@@ -1,10 +1,11 @@
-# DCPowerController.py — PySide6 QSerialPort + Command Queue(비동기) 버전
+# DCPowerController.py — PySide6 QSerialPort + Command Queue(비동기) [스레드-로컬 타이머 적용]
+
 from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from typing import Callable, Optional, Deque
 
-from PySide6.QtCore import QObject, QTimer, QIODeviceBase, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, QIODeviceBase, Signal, Slot, Qt
 from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.config import (
@@ -17,12 +18,12 @@ from lib.config import (
 @dataclass
 class Command:
     cmd_str: str
-    callback: Callable[[Optional[str]], None]  # 응답 1줄 또는 None(타임아웃/무응답 허용)
+    callback: Callable[[Optional[str]], None]          # 응답 1줄 또는 None(타임아웃/무응답)
     timeout_ms: int = 500
     gap_ms: int = 1000
     tag: str = ""
     retries_left: int = 2
-    allow_no_reply: bool = False  # SCPI 설정명령(응답 없음)일 때 True
+    allow_no_reply: bool = False                       # SCPI 설정명령(응답 없음)일 때 True
 
 # ---- 컨트롤러 -----------------------------------------------------------------
 class DCPowerController(QObject):
@@ -65,19 +66,32 @@ class DCPowerController(QObject):
         # 명령 큐
         self._q: Deque[Command] = deque()
         self._inflight: Optional[Command] = None
-        self._cmd_timer = QTimer(self); self._cmd_timer.setSingleShot(True)
-        self._gap_timer = QTimer(self); self._gap_timer.setSingleShot(True)
-        self._cmd_timer.timeout.connect(self._on_cmd_timeout)
-        self._gap_timer.timeout.connect(self._dequeue_and_send)
 
-        # 폴링/제어 타이머
-        self.polling_timer = QTimer(self)
-        self.polling_timer.setInterval(3000)           # 3s
-        self.polling_timer.timeout.connect(self._enqueue_poll_cycle)
+        # --- 타이머는 스레드-로컬에서 생성 (여기서는 None으로만) ---
+        self._cmd_timer: Optional[QTimer] = None
+        self._gap_timer: Optional[QTimer] = None
+        self.polling_timer: Optional[QTimer] = None
+        self.control_timer: Optional[QTimer] = None
 
-        self.control_timer = QTimer(self)
-        self.control_timer.setInterval(1000)          # 1s
-        self.control_timer.timeout.connect(self._on_control_tick)
+    # ---------------- 타이머 생성 (반드시 DCPowerThread에서 호출) ----------------
+    @Slot()
+    def _setup_timers(self):
+        if self._cmd_timer is None:
+            self._cmd_timer = QTimer(self); self._cmd_timer.setSingleShot(True)
+            self._cmd_timer.timeout.connect(self._on_cmd_timeout)
+        if self._gap_timer is None:
+            self._gap_timer = QTimer(self); self._gap_timer.setSingleShot(True)
+            self._gap_timer.timeout.connect(self._dequeue_and_send)
+        if self.polling_timer is None:
+            self.polling_timer = QTimer(self)
+            self.polling_timer.setInterval(3000)  # 3s
+            self.polling_timer.setTimerType(Qt.PreciseTimer)
+            self.polling_timer.timeout.connect(self._enqueue_poll_cycle)
+        if self.control_timer is None:
+            self.control_timer = QTimer(self)
+            self.control_timer.setInterval(1000)  # 1s
+            self.control_timer.setTimerType(Qt.PreciseTimer)
+            self.control_timer.timeout.connect(self._on_control_tick)
 
     # ---------------- 연결/해제 ----------------
     def connect_dcpower_device(self) -> bool:
@@ -103,9 +117,10 @@ class DCPowerController(QObject):
     @Slot()
     def close_connection(self):
         self.stop_process()
-        self.polling_timer.stop()
-        self._cmd_timer.stop()
-        self._gap_timer.stop()
+        if self.polling_timer: self.polling_timer.stop()
+        if self._cmd_timer:    self._cmd_timer.stop()
+        if self._gap_timer:    self._gap_timer.stop()
+        if self.control_timer: self.control_timer.stop()
         # 큐/인플라이트 정리
         if self._inflight:
             cb = self._inflight.callback
@@ -144,9 +159,9 @@ class DCPowerController(QObject):
         self._is_running = True
         self.state = "RAMPING_UP"
         # 주기 폴링/제어 시작
-        if not self.polling_timer.isActive():
+        if self.polling_timer and not self.polling_timer.isActive():
             self.polling_timer.start()
-        if not self.control_timer.isActive():
+        if self.control_timer and not self.control_timer.isActive():
             self.control_timer.start()
 
     @Slot()
@@ -155,7 +170,7 @@ class DCPowerController(QObject):
             return
         self._is_running = False
         self.state = "IDLE"
-        self.control_timer.stop()
+        if self.control_timer: self.control_timer.stop()
         # 출력 OFF(응답 없이)
         self._enqueue_cmd("OUTP OFF", lambda _l: None, allow_no_reply=True, tag="[OUTP OFF]")
         self.status_message.emit("DCpower", "정지: 출력 OFF")
@@ -212,6 +227,7 @@ class DCPowerController(QObject):
     def _enqueue_poll_cycle(self):
         if self._inflight is not None or self._q:
             return  # UI/제어 우선
+
         # V → I 순으로 읽고 갱신
         def on_v(line: Optional[str]):
             v = self._parse_float(line)
@@ -226,6 +242,7 @@ class DCPowerController(QObject):
                                                    v if v is not None else 0.0,
                                                    i if i is not None else 0.0)
             self._enqueue_cmd("MEAS:CURR?", on_i, timeout_ms=500, tag="[MEAS:CURR?]")
+
         self._enqueue_cmd("MEAS:VOLT?", on_v, timeout_ms=500, tag="[MEAS:VOLT?]")
 
     # ---------------- 초기화 시퀀스(비동기 체인) ----------------
@@ -270,8 +287,8 @@ class DCPowerController(QObject):
         if not cmd_str.endswith("\n"):
             cmd_str += "\n"
         self._q.append(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
-        if self._inflight is None and not self._gap_timer.isActive():
-            QTimer.singleShot(0, self._dequeue_and_send)
+        if self._inflight is None and self._gap_timer and not self._gap_timer.isActive():
+            self._gap_timer.start(0)
 
     def _enqueue_cmd_front(self, cmd_str: str, on_reply: Callable[[Optional[str]], None],
                            timeout_ms: int = 500, gap_ms: int = 20,
@@ -280,12 +297,12 @@ class DCPowerController(QObject):
         if not cmd_str.endswith("\n"):
             cmd_str += "\n"
         self._q.appendleft(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
-        if self._inflight is None:
+        if self._inflight is None and self._gap_timer:
             self._gap_timer.stop()
-            QTimer.singleShot(0, self._dequeue_and_send)
+            self._gap_timer.start(0)
 
     def _dequeue_and_send(self):
-        if self._inflight is not None or not self._q or not self.serial.isOpen() or self._gap_timer.isActive():
+        if self._inflight is not None or not self._q or not self.serial.isOpen() or (self._gap_timer and self._gap_timer.isActive()):
             return
         cmd = self._q.popleft()
         self._inflight = cmd
@@ -296,23 +313,32 @@ class DCPowerController(QObject):
             if int(n) <= 0:
                 raise IOError("write failed")
             self.serial.flush()
-            self._cmd_timer.stop()
-            self._cmd_timer.start(cmd.timeout_ms)
+
+            # ★ 무응답 허용 명령은 전송 직후 즉시 완료 처리 (타임아웃 대기 X)
+            if cmd.allow_no_reply:
+                self._finish_command(None)
+                return
+
+            if self._cmd_timer:
+                self._cmd_timer.stop()
+                self._cmd_timer.start(cmd.timeout_ms)
+
             # 로그
             if cmd.tag:
                 self.status_message.emit("DCpower > 전송", f"{cmd.tag} {cmd.cmd_str.strip()}")
             else:
                 self.status_message.emit("DCpower > 전송", cmd.cmd_str.strip())
+
         except Exception as e:
             # 전송 실패 → 재시도
             self.status_message.emit("DCpower", f"전송 오류: {e}")
-            self._cmd_timer.stop()
+            if self._cmd_timer: self._cmd_timer.stop()
             failed = self._inflight
             self._inflight = None
             if failed and failed.retries_left > 0:
                 failed.retries_left -= 1
                 self._q.appendleft(failed)  # 바로 다시 시도
-            self._gap_timer.start(50)  # 잠깐 쉬고 다시
+            if self._gap_timer: self._gap_timer.start(50)  # 잠깐 쉬고 다시
             return
 
     def _on_cmd_timeout(self):
@@ -325,7 +351,7 @@ class DCPowerController(QObject):
             self._inflight = None
             try: cb(None)
             finally:
-                self._gap_timer.start(cmd.gap_ms)
+                if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
             return
 
         # 재시도 또는 실패 통지
@@ -333,7 +359,7 @@ class DCPowerController(QObject):
             cmd.retries_left -= 1
             self._inflight = None
             self._q.appendleft(cmd)
-            self._gap_timer.start(50)
+            if self._gap_timer: self._gap_timer.start(50)
         else:
             self._finish_command(None)
 
@@ -341,7 +367,7 @@ class DCPowerController(QObject):
         cmd = self._inflight
         if cmd is None:
             return
-        self._cmd_timer.stop()
+        if self._cmd_timer: self._cmd_timer.stop()
         self._inflight = None
 
         # 콜백
@@ -351,7 +377,7 @@ class DCPowerController(QObject):
             pass
 
         # 다음 명령
-        self._gap_timer.start(cmd.gap_ms)
+        if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
 
     # ---------------- 시리얼 이벤트 ----------------
     def _on_ready_read(self):
@@ -406,7 +432,7 @@ class DCPowerController(QObject):
         # 진행 중 명령 재시도 준비
         inflight = self._inflight
         if inflight is not None:
-            self._cmd_timer.stop()
+            if self._cmd_timer: self._cmd_timer.stop()
             self._inflight = None
             if inflight.retries_left > 0:
                 inflight.retries_left -= 1
@@ -419,6 +445,6 @@ class DCPowerController(QObject):
             try: self.serial.close()
             except Exception: pass
 
-        # 재연결 시도
+        # 재연결 시도 후 즉시 재개
         if self.connect_dcpower_device():
-            QTimer.singleShot(0, self._dequeue_and_send)
+            if self._gap_timer: self._gap_timer.start(0)
