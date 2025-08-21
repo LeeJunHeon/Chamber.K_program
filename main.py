@@ -117,7 +117,7 @@ class MainDialog(QDialog):
         
         # [핵심 수정] ProcessController <-> MFCController 양방향 연결 (중복 제거)
         # Process -> MFC (명령 요청) - 이 라인 하나만 있으면 됩니다.
-        self.mfc_controller.command_requested.connect(self.mfc_controller.handle_command)
+        self.process_controller.command_requested.connect(self.mfc_controller.handle_command)
         # MFC -> Process (결과 보고)
         self.mfc_controller.command_confirmed.connect(self.process_controller._on_mfc_confirmed)
         self.mfc_controller.command_failed.connect(self.process_controller._on_mfc_failed)

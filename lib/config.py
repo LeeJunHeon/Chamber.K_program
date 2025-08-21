@@ -7,7 +7,6 @@
 # 시리얼 포트 설정 (포트 이름은 실제 환경에 맞게 수정)
 MFC_PORT = "COM4"
 DC_PORT = "COM8"
-#FADUINO_PORT = "COM15"
 FADUINO_PORT = "COM3"
 
 FADUINO_BAUD = 9600
