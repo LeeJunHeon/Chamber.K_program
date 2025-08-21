@@ -88,6 +88,8 @@ class MainDialog(QDialog):
         if hasattr(self.process_controller, "_setup_timers"):
             self.process_thread.started.connect(self.process_controller._setup_timers)
 
+        self.mfc_thread.started.connect(self.mfc_controller._setup_timers)
+
         #    종료 시 각 컨트롤러 정리를 '자기 스레드 슬롯'에서 수행
         self.shutdown_requested.connect(self.faduino_controller.cleanup)
         self.shutdown_requested.connect(self.mfc_controller.cleanup)

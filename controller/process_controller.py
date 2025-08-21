@@ -62,14 +62,16 @@ class SputterProcessController(QObject):
 
         # 1) 장비 연결 확인/시도
         if params.get('dc_power', 0) > 0:
-            if not self.dc.serial_dcpower and not self.dc.connect_dcpower_device():
-                self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
-                return
+            if not (hasattr(self.dc, "serial") and self.dc.serial.isOpen()):
+                if not self.dc.connect_dcpower_device():
+                    self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
+                    return
 
         # MFC는 항상 필요
-        if not getattr(self.mfc, "serial_mfc", None) and not self.mfc.connect_mfc_device():
-            self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
-            return
+        if not (self.mfc.serial_mfc.isOpen()):
+            if not self.mfc.connect_mfc_device():
+                self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
+                return
 
         # 2) 내부 상태
         selected_gas = params.get('selected_gas', 'Ar')
@@ -189,7 +191,6 @@ class SputterProcessController(QObject):
         step = self._steps[self._current_step_idx]
         self.status_message.emit("MFC(실패)", f"'{step[1]}' 명령 실패: {error_msg}")
         self.status_message.emit("치명적 오류", "MFC 통신 오류로 공정을 중단합니다.")
-        self._is_running = False
         self.stop_process()
 
     # --- 파워 안정화 ---
