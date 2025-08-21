@@ -1,302 +1,404 @@
-# Faduino.py
+# Faduino_K_QSerialQueued.py
+# 챔버K용 Faduino 컨트롤러 — QSerialPort + 명령 큐 + 타임아웃/재시도/워치독
+from __future__ import annotations
 
-"""
-Faduino(파두이노) 릴레이/센서/버튼 연동 클래스
-- [수정] STATE_READ 명령을 사용하여 주기적으로 상태를 읽고, UI 클릭 시에만 상태를 제어하도록 변경
-- 주기적 폴링/응답/센서 처리 등 포함
-"""
+from dataclasses import dataclass
+from collections import deque
+from typing import Deque, Callable, Optional
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot, QMutex, QTimer
-import serial
-import time
+from PySide6.QtCore import QObject, QTimer, QIODevice, Signal, Slot
+from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
+
+# === 프로젝트 설정(당신 코드 그대로 사용) ===
 from lib.config import (
     FADUINO_PORT, FADUINO_BAUD,
     FADUINO_PORT_INDEX, FADUINO_SENSOR_MAP, BUTTON_TO_PORT_MAP,
 )
 
+# ---- 타이밍/백오프(필요시 config로 이동 가능) ----
+POLL_INTERVAL_MS = 200
+CMD_TIMEOUT_MS   = 1000
+GAP_MS           = 40
+RECON_BACKOFF_START_MS = 500
+RECON_BACKOFF_MAX_MS   = 4000
+
+STATE_BITS_LEN = 14
+PWM_FULL_SCALE = 255  # Faduino는 0~255 (PLC 0~4000 아님)
+
+@dataclass
+class Command:
+    cmd_str: str
+    on_reply: Callable[[Optional[str]], None]
+    timeout_ms: int = CMD_TIMEOUT_MS
+    gap_ms: int = GAP_MS
+    tag: str = ""
+    retries_left: int = 3
+    allow_no_reply: bool = False
+
 class FaduinoController(QObject):
+    # === 시그널 (당신 코드와 동일) ===
     status_message = Signal(str, str)
     update_button_display = Signal(str, bool)
     update_sensor_display = Signal(str, bool)
-    rf_power_response = Signal(float, float)
+    rf_power_response = Signal(float, float)  # OK:RF_READ,<for>,<ref> → (float, float)
 
-    def __init__(self):
-        super().__init__()
-        self.serial_faduino = None
-        self.serial_lock = QMutex()
-        self._is_running = False
-        # 파이썬이 기억하는 하드웨어의 마지막 상태
-        self.port_states = [False] * 14
-        self.port_states[FADUINO_PORT_INDEX['Door_Down']] = True # 초기 상태: Door_Down = ON
+    def __init__(self, parent=None):
+        super().__init__(parent)
 
+        # 내부 릴레이 상태(문 Down=초기 ON 유지)
+        self.port_states = [False] * STATE_BITS_LEN
+        if 'Door_Down' in FADUINO_PORT_INDEX:
+            self.port_states[FADUINO_PORT_INDEX['Door_Down']] = True
+
+        # 현재 PWM(0~255)
+        self.current_pwm_value = 0
+
+        # --- QSerialPort ---
+        self.serial = QSerialPort(self)
+        self.serial.setBaudRate(FADUINO_BAUD)
+        self.serial.setDataBits(QSerialPort.Data8)
+        self.serial.setParity(QSerialPort.NoParity)
+        self.serial.setStopBits(QSerialPort.OneStop)
+        self.serial.setFlowControl(QSerialPort.NoFlowControl)
+        self.serial.readyRead.connect(self._on_ready_read)
+        self.serial.errorOccurred.connect(self._on_serial_error)
+
+        # --- 수신 버퍼/파서 ---
+        self._rx = bytearray()
+        self._RX_MAX = 16 * 1024
+        self._LINE_MAX = 512
+
+        # --- 명령 큐/인플라이트/타이머 ---
+        self._cmd_q: Deque[Command] = deque()
+        self._inflight: Optional[Command] = None
+
+        self._cmd_timer = QTimer(self)
+        self._cmd_timer.setSingleShot(True)
+        self._cmd_timer.timeout.connect(self._on_cmd_timeout)
+
+        self._gap_timer = QTimer(self)
+        self._gap_timer.setSingleShot(True)
+        self._gap_timer.timeout.connect(self._dequeue_and_send)
+
+        # --- 폴링/워치독 ---
         self.polling_timer = QTimer(self)
-        self.polling_timer.setInterval(200)
-        self.polling_timer.timeout.connect(self._poll_status)
+        self.polling_timer.setInterval(POLL_INTERVAL_MS)
+        self.polling_timer.timeout.connect(self._enqueue_state_read)
 
-        self.rf_controller = None # [추가] RF 컨트롤러 참조를 저장할 변수
+        self._watchdog = QTimer(self)
+        self._watchdog.setInterval(1000)
+        self._watchdog.timeout.connect(self._watch_connection)
 
-        # 동기식 읽기(RF파워) 작업 중 다른 통신을 막기 위한 플래그
-        self._is_sync_busy = False
+        self._want_connected = False
+        self._reconnect_backoff_ms = RECON_BACKOFF_START_MS
+        self._reconnect_pending = False
 
-    @Slot()
-    def _poll_status(self):
-        """[새 함수] QTimer에 의해 주기적으로 호출되어 상태를 확인합니다."""
-        if self._is_running and not self._is_sync_busy:
-            try:
-                self.send_state_read_command()
-                self.read_from_faduino()
-            except Exception as e:
-                self.status_message.emit("Faduino", f"폴링 오류: {e}")
-
+    # ========== 연결/해제 ==========
     @Slot()
     def start_polling(self):
-        """
-        [수정] 스레드 시작 시, STATE_READ 명령으로 주기적인 상태 동기화를 수행
-        """
-        self._is_running = True
-        try:
-            self.serial_faduino = serial.Serial(FADUINO_PORT, FADUINO_BAUD, timeout=1)
-            self.status_message.emit("Faduino", "연결 성공, 리셋 대기...")
-            QThread.msleep(2000)
-            if self.serial_faduino.in_waiting > 0:
-                self.serial_faduino.read_all()
-            self.serial_faduino.reset_input_buffer()
-            self.serial_faduino.reset_output_buffer()
-            self.status_message.emit("Faduino", "입출력 버퍼를 리셋했습니다.")
-        except Exception as e:
-            self.status_message.emit("Faduino", f"연결 실패: {e}")
-            self.serial_faduino = None
-            return
-
-        self.status_message.emit("정보", "Faduino와 주기적 상태 동기화를 시작합니다.")
-
+        """포트 열고 폴링 시작"""
+        self._want_connected = True
+        self._open_port()
+        self._watchdog.start()
         self.polling_timer.start()
+        self.status_message.emit("Faduino", "주기적 상태 동기화 시작")
 
-    def send_state_read_command(self):
-        """[새 기능] 아두이노에 'STATE_READ' 명령을 보내 현재 상태를 요청하는 함수"""
-        if not self.serial_faduino:
+    def _open_port(self):
+        if self.serial.isOpen():
             return
-
-        cmd = "STATE_READ\n"
-        self.serial_lock.lock()
-        try:
-            self.serial_faduino.write(cmd.encode('ascii'))
-        except Exception as e:
-            self.status_message.emit("오류", f"Faduino 상태 요청 실패: {e}")
-        finally:
-            self.serial_lock.unlock()
-
-    def send_full_state_command(self):
-        """내부 상태(port_states)를 기반으로 전체 비트열 제어 명령을 전송하는 함수"""
-        if not self.serial_faduino:
+        names = {p.portName() for p in QSerialPortInfo.availablePorts()}
+        if FADUINO_PORT not in names:
+            self.status_message.emit("Faduino", f"{FADUINO_PORT} 미존재. 사용 가능: {sorted(names)}")
             return
+        self.serial.setPortName(FADUINO_PORT)
+        if not self.serial.open(QIODevice.ReadWrite):
+            self.status_message.emit("Faduino", f"포트 열기 실패: {self.serial.errorString()}")
+            return
+        self.serial.setDataTerminalReady(True)
+        self.serial.setRequestToSend(False)
+        self.serial.clear(QSerialPort.AllDirections)
+        self._rx.clear()
+        self._reconnect_backoff_ms = RECON_BACKOFF_START_MS
+        self._reconnect_pending = False
+        self.status_message.emit("Faduino", f"{FADUINO_PORT} 연결 성공(QSerialPort)")
 
-        bit_str = ''.join(['1' if state else '0' for state in self.port_states])
-        cmd = f"{bit_str},0\n" # 이 명령의 PWM 값은 항상 0
+    def _watch_connection(self):
+        if not self._want_connected:
+            return
+        if self.serial.isOpen():
+            return
+        if self._reconnect_pending:
+            return
+        self._reconnect_pending = True
+        backoff = self._reconnect_backoff_ms
+        self.status_message.emit("Faduino", f"재연결 대기… {backoff} ms")
+        QTimer.singleShot(backoff, self._try_reconnect)
 
-        self.serial_lock.lock()
-        try:
-            self.serial_faduino.write(cmd.encode('ascii'))
-        except Exception as e:
-            self.status_message.emit("오류", f"Faduino 상태 제어 실패: {e}")
-        finally:
-            self.serial_lock.unlock()
+    def _try_reconnect(self):
+        self._reconnect_pending = False
+        if not self._want_connected:
+            return
+        if self.serial.isOpen():
+            return
+        self._open_port()
+        if self.serial.isOpen():
+            self.status_message.emit("Faduino", "재연결 성공")
+            if self._cmd_q and self._inflight is None:
+                QTimer.singleShot(0, self._dequeue_and_send)
+        else:
+            self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, RECON_BACKOFF_MAX_MS)
 
-    # [추가] RF 컨트롤러의 인스턴스를 받아 저장하는 함수
-    def set_rf_controller(self, rf_controller):
-        self.rf_controller = rf_controller
+    @Slot()
+    def cleanup(self):
+        """안전 종료"""
+        self._want_connected = False
+        self.polling_timer.stop()
+        self._cmd_timer.stop()
+        self._gap_timer.stop()
+        self._watchdog.stop()
+        self._rx.clear()
+        # inflight/큐 정리(콜백에 None 통지 X — 필요시 추가)
+        self._inflight = None
+        self._cmd_q.clear()
+        if self.serial.isOpen():
+            self.serial.close()
+        self.status_message.emit("Faduino", "연결 종료")
 
-    @Slot(str, bool)
-    def update_port_state(self, name, state):
-        """
-        요청에 기반한 제어 명령만 생성하여 전송합니다.
-        """
+    # ========== 수신/파싱 ==========
+    def _on_serial_error(self, err):
+        if err == QSerialPort.NoError:
+            return
+        self.status_message.emit("Faduino", f"시리얼 오류: {self.serial.errorString()}")
+        # inflight 복구(재시도)
+        if self._inflight:
+            cmd = self._inflight
+            self._inflight = None
+            self._cmd_timer.stop()
+            if cmd.retries_left > 0:
+                cmd.retries_left -= 1
+                self._cmd_q.appendleft(cmd)
+        if self.serial.isOpen():
+            self.serial.close()
+        self._gap_timer.stop()  # 잠시 멈췄다가 워치독이 재연결
 
-        self._is_sync_busy = True
-        self.serial_lock.lock()
+    def _on_ready_read(self):
+        ba = self.serial.readAll()
+        if ba.isEmpty():
+            return
+        self._rx.extend(bytes(ba))
+        if len(self._rx) > self._RX_MAX:
+            del self._rx[:-self._RX_MAX]
+        # 라인 파싱
+        while True:
+            i_cr = self._rx.find(b'\r')
+            i_lf = self._rx.find(b'\n')
+            if i_cr == -1 and i_lf == -1:
+                break
+            idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
+            line_bytes = self._rx[:idx]
+            drop = idx + 1
+            # CRLF/LFCR 스킵
+            if drop < len(self._rx):
+                ch = self._rx[idx]
+                nxt = self._rx[idx + 1]
+                if (ch == 13 and nxt == 10) or (ch == 10 and nxt == 13):
+                    drop += 1
+            del self._rx[:drop]
+            if not line_bytes:
+                continue
+            if len(line_bytes) > self._LINE_MAX:
+                line_bytes = line_bytes[:self._LINE_MAX]
+            try:
+                line = line_bytes.decode('ascii', errors='ignore').strip()
+            except Exception:
+                line = ""
+            if not line:
+                continue
 
-        try:
-            if name == 'Door_Button':
-                self.port_states[FADUINO_PORT_INDEX['Door_Up']] = state
-                self.port_states[FADUINO_PORT_INDEX['Door_Down']] = not state
-            elif name in BUTTON_TO_PORT_MAP:
-                internal_name = BUTTON_TO_PORT_MAP[name]
-                if internal_name in FADUINO_PORT_INDEX:
-                    idx = FADUINO_PORT_INDEX[internal_name]
-                    self.port_states[idx] = state
+            # 에코 스킵
+            if self._inflight and line == self._inflight.cmd_str.strip():
+                continue
+
+            # 비동기 RF 응답은 언제 와도 우선 처리(명령 완료 방해 X)
+            if line.startswith("OK:RF_READ,"):
+                parts = line.split(',')
+                if len(parts) == 3:
+                    try:
+                        fwd = float(parts[1]); ref = float(parts[2])
+                        self.rf_power_response.emit(fwd, ref)
+                    except Exception:
+                        pass
+                continue
+
+            # 여기 도달한 라인이 인플라이트의 '응답 1건'
+            self._finish_command(line)
+            break  # 한 번에 한 명령만 완료
+
+        # 수신 꼬리의 CR/LF만 정리
+        while self._rx[:1] in (b'\r', b'\n'):
+            del self._rx[0:1]
+
+    # ========== 큐/전송/타임아웃 ==========
+    def enqueue(self, cmd: Command):
+        if not cmd.cmd_str.endswith('\n') and not cmd.cmd_str.endswith('\r'):
+            cmd.cmd_str += '\n'  # 챔버K는 \n 기반
+        self._cmd_q.append(cmd)
+        if self._inflight is None and not self._gap_timer.isActive():
+            QTimer.singleShot(0, self._dequeue_and_send)
+
+    def _dequeue_and_send(self):
+        if self._inflight is not None or not self._cmd_q:
+            return
+        if not self.serial.isOpen():
+            return
+        if self._gap_timer.isActive():
+            return
+        cmd = self._cmd_q.popleft()
+        self._inflight = cmd
+        # 전송
+        payload = cmd.cmd_str.encode('ascii')
+        n = int(self.serial.write(payload))
+        if n <= 0:
+            # 전송 실패 → 재시도 예약
+            self._inflight = None
+            if cmd.retries_left > 0:
+                cmd.retries_left -= 1
+                self._cmd_q.appendleft(cmd)
+            if self.serial.isOpen():
+                self.serial.close()
+            QTimer.singleShot(0, self._try_reconnect)
+            return
+        self.serial.flush()
+        self._cmd_timer.stop()
+        self._cmd_timer.start(cmd.timeout_ms)
+
+    def _on_cmd_timeout(self):
+        self._finish_command(None)
+
+    def _finish_command(self, line: Optional[str]):
+        if self._inflight is None:
+            return
+        cmd = self._inflight
+        self._inflight = None
+        self._cmd_timer.stop()
+
+        if line is None:
+            # 타임아웃/무응답 허용
+            if cmd.allow_no_reply:
+                try: cmd.on_reply(None)
+                finally: self._gap_timer.start(cmd.gap_ms)
+                return
+            if cmd.retries_left > 0:
+                cmd.retries_left -= 1
+                self._cmd_q.appendleft(cmd)
+                if self.serial.isOpen():
+                    self.serial.close()
+                QTimer.singleShot(0, self._try_reconnect)
+                return
             else:
-                self._is_sync_busy = False
-                return # 모르는 이름이면 무시
+                try: cmd.on_reply(None)
+                finally: self._gap_timer.start(cmd.gap_ms)
+                return
 
-            bit_str = ''.join(['1' if s else '0' for s in self.port_states])
-
-            # [수정] PWM 값을 0으로 하드코딩하는 대신, RF 컨트롤러의 현재 값을 가져옴
-            current_pwm = 0
-            if self.rf_controller:
-                current_pwm = self.rf_controller.current_pwm_value
-
-            cmd = f"{bit_str},{current_pwm}\n" 
-
-            # 3. 생성된 명령을 전송합니다. 
-            if self.serial_faduino and self.serial_faduino.is_open:
-                self.serial_faduino.reset_input_buffer()
-                self.serial_faduino.write(cmd.encode('ascii'))
-                self.status_message.emit("Faduino > 제어", f"포트 '{name}' 상태를 {'ON' if state else 'OFF'}으로 변경 시도")
-                QThread.msleep(100)
-
-            # 4. [추가] UI도 즉시 반영 (폴링 응답 전이라도)
-            self.update_button_display.emit(name, state)
-
-            # Ar, O2 같은 가스 포트는 인디케이터 이름이 동일하게 매핑돼 있으면 즉시 업데이트
-            if name in BUTTON_TO_PORT_MAP:
-                internal_name = BUTTON_TO_PORT_MAP[name] + "_Indicator"
-                if internal_name in FADUINO_SENSOR_MAP:
-                    self.update_sensor_display.emit(internal_name, state)
-
-        except Exception as e:
-            self.status_message.emit("오류", f"Faduino 상태 제어 실패: {e}")
+        # 정상 응답
+        try:
+            cmd.on_reply(line.strip())
         finally:
-            self.serial_lock.unlock()
-            self._is_sync_busy = False
+            self._gap_timer.start(cmd.gap_ms)
 
+    # ========== 폴링/상태 동기화 ==========
+    def _enqueue_state_read(self):
+        """STATE_READ → '<14bits>,<hex>' 응답"""
+        def on_reply(line: Optional[str]):
+            if not line or ',' not in line:
+                return
+            state_part, sensor_hex = line.split(',', 1)
+            # 센서 갱신
+            try:
+                sensor_val = int(sensor_hex.strip(), 16)
+                for name, bit in FADUINO_SENSOR_MAP.items():
+                    self.update_sensor_display.emit(name, (sensor_val & (1 << bit)) != 0)
+            except Exception:
+                pass
+            # 버튼 동기화
+            if len(state_part) == STATE_BITS_LEN:
+                self._update_buttons_from_state(state_part)
+        self.enqueue(Command("STATE_READ", on_reply, timeout_ms=CMD_TIMEOUT_MS, gap_ms=GAP_MS, tag="[POLL]"))
 
-    def update_buttons_from_state(self, state_str):
-        """아두이노 응답으로 내부 상태와 UI 버튼을 동기화하는 함수"""
-        if len(state_str) != 14: return
-
-        # UI 버튼 이름과 포트 이름을 매핑하여 처리
+    def _update_buttons_from_state(self, state_str: str):
+        # 일반 버튼
         for btn_name, port_name in BUTTON_TO_PORT_MAP.items():
+            if port_name not in FADUINO_PORT_INDEX:
+                continue
             idx = FADUINO_PORT_INDEX[port_name]
             new_state = (state_str[idx] == '1')
             if self.port_states[idx] != new_state:
                 self.port_states[idx] = new_state
                 self.update_button_display.emit(btn_name, new_state)
+        # Door 버튼(Up 기준)
+        if 'Door_Up' in FADUINO_PORT_INDEX and 'Door_Down' in FADUINO_PORT_INDEX:
+            up = FADUINO_PORT_INDEX['Door_Up']
+            down = FADUINO_PORT_INDEX['Door_Down']
+            new_door = (state_str[up] == '1')
+            if self.port_states[up] != new_door:
+                self.port_states[up] = new_door
+                self.port_states[down] = (state_str[down] == '1')
+                self.update_button_display.emit('Door_Button', new_door)
 
-        # Door 버튼도 동일하게 처리
-        door_up_idx = FADUINO_PORT_INDEX['Door_Up']
-        door_down_idx = FADUINO_PORT_INDEX['Door_Down']
-        new_door_state = (state_str[door_up_idx] == '1')
-
-        if self.port_states[door_up_idx] != new_door_state:
-            self.port_states[door_up_idx] = new_door_state
-            self.port_states[door_down_idx] = not new_door_state
-            self.update_button_display.emit('Door_Button', new_door_state)
-
-    def read_from_faduino(self):
-        """아두이노로부터의 모든 응답을 읽고 파싱하는 중앙 처리 함수"""
-        if not self.serial_faduino or not self.serial_faduino.is_open: return
-
-        line = ""
-        self.serial_lock.lock()
-        try:
-            line = self.serial_faduino.readline().decode('ascii', errors='ignore').strip()
-        except Exception as e:
-            self.status_message.emit("오류", f"Faduino 수신 중 예외 발생: {e}")
-        finally:
-            self.serial_lock.unlock()
-
-        if not line: return
-
-        # RF 파워 응답을 우선적으로 처리
-        if line.startswith("OK:RF_READ,"):
-            parts = line.split(',')
-            if len(parts) == 3:
-                try:
-                    forward_raw = float(parts[1])
-                    reflected_raw = float(parts[2])
-                    self.rf_power_response.emit(forward_raw, reflected_raw)
-                except (ValueError, IndexError):
-                    self.status_message.emit("Faduino(경고)", "잘못된 RF 파워 응답 수신")
+    # ========== 공개 API ==========
+    @Slot(str, bool)
+    def update_port_state(self, name: str, state: bool):
+        """UI 클릭 → 내부 상태 갱신 → 전체비트+PWM 전송"""
+        if name == 'Door_Button':
+            if 'Door_Up' in FADUINO_PORT_INDEX and 'Door_Down' in FADUINO_PORT_INDEX:
+                self.port_states[FADUINO_PORT_INDEX['Door_Up']]   = state
+                self.port_states[FADUINO_PORT_INDEX['Door_Down']] = not state
+        elif name in BUTTON_TO_PORT_MAP:
+            port = BUTTON_TO_PORT_MAP[name]
+            if port in FADUINO_PORT_INDEX:
+                self.port_states[FADUINO_PORT_INDEX[port]] = state
+        else:
             return
 
-        # 일반 상태 응답 처리 (STATE_READ 또는 제어 명령의 결과)
-        if ',' in line:
-            state_part, sensor_part = line.split(',', 1)
-            try:
-                sensor_val = int(sensor_part, 16)
-                for name, bit in FADUINO_SENSOR_MAP.items():
-                    is_on = (sensor_val & (1 << bit)) != 0
-                    self.update_sensor_display.emit(name, is_on)
-            except (ValueError, IndexError) as e:
-                self.status_message.emit("Faduino(오류)", f"센서 파싱 실패: {line}, {e}")
-                pass
+        # UI 즉시 반영
+        self.update_button_display.emit(name, state)
 
-            # "22222"가 아니어도 항상 하드웨어 상태로 UI를 동기화
-            if len(state_part) == 14:
-                self.update_buttons_from_state(state_part)
+        # 현재 PWM과 함께 전체 상태 전송
+        self._send_full_state_with_pwm(self.current_pwm_value)
 
-    def send_rfpower_command(self, pwm_value):
-        """RFpower 제어 시, 현재 상태 비트열과 PWM 값을 붙여 전송"""
-        if not self.serial_faduino:
-            return
-            
-        bit_str = ''.join(['1' if state else '0' for state in self.port_states])
-        cmd = f"{bit_str},{pwm_value}\n"
+    @Slot(int)
+    def send_rfpower_command(self, pwm_0_255: int):
+        """RF 파워(PWM 0~255) 갱신 — 전체 비트 + PWM 같이 보냄"""
+        self.current_pwm_value = self._clamp_pwm(pwm_0_255)
+        self._send_full_state_with_pwm(self.current_pwm_value)
 
-        self.serial_lock.lock()
-        try:
-            self.serial_faduino.write(cmd.encode('ascii'))
-            self.status_message.emit("Faduino > 전송", f"RF파워 송신: {cmd.strip()}")
-        except Exception as e:
-            self.status_message.emit("오류", f"RF파워 송신 실패: {e}")
-        finally:
-            self.serial_lock.unlock()
-
-    def execute_sync_read_command(self, command_to_send, expected_prefix):
-        """특정 명령을 보내고, 맞는 응답이 올 때까지 동기적으로 대기 (RF 파워 읽기 전용)"""
-        if not self.serial_faduino:
-            return None
-
-        self._is_sync_busy = True # 동기 작업 시작을 알림
-        try:
-            self.serial_lock.lock()
-            self.serial_faduino.reset_input_buffer()
-            self.serial_faduino.write(command_to_send.encode('ascii'))
-
-            start_time = time.time()
-            while time.time() - start_time < 1.5: # 1.5초 타임아웃
-                if self.serial_faduino.in_waiting > 0:
-                    line = self.serial_faduino.readline().decode('ascii', errors='ignore').strip()
-                    if line.startswith(expected_prefix):
-                        return line
-                QThread.msleep(10)
-            return None
-        except Exception as e:
-            self.status_message.emit("오류", f"동기 읽기 실패: {e}")
-            return None
-        finally:
-            self._is_sync_busy = False # 동기 작업 종료
-            self.serial_lock.unlock()
+    def _send_full_state_with_pwm(self, pwm_0_255: int):
+        bit_str = ''.join('1' if s else '0' for s in self.port_states)
+        cmd_line = f"{bit_str},{self._clamp_pwm(pwm_0_255)}"
+        # 일반적으로 에코만 오거나 무응답일 수 있어 allow_no_reply=True 권장
+        self.enqueue(Command(cmd_line, lambda _l: None, timeout_ms=CMD_TIMEOUT_MS,
+                             gap_ms=GAP_MS, tag="[STATE+PWM]", allow_no_reply=True))
 
     @Slot()
     def on_emergency_stop(self):
-        """비상 정지 시 모든 포트를 끄는 제어 명령을 전송"""
-        self.status_message.emit("Faduino", "ALL STOP")
-        self._is_sync_busy = True
-
-        try:
-            self.port_states = [False] * 14
+        """모든 포트 OFF, Door_Down만 ON"""
+        self.port_states = [False] * STATE_BITS_LEN
+        if 'Door_Down' in FADUINO_PORT_INDEX:
             self.port_states[FADUINO_PORT_INDEX['Door_Down']] = True
-            self.send_full_state_command() # 모든 포트를 끄는 명령 전송
+        # UI 모두 OFF
+        for btn in BUTTON_TO_PORT_MAP.keys():
+            self.update_button_display.emit(btn, False)
+        self.update_button_display.emit('Door_Button', False)
+        # 하드웨어 반영
+        self._send_full_state_with_pwm(0)
+        self.status_message.emit("Faduino(비상)", "EMERGENCY STOP: 모든 포트 OFF")
 
-            # UI의 모든 버튼을 끄도록 신호 발생
-            for btn_name in BUTTON_TO_PORT_MAP.keys():
-                self.update_button_display.emit(btn_name, False)
-            self.update_button_display.emit('Door_Button', False)
-            self.status_message.emit("Faduino(비상)", "EMERGENCY STOP: 모든 포트 OFF")
-        except Exception as e:
-            self.status_message.emit("Faduino(오류)", f"EMERGENCY STOP 실패: {e}")
-        finally:
-            self._is_sync_busy = False  # 다시 polling 허용  
-
-
-    @Slot()
-    def cleanup(self):
-        """프로그램 종료 전 안전하게 리소스 해제"""
-        self.polling_timer.stop()
-        self._is_running = False
-        QThread.msleep(250) # 스레드 루프가 완전히 종료될 시간을 줌
-        if self.serial_faduino and self.serial_faduino.is_open:
-            self.serial_faduino.close()
-            self.serial_faduino = None
-            self.status_message.emit("Faduino", "시리얼 포트를 안전하게 닫았습니다.")
+    # ========== 유틸 ==========
+    def _clamp_pwm(self, v: int) -> int:
+        try:
+            v = int(v)
+        except Exception:
+            v = 0
+        if v < 0: v = 0
+        if v > PWM_FULL_SCALE: v = PWM_FULL_SCALE
+        return v
