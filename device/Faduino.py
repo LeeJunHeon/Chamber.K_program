@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from collections import deque
 from typing import Deque, Callable, Optional
 
-from PySide6.QtCore import QObject, QTimer, QIODevice, Signal, Slot
+from PySide6.QtCore import QObject, QTimer, QIODevice, Signal, Slot, Qt
 from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 # === 프로젝트 설정(당신 코드 그대로 사용) ===
@@ -72,6 +72,7 @@ class FaduinoController(QObject):
         self._cmd_q: Deque[Command] = deque()
         self._inflight: Optional[Command] = None
 
+        # 타이머들을 생성자에서 미리 생성 (스레드 문제 해결)
         self._cmd_timer = QTimer(self)
         self._cmd_timer.setSingleShot(True)
         self._cmd_timer.timeout.connect(self._on_cmd_timeout)
@@ -83,11 +84,17 @@ class FaduinoController(QObject):
         # --- 폴링/워치독 ---
         self.polling_timer = QTimer(self)
         self.polling_timer.setInterval(POLL_INTERVAL_MS)
+        self.polling_timer.setTimerType(Qt.PreciseTimer)
         self.polling_timer.timeout.connect(self._enqueue_state_read)
 
         self._watchdog = QTimer(self)
         self._watchdog.setInterval(1000)
+        self._watchdog.setTimerType(Qt.PreciseTimer)
         self._watchdog.timeout.connect(self._watch_connection)
+
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setSingleShot(True)
+        self._reconnect_timer.timeout.connect(self._try_reconnect)
 
         self._want_connected = False
         self._reconnect_backoff_ms = RECON_BACKOFF_START_MS
@@ -99,8 +106,10 @@ class FaduinoController(QObject):
         """포트 열고 폴링 시작"""
         self._want_connected = True
         self._open_port()
-        self._watchdog.start()
-        self.polling_timer.start()
+        if not self._watchdog.isActive():
+            self._watchdog.start()
+        if not self.polling_timer.isActive():
+            self.polling_timer.start()
         self.status_message.emit("Faduino", "주기적 상태 동기화 시작")
 
     def _open_port(self):
@@ -132,7 +141,7 @@ class FaduinoController(QObject):
         self._reconnect_pending = True
         backoff = self._reconnect_backoff_ms
         self.status_message.emit("Faduino", f"재연결 대기… {backoff} ms")
-        QTimer.singleShot(backoff, self._try_reconnect)
+        self._reconnect_timer.start(backoff)
 
     def _try_reconnect(self):
         self._reconnect_pending = False
@@ -144,7 +153,7 @@ class FaduinoController(QObject):
         if self.serial.isOpen():
             self.status_message.emit("Faduino", "재연결 성공")
             if self._cmd_q and self._inflight is None:
-                QTimer.singleShot(0, self._dequeue_and_send)
+                self._gap_timer.start(0)
         else:
             self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, RECON_BACKOFF_MAX_MS)
 
@@ -244,7 +253,7 @@ class FaduinoController(QObject):
             cmd.cmd_str += '\n'  # 챔버K는 \n 기반
         self._cmd_q.append(cmd)
         if self._inflight is None and not self._gap_timer.isActive():
-            QTimer.singleShot(0, self._dequeue_and_send)
+            self._gap_timer.start(0)
 
     def _dequeue_and_send(self):
         if self._inflight is not None or not self._cmd_q:
@@ -266,8 +275,13 @@ class FaduinoController(QObject):
                 self._cmd_q.appendleft(cmd)
             if self.serial.isOpen():
                 self.serial.close()
-            QTimer.singleShot(0, self._try_reconnect)
+            self._reconnect_timer.start(0)
             return
+        
+        if cmd.allow_no_reply:
+            self._finish_command(None)
+            return
+        
         self.serial.flush()
         self._cmd_timer.stop()
         self._cmd_timer.start(cmd.timeout_ms)
@@ -293,7 +307,7 @@ class FaduinoController(QObject):
                 self._cmd_q.appendleft(cmd)
                 if self.serial.isOpen():
                     self.serial.close()
-                QTimer.singleShot(0, self._try_reconnect)
+                self._reconn
                 return
             else:
                 try: cmd.on_reply(None)
@@ -323,7 +337,7 @@ class FaduinoController(QObject):
             # 버튼 동기화
             if len(state_part) == STATE_BITS_LEN:
                 self._update_buttons_from_state(state_part)
-        self.enqueue(Command("STATE_READ", on_reply, timeout_ms=CMD_TIMEOUT_MS, gap_ms=GAP_MS, tag="[POLL]"))
+        self.enqueue(Command("STATE_READ", on_reply, timeout_ms=CMD_TIMEOUT_MS, gap_ms=GAP_MS, tag="[POLL]", allow_no_reply=True))
 
     def _update_buttons_from_state(self, state_str: str):
         # 일반 버튼
