@@ -6,13 +6,12 @@ from lib.config import (
     RF_TOLERANCE_POWER, RF_FORWARD_SCALING_MAX_WATT, 
     RF_REFLECTED_SCALING_MAX_WATT
 )
-
 class RFPowerController(QObject):
     update_rf_status_display = Signal(float, float)
     status_message = Signal(str, str)
     target_reached = Signal()
     ramp_down_finished = Signal()
-    
+
     def __init__(self, faduino, parent=None):
         super().__init__(parent)
         self.faduino = faduino
@@ -22,107 +21,107 @@ class RFPowerController(QObject):
         self.current_pwm_value = 0
         self.pwm_offset_cal = 0.0
         self.pwm_param_cal = 1.0
-        
         self.current_power_step = 0.0
 
         self.state = "IDLE"
-        # [추가] 반사파 대기 상태 관리를 위한 변수
         self.previous_state = "IDLE"
         self.ref_p_wait_start_time = None
+
+        # 제어 타이머(유지)
         self.control_timer = QTimer(self)
-        self.control_timer.setInterval(1000) # 1초마다 tick
+        self.control_timer.setInterval(1000)
         self.control_timer.timeout.connect(self._on_timer_tick)
+
+        # ★ ramp-down 타이머를 __init__에서 1회 생성
+        self.ramp_down_timer = QTimer(self)
+        self.ramp_down_timer.setInterval(50)
+        self.ramp_down_timer.timeout.connect(self._ramp_down_step)
+
+        # ★ RF 파워 샘플을 비동기 신호로 받음 (Main에서 신호 연결 필요)
+        self._last_for = None
+        self._last_ref = None
+
+    # 외부에서 faduino.rf_power_response(float,float)와 연결
+    @Slot(float, float)
+    def on_rf_power_sample(self, forward_w, reflected_w):
+        self._last_for = forward_w
+        self._last_ref = reflected_w
 
     @Slot(dict)
     def start_process(self, power_params):
         if self._is_running:
             self.status_message.emit("RFpower", "경고: RF 파워가 이미 동작 중입니다.")
             return
-        
-        requested_target  = power_params.get('target', 0)
-        self.target_power = min(requested_target, RF_MAX_POWER)
-        self.pwm_offset_cal = power_params.get('offset', 0)
-        self.pwm_param_cal = power_params.get('param', 1.0)
-        
-        self.current_power_step = 0.0
-        self.current_pwm_value = 0
+        self.target_power   = min(power_params.get('target', 0), RF_MAX_POWER)
+        self.pwm_offset_cal = power_params.get('offset', 0.0)
+        self.pwm_param_cal  = power_params.get('param', 1.0)
 
+        self.current_power_step = 0.0
+        self.current_pwm_value  = 0
         self._is_running = True
         self.state = "RAMPING_UP"
         self.control_timer.start()
-    
+
     @Slot()
     def _on_timer_tick(self):
         if not self._is_running:
             self.control_timer.stop()
             return
 
-        for_p, ref_p = self.read_rf_power()
+        # ★ 매 틱마다 Faduino에게 RF 읽기 요청 (비동기)
+        if hasattr(self.faduino, "request_rf_read"):
+            self.faduino.request_rf_read()
+
+        for_p = self._last_for
+        ref_p = self._last_ref
         if for_p is None:
-            self.status_message.emit("RFpower(경고)", "파워 읽기 실패")
+            # 아직 샘플이 안들어왔으면 다음 틱에서
             return
 
-        self.update_rf_status_display.emit(for_p, ref_p)
+        self.update_rf_status_display.emit(for_p, ref_p if ref_p is not None else 0.0)
 
-                # --- [수정된 반사파 대기 로직] ---
+        # --- 반사파 대기 로직(그대로) ---
         if ref_p is not None and ref_p > 3.0:
             if self.state != "REF_P_WAITING":
-                # 대기 상태가 아니었다면, 현재 상태를 저장하고 대기 시작
                 self.previous_state = self.state
                 self.state = "REF_P_WAITING"
                 self.ref_p_wait_start_time = time.time()
-                self.status_message.emit("RFpower(대기)", f"반사파({ref_p:.1f}W) 안정화 대기를 시작합니다. (최대 30초)")
-            
-            # 대기 시간 초과 확인
+                self.status_message.emit("RFpower(대기)", f"반사파({ref_p:.1f}W) 안정화 대기 시작(최대 30초)")
             if time.time() - self.ref_p_wait_start_time > 30:
-                self.status_message.emit("재시작", "반사파 안정화 시간(30초) 초과. 즉시 중단합니다.")
+                self.status_message.emit("재시작", "반사파 안정화 시간 초과. 중단합니다.")
                 self.stop_process()
-
-            return # 대기 중이므로 아래 로직은 실행하지 않고 다음 틱까지 대기
-
-        # 반사파가 3.0W 이하로 안정된 경우
+            return
         if self.state == "REF_P_WAITING":
-            self.status_message.emit("RFpower(정보)", f"반사파 안정화 완료 ({ref_p:.1f}W). 공정을 재개합니다.")
-            self.state = self.previous_state # 이전 상태(RAMPING_UP 또는 MAINTAINING)로 복귀
+            self.status_message.emit("RFpower(정보)", f"반사파 안정화 완료 ({ref_p:.1f}W). 재개")
+            self.state = self.previous_state
             self.ref_p_wait_start_time = None
 
-        # --- 상태 머신 로직 ---
+        # --- 상태 머신(기존 로직) ---
         if self.state == "RAMPING_UP":
-            # 1. 최종 목표 도달 시 상태 변경
             if abs(for_p - self.target_power) <= RF_TOLERANCE_POWER:
-                self.status_message.emit("RFpower", f"{self.target_power}W 도달. 파워 유지 시작")
+                self.status_message.emit("RFpower", f"{self.target_power}W 도달. 유지 모드로 전환")
                 self.state = "MAINTAINING"
                 self.target_reached.emit()
                 return
-
-            # 2. 현재 스텝 목표치에 도달했는지 확인
             if for_p >= self.current_power_step:
-                # [Feed-forward] 현재 스텝에 도달했으므로, 다음 스텝 목표를 설정하고 PWM 예측
                 self.current_power_step = min(self.current_power_step + RF_RAMP_STEP, self.target_power)
                 base_pwm = self.pwm_offset_cal + (self.current_power_step * self.pwm_param_cal)
                 self.current_pwm_value = max(0, min(int(base_pwm), 255))
             else:
-                # [Feedback] 아직 현재 스텝에 도달 못함 (언더슈트) -> PWM 미세 조정
                 self.current_pwm_value = min(self.current_pwm_value + 1, 255)
-            
-            # [Feedback] 계산된 PWM이 오버슈트를 유발했다면 미세 조정
             if for_p > self.current_power_step + RF_TOLERANCE_POWER:
-                 self.current_pwm_value = max(0, self.current_pwm_value - 1)
-
+                self.current_pwm_value = max(0, self.current_pwm_value - 1)
             self.faduino.send_rfpower_command(self.current_pwm_value)
-            self.status_message.emit("RFpower", f"Ramp-Up... 스텝 목표:{self.current_power_step:.1f}W, 현재:{for_p:.1f}W (PWM:{self.current_pwm_value})")
-
         elif self.state == "MAINTAINING":
-            error = self.target_power - for_p
-            if abs(error) > RF_TOLERANCE_POWER:
-                adjustment = 1 if error > 0 else -1
-                self.current_pwm_value = max(0, min(255, self.current_pwm_value + adjustment))
+            err = self.target_power - for_p
+            if abs(err) > RF_TOLERANCE_POWER:
+                self.current_pwm_value = max(0, min(255, self.current_pwm_value + (1 if err > 0 else -1)))
                 self.faduino.send_rfpower_command(self.current_pwm_value)
-                self.status_message.emit("RFpower", f"파워 유지 보정... (PWM:{self.current_pwm_value})")
 
     @Slot()
     def stop_process(self):
-        if self._is_ramping_down or not self._is_running: return
+        if self._is_ramping_down or not self._is_running:
+            return
         self.status_message.emit("RFpower", "정지 신호 수신됨.")
         self._is_running = False
         self.state = "IDLE"
@@ -130,42 +129,27 @@ class RFPowerController(QObject):
         self.ramp_down()
 
     def ramp_down(self):
-        if self._is_ramping_down: return
+        if self._is_ramping_down:
+            return
         self._is_ramping_down = True
         self.status_message.emit("RFpower", "RF 파워 ramp-down 시작")
-        
-        self.ramp_down_timer = QTimer(self)
-        def ramp_down_step():
-            if self.current_pwm_value > 0:
-                self.current_pwm_value = max(0, self.current_pwm_value - RF_RAMP_STEP)
-                self.faduino.send_rfpower_command(self.current_pwm_value)
-            else:
-                self.ramp_down_timer.stop()
-                self.faduino.send_rfpower_command(0)
-                self.update_rf_status_display.emit(0.0, 0.0)
-                self.status_message.emit("RFpower", "RF 파워 ramp-down 완료")
-                self.ramp_down_finished.emit()
-                self._is_ramping_down = False
+        # ★ 여기서 새 타이머를 만들지 말고, 이미 있는 타이머 start 만
+        if not self.ramp_down_timer.isActive():
+            self.ramp_down_timer.start()
 
-        self.ramp_down_timer.timeout.connect(ramp_down_step)
-        self.ramp_down_timer.start(50)
+    def _ramp_down_step(self):
+        if self.current_pwm_value > 0:
+            self.current_pwm_value = max(0, self.current_pwm_value - RF_RAMP_STEP)
+            self.faduino.send_rfpower_command(self.current_pwm_value)
+            return
+        # 종료
+        self.ramp_down_timer.stop()
+        self.faduino.send_rfpower_command(0)
+        self.update_rf_status_display.emit(0.0, 0.0)
+        self.status_message.emit("RFpower", "RF 파워 ramp-down 완료")
+        self._is_ramping_down = False
+        self.ramp_down_finished.emit()
 
     @Slot()
     def close_connection(self):
         self.stop_process()
-
-    def read_rf_power(self):
-        response_line = self.faduino.execute_sync_read_command("RF_READ,0\n", "OK:RF_READ,")
-        if response_line:
-            try:
-                parts = response_line.split(',')
-                if len(parts) == 3:
-                    forward_raw = int(parts[1])
-                    reflected_raw = int(parts[2])
-                    
-                    forward_watt = (forward_raw / 1023.0) * RF_FORWARD_SCALING_MAX_WATT 
-                    reflected_watt = (reflected_raw / 1023.0) * RF_REFLECTED_SCALING_MAX_WATT
-                    return forward_watt, reflected_watt
-            except (ValueError, IndexError):
-                self.status_message.emit("오류", f"RF 파워 응답 파싱 실패: {response_line}")
-        return None, None

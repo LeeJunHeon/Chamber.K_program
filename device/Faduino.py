@@ -447,6 +447,10 @@ class FaduinoController(QObject):
             tag="[STATE+PWM]",
             allow_no_reply=True
         ))
+        
+    @Slot()
+    def request_rf_read(self):
+        self.enqueue(Command("RF_READ,0", lambda _l: None, allow_no_reply=True, gap_ms=GAP_MS, tag="[RF_READ]"))
 
     @Slot()
     def on_emergency_stop(self):

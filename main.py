@@ -112,7 +112,8 @@ class MainDialog(QDialog):
         self.ui.Door_Button.toggled.connect(
             partial(self.faduino_controller.update_port_state, 'Door_Button')
         )
-
+        self.faduino_controller.rf_power_response.connect(self.rfpower_controller.on_rf_power_sample)
+    
         # 3) 감독자(Process) ↔ 장치 라우팅
         #    Process가 스스로 start_requested를 받아 flow 시작(동일 스레드)
         self.process_controller.start_requested.connect(self.process_controller.start_process_flow)
