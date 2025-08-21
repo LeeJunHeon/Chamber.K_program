@@ -1,7 +1,8 @@
 # device/process_controller.py
 
 # QEventLoop: 특정 신호가 올 때까지 코드 실행을 잠시 멈추고 기다리게 해주는 도구
-from PySide6.QtCore import QObject, Signal, Slot, QThread, QEventLoop, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, QThread, QEventLoop, Qt, QTimer
+import math
 
 class SputterProcessController(QObject):
     # --- UI 및 다른 컨트롤러와 통신하기 위한 시그널들 ---
@@ -39,10 +40,12 @@ class SputterProcessController(QObject):
         self._step_in_progress = False      # 한 단계가 완료되기 전에 중복 실행되는 것을 방지하기 위한 플래그
         self.params = None                  # UI로부터 받은 공정 파라미터 딕셔너리
 
-        # [추가] 비동기 타이머 설정
-        self._timer = QTimer(self)
-        self._timer.setInterval(1000)  # 1초 간격
-        self._timer.timeout.connect(self._on_timer_tick)
+        # # [추가] 비동기 타이머 설정
+        # self._timer = QTimer(self)
+        # self._timer.setInterval(1000)  # 1초 간격
+        # self._timer.timeout.connect(self._on_timer_tick)
+
+        self._timer = None
         
         self._time_left = 0
         self._current_timer_purpose = None # 'shutter' 또는 'process' 등 타이머 용도 구분
@@ -253,8 +256,7 @@ class SputterProcessController(QObject):
     def _shutter_delay(self):
         """[수정] Shutter delay 시간만큼 비동기적으로 대기."""
         # [핵심 수정] UI에서 '분' 단위로 입력받은 값에 60을 곱해 '초' 단위로 변환합니다.
-        delay_minutes = self.params.get('shutter_delay', 0)
-        delay_seconds = int(delay_minutes * 60)
+        delay_seconds = math.ceil(self.params.get('shutter_delay', 0) * 60)
 
         if delay_seconds <= 0:
             # 딜레이가 없으면 바로 다음 단계로
@@ -272,8 +274,7 @@ class SputterProcessController(QObject):
     def _process_time(self):
         """[수정] 메인 공정 시간만큼 비동기적으로 대기."""
         # [핵심 수정] UI에서 '분' 단위로 입력받은 값에 60을 곱해 '초' 단위로 변환합니다.
-        process_minutes = self.params.get('process_time', 0)
-        process_seconds = int(process_minutes * 60)
+        process_seconds = math.ceil(self.params.get('process_time', 0) * 60)
 
         if process_seconds <= 0:
             # 공정 시간이 없으면 바로 다음 단계로
@@ -336,6 +337,19 @@ class SputterProcessController(QObject):
         self._current_timer_purpose = 'delay'
         # 필요하면 UI에 표시: self.shutter_delay_tick.emit(self._time_left)
         self._timer.start()
+
+    @Slot()
+    def _setup_timers(self):
+        if self._timer is None:
+            self._timer = QTimer(self)
+            self._timer.setInterval(1000)
+            self._timer.setTimerType(Qt.PreciseTimer)
+            self._timer.timeout.connect(self._on_timer_tick)
+
+    @Slot()
+    def teardown(self):
+        if self._timer and self._timer.isActive():
+            self._timer.stop()
 
     @Slot()
     def stop_process(self):

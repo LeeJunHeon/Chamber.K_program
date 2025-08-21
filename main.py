@@ -50,8 +50,6 @@ class MainDialog(QDialog):
         self.rfpower_thread.setObjectName("RFPowerThread")
         self.rfpower_controller = RFPowerController(faduino=self.faduino_controller)
         self.rfpower_controller.moveToThread(self.rfpower_thread)
-        # [추가] Faduino가 RF 컨트롤러의 현재 PWM 값을 알 수 있도록 참조를 전달
-        self.faduino_controller.set_rf_controller(self.rfpower_controller) 
         
         # 5. Process 컨트롤러 설정
         self.process_thread = QThread()
@@ -91,7 +89,7 @@ class MainDialog(QDialog):
         # --- 2. UI 이벤트 -> 컨트롤러 동작 연결 ---
         self.ui.Sputter_Start_Button.clicked.connect(self._handle_start_process)
         #self.ui.Sputter_Stop_Button.clicked.connect(self._handle_sputter_stop)
-        self.ui.ALL_STOP_button.clicked.connect(self.faduino_controller.on_emergency_stop)
+        self.ui.ALL_STOP_button.clicked.connect(self._handle_all_stop)
 
         # Faduino 버튼 연결
         for btn_name in BUTTON_TO_PORT_MAP.keys():
@@ -105,6 +103,8 @@ class MainDialog(QDialog):
         )
 
         # --- 3. 컨트롤러 간 상호작용 연결 ---
+        self.process_thread.started.connect(self.process_controller._setup_timers)
+
         # ProcessController가 시작 신호를 스스로 받도록 연결
         self.process_controller.start_requested.connect(self.process_controller.start_process_flow)
 
@@ -150,6 +150,8 @@ class MainDialog(QDialog):
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
         self.process_controller.status_message.connect(self.on_status_message)
+
+        self.shutdown_requested.connect(self.process_controller.teardown)
 
     @Slot()
     def _handle_start_process(self):
@@ -290,41 +292,51 @@ class MainDialog(QDialog):
         self.ui.for_p_edit.setPlainText("ERROR" if for_power is None else f"{for_power:.2f}")
         self.ui.ref_p_edit.setPlainText("ERROR" if ref_power is None else f"{ref_power:.2f}")
 
+    def _handle_all_stop(self):
+        self.request_process_stop.emit()           # 공정 중지 요청(프로세스 스레드에서 처리)
+        self.faduino_controller.on_emergency_stop()
+
     def closeEvent(self, event):
-        """[수정됨] 안전한 스레드 종료 로직"""
-        reply = QMessageBox.question(self, '종료 확인', '정말로 프로그램을 종료하시겠습니까?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
-
-            # 1. 진행 중인 공정이 있다면 먼저 중지 요청
-            if self.process_running:
-                # process_controller의 stop_process가 동기적으로 완료될 때까지 대기
-                loop = QEventLoop()
-                self.process_controller.finished.connect(loop.quit)
-                self.process_controller.stop_process()
-                loop.exec() # stop_process가 끝나고 finished 신호를 보낼 때까지 대기
-                self.process_controller.finished.disconnect(loop.quit)
-                log_message_to_monitor("정보", "진행 중인 공정이 중지되었습니다.")
-
-            # 2. 모든 백그라운드 스레드에 리소스 정리 및 종료 요청 (교착 상태 방지)
-            self.shutdown_requested.emit()
-
-            # 3. 모든 스레드의 이벤트 루프에 공식적인 종료 신호 전송
-            threads = [self.process_thread, self.faduino_thread, self.mfc_thread, self.dcpower_thread, self.rfpower_thread]
-            for thread in threads:
-                thread.quit()
-
-            # 4. 모든 스레드가 실제로 종료될 때까지 대기
-            for thread in threads:
-                thread_name = thread.objectName()
-                log_message_to_monitor("정보", f"{thread_name} 스레드 종료 대기 중...")
-                if not thread.wait(3000): # 3초 타임아웃
-                     log_message_to_monitor("경고", f"{thread_name} 스레드가 시간 내에 종료되지 않았습니다.")
-
-            log_message_to_monitor("정보", "모든 스레드가 종료되었습니다. 프로그램을 닫습니다.")
-            event.accept()
-        else:
+        reply = QMessageBox.question(
+            self, '종료 확인', '정말로 프로그램을 종료하시겠습니까?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
             event.ignore()
+            return
+
+        log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
+
+        # 1) 공정 중이면 먼저 중지 요청 → finished 대기
+        if self.process_running:
+            loop = QEventLoop()
+            self.process_controller.finished.connect(loop.quit)
+            self.request_process_stop.emit()              # 직접 호출 X, 신호로 요청
+            loop.exec()
+            self.process_controller.finished.disconnect(loop.quit)
+            log_message_to_monitor("정보", "진행 중인 공정이 중지되었습니다.")
+
+        # 2) 모든 백그라운드 객체에 '자기 스레드'에서의 정리 요청
+        #    (여기서 process_controller.teardown 이 실행될 수 있도록
+        #     연결을 사전에 해둔 상태여야 합니다!)
+        self.shutdown_requested.emit()
+
+        # 3) 스레드 종료 신호
+        threads = [self.process_thread, self.faduino_thread, self.mfc_thread,
+                self.dcpower_thread, self.rfpower_thread]
+        for thread in threads:
+            thread.quit()
+
+        # 4) 스레드 종료 대기
+        for thread in threads:
+            thread_name = thread.objectName()
+            log_message_to_monitor("정보", f"{thread_name} 스레드 종료 대기 중...")
+            if not thread.wait(3000):
+                log_message_to_monitor("경고", f"{thread_name} 스레드가 시간 내에 종료되지 않았습니다.")
+
+        log_message_to_monitor("정보", "모든 스레드가 종료되었습니다. 프로그램을 닫습니다.")
+        event.accept()
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
