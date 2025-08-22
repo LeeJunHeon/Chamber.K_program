@@ -129,8 +129,6 @@ class FaduinoController(QObject):
         # ▼▼▼ 타이머 시작 로직을 이쪽으로 이동 ▼▼▼
         if not self._watchdog.isActive():
             self._watchdog.start()
-        if not self.polling_timer.isActive():
-            self.polling_timer.start()
 
     # ========== 연결/해제 ==========
     @Slot()
@@ -167,13 +165,14 @@ class FaduinoController(QObject):
             self.status_message.emit("Faduino", f"포트 열기 실패: {self.serial.errorString()}")
             return
 
-        self.serial.setDataTerminalReady(True)
-        self.serial.setRequestToSend(False)
         self.serial.clear()
         self._rx.clear()
         self._reconnect_backoff_ms = RECON_BACKOFF_START_MS
         self._reconnect_pending = False
         self.status_message.emit("Faduino", f"{FADUINO_PORT} 연결 성공(QSerialPort)")
+
+        # ✅ 포트 오픈 직후 1.2초 뒤에 폴링 시작
+        QTimer.singleShot(1200, self._after_serial_open)
 
     def _watch_connection(self):
         if not self._want_connected or self.serial.isOpen() or self._reconnect_pending:
@@ -286,9 +285,13 @@ class FaduinoController(QObject):
 
     # ========== 큐/전송/타임아웃 ==========
     def enqueue(self, cmd: Command):
-        if not cmd.cmd_str.endswith('\n') and not cmd.cmd_str.endswith('\r'):
-            cmd.cmd_str += '\n'  # 챔버K는 \n 기반 (필요시 \r로 변경)
+        # 무조건 EOL 재부착
+        self._eol = "\r\n"
+        line = cmd.cmd_str.rstrip("\r\n")
+        cmd.cmd_str = line + self._eol
         self._cmd_q.append(cmd)
+        self.status_message.emit("Faduino-DBG",
+            f"ENQ tag={cmd.tag or ''} len={len(self._cmd_q)} line='{line}' eol={repr(self._eol)}")
         if self._inflight is None and self._gap_timer and not self._gap_timer.isActive():
             self._gap_timer.start(0)
 
@@ -305,7 +308,10 @@ class FaduinoController(QObject):
 
         # 전송
         payload = cmd.cmd_str.encode('ascii')
+        
         n = int(self.serial.write(payload))
+        self.status_message.emit("Faduino-DBG", f"SND tag={cmd.tag or ''} nbytes={n} line='{cmd.cmd_str.strip()}'")
+
         if n <= 0:
             # 전송 실패 → 재시도 예약
             self._inflight = None
@@ -411,7 +417,7 @@ class FaduinoController(QObject):
             timeout_ms=200,
             gap_ms=GAP_MS,
             tag="[POLL]",
-            allow_no_reply=True
+            allow_no_reply=False
         ))
 
     def _update_buttons_from_state(self, state_str: str):
@@ -439,6 +445,19 @@ class FaduinoController(QObject):
     @Slot(str, bool)
     def update_port_state(self, name: str, state: bool):
         """UI 클릭 → 내부 상태 갱신 → 전체비트+PWM 전송"""
+
+            # === 디버그: 어떤 스레드에서 호출됐는지, 버튼 이름/상태 출력 ===
+        try:
+            cur = int(QThread.currentThreadId())   # PyQt6: OK
+            owner = int(self.thread().currentThreadId())
+        except Exception:
+            cur = owner = -1
+        self.status_message.emit(
+            "Faduino-DBG",
+            f"update_port_state(name={name}, state={state}) T={hex(cur)} owner={hex(owner)}"
+        )
+
+
         if name == 'Door_Button':
             if 'Door_Up' in FADUINO_PORT_INDEX and 'Door_Down' in FADUINO_PORT_INDEX:
                 self.port_states[FADUINO_PORT_INDEX['Door_Up']]   = state
@@ -471,7 +490,7 @@ class FaduinoController(QObject):
             timeout_ms=CMD_TIMEOUT_MS,
             gap_ms=GAP_MS,
             tag="[STATE+PWM]",
-            allow_no_reply=True
+            allow_no_reply=False
         ))
 
     @Slot()
@@ -501,3 +520,16 @@ class FaduinoController(QObject):
         if v < 0: v = 0
         if v > PWM_FULL_SCALE: v = PWM_FULL_SCALE
         return v
+    
+    @Slot()
+    def _after_serial_open(self):
+        # 아직 열려있는지 확인
+        if not (self.serial and self.serial.isOpen()):
+            return
+        # 중복 시작 방지
+        if self.polling_timer and not self.polling_timer.isActive():
+            self.status_message.emit("Faduino-DBG", "Starting polling after 1.2s warm-up")
+            self.polling_timer.start()
+            # 선택: 첫 상태를 즉시 한 번 읽고 시작하고 싶으면 아래 한 줄도 OK
+            # self._enqueue_state_read()
+
