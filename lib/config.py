@@ -65,11 +65,25 @@ BUTTON_TO_PORT_MAP = {
 # 명령어는 ASCII 문자로 전송해야 되며, \r으로 끝나야 함.
 MFC_COMMANDS = {
     # --- MFC 쓰기(Write) 명령어 ---
-    # --- 채널 지정 명령어 (channel 인자 필요) ---
-    'FLOW_ON': lambda channel: f"L{channel} 1",               # 지정된 채널의 Flow를 켭니다 (1=ON).
-    'FLOW_OFF': lambda channel: f"L{channel} 0",              # 지정된 채널의 Flow를 끕니다 (0=OFF). 
+    # 일괄 ON/OFF: L0 뒤에 비트마스크(예: '1010')
+    'SET_ONOFF_MASK': lambda bits: f"L0{bits}",
+
+    # (선택) 단일 채널 ON/OFF는 유지해도 되지만 내부 로직에선 쓰지 않음(폴백용)
+    'FLOW_ON':  lambda channel: f"L{int(channel)} 1",
+    'FLOW_OFF': lambda channel: f"L{int(channel)} 0",
+
     'MFC_ZEROING': lambda channel: f"L{4+channel} 1",         # 지정된 채널의 MFC를 Zeroing합니다 (Ch1=L5, Ch2=L6 ...). 
     'FLOW_SET': lambda channel, value: f"Q{channel} {value}", # 지정된 채널의 Flow 값을 설정합니다 (% of Full Scale). 
+
+    # === 읽기 ===
+    'READ_FLOW_ALL': "R60",                    # 모든 채널 유량
+    'READ_FLOW':     lambda channel: f"R6{int(channel)}",  # 폴백/디버깅용
+    'READ_MFC_ON_OFF_STATUS': "R69",
+    'READ_PRESSURE': "R5",
+    'READ_SP1_VALUE': "R1",
+    'READ_VALVE_POSITION': "R6",
+    'READ_SYSTEM_STATUS': "R7",
+    'READ_FLOW_SET': lambda channel: f"R6{4+int(channel)}", # 지정된 채널의 Flow 설정 값을 읽습니다 (Ch1=R65, Ch2=R66 ...). 
 
     # --- 공통 명령어 (채널 지정 불필요) ---
     'VALVE_OPEN': "O",  # Throttle Valve를 엽니다. 
@@ -78,19 +92,8 @@ MFC_COMMANDS = {
     'SP4_ON': "D4",     # Set-point 4를 실행합니다. 
     'SP1_ON': "D1",     # Set-point 1을 실행합니다. 
     'SP1_SET': lambda value: f"S1 {value}", # Set-point 1의 목표 압력 값을 설정합니다. 
-
-    # --- MFC 읽기(Read) 명령어 ---
-    # --- 채널 지정 명령어 (channel 인자 필요) ---
-    'READ_FLOW': lambda channel: f"R6{channel}",        # 지정된 채널의 현재 유량을 읽습니다. 
-    'READ_FLOW_SET': lambda channel: f"R6{4+channel}",  # 지정된 채널의 Flow 설정 값을 읽습니다 (Ch1=R65, Ch2=R66 ...). 
-
-    # --- 공통 명령어 (채널 지정 불필요) ---
-    'READ_PRESSURE': "R5",          # 현재 시스템 압력을 읽습니다. 
-    'READ_SP1_VALUE': "R1",         # Set-point 1에 설정된 값을 읽습니다. 
-    'READ_VALVE_POSITION': "R6",    # Throttle Valve의 현재 위치(%)를 읽습니다. 
-    'READ_SYSTEM_STATUS': "R7",     # 현재 활성화된 Set-point 등 시스템 상태를 읽습니다. 
-    'READ_MFC_ON_OFF_STATUS': "R69",# 모든 MFC 채널의 ON/OFF 상태를 한 번에 읽습니다. 
 }
+
 # --- MFC ---
 FLOW_ERROR_TOLERANCE = 0.05  # 5% 오차 허용
 FLOW_ERROR_MAX_COUNT = 3     # 3회 연속 불일치 시 경고

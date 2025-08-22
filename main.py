@@ -135,7 +135,7 @@ class MainDialog(QDialog):
             self.process_controller.start_process_flow,
             type=Qt.ConnectionType.QueuedConnection
         )
-        
+
         #    Process → Devices
         self.process_controller.update_faduino_port.connect(
             self.faduino_controller.update_port_state,
@@ -312,23 +312,12 @@ class MainDialog(QDialog):
         self.ui.process_time_edit.setPlainText(f"{m:02d}:{s:02d}")
 
     # ---------- MFC 표시(문자열 1개 Signal 보호 파싱) ----------
-    def update_mfc_flow_display(self, flow: str):
-        # flow 예: "Ar: 1.00" | "O2: 0.5" | "1.00"
-        flow = (flow or "").strip()
-        gas = None
-        value_str = None
-
-        if ":" in flow:
-            parts = flow.split(":", 1)
-            gas = (parts[0] or "").strip().upper()
-            value_str = (parts[1] or "").strip()
-        else:
-            gas = "AR" if self.ui.Ar_gas_radio.isChecked() else ("O2" if self.ui.O2_gas_radio.isChecked() else "AR")
-            value_str = flow
-
+    @Slot(str, float)
+    def update_mfc_flow_display(self, gas: str, value: float):
+        gas = gas.upper().strip()
         target_edit = self.ui.Ar_flow_edit if gas == "AR" else self.ui.O2_flow_edit
         try:
-            target_edit.setPlainText(f"{float(value_str):.2f}")
+            target_edit.setPlainText(f"{float(value):.2f}")
         except Exception:
             target_edit.setPlainText("Parsing Error")
 
