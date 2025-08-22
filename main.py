@@ -16,6 +16,7 @@ from device.RFpower import RFPowerController
 class MainDialog(QDialog):
     shutdown_requested = Signal()
     request_process_stop = Signal()
+    faduino_ui_request = Signal(str, bool) # (버튼이름, 상태)
 
     """메인 UI 및 전체 공정/장치 연결 클래스"""
     def __init__(self):
@@ -30,7 +31,21 @@ class MainDialog(QDialog):
         self.faduino_thread.setObjectName("FaduinoThread")
         self.faduino_controller = FaduinoController()
         self.faduino_controller.moveToThread(self.faduino_thread)
-        self.faduino_thread.started.connect(self.faduino_controller._setup_timers)
+        self.faduino_thread.started.connect(
+            self.faduino_controller._setup_timers,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+
+        self.faduino_thread.started.connect(
+            self.faduino_controller.start_polling,  
+            type=Qt.ConnectionType.QueuedConnection
+        )
+
+        # Faduino UI→워커 라우팅 (Queued 보장)
+        self.faduino_ui_request.connect(
+            self.faduino_controller.update_port_state,
+            type=Qt.ConnectionType.QueuedConnection
+        )
 
         # 2) MFC
         self.mfc_thread = QThread(self)
@@ -77,17 +92,17 @@ class MainDialog(QDialog):
     def _connect_signals(self):
         """스레드-로컬 타이머/정리, UI 이벤트, 장치 명령 라우팅, 상태 표시를 연결"""
 
-        # 1) 프로그램 생명주기 / 스레드-로컬 타이머 보장
-        #    Faduino: 반드시 그 스레드에서 타이머 생성 후 폴링 시작
-        if hasattr(self.faduino_controller, "_setup_timers"):
-            self.faduino_thread.started.connect(self.faduino_controller._setup_timers)
-
         #    Process 타이머도 자신 스레드에서 생성
         if hasattr(self.process_controller, "_setup_timers"):
-            self.process_thread.started.connect(self.process_controller._setup_timers)
-
+            self.process_thread.started.connect(
+                self.process_controller._setup_timers,
+                type=Qt.ConnectionType.QueuedConnection
+            )
         if hasattr(self.mfc_controller, "_setup_timers"):
-            self.mfc_thread.started.connect(self.mfc_controller._setup_timers)
+            self.mfc_thread.started.connect(
+                self.mfc_controller._setup_timers,
+                type=Qt.ConnectionType.QueuedConnection
+            )
 
         #    종료 시 각 컨트롤러 정리를 '자기 스레드 슬롯'에서 수행
         self.shutdown_requested.connect(self.faduino_controller.cleanup)
@@ -106,26 +121,49 @@ class MainDialog(QDialog):
         for btn_name in BUTTON_TO_PORT_MAP.keys():
             btn = getattr(self.ui, btn_name, None)
             if btn:
-                btn.toggled.connect(partial(self.faduino_controller.update_port_state, btn_name))
+                btn.toggled.connect(lambda checked, n=btn_name: self.faduino_ui_request.emit(n, checked))
+
         # Door는 특수 토글
-        self.ui.Door_Button.toggled.connect(
-            partial(self.faduino_controller.update_port_state, 'Door_Button')
+        self.ui.Door_Button.toggled.connect(lambda checked: self.faduino_ui_request.emit('Door_Button', checked))
+        self.faduino_controller.rf_power_response.connect(
+            self.rfpower_controller.on_rf_power_sample,
+            type=Qt.ConnectionType.QueuedConnection
         )
-        self.faduino_controller.rf_power_response.connect(self.rfpower_controller.on_rf_power_sample)
     
         # 3) 감독자(Process) ↔ 장치 라우팅
-        self.process_controller.start_requested.connect(self.process_controller.start_process_flow)
-
+        self.process_controller.start_requested.connect(
+            self.process_controller.start_process_flow,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        
         #    Process → Devices
-        self.process_controller.update_faduino_port.connect(self.faduino_controller.update_port_state)
-        self.process_controller.start_dc_power.connect(self.dcpower_controller.start_process)
-        self.process_controller.stop_dc_power.connect(self.dcpower_controller.stop_process)
-        self.process_controller.start_rf_power.connect(self.rfpower_controller.start_process)
-        self.process_controller.stop_rf_power.connect(self.rfpower_controller.stop_process)
+        self.process_controller.update_faduino_port.connect(
+            self.faduino_controller.update_port_state,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.start_dc_power.connect(
+            self.dcpower_controller.start_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.stop_dc_power.connect(
+            self.dcpower_controller.stop_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.start_rf_power.connect(
+            self.rfpower_controller.start_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.stop_rf_power.connect(
+            self.rfpower_controller.stop_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
 
         #    (핵심) Process → MFC: 명령 단일 라우트
         if hasattr(self.process_controller, "command_requested"):
-            self.process_controller.command_requested.connect(self.mfc_controller.handle_command)
+            self.process_controller.command_requested.connect(
+                self.mfc_controller.handle_command,
+                type=Qt.ConnectionType.QueuedConnection
+            )
 
         #    MFC → Process: 결과 보고
         self.mfc_controller.command_confirmed.connect(self.process_controller._on_mfc_confirmed)

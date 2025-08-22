@@ -135,37 +135,41 @@ class FaduinoController(QObject):
     # ========== 연결/해제 ==========
     @Slot()
     def start_polling(self):
-        """포트 열고 폴링 시작 (스레드-로컬 타이머 보장)"""
-        # 가드: 혹시 _setup_timers가 먼저 안 불렸다면 여기서 보강
+        # 잘못된 스레드에서 들어오면 자기 스레드로 재호출
+        if self.thread() is not QThread.currentThread():
+            QMetaObject.invokeMethod(self, "start_polling",
+                                    Qt.ConnectionType.QueuedConnection)
+            return
+        # 타이머/시리얼이 아직이면 자기 스레드에서 초기화
         if self._cmd_timer is None:
-            self._setup_timers()
-
+            QMetaObject.invokeMethod(self, "_setup_timers",
+                                    Qt.ConnectionType.BlockingQueuedConnection)
+        # 여기서 반드시 연결 의지 ON
         self._want_connected = True
         self._open_port()
-        # if not self._watchdog.isActive():
-        #     self._watchdog.start()
-        # if not self.polling_timer.isActive():
-        #     self.polling_timer.start()
         self.status_message.emit("Faduino", "주기적 상태 동기화 시작")
 
     def _open_port(self):
         if self.serial is None:
-            self._setup_timers()
+            QMetaObject.invokeMethod(self, "_setup_timers",
+                                    Qt.ConnectionType.BlockingQueuedConnection)
+            return
         if self.serial.isOpen():
             return
-        
+
         names = {p.portName() for p in QSerialPortInfo.availablePorts()}
         if FADUINO_PORT not in names:
             self.status_message.emit("Faduino", f"{FADUINO_PORT} 미존재. 사용 가능: {sorted(names)}")
             return
+
         self.serial.setPortName(FADUINO_PORT)
-        if not self.serial.open(QIODevice.ReadWrite):
+        if not self.serial.open(QIODevice.OpenModeFlag.ReadWrite):
             self.status_message.emit("Faduino", f"포트 열기 실패: {self.serial.errorString()}")
             return
 
         self.serial.setDataTerminalReady(True)
         self.serial.setRequestToSend(False)
-        self.serial.clear(QSerialPort.AllDirections)
+        self.serial.clear()
         self._rx.clear()
         self._reconnect_backoff_ms = RECON_BACKOFF_START_MS
         self._reconnect_pending = False
@@ -209,7 +213,7 @@ class FaduinoController(QObject):
 
     # ========== 수신/파싱 ==========
     def _on_serial_error(self, err):
-        if err == QSerialPort.NoError:
+        if err == QSerialPort.SerialPortError.NoError:
             return
         self.status_message.emit("Faduino", f"시리얼 오류: {self.serial.errorString()}")
         # inflight 복구(재시도)
