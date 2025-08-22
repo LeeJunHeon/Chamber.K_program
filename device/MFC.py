@@ -445,158 +445,238 @@ class MFCController(QObject):
             sent_value = float(params['value'])
             self.last_setpoints[channel] = sent_value
 
-            def on_set(_ack: Optional[str]):
-                def on_read_set(resp: Optional[str]):
-                    ok = False
-                    try:
-                        if resp and '+' in resp:
-                            ok = abs(float(resp.split('+')[1]) - sent_value) < 0.1
-                    except Exception:
+            attempts_left = 3
+
+            def attempt():
+                nonlocal attempts_left
+
+                def on_set(_ack: Optional[str]):
+                    def on_read_set(resp: Optional[str]):
                         ok = False
-                    if ok:
-                        self.command_confirmed.emit(cmd)
-                        self.status_message.emit("MFC < 확인", f"Ch{channel} 목표 {sent_value:.1f} sccm 설정 완료")
-                    else:
-                        self.command_failed.emit(cmd)
-                        self.status_message.emit("MFC(경고)", f"Ch{channel} FLOW_SET 검증 실패")
-                self.enqueue(make('READ_FLOW_SET', {'channel': channel}),
-                             on_read_set, tag='[READ_FLOW_SET]')
-            self.enqueue(make('FLOW_SET', params), on_set, tag='[FLOW_SET]')
+                        try:
+                            if resp and '+' in resp:
+                                ok = abs(float(resp.split('+')[1]) - sent_value) < 0.1
+                        except Exception:
+                            ok = False
+
+                        if ok:
+                            self.command_confirmed.emit(cmd)
+                            self.status_message.emit("MFC < 확인", f"Ch{channel} 목표 {sent_value:.1f} sccm 설정 완료")
+                        else:
+                            if attempts_left > 0:
+                                attempts_left -= 1
+                                self.status_message.emit("MFC-DBG", f"[VERIFY RETRY] FLOW_SET 재시도 (남은 {attempts_left})")
+                                QTimer.singleShot(0, attempt)
+                            else:
+                                self._force_reconnect("FLOW_SET 검증 실패(3회 초과)")
+                                self.command_failed.emit(cmd)
+
+                    self.enqueue(self._build_cmd('READ_FLOW_SET', {'channel': channel}),
+                                on_read_set, tag='[READ_FLOW_SET]')
+
+                self.enqueue(self._build_cmd('FLOW_SET', params), on_set, tag='[FLOW_SET]', allow_no_reply=True)
+
+            attempt()
             return
 
         # 2) FLOW_ON / FLOW_OFF
         if cmd in ("FLOW_ON", "FLOW_OFF"):
             channel = int(params['channel'])
             want_on = (cmd == "FLOW_ON")
+            attempts_left = 3
 
-            def on_set(_ack: Optional[str]):
-                def on_status(resp: Optional[str]):
-                    ok = False
-                    try:
-                        if resp and resp.startswith('L') and len(resp) >= (1 + channel + 1):
-                            status_char = resp[1 + channel]
-                            ok = (status_char == ('1' if want_on else '0'))
-                    except Exception:
-                        ok = False
+            def attempt():
+                nonlocal attempts_left
 
-                    if not ok:
-                        self.command_failed.emit(cmd)
-                        self.status_message.emit("MFC(경고)", f"Ch{channel} Flow {'ON' if want_on else 'OFF'} 상태 확인 실패")
-                        return
+                def on_set(_ack: Optional[str]):
+                    def on_status(resp: Optional[str]):
+                        ok_status = False
+                        try:
+                            if resp and resp.startswith('L') and len(resp) >= (1 + channel + 1):
+                                status_char = resp[1 + channel]
+                                ok_status = (status_char == ('1' if want_on else '0'))
+                        except Exception:
+                            ok_status = False
 
-                    if want_on:
-                        target = self.last_setpoints.get(channel, 0.0)
-                        tol = target * FLOW_ERROR_TOLERANCE
-                        self._stabilize_attempts_left[channel] = 30
-
-                        def one_check(_r=None):
-                            left = self._stabilize_attempts_left[channel]
-                            if left <= 0:
+                        if not ok_status:
+                            if attempts_left > 0:
+                                attempts_left -= 1
+                                self.status_message.emit("MFC-DBG",
+                                    f"[VERIFY RETRY] {cmd} 상태확인 재시도 (남은 {attempts_left})")
+                                QTimer.singleShot(0, attempt)
+                            else:
+                                self._force_reconnect(f"{cmd} 상태 검증 실패(3회 초과)")
                                 self.command_failed.emit(cmd)
-                                self.status_message.emit("MFC(경고)", f"Ch{channel} 유량 안정화 실패(타임아웃)")
-                                return
+                            return
 
-                            def on_flow(resp2: Optional[str]):
-                                ok2 = False
-                                try:
-                                    if resp2 and '+' in resp2:
-                                        actual = float(resp2.split('+')[1])
-                                        ok2 = abs(actual - target) <= tol
-                                        self.status_message.emit(
-                                            "MFC",
-                                            f"유량 확인... (Ch{channel} 목표:{target:.1f}, 현재:{actual:.1f}, 남은:{left-1}s)"
-                                        )
-                                except Exception:
+                        # ON이면 목표 유량까지 안정화 확인
+                        if want_on:
+                            target = self.last_setpoints.get(channel, 0.0)
+                            tol = target * FLOW_ERROR_TOLERANCE
+                            self._stabilize_attempts_left[channel] = 30  # 기존 로직 유지 (최대 30초)
+
+                            def one_check(_r=None):
+                                left = self._stabilize_attempts_left[channel]
+                                if left <= 0:
+                                    # 안정화 실패를 '검증 실패'로 취급하여 재시도/재연결
+                                    if attempts_left > 0:
+                                        attempts_left -= 1
+                                        self.status_message.emit("MFC-DBG",
+                                            f"[VERIFY RETRY] {cmd} 안정화 재시도 (남은 {attempts_left})")
+                                        QTimer.singleShot(0, attempt)
+                                    else:
+                                        self._force_reconnect(f"{cmd} 안정화 실패(3회 초과)")
+                                        self.command_failed.emit(cmd)
+                                    return
+
+                                def on_flow(resp2: Optional[str]):
                                     ok2 = False
+                                    try:
+                                        if resp2 and '+' in resp2:
+                                            actual = float(resp2.split('+')[1])
+                                            ok2 = abs(actual - target) <= tol
+                                            self.status_message.emit(
+                                                "MFC",
+                                                f"유량 확인... (Ch{channel} 목표:{target:.1f}, 현재:{actual:.1f}, 남은:{left-1}s)"
+                                            )
+                                    except Exception:
+                                        ok2 = False
 
-                                if ok2:
-                                    self.command_confirmed.emit(cmd)
-                                    self.status_message.emit("MFC < 확인", f"Ch{channel} 유량 안정화 완료")
-                                else:
-                                    self._stabilize_attempts_left[channel] = left - 1
-                                    # MFC 스레드에서 실행되므로 static singleShot 안전
-                                    QTimer.singleShot(1000, lambda: self.enqueue(
-                                        make('READ_FLOW', {'channel': channel}),
-                                        on_flow, tag='[STABILIZE FLOW]'
-                                    ))
+                                    if ok2:
+                                        self.command_confirmed.emit(cmd)
+                                        self.status_message.emit("MFC < 확인", f"Ch{channel} 유량 안정화 완료")
+                                    else:
+                                        self._stabilize_attempts_left[channel] = left - 1
+                                        QTimer.singleShot(1000, lambda: self.enqueue(
+                                            self._build_cmd('READ_FLOW', {'channel': channel}),
+                                            on_flow, tag='[STABILIZE FLOW]'
+                                        ))
 
-                            self.enqueue(make('READ_FLOW', {'channel': channel}),
-                                         on_flow, tag='[STABILIZE FLOW]')
-                        one_check()
-                    else:
-                        self.command_confirmed.emit(cmd)
-                        self.status_message.emit("MFC < 확인", f"Ch{channel} Flow OFF 확인")
+                                self.enqueue(self._build_cmd('READ_FLOW', {'channel': channel}),
+                                            on_flow, tag='[STABILIZE FLOW]')
 
-                self.enqueue(make('READ_MFC_ON_OFF_STATUS', None),
-                             on_status, tag='[READ_MFC_ON_OFF_STATUS]')
-            self.enqueue(make(cmd, params), on_set, tag=f'[{cmd}]')
+                            one_check()
+                        else:
+                            # OFF는 상태만 맞으면 종료
+                            self.command_confirmed.emit(cmd)
+                            self.status_message.emit("MFC < 확인", f"Ch{channel} Flow OFF 확인")
+
+                    self.enqueue(self._build_cmd('READ_MFC_ON_OFF_STATUS', None),
+                                on_status, tag='[READ_MFC_ON_OFF_STATUS]')
+
+                self.enqueue(self._build_cmd(cmd, params), on_set, tag=f'[{cmd}]', allow_no_reply=True)
+
+            attempt()
             return
 
         # 3) VALVE_OPEN / VALVE_CLOSE
         if cmd in ("VALVE_OPEN", "VALVE_CLOSE"):
             want_open = (cmd == "VALVE_OPEN")
+            attempts_left = 3
 
-            def on_cmd(_ack: Optional[str]):
-                def delayed_read():
-                    def on_read(resp: Optional[str]):
-                        ok = False
-                        try:
-                            if resp and '+' in resp:
-                                pos = float(resp.split('+')[1])
-                                ok = (pos > 99.0) if want_open else (pos < 1.0)
-                        except Exception:
+            def attempt():
+                nonlocal attempts_left
+
+                def on_cmd(_ack: Optional[str]):
+                    def delayed_read():
+                        def on_read(resp: Optional[str]):
                             ok = False
-                        if ok:
-                            self.command_confirmed.emit(cmd)
-                            self.status_message.emit("MFC < 확인", f"밸브 {'열림' if want_open else '닫힘'} 확인")
-                        else:
-                            self.command_failed.emit(cmd)
-                            self.status_message.emit("MFC(경고)", f"밸브 {'열림' if want_open else '닫힘'} 확인 실패")
-                    self.enqueue(self._build_cmd('READ_VALVE_POSITION', None),
-                                 on_read, tag='[READ_VALVE_POSITION]')
-                # 이 호출도 MFC 스레드에서 실행 → 안전
-                QTimer.singleShot(3000, delayed_read)
+                            try:
+                                if resp and '+' in resp:
+                                    pos = float(resp.split('+')[1])
+                                    ok = (pos > 99.0) if want_open else (pos < 1.0)
+                            except Exception:
+                                ok = False
+                            if ok:
+                                self.command_confirmed.emit(cmd)
+                                self.status_message.emit("MFC < 확인", f"밸브 {'열림' if want_open else '닫힘'} 확인")
+                            else:
+                                if attempts_left > 0:
+                                    attempts_left -= 1
+                                    self.status_message.emit("MFC-DBG",
+                                        f"[VERIFY RETRY] {cmd} 검증 재시도 (남은 {attempts_left})")
+                                    QTimer.singleShot(0, attempt)
+                                else:
+                                    self._force_reconnect(f"{cmd} 검증 실패(3회 초과)")
+                                    self.command_failed.emit(cmd)
 
-            self.enqueue(self._build_cmd(cmd, params), on_cmd, tag=f'[{cmd}]')
+                        self.enqueue(self._build_cmd('READ_VALVE_POSITION', None),
+                                    on_read, tag='[READ_VALVE_POSITION]')
+
+                    QTimer.singleShot(5000, delayed_read)  # 기존 지연 유지
+
+                self.enqueue(self._build_cmd(cmd, params), on_cmd, tag=f'[{cmd}]', allow_no_reply=True)
+
+            attempt()
             return
+
 
         # 4) SP1_SET / SP1_ON / SP4_ON / ZEROING 류
         if cmd == "SP1_SET":
             sent_value = float(params['value'])
+            attempts_left = 3
 
-            def on_set(_ack: Optional[str]):
-                def on_read(resp: Optional[str]):
-                    ok = False
-                    try:
-                        if resp and '+' in resp:
-                            ok = abs(float(resp.split('+')[1]) - sent_value) < 0.1
-                    except Exception:
+            def attempt():
+                nonlocal attempts_left
+
+                def on_set(_ack: Optional[str]):
+                    def on_read(resp: Optional[str]):
                         ok = False
-                    if ok:
-                        self.command_confirmed.emit(cmd)
-                        self.status_message.emit("MFC < 확인", f"SP1 {sent_value:.2f} 설정 완료")
-                    else:
-                        self.command_failed.emit(cmd)
-                        self.status_message.emit("MFC(경고)", "SP1_SET 검증 실패")
-                self.enqueue(self._build_cmd('READ_SP1_VALUE', None),
-                             on_read, tag='[READ_SP1_VALUE]')
-            self.enqueue(self._build_cmd('SP1_SET', params), on_set, tag='[SP1_SET]')
+                        try:
+                            if resp and '+' in resp:
+                                ok = abs(float(resp.split('+')[1]) - sent_value) < 0.1
+                        except Exception:
+                            ok = False
+                        if ok:
+                            self.command_confirmed.emit(cmd)
+                            self.status_message.emit("MFC < 확인", f"SP1 {sent_value:.2f} 설정 완료")
+                        else:
+                            if attempts_left > 0:
+                                attempts_left -= 1
+                                self.status_message.emit("MFC-DBG",
+                                    f"[VERIFY RETRY] SP1_SET 재시도 (남은 {attempts_left})")
+                                QTimer.singleShot(0, attempt)
+                            else:
+                                self._force_reconnect("SP1_SET 검증 실패(3회 초과)")
+                                self.command_failed.emit(cmd)
+
+                    self.enqueue(self._build_cmd('READ_SP1_VALUE', None),
+                                on_read, tag='[READ_SP1_VALUE]')
+
+                self.enqueue(self._build_cmd('SP1_SET', params), on_set, tag='[SP1_SET]', allow_no_reply=True)
+
+            attempt()
             return
 
         if cmd in ("SP1_ON", "SP4_ON"):
             expected_char = '1' if cmd == "SP1_ON" else '4'
-            def on_set(_ack: Optional[str]):
-                def on_read(resp: Optional[str]):
-                    ok = bool(resp and resp.startswith("M") and resp[1] == expected_char)
-                    if ok:
-                        self.command_confirmed.emit(cmd)
-                        self.status_message.emit("MFC < 확인", f"{cmd} 활성화 확인")
-                    else:
-                        self.command_failed.emit(cmd)
-                        self.status_message.emit("MFC(경고)", f"{cmd} 확인 실패")
-                self.enqueue(self._build_cmd('READ_SYSTEM_STATUS', None),
-                             on_read, tag='[READ_SYSTEM_STATUS]')
-            self.enqueue(self._build_cmd(cmd, None), on_set, tag=f'[{cmd}]')
+            attempts_left = 3
+
+            def attempt():
+                nonlocal attempts_left
+
+                def on_set(_ack: Optional[str]):
+                    def on_read(resp: Optional[str]):
+                        ok = bool(resp and resp.startswith("M") and resp[1] == expected_char)
+                        if ok:
+                            self.command_confirmed.emit(cmd)
+                            self.status_message.emit("MFC < 확인", f"{cmd} 활성화 확인")
+                        else:
+                            if attempts_left > 0:
+                                attempts_left -= 1
+                                self.status_message.emit("MFC-DBG",
+                                    f"[VERIFY RETRY] {cmd} 재시도 (남은 {attempts_left})")
+                                QTimer.singleShot(0, attempt)
+                            else:
+                                self._force_reconnect(f"{cmd} 검증 실패(3회 초과)")
+                                self.command_failed.emit(cmd)
+
+                    self.enqueue(self._build_cmd('READ_SYSTEM_STATUS', None),
+                                on_read, tag='[READ_SYSTEM_STATUS]')
+
+                self.enqueue(self._build_cmd(cmd, None), on_set, tag=f'[{cmd}]', allow_no_reply=True)
+
+            attempt()
             return
 
         if cmd in ("MFC_ZEROING", "PS_ZEROING"):

@@ -261,7 +261,11 @@ class FaduinoController(QObject):
 
             # 에코 스킵
             if self._inflight and line == self._inflight.cmd_str.strip():
-                continue
+                if self._inflight.tag in ("[STATE+PWM]",):
+                    self._finish_command(line)
+                    break
+                else:
+                    continue
 
             # 인플라이트 응답 처리
             self._finish_command(line)
