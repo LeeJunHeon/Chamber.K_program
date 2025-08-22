@@ -8,9 +8,9 @@
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
 
-from PySide6.QtCore import (QCoreApplication, QMetaObject, QRect, Qt)
-from PySide6.QtGui import (QFont)
-from PySide6.QtWidgets import (QComboBox, QFrame, QLabel, QCheckBox,
+from PyQt6.QtCore import (QCoreApplication, QMetaObject, QRect, Qt)
+from PyQt6.QtGui import (QFont)
+from PyQt6.QtWidgets import (QComboBox, QFrame, QLabel, QCheckBox,
     QPlainTextEdit, QPushButton, QTextEdit, QRadioButton, QButtonGroup)
 
 class Ui_Dialog(object):

@@ -1,6 +1,6 @@
 # device/process_controller.py  (CH‑K → CH‑2 style, thread‑safe timers)
 
-from PySide6.QtCore import QObject, Signal, Slot, Qt, QTimer, QEventLoop
+from PyQt6.QtCore import QObject, pyqtSignal as Signal, pyqtSlot as Slot, Qt, QTimer, QEventLoop
 import math
 
 class SputterProcessController(QObject):

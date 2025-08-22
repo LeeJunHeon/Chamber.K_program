@@ -1,8 +1,8 @@
 # === CHAMBER-K main.py (수정본) ===
 import sys
 from functools import partial
-from PySide6.QtCore import QThread, Slot, Signal, QEventLoop
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QObject
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from UI import Ui_Dialog
 from lib.config import BUTTON_TO_PORT_MAP
@@ -12,7 +12,6 @@ from device.Faduino import FaduinoController
 from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
-
 
 class MainDialog(QDialog):
     shutdown_requested = Signal()
@@ -213,7 +212,7 @@ class MainDialog(QDialog):
         # 1) 공정 중지 요청(프로세스 스레드에서 안전하게 처리)
         self.request_process_stop.emit()
         # 2) 장비 즉시 정지(Faduino 비상정지)
-        self.faduino_controller.on_emergency_stop()
+        #self.faduino_controller.on_emergency_stop()
 
     # ---------- 상태/표시 ----------
     @Slot(str)

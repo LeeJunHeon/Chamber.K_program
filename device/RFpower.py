@@ -1,6 +1,6 @@
 # RFpower.py
 import time
-from PySide6.QtCore import QObject, QThread, Signal, Slot, QTimer
+from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer
 from lib.config import (
     RF_MAX_POWER, RF_RAMP_STEP, RF_MAX_ERROR_COUNT, 
     RF_TOLERANCE_POWER, RF_FORWARD_SCALING_MAX_WATT, 

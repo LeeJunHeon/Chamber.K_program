@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from collections import deque
 from typing import Deque, Callable, Optional
 
-from PySide6.QtCore import QObject, QTimer, QIODevice, Signal, Slot, Qt
-from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
+from PyQt6.QtCore import QObject, QTimer, QIODevice, pyqtSignal as Signal, pyqtSlot as Slot, Qt, QThread, QMetaObject
+from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 # === 프로젝트 설정 ===
 from lib.config import (
@@ -24,6 +24,24 @@ RECON_BACKOFF_MAX_MS   = 4000
 
 STATE_BITS_LEN = 14
 PWM_FULL_SCALE = 255  # 0~255
+
+def _dbg_thread(prefix: str, owner_obj, extra: dict=None):
+    try:
+        cur = QThread.currentThread()
+        own = owner_obj.thread()
+        parts = [
+            f"{prefix}: cur={hex(id(cur))}/{cur.objectName()}",
+            f"owner={hex(id(own))}/{own.objectName() if own else ''}",
+        ]
+        if extra:
+            for k, obj in extra.items():
+                if obj is None:
+                    parts.append(f"{k}=None")
+                else:
+                    parts.append(f"{k}.owner={hex(id(obj.thread()))}/{obj.thread().objectName()}")
+        print(" | ".join(parts))
+    except Exception as e:
+        print(f"[DBG-ERR] {prefix}: {e}")
 
 @dataclass
 class Command:
@@ -54,15 +72,8 @@ class FaduinoController(QObject):
         # 현재 PWM(0~255)
         self.current_pwm_value = 0
 
-        # --- QSerialPort ---
-        self.serial = QSerialPort(self)
-        self.serial.setBaudRate(FADUINO_BAUD)
-        self.serial.setDataBits(QSerialPort.Data8)
-        self.serial.setParity(QSerialPort.NoParity)
-        self.serial.setStopBits(QSerialPort.OneStop)
-        self.serial.setFlowControl(QSerialPort.NoFlowControl)
-        self.serial.readyRead.connect(self._on_ready_read)
-        self.serial.errorOccurred.connect(self._on_serial_error)
+        # --- QSerialPort (스레드-로컬 생성; 지금은 None) ---
+        self.serial: Optional[QSerialPort] = None
 
         # --- 수신 버퍼/파서 ---
         self._rx = bytearray()
@@ -87,6 +98,26 @@ class FaduinoController(QObject):
     # ========== 타이머 생성(반드시 FaduinoThread에서 호출) ==========
     @Slot()
     def _setup_timers(self):
+        _dbg_thread("FAD _setup_timers(enter)", self, {
+            "serial": self.serial,
+            "cmd_t": self._cmd_timer,
+            "gap_t": self._gap_timer,
+            "poll_t": self.polling_timer,
+            "wd_t": self._watchdog,
+            "recon_t": self._reconnect_timer,
+        })
+            
+        # --- QSerialPort ---
+        if self.serial is None:
+            self.serial = QSerialPort(self)
+            self.serial.setBaudRate(FADUINO_BAUD)
+            self.serial.setDataBits(QSerialPort.Data8)
+            self.serial.setParity(QSerialPort.NoParity)
+            self.serial.setStopBits(QSerialPort.OneStop)
+            self.serial.setFlowControl(QSerialPort.NoFlowControl)
+            self.serial.readyRead.connect(self._on_ready_read)
+            self.serial.errorOccurred.connect(self._on_serial_error)
+
         if self._cmd_timer is None:
             self._cmd_timer = QTimer(self)
             self._cmd_timer.setSingleShot(True)
@@ -120,10 +151,17 @@ class FaduinoController(QObject):
         if not self.polling_timer.isActive():
             self.polling_timer.start()
 
+        _dbg_thread("FAD _setup_timers(exit)", self, {
+            "serial": self.serial, "cmd_t": self._cmd_timer, "gap_t": self._gap_timer,
+            "poll_t": self.polling_timer, "wd_t": self._watchdog, "recon_t": self._reconnect_timer,
+        })
+
     # ========== 연결/해제 ==========
     @Slot()
     def start_polling(self):
         """포트 열고 폴링 시작 (스레드-로컬 타이머 보장)"""
+        _dbg_thread("FAD start_polling()", self, {"serial": self.serial, "poll_t": self.polling_timer, "wd_t": self._watchdog})
+        
         # 가드: 혹시 _setup_timers가 먼저 안 불렸다면 여기서 보강
         if self._cmd_timer is None:
             self._setup_timers()
@@ -137,8 +175,13 @@ class FaduinoController(QObject):
         self.status_message.emit("Faduino", "주기적 상태 동기화 시작")
 
     def _open_port(self):
+        _dbg_thread("FAD _open_port()", self, {"serial": self.serial})
+
+        if self.serial is None:
+            self._setup_timers()
         if self.serial.isOpen():
             return
+        
         names = {p.portName() for p in QSerialPortInfo.availablePorts()}
         if FADUINO_PORT not in names:
             self.status_message.emit("Faduino", f"{FADUINO_PORT} 미존재. 사용 가능: {sorted(names)}")
@@ -147,6 +190,9 @@ class FaduinoController(QObject):
         if not self.serial.open(QIODevice.ReadWrite):
             self.status_message.emit("Faduino", f"포트 열기 실패: {self.serial.errorString()}")
             return
+        
+        _dbg_thread("FAD _open_port(opened)", self, {"serial": self.serial})
+
         self.serial.setDataTerminalReady(True)
         self.serial.setRequestToSend(False)
         self.serial.clear(QSerialPort.AllDirections)
@@ -187,7 +233,7 @@ class FaduinoController(QObject):
         self._rx.clear()
         self._inflight = None
         self._cmd_q.clear()
-        if self.serial.isOpen():
+        if self.serial and self.serial.isOpen():
             self.serial.close()
         self.status_message.emit("Faduino", "연결 종료")
 

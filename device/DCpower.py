@@ -1,12 +1,12 @@
-# DCPowerController.py — PySide6 QSerialPort + Command Queue(비동기) [스레드-로컬 타이머 적용]
+# DCPowerController.py — PyQt6 QSerialPort + Command Queue(비동기) [스레드-로컬 타이머 적용]
 
 from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from typing import Callable, Optional, Deque
 
-from PySide6.QtCore import QObject, QTimer, QIODeviceBase, Signal, Slot, Qt
-from PySide6.QtSerialPort import QSerialPort, QSerialPortInfo
+from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, pyqtSlot as Slot, Qt
+from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.config import (
     DC_PORT, DC_BAUDRATE,
