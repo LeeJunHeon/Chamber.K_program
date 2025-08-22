@@ -1,25 +1,28 @@
-# device/process_controller.py  (CH-K 수정본, PySide6)
+# device/process_controller.py  (CH‑K → CH‑2 style, thread‑safe timers)
 
-from PySide6.QtCore import QObject, Signal, Slot, QThread, QEventLoop, Qt, QTimer
+from PySide6.QtCore import QObject, Signal, Slot, Qt, QTimer, QEventLoop
 import math
 
 class SputterProcessController(QObject):
-    # --- UI 및 다른 컨트롤러와 통신하기 위한 시그널들 ---
-    status_message = Signal(str, str)        # UI 로그창에 (레벨, 메시지)
-    update_faduino_port = Signal(str, bool)  # Faduino 포트 상태 변경
-    start_dc_power = Signal(float)           # DC 파워 시작 요청 (목표치)
-    stop_dc_power = Signal()                 # DC 파워 정지 요청
-    start_rf_power = Signal(dict)            # RF 파워 시작 요청 ({'target','offset','param'})
-    stop_rf_power = Signal()                 # RF 파워 정지 요청
+    # --- UI 및 다른 컨트롤러와 통신 시그널 (CH‑K 명세 유지) ---
+    status_message = Signal(str, str)
+    update_faduino_port = Signal(str, bool)
+    start_dc_power = Signal(float)
+    stop_dc_power = Signal()
+    start_rf_power = Signal(dict)
+    stop_rf_power = Signal()
 
-    shutter_delay_tick = Signal(int)         # Shutter delay 남은 초
-    process_time_tick = Signal(int)          # 메인 공정 남은 초
-    stage_monitor = Signal(str)              # 현재 단계 텍스트
-    finished = Signal()                      # 전체 공정 종료
-    start_requested = Signal(dict)           # UI → 공정 시작 파라미터
-    connection_failed = Signal(str)          # 장비 연결 실패
-    critical_error = Signal(str)             # 치명적 오류
-    command_requested = Signal(str, dict)    # Process → MFC 명령 라우팅
+    shutter_delay_tick = Signal(int)
+    process_time_tick = Signal(int)
+    stage_monitor = Signal(str)
+    finished = Signal()
+
+    start_requested = Signal(dict)
+    connection_failed = Signal(str)
+    critical_error = Signal(str)
+
+    # Process → MFC: 단일 라우팅
+    command_requested = Signal(str, dict)
 
     def __init__(self, mfc_controller, dc_controller, rf_controller, faduino_controller):
         super().__init__()
@@ -39,12 +42,12 @@ class SputterProcessController(QObject):
         self._step_in_progress = False
         self.params = None
 
-        # 타이머(스레드-로컬 생성)
-        self._timer = None
+        # ⚠️ 스레드-로컬로 생성해야 하는 객체들: __init__에서는 만들지 않음
+        self._timer = None              # 1초 틱 타이머 (shutter/process/delay 공용)
         self._time_left = 0
         self._current_timer_purpose = None  # 'shutter' | 'process' | 'delay'
 
-    # --- 타이머 셋업 (ProcessThread에서만 호출) ---
+    # === 타이머/리소스 셋업: 반드시 ProcessThread에서 호출 ===
     @Slot()
     def _setup_timers(self):
         if self._timer is None:
@@ -52,35 +55,34 @@ class SputterProcessController(QObject):
             self._timer.setInterval(1000)
             self._timer.setTimerType(Qt.PreciseTimer)
             self._timer.timeout.connect(self._on_timer_tick)
+        self.status_message.emit("정보", "ProcessController 타이머 초기화 완료")
 
-    # --- 공정 시작 ---
+    # === 공정 시작 ===
     @Slot(dict)
     def start_process_flow(self, params):
-        """UI의 start_requested 신호를 받아 공정 시작."""
         self.params = params
         self._is_running = True
 
-        # 1) 장비 연결 확인/시도
+        # 1) 장비 연결 확인/시도 (동기식 확인만, I/O는 각 장치 스레드에서 처리)
         if params.get('dc_power', 0) > 0:
-            if not (hasattr(self.dc, "serial") and self.dc.serial.isOpen()):
-                if not self.dc.connect_dcpower_device():
+            if not (hasattr(self.dc, "serial") and self.dc.serial and self.dc.serial.isOpen()):
+                if not getattr(self.dc, 'connect_dcpower_device', lambda: False)():
                     self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
                     return
 
-        # MFC는 항상 필요
-        if not (self.mfc.serial_mfc.isOpen()):
-            if not self.mfc.connect_mfc_device():
+        if not getattr(self.mfc, 'serial_mfc', None) or not self.mfc.serial_mfc.isOpen():
+            if not getattr(self.mfc, 'connect_mfc_device', lambda: False)():
                 self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
                 return
 
-        # 2) 내부 상태
+        # 2) 내부 상태 설정
         selected_gas = params.get('selected_gas', 'Ar')
         self.process_channel = 1 if selected_gas == 'Ar' else 2
         self.gas_valve_button = 'Ar_Button' if selected_gas == 'Ar' else 'O2_Button'
         self.is_dc_on = params.get('dc_power', 0) > 0
         self.is_rf_on = params.get('rf_power', 0) > 0
 
-        # 3) 단계 생성 및 시작
+        # 3) 스텝 준비
         self._prepare_steps(params)
         self._current_step_idx = 0
         self._step_in_progress = False
@@ -91,19 +93,19 @@ class SputterProcessController(QObject):
     def _prepare_steps(self, params):
         ch = self.process_channel
         flow = float(params.get("mfc_flow", 0))
-        sp1 = float(params.get("sp1_set", 0)) / 10.0  # 단위 보정
+        sp1 = float(params.get("sp1_set", 0)) / 10.0
 
         steps = [
             ("MFC", "FLOW_OFF", {"channel": ch}, f"Ch{ch} flow off, valve open, zeroing ..."),
             ("MFC", "VALVE_OPEN", {}, "Valve open"),
             ("MFC", "MFC_ZEROING", {"channel": ch}, "MFC ZEROING"),
             ("MFC", "PS_ZEROING", {}, "PS ZEROING"),
-            ("FADUINO", self.gas_valve_button, True, f"{self.params.get('selected_gas')} Valve를 엽니다."),
+            ("FADUINO", self.gas_valve_button, True, f"{params.get('selected_gas')} Valve를 엽니다."),
             ("MFC", "FLOW_SET", {"channel": ch, "value": flow}, f"Ch{ch} 유량 {flow} sccm 설정"),
             ("MFC", "FLOW_ON", {"channel": ch}, f"Ch{ch} flow ON"),
             ("MFC", "SP4_ON", {}, "SP4 ON (압력제어 준비)"),
             ("MFC", "SP1_SET", {"value": sp1}, f"SP1(압력 목표) 값 {sp1} 설정"),
-            ("DELAY", 60, None, "SP4 안정화 1분 대기"),  # 초 단위
+            ("DELAY", 60, None, "SP4 안정화 1분 대기"),
         ]
 
         if params.get('use_g1', False):
@@ -118,7 +120,7 @@ class SputterProcessController(QObject):
             ("FADUINO", "MS_button", True, "Main Shutter(M.S.)를 엽니다."),
             ("PROCESS_TIME", None, None, "메인 공정 대기"),
             ("FADUINO", "MS_button", False, "Main Shutter(M.S.)를 닫습니다."),
-            ("FADUINO", self.gas_valve_button, False, f"{self.params.get('selected_gas')} Valve를 닫습니다."),
+            ("FADUINO", self.gas_valve_button, False, f"{params.get('selected_gas')} Valve를 닫습니다."),
         ])
         self._steps = steps
 
@@ -140,7 +142,6 @@ class SputterProcessController(QObject):
         self._step_in_progress = True
 
         if device == "MFC":
-            self.status_message.emit("정보", f"[DEBUG] MFC 명령 emit: {cmd}, {params}")
             self.command_requested.emit(cmd, params)
 
         elif device == "FADUINO":
@@ -148,7 +149,6 @@ class SputterProcessController(QObject):
             QTimer.singleShot(1000, self._advance_after_faduino)  # 논블로킹 지연
 
         elif device == "DELAY":
-            # ★ 버그수정: 지연 후 즉시 진행하지 말고 타이머로 끝날 때 넘어감
             seconds = int(cmd) if cmd else 0
             self._delay_seconds(seconds)
 
@@ -229,7 +229,7 @@ class SputterProcessController(QObject):
         self._step_in_progress = False
         self._run_next_step()
 
-    # --- 타이머 기반 대기들 ---
+    # --- 타이머 기반 대기 ---
     def _shutter_delay(self):
         delay_seconds = math.ceil(self.params.get('shutter_delay', 0) * 60)
         if delay_seconds <= 0:
@@ -241,7 +241,10 @@ class SputterProcessController(QObject):
         self._time_left = delay_seconds
         self._current_timer_purpose = 'shutter'
         self.shutter_delay_tick.emit(self._time_left)
-        self._timer.start()  # 1초 주기 틱
+        if self._timer:
+            self._timer.start()
+        else:
+            self.status_message.emit("오류", "타이머가 초기화되지 않았습니다. _setup_timers가 호출되었는지 확인")
 
     def _process_time(self):
         process_seconds = math.ceil(self.params.get('process_time', 0) * 60)
@@ -255,7 +258,10 @@ class SputterProcessController(QObject):
         self._time_left = process_seconds
         self._current_timer_purpose = 'process'
         self.process_time_tick.emit(self._time_left)
-        self._timer.start()
+        if self._timer:
+            self._timer.start()
+        else:
+            self.status_message.emit("오류", "타이머가 초기화되지 않았습니다. _setup_timers가 호출되었는지 확인")
 
     def _delay_seconds(self, seconds: int):
         if seconds <= 0:
@@ -265,11 +271,15 @@ class SputterProcessController(QObject):
             return
         self._time_left = int(seconds)
         self._current_timer_purpose = 'delay'
-        self._timer.start()
+        if self._timer:
+            self._timer.start()
+        else:
+            self.status_message.emit("오류", "타이머가 초기화되지 않았습니다. _setup_timers가 호출되었는지 확인")
 
     def _on_timer_tick(self):
         if not self._is_running:
-            self._timer.stop()
+            if self._timer:
+                self._timer.stop()
             if self._current_timer_purpose == 'process':
                 self.command_requested.emit("set_polling", {'enable': False})
             return
@@ -281,28 +291,15 @@ class SputterProcessController(QObject):
             self.process_time_tick.emit(self._time_left)
 
         if self._time_left <= 0:
-            self._timer.stop()
+            if self._timer:
+                self._timer.stop()
             if self._current_timer_purpose == 'process':
                 self.command_requested.emit("set_polling", {'enable': False})
             self._current_step_idx += 1
             self._step_in_progress = False
             self._run_next_step()
 
-    @Slot()
-    def _after_close_gun(self):
-        self.stage_monitor.emit("Gas valve close...")
-        if self.gas_valve_button:
-            gas_name = "Ar" if "Ar" in self.gas_valve_button else "O2"
-            self.status_message.emit("FADUINO", f"{gas_name} Valve를 닫습니다.")
-            self.update_faduino_port.emit(self.gas_valve_button, False)
-        QTimer.singleShot(1000, self._finish_stop)  # 다음 단계로 또 지연 연결
-
-    @Slot()
-    def _finish_stop(self):
-        self.status_message.emit("정보", "종료 시퀀스가 안전하게 완료되었습니다.")
-        self.finished.emit()
-
-    # --- 종료/정리 ---
+    # === 종료/정리 ===
     @Slot()
     def teardown(self):
         if self._timer and self._timer.isActive():
@@ -310,18 +307,18 @@ class SputterProcessController(QObject):
 
     @Slot()
     def stop_process(self):
-        """공정을 중단하고 모든 장비를 안전하게 종료."""
         if not self._is_running:
             return
 
         self.status_message.emit("정보", "종료 시퀀스를 실행합니다.")
         self._is_running = False
-        self._timer.stop() if self._timer else None
+        if self._timer:
+            self._timer.stop()
 
         self.stage_monitor.emit("M.S. close...")
         self.update_faduino_port.emit('MS_button', False)
 
-        # 1) 파워 끄기
+        # 파워 끄기
         if self.is_dc_on and self.dc:
             self.status_message.emit("DCpower", "DC 파워를 끕니다.")
             self.stop_dc_power.emit()
@@ -329,21 +326,19 @@ class SputterProcessController(QObject):
         if self.is_rf_on and self.rf:
             self.status_message.emit("RFpower", "RF 파워를 끕니다 (Ramp-down).")
             loop = QEventLoop()
-            self.rf.ramp_down_finished.connect(loop.quit)
+            if hasattr(self.rf, 'ramp_down_finished'):
+                self.rf.ramp_down_finished.connect(loop.quit)
             self.stop_rf_power.emit()
-            loop.exec()
-            self.rf.ramp_down_finished.disconnect(loop.quit)
+            if hasattr(self.rf, 'ramp_down_finished'):
+                loop.exec()
+                self.rf.ramp_down_finished.disconnect(loop.quit)
             self.status_message.emit("정보", "RF 파워 OFF 완료.")
 
-        # 2) MFC 플로우/밸브/폴링
-        self.stage_monitor.emit("MFC flow, valve off...")
-        self.stage_monitor.emit("MFC flow, valve off...")
+        # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN, 폴링 OFF)
         if self.mfc:
             loop = QEventLoop()
-
-            def _quit_loop(*_):   # 인자 무시하고 loop.quit()
+            def _quit_loop(*_):
                 loop.quit()
-        
             self.mfc.command_confirmed.connect(_quit_loop)
             self.mfc.command_failed.connect(_quit_loop)
 
@@ -354,21 +349,21 @@ class SputterProcessController(QObject):
             loop.exec()
 
             self.command_requested.emit("set_polling", {'enable': False})
-
             self.mfc.command_confirmed.disconnect(_quit_loop)
             self.mfc.command_failed.disconnect(_quit_loop)
 
-        # 3) Faduino 셔터/가스 닫기
-        self.stage_monitor.emit("Gun shutter close...")
+        # Gun shutters & Gas
         self.update_faduino_port.emit('S1_button', False)
         self.update_faduino_port.emit('S2_button', False)
-        QTimer.singleShot(1000, self._after_close_gun)  # 논블로킹 지연
 
-        self.stage_monitor.emit("Gas valve close...")
-        if self.gas_valve_button:
-            gas_name = "Ar" if "Ar" in self.gas_valve_button else "O2"
-            self.status_message.emit("FADUINO", f"{gas_name} Valve를 닫습니다.")
-            self.update_faduino_port.emit(self.gas_valve_button, False)
-        
+        gas_name = "Ar" if self.process_channel == 1 else "O2"
+        self.status_message.emit("FADUINO", f"{gas_name} Valve를 닫습니다.")
+        self.update_faduino_port.emit(self.gas_valve_button, False)
+
+        # 종료 완료 통지
         QTimer.singleShot(1000, self._finish_stop)
+
+    @Slot()
+    def _finish_stop(self):
         self.status_message.emit("정보", "종료 시퀀스가 안전하게 완료되었습니다.")
+        self.finished.emit()

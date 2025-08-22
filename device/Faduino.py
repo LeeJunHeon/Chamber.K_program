@@ -114,6 +114,12 @@ class FaduinoController(QObject):
             self._reconnect_timer.setSingleShot(True)
             self._reconnect_timer.timeout.connect(self._try_reconnect)
 
+        # ▼▼▼ 타이머 시작 로직을 이쪽으로 이동 ▼▼▼
+        if not self._watchdog.isActive():
+            self._watchdog.start()
+        if not self.polling_timer.isActive():
+            self.polling_timer.start()
+
     # ========== 연결/해제 ==========
     @Slot()
     def start_polling(self):
@@ -124,10 +130,10 @@ class FaduinoController(QObject):
 
         self._want_connected = True
         self._open_port()
-        if not self._watchdog.isActive():
-            self._watchdog.start()
-        if not self.polling_timer.isActive():
-            self.polling_timer.start()
+        # if not self._watchdog.isActive():
+        #     self._watchdog.start()
+        # if not self.polling_timer.isActive():
+        #     self.polling_timer.start()
         self.status_message.emit("Faduino", "주기적 상태 동기화 시작")
 
     def _open_port(self):
@@ -447,7 +453,7 @@ class FaduinoController(QObject):
             tag="[STATE+PWM]",
             allow_no_reply=True
         ))
-        
+
     @Slot()
     def request_rf_read(self):
         self.enqueue(Command("RF_READ,0", lambda _l: None, allow_no_reply=True, gap_ms=GAP_MS, tag="[RF_READ]"))

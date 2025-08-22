@@ -79,16 +79,15 @@ class MainDialog(QDialog):
 
         # 1) 프로그램 생명주기 / 스레드-로컬 타이머 보장
         #    Faduino: 반드시 그 스레드에서 타이머 생성 후 폴링 시작
-        #    (FaduinoController에 @_Slot() def _setup_timers(...) 구현되어 있어야 함)
         if hasattr(self.faduino_controller, "_setup_timers"):
             self.faduino_thread.started.connect(self.faduino_controller._setup_timers)
-        self.faduino_thread.started.connect(self.faduino_controller.start_polling)
 
         #    Process 타이머도 자신 스레드에서 생성
         if hasattr(self.process_controller, "_setup_timers"):
             self.process_thread.started.connect(self.process_controller._setup_timers)
 
-        self.mfc_thread.started.connect(self.mfc_controller._setup_timers)
+        if hasattr(self.mfc_controller, "_setup_timers"):
+            self.mfc_thread.started.connect(self.mfc_controller._setup_timers)
 
         #    종료 시 각 컨트롤러 정리를 '자기 스레드 슬롯'에서 수행
         self.shutdown_requested.connect(self.faduino_controller.cleanup)
@@ -115,7 +114,6 @@ class MainDialog(QDialog):
         self.faduino_controller.rf_power_response.connect(self.rfpower_controller.on_rf_power_sample)
     
         # 3) 감독자(Process) ↔ 장치 라우팅
-        #    Process가 스스로 start_requested를 받아 flow 시작(동일 스레드)
         self.process_controller.start_requested.connect(self.process_controller.start_process_flow)
 
         #    Process → Devices
