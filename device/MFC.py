@@ -291,11 +291,17 @@ class MFCController(QObject):
             if cmd.retries_left > 0:
                 cmd.retries_left -= 1
                 self._cmd_q.appendleft(cmd)
-                if self._gap_timer: self._gap_timer.start(max(50, cmd.gap_ms))
+                # 선택: 포트 리셋로 회복력 강화
+                try:
+                    if self.serial_mfc.isOpen():
+                        self.serial_mfc.close()
+                except Exception:
+                    pass
+                if self._reconnect_timer:
+                    self._reconnect_timer.start(0)     # 즉시 재연결
             else:
-                self._force_reconnect("전송 실패(재시도 소진)", requeue_cmd=cmd)   # ★ 추가
+                self._force_reconnect("전송 실패(재시도 소진)", requeue_cmd=cmd)
             return
-
 
         self.serial_mfc.flush()
 
