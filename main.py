@@ -104,13 +104,26 @@ class MainDialog(QDialog):
                 type=Qt.ConnectionType.QueuedConnection
             )
 
+        if hasattr(self.dcpower_controller, "_setup_timers"):
+            self.dcpower_thread.started.connect(
+                self.dcpower_controller._setup_timers,
+                type=Qt.ConnectionType.QueuedConnection
+            )
+
+        # if hasattr(self.rfpower_controller, "_setup_timers"):
+        #     self.rfpower_thread.started.connect(
+        #         self.rfpower_controller._setup_timers,
+        #         type=Qt.ConnectionType.QueuedConnection
+        #     )
+
         #    종료 시 각 컨트롤러 정리를 '자기 스레드 슬롯'에서 수행
-        self.shutdown_requested.connect(self.faduino_controller.cleanup)
-        self.shutdown_requested.connect(self.mfc_controller.cleanup)
-        self.shutdown_requested.connect(self.dcpower_controller.cleanup)
-        self.shutdown_requested.connect(self.rfpower_controller.cleanup)
+        # _connect_signals() 안: 종료 시그널 연결을 명시적 Queued로
+        self.shutdown_requested.connect(self.faduino_controller.cleanup, type=Qt.ConnectionType.QueuedConnection)
+        self.shutdown_requested.connect(self.mfc_controller.cleanup,     type=Qt.ConnectionType.QueuedConnection)
+        self.shutdown_requested.connect(self.dcpower_controller.cleanup, type=Qt.ConnectionType.QueuedConnection)
+        self.shutdown_requested.connect(self.rfpower_controller.cleanup, type=Qt.ConnectionType.QueuedConnection)
         if hasattr(self.process_controller, "teardown"):
-            self.shutdown_requested.connect(self.process_controller.teardown)
+            self.shutdown_requested.connect(self.process_controller.teardown, type=Qt.ConnectionType.QueuedConnection)
 
         # 2) UI 이벤트 → 컨트롤러
         self.ui.Sputter_Start_Button.clicked.connect(self._handle_start_process)
@@ -359,7 +372,7 @@ class MainDialog(QDialog):
 
         # 진행 중인 공정이 있으면 먼저 중단 (감독자 쪽 메서드/신호 이름에 맞춰 조정)
         try:
-            if getattr(self.process_controller, "is_running", False):
+            if getattr(self.process_controller, "_is_running", False):
                 # 예: self.process_controller.stop_process() 또는 abort_process()
                 self.process_controller.stop_process()
         except Exception:

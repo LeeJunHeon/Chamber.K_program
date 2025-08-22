@@ -1,8 +1,21 @@
 # device/process_controller.py  (CH‑K → CH‑2 style, thread‑safe timers)
 
-from PyQt6.QtCore import QObject, pyqtSignal as Signal, pyqtSlot as Slot, Qt, QTimer, QEventLoop
+from PyQt6.QtCore import QObject, pyqtSignal as Signal, pyqtSlot as Slot, Qt, QTimer, QEventLoop, QMetaObject, QThread
 import math
 
+def _invoke_connect(obj, method_name: str) -> bool:
+    """obj.method_name()을 스레드 안전하게 호출."""
+    try:
+        if obj.thread() is QThread.currentThread():
+            getattr(obj, method_name)()
+            return True
+        else:
+            return QMetaObject.invokeMethod(
+                obj, method_name, Qt.ConnectionType.BlockingQueuedConnection
+            )
+    except Exception:
+        return False
+    
 class SputterProcessController(QObject):
     # --- UI 및 다른 컨트롤러와 통신 시그널 (CH‑K 명세 유지) ---
     status_message = Signal(str, str)
@@ -58,24 +71,34 @@ class SputterProcessController(QObject):
         self.status_message.emit("정보", "ProcessController 타이머 초기화 완료")
 
     # === 공정 시작 ===
+    def _invoke_self(self, method_name: str):
+        if self.thread() is QThread.currentThread():
+            getattr(self, method_name)()
+        else:
+            QMetaObject.invokeMethod(self, method_name, Qt.ConnectionType.BlockingQueuedConnection)
+
+
     @Slot(dict)
     def start_process_flow(self, params):
         self.params = params
         self._is_running = True
 
+        # [추가] 타이머는 반드시 자기 스레드에서 생성
+        self._invoke_self("_setup_timers")
+
         # 1) 장비 연결 확인/시도 (동기식 확인만, I/O는 각 장치 스레드에서 처리)
         if params.get('dc_power', 0) > 0:
-            if not (hasattr(self.dc, "serial") and self.dc.serial and self.dc.serial.isOpen()):
-                if not getattr(self.dc, 'connect_dcpower_device', lambda: False)():
-                    self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
-                    self._is_running = False  # ★ 명시적 초기화
-                    return
-
-        if not getattr(self.mfc, 'serial_mfc', None) or not self.mfc.serial_mfc.isOpen():
-            if not getattr(self.mfc, 'connect_mfc_device', lambda: False)():
-                self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
-                self._is_running = False  # ★ 명시적 초기화
+            _invoke_connect(self.dc, "connect_dcpower_device")
+            if not self.dc.is_connected():
+                self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
+                self._is_running = False
                 return
+
+        _invoke_connect(self.mfc, "connect_mfc_device")
+        if not self.mfc.is_connected():
+            self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
+            self._is_running = False
+            return
             
         self._is_running = True
 
@@ -180,7 +203,7 @@ class SputterProcessController(QObject):
     # --- MFC 콜백 ---
     @Slot(str)
     def _on_mfc_confirmed(self, cmd):
-        if not self._is_running:
+        if not self._is_running or self._current_step_idx >= len(self._steps):
             return
         step = self._steps[self._current_step_idx]
         if step[0] == "MFC" and step[1] == cmd:
@@ -318,6 +341,8 @@ class SputterProcessController(QObject):
         self._is_running = False
         if self._timer:
             self._timer.stop()
+
+        self.command_requested.emit("set_polling", {'enable': False})
 
         self.stage_monitor.emit("M.S. close...")
         self.update_faduino_port.emit('MS_button', False)

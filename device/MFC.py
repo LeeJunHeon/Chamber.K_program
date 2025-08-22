@@ -45,14 +45,7 @@ class MFCController(QObject):
         self.command_requested.connect(self.handle_command)
 
         # 시리얼
-        self.serial_mfc = QSerialPort(self)
-        self.serial_mfc.setBaudRate(MFC_BAUDRATE)
-        self.serial_mfc.setDataBits(QSerialPort.DataBits.Data8)
-        self.serial_mfc.setParity(QSerialPort.Parity.NoParity)
-        self.serial_mfc.setStopBits(QSerialPort.StopBits.OneStop)
-        self.serial_mfc.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
-        self.serial_mfc.readyRead.connect(self._on_ready_read)
-        self.serial_mfc.errorOccurred.connect(self._on_serial_error)
+        self.serial_mfc: Optional[QSerialPort] = None
 
         # RX 라인 파서 버퍼
         self._rx = bytearray()
@@ -85,6 +78,8 @@ class MFCController(QObject):
         # 재연결 백오프
         self._recon_backoff_ms = 500
         self._recon_backoff_max = 4000
+
+        self._connected = False
 
     # ================== 스레드-로컬 타이머 생성 ==================
     @Slot()
@@ -133,24 +128,45 @@ class MFCController(QObject):
         t.start(ms)
 
     # ================== 연결/해제 ==================
+    @Slot()
     def connect_mfc_device(self) -> bool:
         """이 메서드는 가급적 컨트롤러 소속 스레드에서 호출."""
-        if self.serial_mfc.isOpen():
+        if self.serial_mfc and self.serial_mfc.isOpen():
+            self._connected = True
             return True
+        
         ports = {p.portName() for p in QSerialPortInfo.availablePorts()}
         if MFC_PORT not in ports:
+            self._connected = False
             self.status_message.emit("MFC", f"{MFC_PORT} 없음. 사용 가능 포트: {sorted(ports)}")
             return False
+        
+        # ★ 여기서 생성 (self 소속 스레드)
+        if self.serial_mfc is None:
+            self.serial_mfc = QSerialPort(self)
+            self.serial_mfc.setBaudRate(MFC_BAUDRATE)
+            self.serial_mfc.setDataBits(QSerialPort.DataBits.Data8)
+            self.serial_mfc.setParity(QSerialPort.Parity.NoParity)
+            self.serial_mfc.setStopBits(QSerialPort.StopBits.OneStop)
+            self.serial_mfc.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
+            self.serial_mfc.readyRead.connect(self._on_ready_read)
+            self.serial_mfc.errorOccurred.connect(self._on_serial_error)
+
         self.serial_mfc.setPortName(MFC_PORT)
         if not self.serial_mfc.open(QIODeviceBase.OpenModeFlag.ReadWrite):
+            self._connected = False
             self.status_message.emit("MFC", f"연결 실패: {self.serial_mfc.errorString()}")
             return False
 
         self.serial_mfc.clear(QSerialPort.Direction.AllDirections)
         self._rx.clear()
         self._ensure_timers()
+        self._connected = True
         self.status_message.emit("MFC", "연결 성공, 입출력 버퍼 초기화 완료.")
         return True
+    
+    def is_connected(self) -> bool:
+        return self._connected
 
     def _force_reconnect(self, reason: str, requeue_cmd: Optional[Command] = None):
         try:
@@ -292,6 +308,17 @@ class MFCController(QObject):
         while self._rx[:1] in (b'\r', b'\n'):
             del self._rx[0:1]
 
+    @Slot()
+    def _kick_sender(self):
+        """반드시 MFC 스레드에서만 호출되어야 하는 송신 트리거"""
+        if self._inflight is not None or not self._cmd_q:
+            return
+        # gap 타이머가 있으면 0ms로, 없으면 즉시 디큐
+        if self._gap_timer and not self._gap_timer.isActive():
+            self._gap_timer.start(0)
+        else:
+            self._dequeue_and_send()
+
     # ================== 명령 큐 ==================
     def enqueue(self, cmd_str: str, callback: Callable[[Optional[str]], None],
                 *, timeout_ms: int = 1500, gap_ms: int = 1000,
@@ -302,11 +329,7 @@ class MFCController(QObject):
         if not cmd_str.endswith('\r'):
             cmd_str += '\r'
         self._cmd_q.append(Command(cmd_str, callback, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
-        if self._inflight is None:
-            if self._gap_timer and not self._gap_timer.isActive():
-                self._gap_timer.start(0)
-            else:
-                self._single_shot(0, self._dequeue_and_send)
+        QMetaObject.invokeMethod(self, "_kick_sender", Qt.ConnectionType.QueuedConnection)
 
     def _dequeue_and_send(self):
         if self._inflight is not None or not self._cmd_q:
@@ -506,6 +529,7 @@ class MFCController(QObject):
                 def on_set(_ack: Optional[str]):
                     # 세팅 검증: READ_FLOW_SET
                     def on_read_set(resp: Optional[str]):
+                        nonlocal attempts_left
                         ok = False
                         v = self._parse_flow_value(resp)
                         if v is not None:
@@ -551,6 +575,7 @@ class MFCController(QObject):
                 def on_sent(_):
                     # 상태확인 READ_MFC_ON_OFF_STATUS
                     def on_status(resp: Optional[str]):
+                        nonlocal attempts_left
                         ok_status = self._parse_onoff_status(resp, channel, want_on)
                         if not ok_status:
                             if attempts_left > 0:
@@ -640,6 +665,7 @@ class MFCController(QObject):
                 def on_cmd(_ack: Optional[str]):
                     def delayed_read():
                         def on_read(resp: Optional[str]):
+                            nonlocal attempts_left
                             ok = False
                             v = self._parse_flow_value(resp)  # 밸브 위치도 숫자 하나만 오므로 재사용
                             if v is not None:
@@ -677,6 +703,7 @@ class MFCController(QObject):
 
                 def on_set(_ack: Optional[str]):
                     def on_read(resp: Optional[str]):
+                        nonlocal attempts_left
                         v = self._parse_flow_value(resp)
                         ok = (v is not None) and (abs(v - sent_value) < 0.1)
                         if ok:
@@ -710,6 +737,7 @@ class MFCController(QObject):
 
                 def on_set(_ack: Optional[str]):
                     def on_read(resp: Optional[str]):
+                        nonlocal attempts_left
                         ok = bool(resp and resp.startswith("M") and resp[1] == expected_char)
                         if ok:
                             self.command_confirmed.emit(cmd)
@@ -732,8 +760,24 @@ class MFCController(QObject):
 
             attempt()
             return
+        
+        if cmd == "MFC_ZEROING":
+            ch = int(params.get('channel', 0))
+            if ch in (1, 2):
+                self.enqueue(self._build_cmd('MFC_ZEROING', {'channel': ch}),
+                            lambda _ : self.command_confirmed.emit(cmd),
+                            tag='[MFC_ZEROING]', allow_no_reply=True)
+            else:
+                # 채널 미지정이면 두 채널 순차 실행
+                self.enqueue(self._build_cmd('MFC_ZEROING', {'channel': 1}),
+                            lambda _ : None, tag='[MFC_ZEROING CH1]', allow_no_reply=True)
+                self._single_shot(50, lambda: self.enqueue(
+                    self._build_cmd('MFC_ZEROING', {'channel': 2}),
+                    lambda _ : self.command_confirmed.emit(cmd),
+                    tag='[MFC_ZEROING CH2]', allow_no_reply=True))
+            return
 
-        if cmd in ("MFC_ZEROING", "PS_ZEROING"):
+        if cmd == "PS_ZEROING":
             # 확인 응답 없음 → 전송 성공으로 간주
             def on_sent(_):
                 self.command_confirmed.emit(cmd)
@@ -755,19 +799,30 @@ class MFCController(QObject):
 
     def _parse_flow_value(self, resp: Optional[str]) -> Optional[float]:
         """
-        장비 응답에서 숫자를 안전하게 추출.
-        예) 'Q1+005.0', 'Q1 5.0', 'P 760.0' 등 헤더/공백/부호 변화 모두 허용.
-        - 첫 번째 실수 한 개만 파싱
+        장비 응답에서 유량/값을 안전하게 추출.
+        규칙:
+        1) '+' 기호 뒤에 오는 실수를 최우선으로 사용 (예: 'Q1+004.90' → 4.90)
+        2) '+'가 없으면 문자열 안의 '마지막' 숫자를 사용 (예: 'P 760.0' → 760.0)
         """
         if not resp:
             return None
         s = str(resp).strip()
-        m = re.search(r'[-+]?\d+(?:\.\d+)?', s)
-        if not m:
+
+        # 1) +뒤 실수 우선
+        m = re.search(r'\+(\d+(?:\.\d+)?)', s)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+
+        # 2) +가 없으면 '마지막' 숫자 사용
+        nums = re.findall(r'[-+]?\d+(?:\.\d+)?', s)
+        if not nums:
             return None
         try:
-            return float(m.group(0))
-        except Exception:
+            return float(nums[-1])
+        except ValueError:
             return None
 
     def _monitor_flow(self, channel: int, actual_flow: Optional[float]):

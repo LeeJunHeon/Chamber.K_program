@@ -48,15 +48,9 @@ class DCPowerController(QObject):
         # 제어변수
         self.current_current = DC_INITIAL_CURRENT
 
-        # --- QSerialPort 설정
-        self.serial = QSerialPort(self)
-        self.serial.setBaudRate(DC_BAUDRATE)
-        self.serial.setDataBits(QSerialPort.DataBits.Data8)
-        self.serial.setParity(QSerialPort.Parity.NoParity)
-        self.serial.setStopBits(QSerialPort.StopBits.OneStop)
-        self.serial.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
-        self.serial.readyRead.connect(self._on_ready_read)
-        self.serial.errorOccurred.connect(self._on_serial_error)
+        self._connected: bool = False
+        # --- QSerialPort: 여기선 만들지 않음! ---
+        self.serial: Optional[QSerialPort] = None
 
         # 수신 버퍼(라인 파서)
         self._rx = bytearray()
@@ -94,16 +88,33 @@ class DCPowerController(QObject):
             self.control_timer.timeout.connect(self._on_control_tick)
 
     # ---------------- 연결/해제 ----------------
+    @Slot()
     def connect_dcpower_device(self) -> bool:
         # 포트 존재 확인
         ports = {p.portName() for p in QSerialPortInfo.availablePorts()}
         if DC_PORT not in ports:
+            self._connected = False
             self.status_message.emit("DCpower", f"{DC_PORT} 포트를 찾을 수 없습니다. 사용 가능: {sorted(ports)}")
             return False
+        
+        # ★ 여기서 생성 (컨트롤러 스레드에서 실행됨)
+        if self.serial is None:
+            self.serial = QSerialPort(self)  # parent=self OK (같은 스레드)
+            self.serial.setBaudRate(DC_BAUDRATE)
+            self.serial.setDataBits(QSerialPort.DataBits.Data8)
+            self.serial.setParity(QSerialPort.Parity.NoParity)
+            self.serial.setStopBits(QSerialPort.StopBits.OneStop)
+            self.serial.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
+            # 시그널 연결도 여기에서
+            self.serial.readyRead.connect(self._on_ready_read)
+            self.serial.errorOccurred.connect(self._on_serial_error)
+
         self.serial.setPortName(DC_PORT)
-        if not self.serial.open(QIODeviceBase.OpenModeFlag.ReadWrite):
-            self.status_message.emit("DCpower", f"연결 실패: {self.serial.errorString()}")
-            return False
+        if not self.serial.isOpen():
+            if not self.serial.open(QIODeviceBase.OpenModeFlag.ReadWrite):
+                self._connected = False
+                self.status_message.emit("DCpower", f"연결 실패: {self.serial.errorString()}")
+                return False
 
         # DTR/RTS, 버퍼 초기화
         self.serial.setDataTerminalReady(True)
@@ -111,8 +122,17 @@ class DCPowerController(QObject):
         self.serial.clear(QSerialPort.Direction.AllDirections)
         self._rx.clear()
 
+        self._connected = True
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort)")
+
+        # ★ 타이머 보장 (최초 1회만 생성)
+        if self._cmd_timer is None:
+            self._setup_timers()
+
         return True
+    
+    def is_connected(self) -> bool:
+        return self._connected
 
     @Slot()
     def cleanup(self):
@@ -131,13 +151,19 @@ class DCPowerController(QObject):
             cmd = self._q.popleft()
             try: cmd.callback(None)
             except Exception: pass
-        if self.serial.isOpen():
+        if self.serial and self.serial.isOpen():
             self.serial.close()
+        self._connected = False
         self.status_message.emit("DCpower", "시리얼 연결 종료")
 
     # ---------------- 공정 시작/제어 ----------------
     @Slot(float)
     def start_process(self, target_power: float):
+        # 타이머/시리얼 선보장
+        if not self.is_connected():
+            if not self.connect_dcpower_device():
+                return
+        
         if not self.serial.isOpen():
             if not self.connect_dcpower_device():
                 return
@@ -302,7 +328,9 @@ class DCPowerController(QObject):
             self._gap_timer.start(0)
 
     def _dequeue_and_send(self):
-        if self._inflight is not None or not self._q or not self.serial.isOpen() or (self._gap_timer and self._gap_timer.isActive()):
+        if (self._inflight is not None or not self._q
+            or not (self.serial and self.serial.isOpen())
+            or (self._gap_timer and self._gap_timer.isActive())):
             return
         cmd = self._q.popleft()
         self._inflight = cmd
@@ -441,7 +469,7 @@ class DCPowerController(QObject):
                 try: inflight.callback(None)
                 except Exception: pass
 
-        if self.serial.isOpen():
+        if self.serial and self.serial.isOpen():
             try: self.serial.close()
             except Exception: pass
 
