@@ -16,7 +16,7 @@ from lib.config import (
 )
 
 # ---- 타이밍/백오프 ----
-POLL_INTERVAL_MS = 500
+POLL_INTERVAL_MS = 1000
 CMD_TIMEOUT_MS   = 1000
 GAP_MS           = 40
 RECON_BACKOFF_START_MS = 500
@@ -33,7 +33,6 @@ class Command:
     gap_ms: int = GAP_MS
     tag: str = ""
     retries_left: int = 3
-    allow_no_reply: bool = False
 
 
 class FaduinoController(QObject):
@@ -264,17 +263,6 @@ class FaduinoController(QObject):
             if self._inflight and line == self._inflight.cmd_str.strip():
                 continue
 
-            # 비동기 RF 응답
-            if line.startswith("OK:RF_READ,"):
-                parts = line.split(',')
-                if len(parts) == 3:
-                    try:
-                        fwd = float(parts[1]); ref = float(parts[2])
-                        self.rf_power_response.emit(fwd, ref)
-                    except Exception:
-                        pass
-                continue
-
             # 인플라이트 응답 처리
             self._finish_command(line)
             break  # 한 번에 한 명령만 완료
@@ -283,6 +271,17 @@ class FaduinoController(QObject):
         while self._rx[:1] in (b'\r', b'\n'):
             del self._rx[0:1]
 
+    def _parse_rf_reply(self, line: Optional[str]):
+        if not line or not line.startswith("OK:RF_READ,"):
+            return
+        parts = line.split(',')
+        if len(parts) == 3:
+            try:
+                fwd = float(parts[1]); ref = float(parts[2])
+                self.rf_power_response.emit(fwd, ref)
+            except Exception:
+                pass
+
     # ========== 큐/전송/타임아웃 ==========
     def enqueue(self, cmd: Command):
         # 무조건 EOL 재부착
@@ -290,8 +289,8 @@ class FaduinoController(QObject):
         line = cmd.cmd_str.rstrip("\r\n")
         cmd.cmd_str = line + self._eol
         self._cmd_q.append(cmd)
-        self.status_message.emit("Faduino-DBG",
-            f"ENQ tag={cmd.tag or ''} len={len(self._cmd_q)} line='{line}' eol={repr(self._eol)}")
+        # self.status_message.emit("Faduino-DBG",
+        #     f"ENQ tag={cmd.tag or ''} len={len(self._cmd_q)} line='{line}' eol={repr(self._eol)}")
         if self._inflight is None and self._gap_timer and not self._gap_timer.isActive():
             self._gap_timer.start(0)
 
@@ -310,7 +309,7 @@ class FaduinoController(QObject):
         payload = cmd.cmd_str.encode('ascii')
         
         n = int(self.serial.write(payload))
-        self.status_message.emit("Faduino-DBG", f"SND tag={cmd.tag or ''} nbytes={n} line='{cmd.cmd_str.strip()}'")
+        #self.status_message.emit("Faduino-DBG", f"SND tag={cmd.tag or ''} nbytes={n} line='{cmd.cmd_str.strip()}'")
 
         if n <= 0:
             # 전송 실패 → 재시도 예약
@@ -322,11 +321,6 @@ class FaduinoController(QObject):
                 self.serial.close()
             if self._reconnect_timer:
                 self._reconnect_timer.start(0)
-            return
-
-        # ★ 무응답 허용 명령은 즉시 완료 처리(타임아웃 기다리지 않음)
-        if cmd.allow_no_reply:
-            self._finish_command(None)
             return
 
         self.serial.flush()
@@ -346,34 +340,51 @@ class FaduinoController(QObject):
             self._cmd_timer.stop()
 
         if line is None:
-            # 타임아웃/무응답
-            if cmd.allow_no_reply:
-                try:
-                    cmd.on_reply(None)
-                finally:
-                    if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
-                return
-
             if cmd.retries_left > 0:
                 cmd.retries_left -= 1
-                self._cmd_q.appendleft(cmd)
-                if self.serial.isOpen():
-                    self.serial.close()
-                if self._reconnect_timer:
-                    self._reconnect_timer.start(0)   # ← 타이핑 오류 수정됨
-                return
-            else:
+                self._cmd_q.appendleft(cmd)  # 같은 명령 재전송
                 try:
-                    cmd.on_reply(None)
-                finally:
-                    if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
+                    self.status_message.emit("Faduino-DBG",
+                        f"[RETRY] {cmd.tag or cmd.cmd_str.strip()} (남은 재시도 {cmd.retries_left}회)")
+                except Exception:
+                    pass
+                if self._gap_timer:
+                    self._gap_timer.start(max(50, cmd.gap_ms))
                 return
+            # 재시도 소진 → 재연결
+            self._force_reconnect("응답 없음(재시도 초과)", requeue_cmd=cmd)
+            return
 
         # 정상 응답
         try:
             cmd.on_reply(line.strip())
         finally:
-            if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
+            if self._gap_timer:
+                self._gap_timer.start(cmd.gap_ms)
+
+    def _force_reconnect(self, reason: str, requeue_cmd: Optional[Command] = None):
+        """즉시 재연결 트리거. 필요하면 같은 명령을 재시도하도록 큐 맨 앞에 되돌려놓는다."""
+        try:
+            self.status_message.emit("Faduino", f"재연결 트리거: {reason}")
+        except Exception:
+            pass
+
+        if requeue_cmd is not None:
+            # 재연결 후 정상적으로 다시 3회 재시도 가능하도록 리셋
+            requeue_cmd.retries_left = 3
+            self._cmd_q.appendleft(requeue_cmd)
+
+        if self._gap_timer and self._gap_timer.isActive():
+            self._gap_timer.stop()
+
+        if self.serial and self.serial.isOpen():
+            try:
+                self.serial.close()
+            except Exception:
+                pass
+
+        if self._reconnect_timer:
+            self._reconnect_timer.start(0)  # 즉시 _try_reconnect()
 
     # ========== 폴링/상태 동기화 ==========
     def _has_pending(self, tag: str) -> bool:
@@ -417,7 +428,6 @@ class FaduinoController(QObject):
             timeout_ms=200,
             gap_ms=GAP_MS,
             tag="[POLL]",
-            allow_no_reply=False
         ))
 
     def _update_buttons_from_state(self, state_str: str):
@@ -452,10 +462,10 @@ class FaduinoController(QObject):
             owner = int(self.thread().currentThreadId())
         except Exception:
             cur = owner = -1
-        self.status_message.emit(
-            "Faduino-DBG",
-            f"update_port_state(name={name}, state={state}) T={hex(cur)} owner={hex(owner)}"
-        )
+        # self.status_message.emit(
+        #     "Faduino-DBG",
+        #     f"update_port_state(name={name}, state={state}) T={hex(cur)} owner={hex(owner)}"
+        # )
 
 
         if name == 'Door_Button':
@@ -490,12 +500,17 @@ class FaduinoController(QObject):
             timeout_ms=CMD_TIMEOUT_MS,
             gap_ms=GAP_MS,
             tag="[STATE+PWM]",
-            allow_no_reply=False
         ))
 
     @Slot()
     def request_rf_read(self):
-        self.enqueue(Command("RF_READ,0", lambda _l: None, allow_no_reply=True, gap_ms=GAP_MS, tag="[RF_READ]"))
+        self.enqueue(Command(
+            "RF_READ,0", 
+            self._parse_rf_reply,
+            timeout_ms=300,
+            gap_ms=GAP_MS, 
+            tag="[RF_READ]"
+        ))
 
     @Slot()
     def on_emergency_stop(self):

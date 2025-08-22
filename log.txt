@@ -1193,3 +1193,295 @@
 [2025-08-22 13:26:22] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
 [2025-08-22 13:26:22] [Faduino] 연결 종료
 [2025-08-22 13:26:22] [DCpower] 시리얼 연결 종료
+[2025-08-22 13:29:56] [정보] ProcessController 타이머 초기화 완료
+[2025-08-22 13:29:56] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:29:56] [Faduino] 주기적 상태 동기화 시작
+[2025-08-22 13:29:57] [Faduino-DBG] Starting polling after 1.2s warm-up
+[2025-08-22 13:29:58] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:29:58] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:29:58] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:29:58] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:29:59] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:29:59] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:29:59] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:29:59] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:00] [Faduino-DBG] update_port_state(name=Rotary_button, state=True) T=0x56f0 owner=0x56f0
+[2025-08-22 13:30:00] [Faduino-DBG] ENQ tag=[STATE+PWM] len=1 line='10000001000000,0' eol='\r\n'
+[2025-08-22 13:30:00] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:00] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:01] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:01] [Faduino] 재연결 성공
+[2025-08-22 13:30:01] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:02] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:02] [Faduino] 재연결 성공
+[2025-08-22 13:30:02] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:03] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:03] [Faduino] 재연결 성공
+[2025-08-22 13:30:03] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:03] [Faduino-DBG] update_port_state(name=FV_button, state=True) T=0x56f0 owner=0x56f0
+[2025-08-22 13:30:03] [Faduino-DBG] ENQ tag=[STATE+PWM] len=2 line='10100001000000,0' eol='\r\n'
+[2025-08-22 13:30:04] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:04] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100001000000,0'
+[2025-08-22 13:30:04] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:05] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:05] [Faduino] 재연결 성공
+[2025-08-22 13:30:05] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100001000000,0'
+[2025-08-22 13:30:06] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:06] [Faduino] 재연결 성공
+[2025-08-22 13:30:06] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100001000000,0'
+[2025-08-22 13:30:07] [Faduino-DBG] update_port_state(name=Turbo_button, state=True) T=0x56f0 owner=0x56f0
+[2025-08-22 13:30:07] [Faduino-DBG] ENQ tag=[STATE+PWM] len=2 line='10100101000000,0' eol='\r\n'
+[2025-08-22 13:30:07] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:07] [Faduino] 재연결 성공
+[2025-08-22 13:30:07] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100001000000,0'
+[2025-08-22 13:30:08] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:08] [Faduino-DBG] ENQ tag=[POLL] len=2 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:08] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100101000000,0'
+[2025-08-22 13:30:09] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:09] [Faduino] 재연결 성공
+[2025-08-22 13:30:09] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100101000000,0'
+[2025-08-22 13:30:10] [Faduino-DBG] update_port_state(name=MV_button, state=True) T=0x56f0 owner=0x56f0
+[2025-08-22 13:30:10] [Faduino-DBG] ENQ tag=[STATE+PWM] len=2 line='10110101000000,0' eol='\r\n'
+[2025-08-22 13:30:10] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:10] [Faduino] 재연결 성공
+[2025-08-22 13:30:10] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100101000000,0'
+[2025-08-22 13:30:11] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:11] [Faduino] 재연결 성공
+[2025-08-22 13:30:11] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10100101000000,0'
+[2025-08-22 13:30:13] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:13] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10110101000000,0'
+[2025-08-22 13:30:13] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:14] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:14] [Faduino] 재연결 성공
+[2025-08-22 13:30:14] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10110101000000,0'
+[2025-08-22 13:30:15] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:15] [Faduino] 재연결 성공
+[2025-08-22 13:30:15] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10110101000000,0'
+[2025-08-22 13:30:16] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:16] [Faduino] 재연결 성공
+[2025-08-22 13:30:16] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10110101000000,0'
+[2025-08-22 13:30:17] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:17] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:17] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:18] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:18] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:18] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:18] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:19] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:19] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:19] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:19] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:20] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:20] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:20] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:20] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:21] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:21] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:21] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:21] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:22] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:22] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:22] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:22] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:23] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:23] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:23] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:23] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:24] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:24] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:24] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:24] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:25] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:25] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:25] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:25] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:26] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:26] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:26] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:26] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:27] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:27] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:27] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:27] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:28] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:28] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:28] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:28] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:29] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:29] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:29] [Faduino-DBG] update_port_state(name=Rotary_button, state=True) T=0x56f0 owner=0x56f0
+[2025-08-22 13:30:29] [Faduino-DBG] ENQ tag=[STATE+PWM] len=1 line='10000001000000,0' eol='\r\n'
+[2025-08-22 13:30:29] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:29] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:30] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:30] [Faduino] 재연결 성공
+[2025-08-22 13:30:30] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:31] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:31] [Faduino] 재연결 성공
+[2025-08-22 13:30:31] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:32] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:30:32] [Faduino] 재연결 성공
+[2025-08-22 13:30:32] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:30:33] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:34] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:34] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:34] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:34] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:35] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:35] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:35] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:35] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:36] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:36] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:36] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:36] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:37] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:37] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:37] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:37] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:38] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:38] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:38] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:38] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:39] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:39] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:39] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:39] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:40] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:40] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:40] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:40] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:41] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:41] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:41] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:41] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:42] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:42] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:42] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:42] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:43] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:43] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:43] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:43] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:44] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:44] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:44] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:44] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:45] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:45] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:45] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:45] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:46] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:46] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:46] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:46] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:47] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:47] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:47] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:47] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:48] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:48] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:48] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:48] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:49] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:49] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:49] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:49] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:50] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:50] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:50] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:50] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:51] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:51] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:51] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:51] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:52] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:52] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:52] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:52] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:53] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:53] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:53] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:53] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:54] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:54] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:54] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:54] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:55] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:55] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:55] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:55] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:56] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:56] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:56] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:56] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:57] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:57] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:57] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:57] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:58] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:58] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:58] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:58] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:59] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:59] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:30:59] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:30:59] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:00] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:00] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:00] [Faduino-DBG] update_port_state(name=Rotary_button, state=True) T=0x56f0 owner=0x56f0
+[2025-08-22 13:31:00] [Faduino-DBG] ENQ tag=[STATE+PWM] len=1 line='10000001000000,0' eol='\r\n'
+[2025-08-22 13:31:00] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:31:00] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:01] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:31:01] [Faduino] 재연결 성공
+[2025-08-22 13:31:01] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:31:02] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:31:02] [Faduino] 재연결 성공
+[2025-08-22 13:31:02] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:31:03] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:31:03] [Faduino] 재연결 성공
+[2025-08-22 13:31:03] [Faduino-DBG] SND tag=[STATE+PWM] nbytes=18 line='10000001000000,0'
+[2025-08-22 13:31:04] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:04] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:04] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:05] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:05] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:05] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:05] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:06] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:06] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:06] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:06] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:07] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:07] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:07] [Faduino-DBG] ENQ tag=[POLL] len=1 line='STATE_READ' eol='\r\n'
+[2025-08-22 13:31:07] [Faduino-DBG] SND tag=[POLL] nbytes=12 line='STATE_READ'
+[2025-08-22 13:31:08] [Faduino] 연결 종료
+[2025-08-22 13:31:08] [DCpower] 시리얼 연결 종료
+[2025-08-22 13:34:29] [정보] ProcessController 타이머 초기화 완료
+[2025-08-22 13:34:29] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:34:29] [Faduino] 주기적 상태 동기화 시작
+[2025-08-22 13:34:30] [Faduino-DBG] Starting polling after 1.2s warm-up
+[2025-08-22 13:34:36] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:34:36] [Faduino] 재연결 성공
+[2025-08-22 13:34:37] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:34:37] [Faduino] 재연결 성공
+[2025-08-22 13:34:38] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:34:38] [Faduino] 재연결 성공
+[2025-08-22 13:34:44] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:34:44] [Faduino] 재연결 성공
+[2025-08-22 13:34:46] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:34:46] [Faduino] 재연결 성공
+[2025-08-22 13:34:47] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:34:47] [Faduino] 재연결 성공
+[2025-08-22 13:34:53] [Faduino] 연결 종료
+[2025-08-22 13:34:53] [DCpower] 시리얼 연결 종료
+[2025-08-22 13:38:05] [정보] ProcessController 타이머 초기화 완료
+[2025-08-22 13:38:05] [Faduino] COM9 연결 성공(QSerialPort)
+[2025-08-22 13:38:05] [Faduino] 주기적 상태 동기화 시작
+[2025-08-22 13:38:06] [Faduino-DBG] Starting polling after 1.2s warm-up
+[2025-08-22 13:38:34] [MFC] COM4 없음. 사용 가능 포트: ['COM9']
+[2025-08-22 13:38:36] [정보] 프로세스 종료중...
+[2025-08-22 13:38:50] [Faduino] 연결 종료
+[2025-08-22 13:38:50] [DCpower] 시리얼 연결 종료
