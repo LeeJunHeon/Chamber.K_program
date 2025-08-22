@@ -85,7 +85,7 @@ class MFCController(QObject):
         if self.polling_timer is None:
             self.polling_timer = QTimer(self)
             self.polling_timer.setInterval(self._poll_interval_ms)
-            self.polling_timer.setTimerType(Qt.PreciseTimer)
+            self.polling_timer.setTimerType(Qt.TimerType.PreciseTimer)
             self.polling_timer.timeout.connect(self._enqueue_poll_cycle)
 
     # ================== 연결/해제 ==================

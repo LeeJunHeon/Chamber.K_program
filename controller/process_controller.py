@@ -53,7 +53,7 @@ class SputterProcessController(QObject):
         if self._timer is None:
             self._timer = QTimer(self)
             self._timer.setInterval(1000)
-            self._timer.setTimerType(Qt.PreciseTimer)
+            self._timer.setTimerType(Qt.TimerType.PreciseTimer)
             self._timer.timeout.connect(self._on_timer_tick)
         self.status_message.emit("정보", "ProcessController 타이머 초기화 완료")
 

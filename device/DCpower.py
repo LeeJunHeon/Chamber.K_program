@@ -85,12 +85,12 @@ class DCPowerController(QObject):
         if self.polling_timer is None:
             self.polling_timer = QTimer(self)
             self.polling_timer.setInterval(3000)  # 3s
-            self.polling_timer.setTimerType(Qt.PreciseTimer)
+            self.polling_timer.setTimerType(Qt.TimerType.PreciseTimer)
             self.polling_timer.timeout.connect(self._enqueue_poll_cycle)
         if self.control_timer is None:
             self.control_timer = QTimer(self)
             self.control_timer.setInterval(1000)  # 1s
-            self.control_timer.setTimerType(Qt.PreciseTimer)
+            self.control_timer.setTimerType(Qt.TimerType.PreciseTimer)
             self.control_timer.timeout.connect(self._on_control_tick)
 
     # ---------------- 연결/해제 ----------------
@@ -115,7 +115,7 @@ class DCPowerController(QObject):
         return True
 
     @Slot()
-    def close_connection(self):
+    def cleanup(self):
         self.stop_process()
         if self.polling_timer: self.polling_timer.stop()
         if self._cmd_timer:    self._cmd_timer.stop()

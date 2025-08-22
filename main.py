@@ -1,7 +1,7 @@
 # === CHAMBER-K main.py (수정본) ===
 import sys
 from functools import partial
-from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QObject
+from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QMetaObject, Qt, QCoreApplication
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from UI import Ui_Dialog
@@ -30,6 +30,7 @@ class MainDialog(QDialog):
         self.faduino_thread.setObjectName("FaduinoThread")
         self.faduino_controller = FaduinoController()
         self.faduino_controller.moveToThread(self.faduino_thread)
+        self.faduino_thread.started.connect(self.faduino_controller._setup_timers)
 
         # 2) MFC
         self.mfc_thread = QThread(self)
@@ -91,8 +92,8 @@ class MainDialog(QDialog):
         #    종료 시 각 컨트롤러 정리를 '자기 스레드 슬롯'에서 수행
         self.shutdown_requested.connect(self.faduino_controller.cleanup)
         self.shutdown_requested.connect(self.mfc_controller.cleanup)
-        self.shutdown_requested.connect(self.dcpower_controller.close_connection)
-        self.shutdown_requested.connect(self.rfpower_controller.close_connection)
+        self.shutdown_requested.connect(self.dcpower_controller.cleanup)
+        self.shutdown_requested.connect(self.rfpower_controller.cleanup)
         if hasattr(self.process_controller, "teardown"):
             self.shutdown_requested.connect(self.process_controller.teardown)
 
@@ -308,41 +309,66 @@ class MainDialog(QDialog):
         self.ui.ref_p_edit.setPlainText("ERROR" if ref_power is None else f"{ref_power:.2f}")
 
     # ---------- 종료 ----------
+    def _call_cleanup_on_worker(self, obj) -> None:
+        if obj is None:
+            return
+        # 워커 소유 스레드에서 동기 실행 (끝날 때까지 대기)
+        QMetaObject.invokeMethod(
+            obj, "cleanup",
+            Qt.ConnectionType.BlockingQueuedConnection
+        )
+
     def closeEvent(self, event):
         reply = QMessageBox.question(
-            self, '종료 확인', '정말로 프로그램을 종료하시겠습니까?',
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            self,
+            "종료 확인",
+            "정말로 프로그램을 종료하시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
-        if reply != QMessageBox.Yes:
+        if reply != QMessageBox.StandardButton.Yes:
             event.ignore()
             return
 
-        log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
+        # 진행 중인 공정이 있으면 먼저 중단 (감독자 쪽 메서드/신호 이름에 맞춰 조정)
+        try:
+            if getattr(self.process_controller, "is_running", False):
+                # 예: self.process_controller.stop_process() 또는 abort_process()
+                self.process_controller.stop_process()
+        except Exception:
+            pass
 
-        # 1) 공정 중이면 먼저 중지 요청 → finished 대기
-        if self.process_running:
-            loop = QEventLoop()
-            self.process_controller.finished.connect(loop.quit)
-            self.request_process_stop.emit()   # 반드시 신호로
-            loop.exec()
-            self.process_controller.finished.disconnect(loop.quit)
-            log_message_to_monitor("정보", "진행 중인 공정이 중지되었습니다.")
+        # 워커 정리: 절대 직접 호출하지 말고, 워커 스레드에서 BlockingQueued로 실행
+        for ctrl in [
+            getattr(self, "faduino_controller", None),
+            getattr(self, "mfc_controller", None),
+            getattr(self, "dcpower_controller", None),
+            getattr(self, "rfpower_controller", None),
+        ]:
+            if ctrl is not None:
+                try:
+                    QMetaObject.invokeMethod(
+                        ctrl, "cleanup",
+                        Qt.ConnectionType.BlockingQueuedConnection
+                    )
+                except Exception:
+                    pass
 
-        # 2) 각 컨트롤러 정리(자기 스레드 슬롯에서 실행)
-        self.shutdown_requested.emit()
-
-        # 3) 스레드 종료
-        threads = [self.process_thread, self.faduino_thread, self.mfc_thread,
-                   self.dcpower_thread, self.rfpower_thread]
+        # 스레드 종료
+        threads = [
+            getattr(self, "process_thread", None),
+            getattr(self, "faduino_thread", None),
+            getattr(self, "mfc_thread", None),
+            getattr(self, "dcpower_thread", None),
+            getattr(self, "rfpower_thread", None),
+        ]
         for th in threads:
-            th.quit()
+            if th:
+                th.quit()
         for th in threads:
-            name = th.objectName()
-            log_message_to_monitor("정보", f"{name} 스레드 종료 대기 중...")
-            if not th.wait(3000):
-                log_message_to_monitor("경고", f"{name} 스레드가 시간 내에 종료되지 않았습니다.")
+            if th:
+                th.wait()
 
-        log_message_to_monitor("정보", "모든 스레드가 종료되었습니다. 프로그램을 닫습니다.")
         event.accept()
 
 

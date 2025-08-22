@@ -151,5 +151,5 @@ class RFPowerController(QObject):
         self.ramp_down_finished.emit()
 
     @Slot()
-    def close_connection(self):
+    def cleanup(self):
         self.stop_process()
