@@ -17,7 +17,7 @@ from lib.config import (
 
 # ---- 타이밍/백오프 ----
 POLL_INTERVAL_MS = 1000
-CMD_TIMEOUT_MS   = 1000
+CMD_TIMEOUT_MS   = 1500
 GAP_MS           = 40
 RECON_BACKOFF_START_MS = 500
 RECON_BACKOFF_MAX_MS   = 4000

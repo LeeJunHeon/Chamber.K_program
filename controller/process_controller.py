@@ -68,12 +68,16 @@ class SputterProcessController(QObject):
             if not (hasattr(self.dc, "serial") and self.dc.serial and self.dc.serial.isOpen()):
                 if not getattr(self.dc, 'connect_dcpower_device', lambda: False)():
                     self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
+                    self._is_running = False  # ★ 명시적 초기화
                     return
 
         if not getattr(self.mfc, 'serial_mfc', None) or not self.mfc.serial_mfc.isOpen():
             if not getattr(self.mfc, 'connect_mfc_device', lambda: False)():
                 self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
+                self._is_running = False  # ★ 명시적 초기화
                 return
+            
+        self._is_running = True
 
         # 2) 내부 상태 설정
         selected_gas = params.get('selected_gas', 'Ar')

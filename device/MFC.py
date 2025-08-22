@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from collections import deque
 from typing import Optional, Callable, Deque, Dict
 
-from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, pyqtSlot as Slot, Qt
+from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, pyqtSlot as Slot, Qt, QThread, QMetaObject
 from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.config import (
@@ -69,6 +69,10 @@ class MFCController(QObject):
         self.flow_error_counters: Dict[int, int] = {1: 0, 2: 0}
         self._stabilize_attempts_left: Dict[int, int] = {1: 0, 2: 0}
 
+        self._reconnect_timer: Optional[QTimer] = None
+        self._recon_backoff_ms = 500
+        self._recon_backoff_max = 4000
+
     # ================== 스레드-로컬 타이머 생성 ==================
     @Slot()
     def _setup_timers(self):
@@ -88,6 +92,20 @@ class MFCController(QObject):
             self.polling_timer.setTimerType(Qt.TimerType.PreciseTimer)
             self.polling_timer.timeout.connect(self._enqueue_poll_cycle)
 
+        if self._reconnect_timer is None:
+            self._reconnect_timer = QTimer(self)
+            self._reconnect_timer.setSingleShot(True)
+            self._reconnect_timer.timeout.connect(self._try_reconnect)
+
+    def _ensure_timers(self):
+        """컨트롤러가 속한 스레드에서 타이머들을 반드시 생성한다."""
+        if self._cmd_timer and self._gap_timer and self.polling_timer:
+            return
+        if self.thread() is not QThread.currentThread():
+            QMetaObject.invokeMethod(self, "_setup_timers", Qt.ConnectionType.BlockingQueuedConnection)
+        else:
+            self._setup_timers()
+
     # ================== 연결/해제 ==================
     def connect_mfc_device(self) -> bool:
         if self.serial_mfc.isOpen():
@@ -103,13 +121,48 @@ class MFCController(QObject):
 
         self.serial_mfc.clear(QSerialPort.Direction.AllDirections)
         self._rx.clear()
+        self._ensure_timers()  
         self.status_message.emit("MFC", "연결 성공, 입출력 버퍼 초기화 완료.")
         return True
+    
+    def _force_reconnect(self, reason: str, requeue_cmd: Optional[Command] = None):
+        try:
+            self.status_message.emit("MFC", f"재연결 트리거: {reason}")
+        except Exception:
+            pass
+
+        if requeue_cmd is not None:
+            requeue_cmd.retries_left = 3     # ★ 복구 후 다시 3회 기회 부여
+            self._cmd_q.appendleft(requeue_cmd)
+
+        try:
+            if self.serial_mfc.isOpen():
+                self.serial_mfc.close()
+        except Exception:
+            pass
+
+        if self._reconnect_timer:
+            self._reconnect_timer.start(0)
+
+    def _try_reconnect(self):
+        ok = self.connect_mfc_device()
+        if ok:
+            self._recon_backoff_ms = 500
+            if self._gap_timer and not self._gap_timer.isActive():
+                self._gap_timer.start(0)
+            self.status_message.emit("MFC", "재연결 성공")
+        else:
+            self._recon_backoff_ms = min(self._recon_backoff_ms * 2, self._recon_backoff_max)
+            if self._reconnect_timer:
+                self._reconnect_timer.start(self._recon_backoff_ms)
+            self.status_message.emit("MFC", f"재연결 대기… {self._recon_backoff_ms} ms")
+
 
     # ================== 폴링 제어 ==================
     @Slot()
     def start_polling(self):
         """(선택) 외부에서 폴링 기동"""
+        self._ensure_timers()  
         self._is_running = True
         self._polling_enabled = True
         if self.polling_timer and not self.polling_timer.isActive():
@@ -147,6 +200,25 @@ class MFCController(QObject):
         if err == QSerialPort.SerialPortError.NoError:
             return
         self.status_message.emit("MFC(에러)", f"시리얼 오류: {self.serial_mfc.errorString()}")
+
+        if self._inflight:
+            cmd = self._inflight
+            self._inflight = None
+            if self._cmd_timer: self._cmd_timer.stop()
+            if cmd.retries_left > 0:
+                cmd.retries_left -= 1
+                self._cmd_q.appendleft(cmd)
+            else:
+                self._force_reconnect("시리얼 오류(재시도 소진)", requeue_cmd=cmd)   # ★
+                return
+
+        try:
+            if self.serial_mfc.isOpen():
+                self.serial_mfc.close()
+        except Exception:
+            pass
+        if self._reconnect_timer:
+            self._reconnect_timer.start(0)
 
     def _on_ready_read(self):
         ba = self.serial_mfc.readAll()
@@ -192,6 +264,7 @@ class MFCController(QObject):
                 *, timeout_ms: int = 1500, gap_ms: int = 1000,
                 tag: str = "", retries_left: int = 3,
                 allow_no_reply: bool = False):
+        self._ensure_timers()  
         if not cmd_str.endswith('\r'):
             cmd_str += '\r'
         self._cmd_q.append(Command(cmd_str, callback, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
@@ -218,11 +291,11 @@ class MFCController(QObject):
             if cmd.retries_left > 0:
                 cmd.retries_left -= 1
                 self._cmd_q.appendleft(cmd)
+                if self._gap_timer: self._gap_timer.start(max(50, cmd.gap_ms))
             else:
-                try: cmd.callback(None)
-                except Exception: pass
-            if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
+                self._force_reconnect("전송 실패(재시도 소진)", requeue_cmd=cmd)   # ★ 추가
             return
+
 
         self.serial_mfc.flush()
 
@@ -243,33 +316,62 @@ class MFCController(QObject):
     def _finish_command(self, line: Optional[str]):
         if self._inflight is None:
             return
+
         cmd = self._inflight
         self._inflight = None
-        if self._cmd_timer: self._cmd_timer.stop()
 
+        if self._cmd_timer:
+            self._cmd_timer.stop()
+
+        # --- 응답 없음(타임아웃/무응답) ---
         if line is None:
+            # 0) 진짜 '확인 응답이 없는' 명령(ZEROING 류)은 성공 처리
             if cmd.allow_no_reply:
-                try: cmd.callback(None)
+                try:
+                    cmd.callback(None)
                 finally:
-                    if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
+                    if self._gap_timer:
+                        self._gap_timer.start(cmd.gap_ms)
                 return
+
+            # 1) 재시도 남음 → 같은 명령 재전송(큐 맨 앞) + 최소 간격 보장
+            try:
+                self.status_message.emit("MFC-DBG", f"[TIMEOUT] {cmd.tag or cmd.cmd_str.strip()}")
+            except Exception:
+                pass
+
             if cmd.retries_left > 0:
                 cmd.retries_left -= 1
                 self._cmd_q.appendleft(cmd)
-            else:
-                try: cmd.callback(None)
-                finally: pass
-            if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
+                try:
+                    self.status_message.emit("MFC-DBG",
+                        f"[RETRY] {cmd.tag or cmd.cmd_str.strip()} (남은 {cmd.retries_left})")
+                except Exception:
+                    pass
+                if self._gap_timer:
+                    self._gap_timer.start(max(50, cmd.gap_ms))  # 과도 재전송 방지
+                return
+
+            # 2) 재시도 소진 → 재연결 승급(같은 명령은 복구 후 다시 3회 시도할 수 있게 리큐)
+            self._force_reconnect("응답 없음(재시도 초과)", requeue_cmd=cmd)
             return
 
+        # --- 정상 응답 ---
         try:
             cmd.callback(line.strip())
         finally:
-            if self._gap_timer: self._gap_timer.start(cmd.gap_ms)
+            if self._gap_timer:
+                self._gap_timer.start(cmd.gap_ms)
 
     # ================== 폴링 사이클 ==================
     def _enqueue_poll_cycle(self):
         if not self._polling_enabled:
+            return
+        
+        # 이미 진행/대기 중이면 이번 사이클은 스킵 (누적 방지)
+        if (self._has_pending('[POLL FLOW1]') or
+            self._has_pending('[POLL FLOW2]') or
+            self._has_pending('[POLL PRESS]')):
             return
 
         # 1) CH1 유량
@@ -278,7 +380,7 @@ class MFCController(QObject):
                 self.update_flow.emit(f"Ar: {resp}")
                 self._monitor_flow(1, resp)
         self.enqueue(self._build_cmd('READ_FLOW', {'channel': 1}),
-                     on_flow1, tag='[POLL FLOW1]')
+                     on_flow1, tag='[POLL FLOW1]', gap_ms=200)
 
         # 2) CH2 유량
         def on_flow2(resp: Optional[str]):
@@ -286,14 +388,20 @@ class MFCController(QObject):
                 self.update_flow.emit(f"O2: {resp}")
                 self._monitor_flow(2, resp)
         self.enqueue(self._build_cmd('READ_FLOW', {'channel': 2}),
-                     on_flow2, tag='[POLL FLOW2]')
+                     on_flow2, tag='[POLL FLOW2]', gap_ms=200)
 
         # 3) 압력
         def on_press(resp: Optional[str]):
             if resp:
                 self.update_pressure.emit(resp)
         self.enqueue(self._build_cmd('READ_PRESSURE', None),
-                     on_press, tag='[POLL PRESS]')
+                     on_press, tag='[POLL PRESS]', gap_ms=200)
+        
+    def _has_pending(self, tag: str) -> bool:
+        if self._inflight and self._inflight.tag == tag:
+            return True
+        return any(c.tag == tag for c in self._cmd_q)
+
 
     # ================== 외부 명령 처리 ==================
     @Slot(str, dict)
