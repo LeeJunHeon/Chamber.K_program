@@ -12,6 +12,9 @@ from lib.config import (
     PLC_SLAVE_ID,
     PLC_BAUD,
     PLC_TIMEOUT,
+    PLC_COIL_MAP,
+    SENSOR_DI_BASE,
+    PLC_SENSOR_BITS
 )
 
 # ===============================
@@ -37,35 +40,6 @@ from lib.config import (
 # MS[11]     M00009    P00049 [30]
 # S1[12]     M00010    P0004A [31]
 # S2[13]     M00011    P0004B [32]
-
-# UI 버튼 이름 → Coil 주소 (FC=5/1)
-# (UI 시그널 이름은 *_button 규칙을 유지했습니다)
-PLC_COIL_MAP: Dict[str, int] = {
-    "Rotary_button":   0,    # M00000
-    "RV_button":       1,    # M00001
-    "FV_button":       2,    # M00002
-    "MV_button":       3,    # M00003
-    "Vent_button":     4,    # M00004
-    "Turbo_button":    5,    # M00005
-    "Doorup_button":   6,    # M00006 (모터 UP)
-    "Doordn_button":   20,   # M00020 (모터 DOWN)
-    "Ar_Button":       7,    # M00007
-    "O2_Button":       8,    # M00008
-    "BuzzStop_Button": 21,   # M00021 (버저)
-    "MS_button":       9,    # M00009
-    "S1_button":       10,   # M00010
-    "S2_button":       11,   # M00011
-}
-
-# 센서(인디케이터) DI 베이스와 비트 맵 (필요 시 이름만 맞추면 됩니다)
-SENSOR_DI_BASE = 0
-PLC_SENSOR_BITS: Dict[str, int] = {
-    "Air":   0,
-    "G1":    1,
-    "G2":    2,
-    "ATM":   3,
-    "Water": 4,
-}
 
 # === RF 피드백(ADC) === (모듈 사양에 맞게 조정)
 RF_ADC_FORWARD_ADDR = 0
@@ -164,7 +138,7 @@ class PLCController(QObject):
 
     def _safe_read_discrete_inputs(self, start_addr: int, count: int) -> List[bool]:
         assert self.instrument is not None
-        return self.instrument.read_bits(start_addr, count, functioncode=2)
+        return self.instrument.read_bits(start_addr, count, functioncode=1)
 
     # ============== 폴링 ======================
     @Slot()

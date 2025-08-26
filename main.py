@@ -4,14 +4,13 @@ from PySide6.QtCore import QThread, Slot, Signal, QEventLoop
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from UI import Ui_Dialog
-from lib.config import BUTTON_TO_PORT_MAP
+from lib.config import PLC_COIL_MAP
 from lib.logger import set_monitor_widget, log_message_to_monitor
 from controller.process_controller import SputterProcessController
 from device.PLC import PLCController
 from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
-from device.PLC import PLC_COIL_MAP
 
 class MainDialog(QDialog):
     shutdown_requested = Signal()

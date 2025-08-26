@@ -105,10 +105,10 @@ class RFPowerController(QObject):
                 # [Feed-forward] 현재 스텝에 도달했으므로, 다음 스텝 목표를 설정하고 PWM 예측
                 self.current_power_step = min(self.current_power_step + RF_RAMP_STEP, self.target_power)
                 base_pwm = self.pwm_offset_cal + (self.current_power_step * self.pwm_param_cal)
-                self.current_pwm_value = max(0, min(int(base_pwm), 255))
+                self.current_pwm_value = max(0, min(int(base_pwm), RF_DAC_FULL_SCALE))
             else:
                 # [Feedback] 아직 현재 스텝에 도달 못함 (언더슈트) -> PWM 미세 조정
-                self.current_pwm_value = min(self.current_pwm_value + 1, 255)
+                self.current_pwm_value = min(self.current_pwm_value + 1, RF_DAC_FULL_SCALE)
             
             # [Feedback] 계산된 PWM이 오버슈트를 유발했다면 미세 조정
             if for_p > self.current_power_step + RF_TOLERANCE_POWER:
@@ -121,7 +121,7 @@ class RFPowerController(QObject):
             error = self.target_power - for_p
             if abs(error) > RF_TOLERANCE_POWER:
                 adjustment = 1 if error > 0 else -1
-                self.current_pwm_value = max(0, min(255, self.current_pwm_value + adjustment))
+                self.current_pwm_value = max(0, min(RF_DAC_FULL_SCALE, self.current_pwm_value + adjustment))
                 self._send_pwm_via_plc(self.current_pwm_value)
                 self.status_message.emit("RFpower", f"파워 유지 보정... (PWM:{self.current_pwm_value})")
 
