@@ -204,6 +204,18 @@ class PLCController(QObject):
                             self.status_message.emit("PLC(경고)", f"DI 인덱스 초과: {name}->{bit} (len={len(bits)})")
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"DI 읽기 실패: {ex}")
+            # debug
+            try:
+                fc2_base0   = self.instrument.read_bits(0,   5, functioncode=2)
+                fc2_base100 = self.instrument.read_bits(100, 5, functioncode=2)
+                fc1_base100 = self.instrument.read_bits(100, 5, functioncode=1)
+                self.status_message.emit(
+                    "PLC-DBG",
+                    f"DI probe: fc2@0={fc2_base0} fc2@100={fc2_base100} fc1@100={fc1_base100}"
+                )
+            except Exception as ex:
+                self.status_message.emit("PLC-DBG", f"DI probe failed: {ex}")
+            # debug
 
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"폴링 실패: {e}")
