@@ -1,0 +1,50 @@
+Air        P00000    M00100 [DI0]
+Gauge1    P00001    M00101 [DI1]
+Gauge2    P00002    M00102 [DI2]
+ATM        P00003    M00103 [DI3]
+Water        P00004    M00104 [DI4]
+
+Rotary[0]    M00000    P00040 [P020]
+RV[1]        M00001    P00041 [P021]
+FV[2]        M00002    P00042 [P022]
+MV[3]    M00003    P00043 [23]
+Vent[4]    M00004    P00161 [24] 
+Turbo[5]    M00005    P00045 [25]
+Doorup[6]    M00006    P00162 [26]
+Doordn[7]    M00020    P00163 [27]
+Ar[8]        M00007    P00047 [2A]
+O2[9]        M00008    P00164 [2B]
+Buzz[10]      M00021      P00165 [2F]
+MS[11]    M00009    P00049 [30]
+S1[12]    M00010    P0004A [31]
+S2[13]    M00011    P0004B [32]
+
+ADC         RDY    U01.00.F
+ADC Ch0    act    U01.01.0
+ADC Ch0    data    U01.02    D00000
+ADC Ch1    act    U01.01.1
+ADC Ch1    data    U01.03    D00001
+ADC Ch2    act    U01.01.2
+ADC Ch2    data    U01.04    D00002
+ADC Ch3    act    U01.01.3
+ADC Ch3    data    U01.05    D00003
+ERR            U01.00.0
+ERR_CLR        U01.11.0
+
+DAC        RDY            U02.00.F
+DAC    Ch0    outen    M00200    U02.02.0
+DAC    Ch0    act            U02.01.0
+DAC    Ch0    data    D00040    U02.03
+DAC    Ch0    ERR            U02.00.0
+DAC    Ch1    outen    M00201    U02.02.1
+DAC    Ch1    act            U02.01.1
+DAC    Ch1    data    D00041    U02.04
+DAC    Ch1    ERR            U02.00.1
+DAC    Ch2    outen    M00202    U02.02.2
+DAC    Ch2    act            U02.01.2
+DAC    Ch2    data    D00042    U02.05
+DAC    Ch2    ERR            U02.00.2
+DAC    Ch3    outen    M00203    U02.02.3
+DAC    Ch3    act            U02.01.3
+DAC    Ch3    data    D00043    U02.06
+DAC    Ch3    ERR            U02.00.3
