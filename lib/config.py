@@ -42,7 +42,7 @@ PLC_COIL_MAP: Dict[str, int] = {
 }
 
 # 센서 인디케이터 -> Discrete Inputs 주소 (읽기용, FC 2)
-SENSOR_DI_BASE = 0  # DI 시작 주소
+SENSOR_DI_BASE = 100  # DI 시작 주소
 PLC_SENSOR_BITS: Dict[str, int] = {
     "Air": 0,
     "G1": 1,

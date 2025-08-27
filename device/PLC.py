@@ -138,7 +138,7 @@ class PLCController(QObject):
 
     def _safe_read_discrete_inputs(self, start_addr: int, count: int) -> List[bool]:
         assert self.instrument is not None
-        return self.instrument.read_bits(start_addr, count, functioncode=1)
+        return self.instrument.read_bits(start_addr, count, functioncode=2)
 
     # ============== 폴링 ======================
     @Slot()
@@ -178,18 +178,6 @@ class PLCController(QObject):
                             self.status_message.emit("PLC(경고)", f"DI 인덱스 초과: {name}->{bit} (len={len(bits)})")
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"DI 읽기 실패: {ex}")
-            # debug
-            try:
-                fc2_base0   = self.instrument.read_bits(0,   5, functioncode=2)
-                fc2_base100 = self.instrument.read_bits(100, 5, functioncode=2)
-                fc1_base100 = self.instrument.read_bits(100, 5, functioncode=1)
-                self.status_message.emit(
-                    "PLC-DBG",
-                    f"DI probe: fc2@0={fc2_base0} fc2@100={fc2_base100} fc1@100={fc1_base100}"
-                )
-            except Exception as ex:
-                self.status_message.emit("PLC-DBG", f"DI probe failed: {ex}")
-            # debug
 
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"폴링 실패: {e}")
@@ -200,8 +188,6 @@ class PLCController(QObject):
     # ============== 쓰기(버튼 클릭 반영) =========
     @Slot(str, bool)
     def update_port_state(self, btn_name: str, state: bool):
-        self.status_message.emit("PLC-DBG", f"update_port_state({btn_name}={state})")
-
         if self.instrument is None:
             self.status_message.emit("PLC(오류)", "포트가 열려 있지 않습니다.")
             return
@@ -301,8 +287,8 @@ class PLCController(QObject):
         if self.instrument is None:
             return None, None
         try:
-            f_raw = self.instrument.read_register(RF_ADC_FORWARD_ADDR, 0, functioncode=4, signed=False)
-            r_raw = self.instrument.read_register(RF_ADC_REFLECT_ADDR, 0, functioncode=4, signed=False)
+            f_raw = self.instrument.read_register(RF_ADC_FORWARD_ADDR, 0, functioncode=3, signed=False)
+            r_raw = self.instrument.read_register(RF_ADC_REFLECT_ADDR, 0, functioncode=3, signed=False)
             forward_watt   = (f_raw / RF_ADC_MAX_COUNT) * RF_FORWARD_SCALING_MAX_WATT
             reflected_watt = (r_raw / RF_ADC_MAX_COUNT) * RF_REFLECTED_SCALING_MAX_WATT
             return forward_watt, reflected_watt
