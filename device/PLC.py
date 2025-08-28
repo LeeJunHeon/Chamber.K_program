@@ -41,13 +41,43 @@ from lib.config import (
 # S1[12]     M00010    P0004A [31]
 # S2[13]     M00011    P0004B [32]
 
+# ADC        RDY    U01.00.F
+# ADC Ch0    act    U01.01.0
+# ADC Ch0    data   U01.02    D00000
+# ADC Ch1    act    U01.01.1
+# ADC Ch1    data   U01.03    D00001
+# ADC Ch2    act    U01.01.2
+# ADC Ch2    data   U01.04    D00002
+# ADC Ch3    act    U01.01.3
+# ADC Ch3    data   U01.05    D00003
+# ERR               U01.00.0
+# ERR_CLR           U01.11.0
+
+# DAC           RDY                U02.00.F
+# DAC    Ch0    outen    M00200    U02.02.0
+# DAC    Ch0    act                U02.01.0
+# DAC    Ch0    data     D00040    U02.03
+# DAC    Ch0    ERR                U02.00.0
+# DAC    Ch1    outen    M00201    U02.02.1
+# DAC    Ch1    act                U02.01.1
+# DAC    Ch1    data     D00041    U02.04
+# DAC    Ch1    ERR                U02.00.1
+# DAC    Ch2    outen    M00202    U02.02.2
+# DAC    Ch2    act                U02.01.2
+# DAC    Ch2    data     D00042    U02.05
+# DAC    Ch2    ERR                U02.00.2
+# DAC    Ch3    outen    M00203    U02.02.3
+# DAC    Ch3    act                U02.01.3
+# DAC    Ch3    data     D00043    U02.06
+# DAC    Ch3    ERR                U02.00.3
+
 # === RF 피드백(ADC) === (모듈 사양에 맞게 조정)
 RF_ADC_FORWARD_ADDR = 0
 RF_ADC_REFLECT_ADDR = 1
 RF_ADC_MAX_COUNT    = 4000
 
 RF_DAC_ADDR_CH0      = 40     # D00040 → 0-based 40
-COIL_ENABLE_DAC_CH0  = 200    # M00200 → 0-based 200
+COIL_ENABLE_DAC_CH0  = 320    # M00200 → 0-based 200 -> 200인데 320으로 해야지 맞게 들어감
 
 class PLCController(QObject):
     status_message = Signal(str, str)
@@ -86,6 +116,11 @@ class PLCController(QObject):
             self.instrument.serial.parity   = 'N'
             self.instrument.serial.stopbits = 1
             self.instrument.serial.timeout  = PLC_TIMEOUT
+
+            self.instrument.close_port_after_each_call = False
+            self.instrument.clear_buffers_before_each_transaction = True
+            self.instrument.handle_local_echo = False
+
             self._is_running = True
             self.polling_timer.start()
             self.status_message.emit("PLC", f"연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID}")
@@ -276,6 +311,11 @@ class PLCController(QObject):
             if COIL_ENABLE_DAC_CH0 is not None:
                 self.instrument.write_bit(COIL_ENABLE_DAC_CH0, 1, functioncode=5)
             self.instrument.write_register(RF_DAC_ADDR_CH0, int(pwm_value), functioncode=6)
+            try:
+                echo = self.instrument.read_register(RF_DAC_ADDR_CH0, 0, functioncode=3, signed=False)
+                self.status_message.emit("PLC > 확인", f"DAC echo={echo}")
+            except Exception as _:
+                pass
             self.status_message.emit("PLC > 전송", f"RF/DAC={int(pwm_value)} @D{RF_DAC_ADDR_CH0}")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"RF 파워 송신 실패: {e}")
@@ -286,6 +326,8 @@ class PLCController(QObject):
     def read_rf_feedback(self) -> tuple[float, float] | tuple[None, None]:
         if self.instrument is None:
             return None, None
+        self._busy = True
+        self._mutex.lock()
         try:
             f_raw = self.instrument.read_register(RF_ADC_FORWARD_ADDR, 0, functioncode=3, signed=False)
             r_raw = self.instrument.read_register(RF_ADC_REFLECT_ADDR, 0, functioncode=3, signed=False)
@@ -295,6 +337,9 @@ class PLCController(QObject):
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"RF 피드백 읽기 실패: {e}")
             return None, None
+        finally:
+            self._busy = False
+            self._mutex.unlock()
 
     # ============== 비상 정지 ==================
     @Slot()

@@ -17,6 +17,7 @@ PLC_PORT = "COM3"
 PLC_BAUD = 115200
 PLC_SLAVE_ID = 1
 PLC_TIMEOUT = 0.5   # 초
+RF_ADC_MAX_COUNT = 4000  # 주소맵 사양에 맞춤(ADC/DAC 모두 0~4000 카운트)
 
 # 인터락 기준값/공정 파라미터 등
 INTERLOCK_CHECK_INTERVAL = 0.2  # sec

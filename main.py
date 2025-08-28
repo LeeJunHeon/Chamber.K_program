@@ -92,6 +92,8 @@ class MainDialog(QDialog):
         self.ui.Sputter_Start_Button.clicked.connect(self._handle_start_process)
         #self.ui.Sputter_Stop_Button.clicked.connect(self._handle_sputter_stop)
         self.ui.ALL_STOP_button.clicked.connect(self.plc_controller.on_emergency_stop)
+        # UI에서 'Sputter 중지' 버튼을 누르면, 새로 만든 신호를 통해 비동기적으로 중단 요청
+        self.ui.Sputter_Stop_Button.clicked.connect(self.request_process_stop)
 
         # PLC 버튼 연결
         for btn_name in PLC_COIL_MAP.keys():
@@ -119,9 +121,6 @@ class MainDialog(QDialog):
         # MFC -> Process (결과 보고)
         self.mfc_controller.command_confirmed.connect(self.process_controller._on_mfc_confirmed)
         self.mfc_controller.command_failed.connect(self.process_controller._on_mfc_failed)
-
-        # UI에서 'Sputter 중지' 버튼을 누르면, 새로 만든 신호를 통해 비동기적으로 중단 요청
-        self.ui.Sputter_Stop_Button.clicked.connect(self.request_process_stop)
         
         # 새로 만든 신호를 Process Controller의 stop_process 슬롯에 연결
         # 이렇게 하면 stop_process는 Process 스레드에서 안전하게 실행됩니다.

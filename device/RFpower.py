@@ -102,12 +102,11 @@ class RFPowerController(QObject):
 
             # 2. 현재 스텝 목표치에 도달했는지 확인
             if for_p >= self.current_power_step:
-                # [Feed-forward] 현재 스텝에 도달했으므로, 다음 스텝 목표를 설정하고 PWM 예측
+                # 다음 스텝으로 1W 올라가며, 그 스텝에 해당하는 DAC 예측값을 바로 사용
                 self.current_power_step = min(self.current_power_step + RF_RAMP_STEP, self.target_power)
-                base_pwm = self.pwm_offset_cal + (self.current_power_step * self.pwm_param_cal)
-                self.current_pwm_value = max(0, min(int(base_pwm), RF_DAC_FULL_SCALE))
+                self.current_pwm_value = self._power_to_dac(self.current_power_step)
             else:
-                # [Feedback] 아직 현재 스텝에 도달 못함 (언더슈트) -> PWM 미세 조정
+                # 아직 스텝 목표 전력에 못 미치면 DAC를 소폭 올려 미세 보정
                 self.current_pwm_value = min(self.current_pwm_value + 1, RF_DAC_FULL_SCALE)
             
             # [Feedback] 계산된 PWM이 오버슈트를 유발했다면 미세 조정
@@ -163,6 +162,16 @@ class RFPowerController(QObject):
         """PLC로부터 (forward_watt, reflected_watt) 튜플을 받는다."""
         fwd, ref = self.plc.read_rf_feedback()
         return fwd, ref
+    
+    def _power_to_dac(self, power_w: float) -> int:
+        """
+        원하는 전력[W]를 DAC 카운트[0..RF_DAC_FULL_SCALE]로 변환.
+        기본 스케일 (power / RF_MAX_POWER) * FULL_SCALE 에
+        게인(param)과 오프셋(offset)을 적용.
+        """
+        base = (power_w / RF_MAX_POWER) * RF_DAC_FULL_SCALE
+        counts = self.pwm_offset_cal + (base * self.pwm_param_cal)
+        return max(0, min(int(round(counts)), RF_DAC_FULL_SCALE))
     
     @Slot()
     def close_connection(self):
