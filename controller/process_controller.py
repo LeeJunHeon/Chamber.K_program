@@ -1,390 +1,483 @@
-# device/process_controller.py
+# device/process_controller.py  (Chamber-K, PLC version — chamber2 스타일, IG/OES/RGA 제거)
 
-# QEventLoop: 특정 신호가 올 때까지 코드 실행을 잠시 멈추고 기다리게 해주는 도구
-from PySide6.QtCore import QObject, Signal, Slot, QThread, QEventLoop, QTimer
+from __future__ import annotations
+from typing import Optional, List, Tuple, Dict, Any
+from dataclasses import dataclass
+from enum import Enum
+
+import math
+from PyQt6.QtCore import (
+    QObject, QTimer, QEventLoop, QMetaObject, QThread,
+    pyqtSignal as Signal, pyqtSlot as Slot, Qt
+)
+
+# ===================== 액션 / 스텝 정의 =====================
+
+class ActionType(str, Enum):
+    MFC_CMD       = "MFC_CMD"        # params=('CMD', {args})
+    PLC_CMD       = "PLC_CMD"        # params=('ButtonName', True/False)
+    DELAY         = "DELAY"          # duration_sec:int , timer_purpose: 'shutter'|'process'|None
+    POWER_WAIT    = "POWER_WAIT"     # DC/RF 목표 도달 대기
+    DC_POWER_SET  = "DC_POWER_SET"   # value: float
+    DC_POWER_STOP = "DC_POWER_STOP"
+    RF_POWER_SET  = "RF_POWER_SET"   # value: float (offset/param은 start에서 params로 받음)
+    RF_POWER_STOP = "RF_POWER_STOP"
+
+@dataclass
+class ProcessStep:
+    action: ActionType
+    message: str
+    # 공용 옵션
+    params: Optional[Tuple] = None       # see ActionType별 주석
+    value: Optional[float] = None        # DC/RF target 등
+    duration_sec: Optional[int] = None   # DELAY 용
+    timer_purpose: Optional[str] = None  # 'shutter' | 'process' | None
+    polling: bool = False                # 이 스텝에서만 MFC 폴링 ON
+
+# ===================== 유틸 : 스레드 안전 호출 =====================
+
+def _invoke_connect(obj, method_name: str) -> bool:
+    """obj.method_name()을 obj의 스레드에서 동기 호출하고, 가능하면 실제 반환값(bool)을 돌려준다."""
+    try:
+        if obj.thread() is QThread.currentThread():
+            ret = getattr(obj, method_name)()
+            return bool(True if ret is None else ret)   # 반환값 없으면 True로 간주
+        ok = QMetaObject.invokeMethod(obj, method_name, Qt.ConnectionType.BlockingQueuedConnection)
+        return bool(ok)
+    except Exception:
+        return False
+
+# ===================== 메인 컨트롤러 =====================
 
 class SputterProcessController(QObject):
-    # --- UI 및 다른 컨트롤러와 통신하기 위한 시그널들 ---
-    status_message = Signal(str, str)       # UI 로그창에 (레벨, 메시지) 형태로 로그를 보냄
-    update_plc_port = Signal(str, bool) # plc의 포트 상태 변경을 요청
-    start_dc_power = Signal(float)          # DC 파워 컨트롤러에 목표 파워를 전달하며 시작 요청
-    stop_dc_power = Signal()                # DC 파워 컨트롤러에 정지 요청
-    stop_rf_power = Signal()                # RF 파워 컨트롤러에 정지 요청
-    shutter_delay_tick = Signal(int)        # Shutter delay 타이머의 남은 시간을 UI에 보냄
-    process_time_tick = Signal(int)         # 메인 공정 타이머의 남은 시간을 UI에 보냄
-    stage_monitor = Signal(str)             # 현재 진행 중인 공정 단계를 UI에 표시
-    finished = Signal()                     # 모든 공정이 성공적으로 완료되었음을 알림
-    start_requested = Signal(dict)          # UI에서 '시작' 버튼을 누르면 공정 파라미터와 함께 이 신호 발생
-    connection_failed = Signal(str)         # 장비 연결 실패 시 에러 메시지를 보냄
-    critical_error = Signal(str)            # 치명적인 오류 발생 시 에러 메시지를 보냄
-    start_rf_power = Signal(dict)           # RF power 파라미터를 넘기는 시그널
+    # --- 로그/상태(UI) ---
+    status_message        = Signal(str, str)   # (level, text)
+    stage_monitor         = Signal(str)
+    shutter_delay_tick    = Signal(int)        # sec
+    process_time_tick     = Signal(int)        # sec
+    finished              = Signal()
+
+    # --- 수명/오류/시작 ---
+    start_requested       = Signal(dict)       # Main이 이 신호를 emit 하도록 구성됨
+    connection_failed     = Signal(str)
+    critical_error        = Signal(str)
+
+    # --- 장치 제어 신호 (Main 쪽 연결과 호환) ---
+    update_plc_port       = Signal(str, bool)  # (btn_name, state)
+    start_dc_power        = Signal(float)      # target W
+    stop_dc_power         = Signal()
+    start_rf_power        = Signal(dict)       # {'target':W, 'offset':x, 'param':y}
+    stop_rf_power         = Signal()
+
+    # --- MFC 라우팅 (Process -> MFC) ---
+    command_requested     = Signal(str, dict)  # (cmd, params)
 
     def __init__(self, mfc_controller, dc_controller, rf_controller, plc_controller):
         super().__init__()
-        # 각 장비의 컨트롤러 인스턴스를 내부 변수로 저장
         self.mfc = mfc_controller
-        self.dc = dc_controller
-        self.rf = rf_controller
+        self.dc  = dc_controller
+        self.rf  = rf_controller
         self.plc = plc_controller
 
-        # --- 내부 상태 변수 초기화 ---
-        self._is_running = False            # 현재 공정이 실행 중인지 여부
-        self.gas_valve_button = None        # 선택된 가스에 따라 제어할 plc 버튼 이름 (예: 'Ar_Button')
-        self.is_dc_on = False               # 이번 공정에서 DC 파워를 사용하는지 여부
-        self.is_rf_on = False               # 이번 공정에서 RF 파워를 사용하는지 여부
-        self.process_channel = 1            # MFC 제어 채널 (1: Ar, 2: O2)
-        self._steps = []                    # 공정 단계들을 저장할 리스트
-        self._current_step_idx = 0          # 현재 실행 중인 단계의 인덱스
-        self._step_in_progress = False      # 한 단계가 완료되기 전에 중복 실행되는 것을 방지하기 위한 플래그
-        self.params = None                  # UI로부터 받은 공정 파라미터 딕셔너리
+        # 내부 상태
+        self._steps: List[ProcessStep] = []
+        self._idx: int = -1
+        self._running: bool = False
+        self.params: Dict[str, Any] = {}
 
-        # [추가] 비동기 타이머 설정
-        self._timer = QTimer(self)
-        self._timer.setInterval(1000)  # 1초 간격
-        self._timer.timeout.connect(self._on_timer_tick)
-        
-        self._time_left = 0
-        self._current_timer_purpose = None # 'shutter' 또는 'process' 등 타이머 용도 구분
+        # 타이머(1초 틱)
+        self._timer: Optional[QTimer] = None
+        self._time_left: int = 0
+        self._timer_purpose: Optional[str] = None  # 'shutter'|'process'|None
+
+        # 파워 대기
+        self._power_loops: List[Tuple[str, QEventLoop]] = []
+
+        # 채널/버튼
+        self._process_channel: int = 1
+        self._gas_valve_button: str = "Ar_Button"
+
+        # 사용 여부
+        self.is_dc_on = False
+        self.is_rf_on = False
+
+    # ---------- 타이머 준비 ----------
+    @Slot()
+    def _setup_timers(self):
+        if self._timer is None:
+            self._timer = QTimer(self)
+            self._timer.setInterval(1000)
+            self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self._timer.timeout.connect(self._on_tick)
+        self.status_message.emit("정보", "ProcessController 타이머 준비 완료")
+
+    def _invoke_self(self, name: str):
+        if self.thread() is QThread.currentThread():
+            getattr(self, name)()
+        else:
+            QMetaObject.invokeMethod(self, name, Qt.ConnectionType.BlockingQueuedConnection)
+
+    # ==================== 공정 시작 ====================
 
     @Slot(dict)
-    def start_process_flow(self, params):
-        """[슬롯] UI에서 시작 신호(start_requested)를 받으면 가장 먼저 실행되는 함수."""
+    def start_process_flow(self, params: Dict[str, Any]):
         self.params = params
-        self._is_running = True
+        self._running = True
 
-        # --- 1. 사용할 장비 연결 확인 및 시도 ---
-        if params.get('dc_power', 0) > 0:
-            # DC 파워를 사용하는데 연결이 안 되어있으면 연결 시도
-            if not self.dc.serial_dcpower and not self.dc.connect_dcpower_device():
+        # 타이머는 자신의 스레드에서 생성
+        self._invoke_self("_setup_timers")
+
+        # 장치 연결 확인
+        if float(params.get('dc_power', 0) or 0) > 0:
+            _invoke_connect(self.dc, "connect_dcpower_device")
+            if not self._is_connected(self.dc):
                 self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
+                self._running = False
                 return
-            
-        # MFC는 항상 사용하므로 연결 확인 및 시도
-        if not self.mfc.serial_mfc and not self.mfc.connect_mfc_device():
+
+        _invoke_connect(self.mfc, "connect_mfc_device")
+        if not self._is_connected(self.mfc):
             self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
+            self._running = False
             return
 
-        # --- 공정 파라미터로부터 내부 상태 변수 설정 ---
-        selected_gas = params.get('selected_gas', 'Ar')
-        self.process_channel = 1 if selected_gas == 'Ar' else 2
-        self.gas_valve_button = 'Ar_Button' if selected_gas == 'Ar' else 'O2_Button'
-        self.is_dc_on = params.get('dc_power', 0) > 0
-        self.is_rf_on = params.get('rf_power', 0) > 0
+        # 채널/버튼/파워 사용여부
+        gas = params.get('selected_gas', 'Ar')
+        self._process_channel = 1 if gas == "Ar" else 2
+        self._gas_valve_button = 'Ar_Button' if gas == 'Ar' else 'O2_Button'
+        self.is_dc_on = float(params.get('dc_power', 0) or 0) > 0
+        self.is_rf_on = float(params.get('rf_power', 0) or 0) > 0
 
-        # --- 2. 공정 단계 목록 생성 ---
-        self._prepare_steps(params)
-        self._current_step_idx = 0
-        self._step_in_progress = False
+        # 스텝 구성
+        self._steps = self._build_steps(params)
+        self._idx = -1
 
         self.status_message.emit("정보", "Sputtering 공정을 시작합니다.")
-        # 첫 번째 단계부터 실행 시작
-        self._run_next_step()
+        self._next_step()
 
-    def _prepare_steps(self, params):
-        """공정 파라미터에 맞춰 실행할 단계(step) 리스트를 미리 생성."""
-        ch = self.process_channel
-        flow = float(params.get("mfc_flow", 0))
-        sp1 = float(params.get("sp1_set", 0))
-        sp1 = sp1 / 10 # 단위 보정
+    # ==================== 스텝 구성 ====================
 
-        # 리스트 형태로 각 단계를 정의. (장치, 명령, 파라미터, UI에 표시될 설명)
-        self._steps = [
-            ("MFC", "FLOW_OFF", {"channel": ch}, f"Ch{ch} flow off, valve open, zeroing ..."),
-            ("MFC", "VALVE_OPEN", {}, "Valve open"),
-            ("MFC", "MFC_ZEROING", {"channel": ch}, "MFC ZEROING"),
-            ("MFC", "PS_ZEROING", {}, "PS ZEROING"),
-            ("PLC", self.gas_valve_button, True, f"{self.params.get('selected_gas')} Valve를 엽니다."),
-            ("MFC", "FLOW_SET", {"channel": ch, "value": flow}, f"Ch{ch} 유량 {flow} sccm 설정"),
-            ("MFC", "FLOW_ON", {"channel": ch}, f"Ch{ch} flow ON"),
-            ("MFC", "SP4_ON", {}, "SP4 ON (압력제어 준비)"),
-            ("MFC", "SP1_SET", {"value": sp1}, f"SP1(압력 목표) 값 {sp1} 설정"),
-            ("DELAY", 60_000, None, "SP4 안정화 1분 대기"),
+    def _build_steps(self, p: Dict[str, Any]) -> List[ProcessStep]:
+        ch   = 1 if p.get('selected_gas', 'Ar') == 'Ar' else 2
+        flow = float(p.get('mfc_flow', 0.0))
+        # (중요) SP1_SET 값은 UI 그대로 보냄 — MFC가 1/10 스케일 변환
+        sp1_ui = float(p.get('sp1_set', 0.0))
+
+        steps: List[ProcessStep] = [
+            # 초기화: Flow Off, Valve Open, Zeroing
+            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} Flow OFF", params=('FLOW_OFF', {'channel': ch})),
+            ProcessStep(ActionType.MFC_CMD, "MFC Valve Open", params=('VALVE_OPEN', {})),
+            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} ZEROING", params=('MFC_ZEROING', {'channel': ch})),
+            ProcessStep(ActionType.MFC_CMD, "PS ZEROING",     params=('PS_ZEROING', {})),
+
+            # 가스 밸브(PLC)
+            ProcessStep(ActionType.PLC_CMD, f"{p.get('selected_gas')} Valve Open",
+                        params=(self._gas_valve_button, True)),
+
+            # 유량 설정 & ON
+            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} {flow:.2f}sccm 설정",
+                        params=('FLOW_SET', {'channel': ch, 'value': flow})),
+            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} Flow ON",
+                        params=('FLOW_ON', {'channel': ch})),
+
+            # 압력 제어 준비 및 목표 설정(SP1=UI값)
+            ProcessStep(ActionType.MFC_CMD, "SP4 ON", params=('SP4_ON', {})),
+            ProcessStep(ActionType.MFC_CMD, f"SP1={sp1_ui:.2f} 설정", params=('SP1_SET', {'value': sp1_ui})),
+            ProcessStep(ActionType.DELAY, "압력 안정화 대기(60초)", duration_sec=60),
         ]
 
-        # [수정] G1 체크박스가 선택된 경우에만 S1 Shutter 열기 단계를 추가
-        if params.get('use_g1', False):
-            self._steps.append(("PLC", "S1_button", True, "Gun Shutter 1(S1)을 엽니다."))
+        # 선택: 건 셔터
+        if p.get('use_g1', False):
+            steps.append(ProcessStep(ActionType.PLC_CMD, "Gun Shutter 1 Open", params=('S1_button', True)))
+        if p.get('use_g2', False):
+            steps.append(ProcessStep(ActionType.PLC_CMD, "Gun Shutter 2 Open", params=('S2_button', True)))
 
-        # [수정] G2 체크박스가 선택된 경우에만 S2 Shutter 열기 단계를 추가
-        if params.get('use_g2', False):
-            self._steps.append(("PLC", "S2_button", True, "Gun Shutter 2(S2)를 엽니다."))
+        # 파워 안정화
+        steps.append(ProcessStep(ActionType.POWER_WAIT, "파워 목표치 도달 대기"))
 
-        # [수정] 나머지 단계들을 self._steps 리스트에 추가
-        self._steps.extend([
-            ("POWER_WAIT", None, None, "파워 안정화 대기"),
-            ("MFC", "SP1_ON", {}, "SP1 ON (압력 제어 시작)"),
-            ("SHUTTER_DELAY", None, None, "Shutter delay 대기"),
-            ("PLC", "MS_button", True, "Main Shutter(M.S.)를 엽니다."),
-            ("PROCESS_TIME", None, None, "메인 공정 대기"),
-            ("PLC", "MS_button", False, "Main Shutter(M.S.)를 닫습니다."),
-            ("PLC", self.gas_valve_button, False, f"{self.params.get('selected_gas')} Valve를 닫습니다."),
+        # 압력 제어 시작
+        steps.append(ProcessStep(ActionType.MFC_CMD, "SP1 ON", params=('SP1_ON', {})))
+
+        # Shutter Delay
+        sd_sec = max(0, int(math.ceil(float(p.get('shutter_delay', 0.0)) * 60)))
+        if sd_sec > 0:
+            steps.append(ProcessStep(ActionType.DELAY, f"Shutter Delay {sd_sec}s",
+                                     duration_sec=sd_sec, timer_purpose='shutter'))
+
+        # Main Shutter
+        if float(p.get('process_time', 0.0)) > 0:
+            steps.append(ProcessStep(ActionType.PLC_CMD, "Main Shutter Open", params=('MS_button', True)))
+
+        # 메인 공정(이 구간만 폴링 ON)
+        pt_sec = max(0, int(math.ceil(float(p.get('process_time', 0.0)) * 60)))
+        if pt_sec > 0:
+            steps.append(ProcessStep(ActionType.DELAY, f"메인 공정 {pt_sec}s 진행",
+                                     duration_sec=pt_sec, timer_purpose='process', polling=True))
+
+        # 종료: Main Shutter 닫기, 가스 닫기
+        steps.extend([
+            ProcessStep(ActionType.PLC_CMD, "Main Shutter Close", params=('MS_button', False)),
+            ProcessStep(ActionType.PLC_CMD, f"{p.get('selected_gas')} Valve Close",
+                        params=(self._gas_valve_button, False)),
         ])
 
-    def _run_next_step(self):
-        """[핵심] 공정 리스트에서 다음 단계를 가져와 실행하는 '감독관' 함수."""
-        print(f"[DEBUG] _run_next_step 진입, step={self._current_step_idx}")
-        if not self._is_running:
-            self.status_message.emit("오류", "공정이 중단되어 다음 step을 실행하지 않습니다.")
+        return steps
+
+    # ==================== 스텝 실행 ====================
+
+    def _next_step(self):
+        if not self._running:
+            self.status_message.emit("오류", "중단 상태 — 다음 스텝 실행 안 함")
             return
 
-        if self._step_in_progress:
-            self.status_message.emit("경고", "이전 단계가 아직 진행 중입니다. 중복 실행 방지.")
-            return
-
-        # 모든 단계가 끝났으면 공정 완료 처리
-        if self._current_step_idx >= len(self._steps):
-            self.status_message.emit("성공", "모든 공정 시퀀스가 완료되었습니다. 장비 종료를 시작합니다.")
-            # [핵심 수정] 장비들을 안전하게 종료하기 위해 stop_process 함수를 호출합니다.
+        self._idx += 1
+        if self._idx >= len(self._steps):
+            self.status_message.emit("성공", "모든 스텝 완료 — 안전 종료로 이동")
             self.stop_process()
             return
 
-        # 현재 실행할 단계(step) 정보를 가져옴
-        step = self._steps[self._current_step_idx]
-        device, cmd, params, desc = step
+        step = self._steps[self._idx]
+        self.stage_monitor.emit(f"[{self._idx+1}/{len(self._steps)}] {step.message}")
+        self.status_message.emit("공정", step.message)
 
-        self.stage_monitor.emit(f"[{self._current_step_idx+1}/{len(self._steps)}] {desc}")
-        self.status_message.emit("공정", desc)
-        self._step_in_progress = True # 현재 단계가 진행 중임을 표시
+        # 스텝 진입 시 폴링 설정
+        self.command_requested.emit("set_polling", {'enable': bool(step.polling)})
 
-        # 장치 종류에 따라 다른 동작 수행
-        if device == "MFC":
-            # MFC에 명령 요청 신호를 보내고 '대기'.
-            # 실제 다음 단계 진행은 _on_mfc_confirmed 슬롯이 신호를 받아 처리함.
-            self.status_message.emit("정보", f"[DEBUG] MFC 명령 emit: {cmd}, {params}")
-            self.mfc.command_requested.emit(cmd, params)
-        elif device == "PLC":
-            # [수정] 검증 로직을 제거하고, 명령을 보낸 후 0.5초 대기하고 바로 다음으로 넘어감
-            self.update_plc_port.emit(cmd, params)
-            QThread.msleep(1000) # 명령이 처리될 최소한의 시간을 줌
+        # 액션 분기
+        if step.action == ActionType.MFC_CMD:
+            cmd, args = step.params
+            self.command_requested.emit(cmd, dict(args))
 
-            # 즉시 다음 단계로 진행
-            self._current_step_idx += 1
-            self._step_in_progress = False
-            self._run_next_step()
-        elif device == "DELAY":
-            # SP4 1분 대기
-            delay_ms = cmd
-            QThread.msleep(delay_ms)
+        elif step.action == ActionType.PLC_CMD:
+            btn, st = step.params
+            self.update_plc_port.emit(str(btn), bool(st))
+            QTimer.singleShot(800, self._next_step)  # 릴레이/실린더 여유
 
-            self._current_step_idx += 1
-            self._step_in_progress = False
-            self._run_next_step()
-        elif device == "POWER_WAIT":
-            self._power_stabilize() # 파워 안정화 대기 함수 호출
-        elif device == "SHUTTER_DELAY":
-            self._shutter_delay()   # Shutter delay 대기 함수 호출
-        elif device == "PROCESS_TIME":
-            self._process_time()    # 메인 공정 시간 대기 함수 호출
-        else:
-            # 정의되지 않은 장치일 경우, 오류 메시지 후 다음 단계로 넘어감
-            self.status_message.emit("오류", f"정의되지 않은 step: {device}")
-            self._current_step_idx += 1
-            self._step_in_progress = False
-            self._run_next_step()
+        elif step.action == ActionType.DC_POWER_SET:
+            self.start_dc_power.emit(float(step.value or 0.0))
 
-    @Slot(str)
-    def _on_mfc_confirmed(self, cmd):
-        """[슬롯] MFC로부터 '명령 성공' 신호를 받았을 때 실행됨."""
-        if not self._is_running: return
+        elif step.action == ActionType.DC_POWER_STOP:
+            self.stop_dc_power.emit()
+            QTimer.singleShot(100, self._next_step)
 
-        # 현재 대기중인 step이 맞는지 확인 (다른 명령의 완료 신호와 겹치는 것 방지)
-        step = self._steps[self._current_step_idx]
-        if step[0] == "MFC" and step[1] == cmd:
-            self.status_message.emit("MFC", f"'{cmd}' 명령 성공. 다음 단계로 진행합니다.")
-            self._current_step_idx += 1    # 다음 단계로 인덱스 이동
-            self._step_in_progress = False # 현재 단계 완료됨을 표시
-            self._run_next_step()          # 다음 단계 실행
-        else:
-            self.status_message.emit("경고", f"예상치 못한 MFC 확인 신호 수신: {cmd}")
-
-    @Slot(str)
-    def _on_mfc_failed(self, error_msg):
-        """[슬롯] MFC로부터 '명령 실패' 신호를 받았을 때 실행됨."""
-        if not self._is_running: return
-        step = self._steps[self._current_step_idx]
-        self.status_message.emit("MFC(실패)", f"'{step[1]}' 명령 실패: {error_msg}")
-        self.status_message.emit("치명적 오류", "MFC 통신 오류로 공정을 중단합니다.")
-        self._is_running = False
-        self.stop_process() # 즉시 공정 중단 함수 호출
-
-    def _power_stabilize(self):
-        """DC/RF Power가 목표치에 도달하고 안정화될 때까지 대기."""
-        dc_power = self.params.get('dc_power', 0)
-        rf_power = self.params.get('rf_power', 0)
-        rf_offset = self.params.get('rf_offset', 0)
-        rf_param = self.params.get('rf_param', 1.0)
-
-        is_dc_on = dc_power > 0
-        is_rf_on = rf_power > 0
-
-        # DC/RF 파워가 목표치에 도달하면 각 컨트롤러가 'target_reached' 신호를 보냄.
-        # QEventLoop를 사용하여 이 신호가 올 때까지 이 함수의 실행을 멈추고 대기함.
-        loops = []
-        if is_dc_on:
-            dc_loop = QEventLoop()
-            self.dc.target_reached.connect(dc_loop.quit) # target_reached 신호가 오면 루프 종료
-            self.start_dc_power.emit(dc_power)           # DC 파워 시작 요청
-            loops.append(dc_loop)
-        if is_rf_on:
-            rf_loop = QEventLoop()
-            self.rf.target_reached.connect(rf_loop.quit) # target_reached 신호가 오면 루프 종료
-            # ▼▼▼ RF 파워 시작 요청 시 딕셔너리 형태로 파라미터를 전달 ▼▼▼
-            rf_params = {
-                'target': rf_power,
-                'offset': rf_offset,
-                'param': rf_param,
+        elif step.action == ActionType.RF_POWER_SET:
+            payload = {
+                'target': float(step.value or 0.0),
+                'offset': float(self.params.get('rf_offset', 0.0) or 0.0),
+                'param':  float(self.params.get('rf_param', 1.0) or 1.0),
             }
+            self.start_rf_power.emit(payload)
 
-            self.start_rf_power.emit(rf_params)           # RF 파워 시작 요청
-            loops.append(rf_loop)
+        elif step.action == ActionType.RF_POWER_STOP:
+            self.stop_rf_power.emit()
+            QTimer.singleShot(100, self._next_step)
 
-        # 두 파워가 모두 목표에 도달할 때까지 대기
-        self.status_message.emit("정보", "파워 목표치 도달 대기중...")
-        for loop in loops:
-            loop.exec()
-        self.status_message.emit("정보", "파워 안정화 완료.")
+        elif step.action == ActionType.POWER_WAIT:
+            self._power_wait()
 
-        # 대기 완료 후 다음 단계로 진행
-        self._current_step_idx += 1
-        self._step_in_progress = False
-        self._run_next_step()
+        elif step.action == ActionType.DELAY:
+            self._start_delay(int(step.duration_sec or 0), step.timer_purpose)
 
-    def _shutter_delay(self):
-        """[수정] Shutter delay 시간만큼 비동기적으로 대기."""
-        # [핵심 수정] UI에서 '분' 단위로 입력받은 값에 60을 곱해 '초' 단위로 변환합니다.
-        delay_minutes = self.params.get('shutter_delay', 0)
-        delay_seconds = int(delay_minutes * 60)
+        else:
+            self.status_message.emit("오류", f"알 수 없는 액션: {step.action}")
+            self._next_step()
 
-        if delay_seconds <= 0:
-            # 딜레이가 없으면 바로 다음 단계로
-            self._current_step_idx += 1
-            self._step_in_progress = False
-            self._run_next_step()
+    # ==================== 장치 콜백(MFC) ====================
+
+    @Slot(str)
+    def _on_mfc_confirmed(self, cmd: str):
+        if not self._running or self._idx >= len(self._steps):
             return
-        
-        self.status_message.emit("정보", f"Shutter Delay {delay_seconds}초 대기")
-        self._time_left = delay_seconds
-        self._current_timer_purpose = 'shutter'
-        self.shutter_delay_tick.emit(self._time_left)
-        self._timer.start() # 타이머 시작! (루프와 msleep 없음)
+        step = self._steps[self._idx]
+        if step.action == ActionType.MFC_CMD:
+            expected = step.params[0] if step.params else None
+            if cmd == expected:
+                self.status_message.emit("MFC", f"'{cmd}' 확인 → 다음 단계")
+                self._next_step()
+            else:
+                self.status_message.emit("경고", f"MFC 확인 무시: '{cmd}', 기대 '{expected}'")
+        # 다른 액션 중일 때 들어온 확인은 무시
 
-    def _process_time(self):
-        """[수정] 메인 공정 시간만큼 비동기적으로 대기."""
-        # [핵심 수정] UI에서 '분' 단위로 입력받은 값에 60을 곱해 '초' 단위로 변환합니다.
-        process_minutes = self.params.get('process_time', 0)
-        process_seconds = int(process_minutes * 60)
-
-        if process_seconds <= 0:
-            # 공정 시간이 없으면 바로 다음 단계로
-            self._current_step_idx += 1
-            self._step_in_progress = False
-            self._run_next_step()
+    @Slot(str)
+    def _on_mfc_failed(self, why: str):
+        if not self._running:
             return
-            
-        self.status_message.emit("정보", f"메인 공정 {process_seconds}초 시작")
-        self.mfc.command_requested.emit("set_polling", {'enable': True})
-        
-        self._time_left = process_seconds
-        self._current_timer_purpose = 'process'
-        self.process_time_tick.emit(self._time_left)
-        self._timer.start() # 타이머 시작!
-
-    def _on_device_failure(self, error_msg):
-        """(사용되지 않음) 일반적인 장치 오류 처리용 예비 함수"""
-        self.status_message.emit("치명적 오류", error_msg)
+        step = self._steps[self._idx] if 0 <= self._idx < len(self._steps) else None
+        bad = (step.params[0] if (step and step.params) else "?")
+        self.status_message.emit("MFC(실패)", f"'{bad}' 실패: {why}")
+        self.critical_error.emit(f"MFC 통신 오류: {why}")
         self.stop_process()
 
-    def _on_timer_tick(self):
-        """[추가] 타이머가 1초마다 호출하는 슬롯."""
-        if not self._is_running:
-            self._timer.stop()
-            # process_time 중에 중단되었다면 polling 비활성화
-            if self._current_timer_purpose == 'process':
-                self.mfc.command_requested.emit("set_polling", {'enable': False})
+    # ==================== 파워 안정화 ====================
+
+    def _power_wait(self):
+        dc_power = float(self.params.get('dc_power', 0.0) or 0.0)
+        rf_power = float(self.params.get('rf_power', 0.0) or 0.0)
+        rf_offset = float(self.params.get('rf_offset', 0.0) or 0.0)
+        rf_param  = float(self.params.get('rf_param', 1.0) or 1.0)
+
+        loops: List[Tuple[str, QEventLoop]] = []
+
+        if dc_power > 0.0:
+            dc_loop = QEventLoop()
+            self.dc.target_reached.connect(dc_loop.quit)
+            loops.append(("dc", dc_loop))
+            self.start_dc_power.emit(dc_power)
+
+        if rf_power > 0.0:
+            rf_loop = QEventLoop()
+            self.rf.target_reached.connect(rf_loop.quit)
+            loops.append(("rf", rf_loop))
+            self.start_rf_power.emit({'target': rf_power, 'offset': rf_offset, 'param': rf_param})
+
+        if not loops:
+            self._next_step()
+            return
+
+        self.status_message.emit("정보", "파워 목표치 도달 대기중...")
+        for _name, lp in loops:
+            lp.exec()
+
+        # disconnect
+        for name, lp in loops:
+            try:
+                if name == "dc":
+                    self.dc.target_reached.disconnect(lp.quit)
+                else:
+                    self.rf.target_reached.disconnect(lp.quit)
+            except:
+                pass
+
+        self.status_message.emit("정보", "파워 안정화 완료.")
+        self._next_step()
+
+    # ==================== 딜레이/타이머 ====================
+
+    def _start_delay(self, seconds: int, purpose: Optional[str]):
+        if seconds <= 0:
+            self._next_step()
+            return
+        self._time_left = int(seconds)
+        self._timer_purpose = purpose
+        # 첫 틱 UI 반영
+        if self._timer_purpose == 'shutter':
+            self.shutter_delay_tick.emit(self._time_left)
+        elif self._timer_purpose == 'process':
+            self.process_time_tick.emit(self._time_left)
+        if self._timer:
+            self._timer.start()
+        else:
+            self.status_message.emit("오류", "타이머 초기화 누락")
+            self._next_step()
+
+    def _on_tick(self):
+        if not self._running:
+            if self._timer:
+                self._timer.stop()
+            # 프로세스 중이 아니면 폴링 OFF
+            self.command_requested.emit("set_polling", {'enable': False})
             return
 
         self._time_left -= 1
-
-        # 현재 타이머의 용도에 따라 다른 UI 업데이트 신호를 보냄
-        if self._current_timer_purpose == 'shutter':
+        if self._timer_purpose == 'shutter':
             self.shutter_delay_tick.emit(self._time_left)
-        elif self._current_timer_purpose == 'process':
+        elif self._timer_purpose == 'process':
             self.process_time_tick.emit(self._time_left)
 
-        # 시간이 다 되면 타이머를 멈추고 다음 단계로 진행
         if self._time_left <= 0:
+            if self._timer:
+                self._timer.stop()
+            # 딜레이 종료 시 폴링 OFF
+            self.command_requested.emit("set_polling", {'enable': False})
+            self._next_step()
+
+    # ==================== 종료/정리 ====================
+
+    @Slot()
+    def teardown(self):
+        if self._timer and self._timer.isActive():
             self._timer.stop()
-            
-            # process_time이 끝났다면 polling 비활성화
-            if self._current_timer_purpose == 'process':
-                self.mfc.command_requested.emit("set_polling", {'enable': False})
-                
-            self._current_step_idx += 1
-            self._step_in_progress = False
-            self._run_next_step()
 
     @Slot()
     def stop_process(self):
-        """[수정됨] 공정을 중단하고 모든 장비를 안전하게 종료 (동기 대기 방식 적용)"""
-        if not self._is_running:
+        """안전 종료 시퀀스"""
+        if not self._running:
             return
-        
-        self.status_message.emit("정보", "종료 시퀀스를 실행합니다.")
-        self._is_running = False # 모든 루프(딜레이, 공정시간 등)를 중단시키는 플래그
 
+        self.status_message.emit("정보", "종료 시퀀스를 실행합니다.")
+        self._running = False
+
+        if self._timer and self._timer.isActive():
+            self._timer.stop()
+
+        # 폴링 OFF
+        self.command_requested.emit("set_polling", {'enable': False})
+
+        # Main Shutter 닫기
         self.stage_monitor.emit("M.S. close...")
         self.update_plc_port.emit('MS_button', False)
 
-        # 1. 파워 끄기
-        if self.is_dc_on and self.dc:
-            self.status_message.emit("DCpower", "DC 파워를 끕니다.")
+        # 파워 끄기
+        if self.is_dc_on:
+            self.status_message.emit("DCpower", "DC 파워 OFF")
             self.stop_dc_power.emit()
-        if self.is_rf_on and self.rf:
-            self.status_message.emit("RFpower", "RF 파워를 끕니다 (Ramp-down).")
-            
-            # [핵심 수정] RF 파워가 완전히 꺼질 때까지 여기서 대기하는 로직 추가
-            loop = QEventLoop()
-            self.rf.ramp_down_finished.connect(loop.quit)
-            self.stop_rf_power.emit() # ramp_down 시작 신호
-            loop.exec() # ramp_down_finished 신호가 올 때까지 대기
-            self.rf.ramp_down_finished.disconnect(loop.quit) # 연결 해제
-            self.status_message.emit("정보", "RF 파워 OFF 완료.")
 
-        # 2. MFC 가스 흐름 중지 및 밸브 제어 (명령 완료 대기 로직)
-        self.stage_monitor.emit("MFC flow, valve off...")
-        if self.mfc:
-            loop = QEventLoop()
-            # 성공/실패 시 모두 루프가 종료되도록 연결
-            self.mfc.command_confirmed.connect(loop.quit)
-            self.mfc.command_failed.connect(loop.quit)
+        if self.is_rf_on:
+            self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
+            # 필요 시 RF 컨트롤러에서 ramp_down 완료 신호 처리
+            self.stop_rf_power.emit()
 
-            # FLOW_OFF 명령 후 대기
-            self.mfc.command_requested.emit("FLOW_OFF", {'channel': self.process_channel})
-            loop.exec() # command_confirmed 또는 command_failed 신호가 올 때까지 대기
+        # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN)
+        ch = self._process_channel
+        loop = QEventLoop()
+        def _quit(*_):
+            try: loop.quit()
+            except: pass
+        self.mfc.command_confirmed.connect(_quit)
+        self.mfc.command_failed.connect(_quit)
 
-            # VALVE_OPEN 명령 후 대기
-            self.mfc.command_requested.emit("VALVE_OPEN", {})
-            loop.exec()
+        self.command_requested.emit("FLOW_OFF", {'channel': ch})
+        loop.exec()
+        self.command_requested.emit("VALVE_OPEN", {})
+        loop.exec()
 
-            # Polling 비활성화 (이 명령은 검증이 필요 없으므로 대기하지 않음)
-            self.mfc.command_requested.emit("set_polling", {'enable': False})
+        try:
+            self.mfc.command_confirmed.disconnect(_quit)
+            self.mfc.command_failed.disconnect(_quit)
+        except:
+            pass
 
-            # 루프 연결 해제 (메모리 누수 방지)
-            self.mfc.command_confirmed.disconnect(loop.quit)
-            self.mfc.command_failed.disconnect(loop.quit)
-
-        # 3. plc 포트 제어 (셔터 및 가스 밸브 닫기)
-        self.stage_monitor.emit("Gun shutter close...")
+        # 건 셔터 닫기 + 가스 밸브 닫기(PLC)
         self.update_plc_port.emit('S1_button', False)
         self.update_plc_port.emit('S2_button', False)
-        QThread.msleep(1000)
 
-        self.stage_monitor.emit("Gas valve close...")
-        if self.gas_valve_button:
-            gas_name = "Ar" if "Ar" in self.gas_valve_button else "O2"
-            self.status_message.emit("plc", f"{gas_name} Valve를 닫습니다.")
-            self.update_plc_port.emit(self.gas_valve_button, False)
-        QThread.msleep(1000)
+        gas_name = "Ar" if ch == 1 else "O2"
+        self.status_message.emit("PLC", f"{gas_name} Valve Close")
+        self.update_plc_port.emit(self._gas_valve_button, False)
 
-        self.status_message.emit("정보", "종료 시퀀스가 안전하게 완료되었습니다.")
-        self.finished.emit() # UI에 최종 종료 신호 전송
+        QTimer.singleShot(800, self._finish_stop)
+
+    @Slot()
+    def _finish_stop(self):
+        self.status_message.emit("정보", "종료 완료")
+        self.finished.emit()
+
+    def _is_connected(self, obj) -> bool:
+        """컨트롤러의 연결상태를 최대한 보수적으로 판정."""
+        # 1) 우선 is_connected()가 있으면 그것을 신뢰
+        try:
+            fn = getattr(obj, "is_connected", None)
+            if callable(fn):
+                return bool(fn())
+        except Exception:
+            pass
+        # 2) 공통 속성으로 대체 판정
+        for name in ("serial", "serial_mfc", "serial_dcpower"):
+            s = getattr(obj, name, None)
+            if s is not None and hasattr(s, "isOpen"):
+                try:
+                    if s.isOpen():
+                        return True
+                except Exception:
+                    pass
+        return False

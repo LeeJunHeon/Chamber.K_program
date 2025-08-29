@@ -1,7 +1,7 @@
 import sys
 from functools import partial
-from PySide6.QtCore import QThread, Slot, Signal, QEventLoop
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
@@ -100,9 +100,7 @@ class MainDialog(QDialog):
             button = getattr(self.ui, btn_name, None)
             if button:
                 button.toggled.connect(partial(self.plc_controller.update_port_state, btn_name))
-        self.ui.Door_Button.toggled.connect(
-            partial(self.plc_controller.update_port_state, 'Door_Button')
-        )
+        self.ui.Door_Button.toggled.connect(self._on_ui_door_toggled)
 
         # --- 3. 컨트롤러 간 상호작용 연결 ---
         # ProcessController가 시작 신호를 스스로 받도록 연결
@@ -115,12 +113,13 @@ class MainDialog(QDialog):
         self.process_controller.start_rf_power.connect(self.rfpower_controller.start_process)
         self.process_controller.stop_rf_power.connect(self.rfpower_controller.stop_process)
         
-        # [핵심 수정] ProcessController <-> MFCController 양방향 연결 (중복 제거)
-        # Process -> MFC (명령 요청) - 이 라인 하나만 있으면 됩니다.
-        self.mfc_controller.command_requested.connect(self.mfc_controller.handle_command)
+        # ProcessController -> MFC (명령 라우팅)
+        self.process_controller.command_requested.connect(self.mfc_controller.handle_command)
         # MFC -> Process (결과 보고)
         self.mfc_controller.command_confirmed.connect(self.process_controller._on_mfc_confirmed)
-        self.mfc_controller.command_failed.connect(self.process_controller._on_mfc_failed)
+        self.mfc_controller.command_failed.connect(
+            lambda cmd, why: self.process_controller._on_mfc_failed(f"{cmd}: {why}")
+        )
         
         # 새로 만든 신호를 Process Controller의 stop_process 슬롯에 연결
         # 이렇게 하면 stop_process는 Process 스레드에서 안전하게 실행됩니다.
@@ -226,6 +225,15 @@ class MainDialog(QDialog):
 
     @Slot(str, bool)
     def update_ui_button_display(self, button_name, state):
+        # Doorup/Doordn은 UI의 Door_Button으로 합쳐서 표시
+        if button_name in ("Doorup_button", "Doordn_button"):
+            door_btn = getattr(self.ui, "Door_Button", None)
+            if door_btn and state:  # True일 때만 반영(불필요한 토글 방지)
+                door_btn.blockSignals(True)
+                door_btn.setChecked(True if button_name == "Doorup_button" else False)
+                door_btn.blockSignals(False)
+            return
+    
         button = getattr(self.ui, button_name, None)
         if button:
             button.blockSignals(True)
@@ -267,13 +275,10 @@ class MainDialog(QDialog):
         text = f"{m:02d}:{s:02d}"
         self.ui.process_time_edit.setPlainText(text)
 
-    def update_mfc_flow_display(self, flow):
-        target_edit = self.ui.Ar_flow_edit if "Ar" in flow else self.ui.O2_flow_edit
-        try:
-            flow_value = flow.split(':')[1].strip()
-            target_edit.setPlainText("ERROR" if flow_value is None else flow_value)
-        except IndexError:
-            target_edit.setPlainText("Parsing Error")
+    @Slot(str, float)
+    def update_mfc_flow_display(self, gas, value):
+        edit = self.ui.Ar_flow_edit if gas == "Ar" else self.ui.O2_flow_edit
+        edit.setPlainText(f"{value:.2f}")
 
     def update_mfc_pressure_display(self, pressure):
         self.ui.working_pressure_edit.setPlainText("ERROR" if pressure is None else str(pressure))
@@ -287,10 +292,29 @@ class MainDialog(QDialog):
         self.ui.for_p_edit.setPlainText("ERROR" if for_power is None else f"{for_power:.2f}")
         self.ui.ref_p_edit.setPlainText("ERROR" if ref_power is None else f"{ref_power:.2f}")
 
+    @Slot(bool)
+    def _on_ui_door_toggled(self, checked: bool):
+        """
+        UI의 Door_Button 한 개 토글을 PLC의 Up/Down 두 코일로 분리 전달.
+        - True  -> Doorup_button (문 열기)
+        - False -> Doordn_button (문 닫기)
+        """
+        if checked:
+            self.plc_controller.update_port_state('Doorup_button', True)
+            # 필요 시 반대 코일을 내려주고 싶으면 아래 줄 주석 해제
+            # self.plc_controller.update_port_state('Doordn_button', False)
+        else:
+            self.plc_controller.update_port_state('Doordn_button', True)
+            # self.plc_controller.update_port_state('Doorup_button', False)
+
     def closeEvent(self, event):
         """[수정됨] 안전한 스레드 종료 로직"""
-        reply = QMessageBox.question(self, '종료 확인', '정말로 프로그램을 종료하시겠습니까?', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply == QMessageBox.Yes:
+        reply = QMessageBox.question(
+            self, '종료 확인', '정말로 프로그램을 종료하시겠습니까?', 
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
             log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
 
             # 1. 진행 중인 공정이 있다면 먼저 중지 요청

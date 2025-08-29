@@ -2,20 +2,22 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import Dict, List, Tuple
-from PySide6.QtCore import QObject, QThread, Signal, Slot, QTimer, QMutex
+from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer, QMutex
 import minimalmodbus
 
 from lib.config import (
+    PLC_PORT, PLC_SLAVE_ID, PLC_BAUD,
+    PLC_TIMEOUT, PLC_COIL_MAP, SENSOR_DI_BASE,
+    PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR,
+    RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
+    RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0,
     RF_FORWARD_SCALING_MAX_WATT,
-    RF_REFLECTED_SCALING_MAX_WATT,
-    PLC_PORT,
-    PLC_SLAVE_ID,
-    PLC_BAUD,
-    PLC_TIMEOUT,
-    PLC_COIL_MAP,
-    SENSOR_DI_BASE,
-    PLC_SENSOR_BITS
+    RF_REFLECTED_SCALING_MAX_WATT
 )
+
+# 주의: 아래 표에서 대괄호 […]가 실제 Modbus 주소(0-based, HEX 표시)입니다.
+# 예) S1: [31] -> 0x31(=49), S2: [32] -> 0x32(=50)
+# 이 주소들은 lib.config.PLC_COIL_MAP에서 바로 int로 지정합니다.
 
 # ===============================
 # 주소 맵 (신규 하드웨어 맵 반영)
@@ -70,14 +72,6 @@ from lib.config import (
 # DAC    Ch3    act                U02.01.3
 # DAC    Ch3    data     D00043    U02.06
 # DAC    Ch3    ERR                U02.00.3
-
-# === RF 피드백(ADC) === (모듈 사양에 맞게 조정)
-RF_ADC_FORWARD_ADDR = 0
-RF_ADC_REFLECT_ADDR = 1
-RF_ADC_MAX_COUNT    = 4000
-
-RF_DAC_ADDR_CH0      = 40     # D00040 → 0-based 40
-COIL_ENABLE_DAC_CH0  = 320    # M00200 → 0-based 200 -> 200인데 320으로 해야지 맞게 들어감
 
 class PLCController(QObject):
     status_message = Signal(str, str)
