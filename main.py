@@ -254,11 +254,11 @@ class MainDialog(QDialog):
         self.ui.Sputter_Stop_Button.setEnabled(False)
         
         # ▼ 추가: 파워/리플렉트 표시값 초기화
-        self.ui.Power_edit.setPlainText("0.00")
-        self.ui.Voltage_edit.setPlainText("0.00")
-        self.ui.Current_edit.setPlainText("0.00")
-        self.ui.for_p_edit.setPlainText("0.00")
-        self.ui.ref_p_edit.setPlainText("0.00")
+        self.ui.Power_edit.setPlainText("0.0")
+        self.ui.Voltage_edit.setPlainText("0.0")
+        self.ui.Current_edit.setPlainText("0.0")
+        self.ui.for_p_edit.setPlainText("0.0")
+        self.ui.ref_p_edit.setPlainText("0.0")
 
         # [추가] 공정 종료 시 UI의 타이머 값을 기본값 "0"으로 초기화
         self.ui.Shutter_delay_edit.setPlainText("5")
@@ -291,9 +291,9 @@ class MainDialog(QDialog):
         self.ui.working_pressure_edit.setPlainText("ERROR" if pressure is None else str(pressure))
 
     def update_dc_status_display(self, power, voltage, current):
-        self.ui.Power_edit.setPlainText("ERROR" if power is None else f"{power:.2f}")
-        self.ui.Voltage_edit.setPlainText("ERROR" if voltage is None else f"{voltage:.2f}")
-        self.ui.Current_edit.setPlainText("ERROR" if current is None else f"{current:.2f}")
+        self.ui.Power_edit.setPlainText("ERROR" if power is None else f"{power:.3f}")
+        self.ui.Voltage_edit.setPlainText("ERROR" if voltage is None else f"{voltage:.3f}")
+        self.ui.Current_edit.setPlainText("ERROR" if current is None else f"{current:.3f}")
 
     def update_rf_status_display(self, for_power, ref_power):
         self.ui.for_p_edit.setPlainText("ERROR" if for_power is None else f"{for_power:.2f}")

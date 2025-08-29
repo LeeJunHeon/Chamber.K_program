@@ -40,11 +40,11 @@ class DCPowerController(QObject):
         self.control_timer.timeout.connect(self._on_timer_tick)
 
         # === 오버슈트 시 빠른 하강용 파라미터 ===
-        self.fast_overshoot_watt   = 10.0   # 목표보다 +5W 이상이면 "빠른 하강" 트리거
+        self.fast_overshoot_watt   = 5.0   # 목표보다 +5W 이상이면 "빠른 하강" 트리거
         self.fast_overshoot_ratio  = 0.12  # 또는 목표의 +12% 초과 시 트리거
-        self.step_up               = 0.003 # 부족 시(+) 1초당 +3mA
-        self.step_down             = 0.006 # 과다 시(-) 1초당 -6mA
-        self.step_down_fast        = 0.01 # "빠른 하강"시 1초당 -40mA (공격적)
+        self.step_up               = 0.001 # 부족 시(+) 1초당 +3mA
+        self.step_down             = 0.001 # 과다 시(-) 1초당 -6mA
+        self.step_down_fast        = 0.005 # "빠른 하강"시 1초당 -40mA (공격적)
 
     # ---------------- 연결 ----------------
     @Slot()
