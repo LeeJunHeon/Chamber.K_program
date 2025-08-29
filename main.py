@@ -252,6 +252,13 @@ class MainDialog(QDialog):
         self.process_running = False
         self.ui.Sputter_Start_Button.setEnabled(True)
         self.ui.Sputter_Stop_Button.setEnabled(False)
+        
+        # ▼ 추가: 파워/리플렉트 표시값 초기화
+        self.ui.Power_edit.setPlainText("0.00")
+        self.ui.Voltage_edit.setPlainText("0.00")
+        self.ui.Current_edit.setPlainText("0.00")
+        self.ui.for_p_edit.setPlainText("0.00")
+        self.ui.ref_p_edit.setPlainText("0.00")
 
         # [추가] 공정 종료 시 UI의 타이머 값을 기본값 "0"으로 초기화
         self.ui.Shutter_delay_edit.setPlainText("5")

@@ -101,6 +101,9 @@ class SputterProcessController(QObject):
         self.is_dc_on = False
         self.is_rf_on = False
 
+        self._stop_pending = False
+        self._active_loops: list[tuple[str, QEventLoop]] = []
+
     # ---------- 타이머 준비 ----------
     @Slot()
     def _setup_timers(self):
@@ -334,19 +337,26 @@ class SputterProcessController(QObject):
             self._next_step()
             return
 
+        self._active_loops = loops  # ★ STOP에서 끊어낼 수 있도록 보관
         self.status_message.emit("정보", "파워 목표치 도달 대기중...")
+
         for _name, lp in loops:
+            # STOP 눌렀으면 더 기다리지 않음
+            if not self._running or self._stop_pending:
+                break
             lp.exec()
 
         # disconnect
         for name, lp in loops:
             try:
-                if name == "dc":
-                    self.dc.target_reached.disconnect(lp.quit)
-                else:
-                    self.rf.target_reached.disconnect(lp.quit)
+                if name == "dc": self.dc.target_reached.disconnect(lp.quit)
+                else:            self.rf.target_reached.disconnect(lp.quit)
             except:
                 pass
+        self._active_loops = []
+
+        if not self._running:   # STOP 중이면 여기서 종료
+            return
 
         self.status_message.emit("정보", "파워 안정화 완료.")
         self._next_step()
@@ -399,16 +409,44 @@ class SputterProcessController(QObject):
             self._timer.stop()
 
     @Slot()
+    def request_stop(self):
+        """UI/다른 스레드에서 눌러도 항상 '내 스레드'에서 안전 종료."""
+        if self._stop_pending:
+            return
+        self._stop_pending = True
+        if self.thread() is QThread.currentThread():
+            self._stop_impl()
+        else:
+            QMetaObject.invokeMethod(self, "_stop_impl",
+                                    Qt.ConnectionType.QueuedConnection)
+
+    @Slot()
     def stop_process(self):
-        """안전 종료 시퀀스"""
+        self.request_stop()
+
+    @Slot()
+    def _stop_impl(self):
+        """실제 안전 종료(컨트롤러 스레드 안에서만 실행)."""
+        # 진행 중인 딜레이 즉시 중단
+        if self._timer and self._timer.isActive():
+            self._timer.stop()
+        self._time_left = 0
+
+        # 파워 대기 루프가 돌고 있으면 즉시 깨움
+        if self._active_loops:
+            for _name, lp in self._active_loops:
+                try: lp.quit()
+                except: pass
+            self._active_loops.clear()
+
+        # 여기서부터는 기존 stop_process 본문 그대로
         if not self._running:
+            self.finished.emit()
+            self._stop_pending = False
             return
 
         self.status_message.emit("정보", "종료 시퀀스를 실행합니다.")
         self._running = False
-
-        if self._timer and self._timer.isActive():
-            self._timer.stop()
 
         # 폴링 OFF
         self.command_requested.emit("set_polling", {'enable': False})
@@ -421,13 +459,11 @@ class SputterProcessController(QObject):
         if self.is_dc_on:
             self.status_message.emit("DCpower", "DC 파워 OFF")
             self.stop_dc_power.emit()
-
         if self.is_rf_on:
             self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
-            # 필요 시 RF 컨트롤러에서 ramp_down 완료 신호 처리
             self.stop_rf_power.emit()
 
-        # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN)
+        # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 기존 코드 그대로
         ch = self._process_channel
         loop = QEventLoop()
         def _quit(*_):
@@ -435,27 +471,25 @@ class SputterProcessController(QObject):
             except: pass
         self.mfc.command_confirmed.connect(_quit)
         self.mfc.command_failed.connect(_quit)
-
         self.command_requested.emit("FLOW_OFF", {'channel': ch})
         loop.exec()
         self.command_requested.emit("VALVE_OPEN", {})
         loop.exec()
-
         try:
             self.mfc.command_confirmed.disconnect(_quit)
             self.mfc.command_failed.disconnect(_quit)
         except:
             pass
 
-        # 건 셔터 닫기 + 가스 밸브 닫기(PLC)
+        # 건 셔터/가스 닫기
         self.update_plc_port.emit('S1_button', False)
         self.update_plc_port.emit('S2_button', False)
-
         gas_name = "Ar" if ch == 1 else "O2"
         self.status_message.emit("PLC", f"{gas_name} Valve Close")
         self.update_plc_port.emit(self._gas_valve_button, False)
 
         QTimer.singleShot(800, self._finish_stop)
+        self._stop_pending = False
 
     @Slot()
     def _finish_stop(self):

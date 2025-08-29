@@ -39,6 +39,13 @@ class DCPowerController(QObject):
         self.control_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.control_timer.timeout.connect(self._on_timer_tick)
 
+        # === 오버슈트 시 빠른 하강용 파라미터 ===
+        self.fast_overshoot_watt   = 10.0   # 목표보다 +5W 이상이면 "빠른 하강" 트리거
+        self.fast_overshoot_ratio  = 0.12  # 또는 목표의 +12% 초과 시 트리거
+        self.step_up               = 0.003 # 부족 시(+) 1초당 +3mA
+        self.step_down             = 0.006 # 과다 시(-) 1초당 -6mA
+        self.step_down_fast        = 0.01 # "빠른 하강"시 1초당 -40mA (공격적)
+
     # ---------------- 연결 ----------------
     @Slot()
     def connect_dcpower_device(self) -> bool:
@@ -101,44 +108,67 @@ class DCPowerController(QObject):
             self.control_timer.stop()
             return
 
-        now_power, now_v, now_i = self.read_dc_power()  # MEAS:ALL? 한 번에 읽음
+        now_power, now_v, now_i = self.read_dc_power()  # MEAS:ALL?
         if not self._check_measurement(now_v, now_i):
             return
 
+        diff = self.target_power - now_power         # +: 더 올려야 함,  -: 과다(오버슈트)
+        # 오버슈트(과다) 판정 기준: 'W 기준' 또는 '% 기준' 중 큰 쪽
+        overshoot_w = -diff
+        overshoot_trig = (overshoot_w > 0) and (
+            overshoot_w >= max(self.fast_overshoot_watt, self.fast_overshoot_ratio * max(self.target_power, 1.0))
+        )
+
         if self.state == "RAMPING_UP":
-            diff = self.target_power - now_power
             if abs(diff) <= DC_TOLERANCE_WATT:
                 self.state = "MAINTAINING"
                 self.status_message.emit("DCpower", f"{self.target_power:.1f}W 도달. 파워 유지 시작")
                 self.target_reached.emit()
                 return
 
-            # dI ≈ dP / V (과도 방지로 스텝 제한)
             if now_v > 1.0:
-                delta_i = diff / now_v
-                step_i = max(-0.010, min(0.010, delta_i))
+                # 기본 권장 변화량(dI ≈ dP/V)
+                di_prop = diff / now_v
             else:
-                step_i = 0.005
+                di_prop = 0.005
+
+            if overshoot_trig:
+                # ★ 오버슈트일 때: 빠르게 내리기
+                drop_i = overshoot_w / max(now_v, 1.0)       # 내려야 하는 대략적 dI
+                step_i = -min(self.step_down_fast, max(self.step_down, drop_i))
+                why = "FAST"
+            else:
+                # 일반 램핑: 너무 큰 스텝 방지 (대칭이지만 음수일 때는 더 크게 클램프해도 됨)
+                lo, hi = -0.010, 0.010
+                step_i = max(lo, min(hi, di_prop))
+                why = "NORM"
 
             self.current_current = self._clamp_i(self.current_current + step_i)
-            # 운전 중엔 전류만 단독 조정(여기서는 APPLy 사용 안 함)
             self._send_noresp(f"CURR {self.current_current:.4f}")
-            self.status_message.emit("DCpower", f"Ramping... CURR={self.current_current:.4f}A")
+            self.status_message.emit("DCpower", f"Ramping({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
 
         elif self.state == "MAINTAINING":
-            diff = self.target_power - now_power
             if abs(diff) <= DC_TOLERANCE_WATT:
                 return
 
-            if now_v >= self.voltage_guard and diff > 0:
-                adjust = -0.002
-                self.status_message.emit("DCpower(경고)", f"전압 상한 근접({now_v:.1f}V) → 전류 감쇠")
+            if overshoot_trig:
+                # ★ 유지구간에서도 오버슈트면 강하게 끌어내림
+                drop_i = overshoot_w / max(now_v, 1.0)
+                step_i = -min(self.step_down_fast, max(self.step_down, drop_i))
+                why = "FAST"
             else:
-                adjust = 0.001 if diff > 0 else -0.001
+                # 전압 가드 근처면 상승은 억제
+                if now_v >= self.voltage_guard and diff > 0:
+                    step_i = -self.step_down
+                    why = "V-GUARD"
+                else:
+                    # 부족(+): 조금씩 올림 / 과다(-): 조금 더 내림
+                    step_i = self.step_up if diff > 0 else -self.step_down
+                    why = "NORM"
 
-            self.current_current = self._clamp_i(self.current_current + adjust)
+            self.current_current = self._clamp_i(self.current_current + step_i)
             self._send_noresp(f"CURR {self.current_current:.4f}")
-            self.status_message.emit("DCpower", f"유지 보정... CURR {self.current_current:.4f}A")
+            self.status_message.emit("DCpower", f"Maintain({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
 
     # ---------------- 초기화/종료 ----------------
     def _initialize_power_supply(self, voltage: float, current: float) -> bool:
