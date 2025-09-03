@@ -4,7 +4,8 @@ from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slo
 from lib.config import (
     RF_MAX_POWER, RF_RAMP_STEP, RF_MAX_ERROR_COUNT, 
     RF_TOLERANCE_POWER, RF_FORWARD_SCALING_MAX_WATT, 
-    RF_REFLECTED_SCALING_MAX_WATT, RF_DAC_FULL_SCALE
+    RF_REFLECTED_SCALING_MAX_WATT, RF_DAC_FULL_SCALE,
+    RF_RAMP_DOWN_STEP
 )
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -145,7 +146,7 @@ class RFPowerController(QObject):
         self.ramp_down_timer = QTimer(self)
         def ramp_down_step():
             if self.current_pwm_value > 0:
-                self.current_pwm_value = max(0, self.current_pwm_value - RF_RAMP_STEP)
+                self.current_pwm_value = max(0, self.current_pwm_value - RF_RAMP_DOWN_STEP)
                 self._send_pwm_via_plc(self.current_pwm_value)
             else:
                 self.ramp_down_timer.stop()
@@ -156,7 +157,7 @@ class RFPowerController(QObject):
                 self._is_ramping_down = False
 
         self.ramp_down_timer.timeout.connect(ramp_down_step)
-        self.ramp_down_timer.start(50)
+        self.ramp_down_timer.start(500)
 
     def read_rf_power(self):
         """PLC로부터 (forward_watt, reflected_watt) 튜플을 받는다."""
