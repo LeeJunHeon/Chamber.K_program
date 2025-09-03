@@ -1,7 +1,7 @@
 # device/process_controller.py  (Chamber-K, PLC version — chamber2 스타일, IG/OES/RGA 제거)
 
 from __future__ import annotations
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum
 
@@ -12,6 +12,13 @@ from PyQt6.QtCore import (
 )
 
 # ===================== 액션 / 스텝 정의 =====================
+
+if TYPE_CHECKING:
+    # 여기 이름은 실제 파일/클래스명과 정확히 일치해야 함
+    from device.MFC import MFCController
+    from device.DCpower import DCPowerController      # 파일: DCpower.py, 클래스: DCPowerController
+    from device.RFpower import RFPowerController      # 파일: RFpower.py, 클래스: RFPowerController
+    from device.PLC import PLCController
 
 class ActionType(str, Enum):
     MFC_CMD       = "MFC_CMD"        # params=('CMD', {args})
@@ -74,10 +81,10 @@ class SputterProcessController(QObject):
 
     def __init__(self, mfc_controller, dc_controller, rf_controller, plc_controller):
         super().__init__()
-        self.mfc = mfc_controller
-        self.dc  = dc_controller
-        self.rf  = rf_controller
-        self.plc = plc_controller
+        self.mfc: MFCController = mfc_controller
+        self.dc:  DCPowerController = dc_controller
+        self.rf:  RFPowerController = rf_controller
+        self.plc: PLCController = plc_controller
 
         # 내부 상태
         self._steps: List[ProcessStep] = []
@@ -103,6 +110,9 @@ class SputterProcessController(QObject):
 
         self._stop_pending = False
         self._active_loops: list[tuple[str, QEventLoop]] = []
+
+        # 램프다운 대기 루프 핸들
+        self._rfdown_wait: Optional[QEventLoop] = None
 
     # ---------- 타이머 준비 ----------
     @Slot()
@@ -404,6 +414,12 @@ class SputterProcessController(QObject):
     # ==================== 종료/정리 ====================
 
     @Slot()
+    def _on_rf_rampdown_finished(self):
+        self.status_message.emit("RFpower", "램프다운 완료 신호 수신")
+        if self._rfdown_wait is not None and self._rfdown_wait.isRunning():
+            self._rfdown_wait.quit()
+
+    @Slot()
     def teardown(self):
         if self._timer and self._timer.isActive():
             self._timer.stop()
@@ -461,7 +477,35 @@ class SputterProcessController(QObject):
             self.stop_dc_power.emit()
         if self.is_rf_on:
             self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
+
+            # 이벤트 루프 준비
+            self._rfdown_wait = QEventLoop()
+
+            # ★ RF → Process 스레드로 안전하게 큐드 연결
+            try:
+                self.rf.ramp_down_finished.connect(
+                    self._on_rf_rampdown_finished,
+                    type=Qt.ConnectionType.QueuedConnection
+                )
+            except TypeError:
+                # 일부 환경에서 type= 키워드가 안 먹으면 기본 Auto로도 무방
+                self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
+
+            # 타임아웃(예: 60초) — 신호 미수신 시 빠져나오기
+            QTimer.singleShot(60000, self._on_rf_rampdown_finished)
+
+            # 램프다운 시작
             self.stop_rf_power.emit()
+
+            # 완료까지 대기
+            self._rfdown_wait.exec()
+
+            # 뒷정리
+            try:
+                self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
+            except Exception:
+                pass
+            self._rfdown_wait = None
 
         # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 기존 코드 그대로
         ch = self._process_channel
