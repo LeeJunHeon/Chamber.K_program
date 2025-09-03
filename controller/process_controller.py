@@ -491,8 +491,8 @@ class SputterProcessController(QObject):
                 # 일부 환경에서 type= 키워드가 안 먹으면 기본 Auto로도 무방
                 self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
 
-            # 타임아웃(예: 60초) — 신호 미수신 시 빠져나오기
-            QTimer.singleShot(60000, self._on_rf_rampdown_finished)
+            # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
+            QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
 
             # 램프다운 시작
             self.stop_rf_power.emit()
