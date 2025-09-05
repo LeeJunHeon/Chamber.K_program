@@ -8,7 +8,7 @@ from enum import Enum
 import math
 from PyQt6.QtCore import (
     QObject, QTimer, QEventLoop, QMetaObject, QThread,
-    pyqtSignal as Signal, pyqtSlot as Slot, Qt
+    pyqtSignal as Signal, pyqtSlot as Slot, Qt, QElapsedTimer
 )
 
 # ===================== 액션 / 스텝 정의 =====================
@@ -92,10 +92,12 @@ class SputterProcessController(QObject):
         self._running: bool = False
         self.params: Dict[str, Any] = {}
 
-        # 타이머(1초 틱)
+        # 타이머(실시간 기반 하트비트 + 모노토닉 시계)
         self._timer: Optional[QTimer] = None
-        self._time_left: int = 0
         self._timer_purpose: Optional[str] = None  # 'shutter'|'process'|None
+        self._delay_clock: Optional[QElapsedTimer] = None  # 실시간 측정용 (모노토닉)
+        self._delay_total_sec: int = 0                      # 전체 대기 초
+        self._last_emitted_sec: int = -1                    # UI 갱신 중복 방지
 
         # 파워 대기
         self._power_loops: List[Tuple[str, QEventLoop]] = []
@@ -119,7 +121,8 @@ class SputterProcessController(QObject):
     def _setup_timers(self):
         if self._timer is None:
             self._timer = QTimer(self)
-            self._timer.setInterval(1000)
+            # 하트비트: 250 ms. 실제 남은 시간 계산은 QElapsedTimer로 수행.
+            self._timer.setInterval(250)
             self._timer.setTimerType(Qt.TimerType.PreciseTimer)
             self._timer.timeout.connect(self._on_tick)
         self.status_message.emit("정보", "ProcessController 타이머 준비 완료")
@@ -373,42 +376,73 @@ class SputterProcessController(QObject):
 
     # ==================== 딜레이/타이머 ====================
 
+    def _emit_delay_ui(self, remaining_sec: int):
+        """남은 초가 바뀌었을 때만 해당 UI 시그널을 보낸다."""
+        if remaining_sec == self._last_emitted_sec:
+            return
+        self._last_emitted_sec = remaining_sec
+        if self._timer_purpose == 'shutter':
+            self.shutter_delay_tick.emit(remaining_sec)
+        elif self._timer_purpose == 'process':
+            self.process_time_tick.emit(remaining_sec)
+
     def _start_delay(self, seconds: int, purpose: Optional[str]):
         if seconds <= 0:
             self._next_step()
             return
-        self._time_left = int(seconds)
+
+        self._delay_total_sec = int(seconds)
         self._timer_purpose = purpose
-        # 첫 틱 UI 반영
-        if self._timer_purpose == 'shutter':
-            self.shutter_delay_tick.emit(self._time_left)
-        elif self._timer_purpose == 'process':
-            self.process_time_tick.emit(self._time_left)
+
+        # 모노토닉 시계 시작
+        self._delay_clock = QElapsedTimer()
+        self._delay_clock.start()
+
+        # 시작 시점에 남은 시간(=총 시간) 1회 즉시 반영
+        self._last_emitted_sec = -1
+        self._emit_delay_ui(self._delay_total_sec)
+
         if self._timer:
+            # 타이머는 단순 하트비트 역할만 수행
             self._timer.start()
         else:
             self.status_message.emit("오류", "타이머 초기화 누락")
             self._next_step()
 
     def _on_tick(self):
+        # 프로세스 중이 아니면 타이머 정지 및 폴링 OFF
         if not self._running:
-            if self._timer:
+            if self._timer and self._timer.isActive():
                 self._timer.stop()
-            # 프로세스 중이 아니면 폴링 OFF
             self.command_requested.emit("set_polling", {'enable': False})
             return
 
-        self._time_left -= 1
-        if self._timer_purpose == 'shutter':
-            self.shutter_delay_tick.emit(self._time_left)
-        elif self._timer_purpose == 'process':
-            self.process_time_tick.emit(self._time_left)
+        # 딜레이 구간이 아닐 수 있음
+        if not self._delay_clock:
+            return
 
-        if self._time_left <= 0:
-            if self._timer:
+        # QElapsedTimer 기반으로 경과/잔여 시간 계산
+        elapsed_ms = self._delay_clock.elapsed()  # ms
+        elapsed_sec = int(elapsed_ms // 1000)
+        remaining = max(0, self._delay_total_sec - elapsed_sec)
+
+        # 초 단위로 값이 변했을 때만 UI 갱신
+        self._emit_delay_ui(remaining)
+
+        # 종료 처리
+        if remaining <= 0:
+            # 하트비트 정지 및 폴링 OFF
+            if self._timer and self._timer.isActive():
                 self._timer.stop()
-            # 딜레이 종료 시 폴링 OFF
             self.command_requested.emit("set_polling", {'enable': False})
+
+            # 상태 초기화
+            self._delay_clock = None
+            self._delay_total_sec = 0
+            self._timer_purpose = None
+            self._last_emitted_sec = -1
+
+            # 다음 스텝으로
             self._next_step()
 
     # ==================== 종료/정리 ====================
@@ -423,6 +457,11 @@ class SputterProcessController(QObject):
     def teardown(self):
         if self._timer and self._timer.isActive():
             self._timer.stop()
+        # 타이머/딜레이 상태 초기화
+        self._delay_clock = None
+        self._delay_total_sec = 0
+        self._timer_purpose = None
+        self._last_emitted_sec = -1
 
     @Slot()
     def request_stop(self):
@@ -446,7 +485,10 @@ class SputterProcessController(QObject):
         # 진행 중인 딜레이 즉시 중단
         if self._timer and self._timer.isActive():
             self._timer.stop()
-        self._time_left = 0
+        self._delay_clock = None
+        self._delay_total_sec = 0
+        self._timer_purpose = None
+        self._last_emitted_sec = -1
 
         # 파워 대기 루프가 돌고 있으면 즉시 깨움
         if self._active_loops:
