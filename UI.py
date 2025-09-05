@@ -402,11 +402,11 @@ class Ui_Dialog(object):
         self.offset_edit = QPlainTextEdit(Dialog)
         self.offset_edit.setObjectName(u"offset_edit")
         self.offset_edit.setGeometry(QRect(900, 425, 60, 31))
-        self.offset_edit.setPlainText("5")
+        self.offset_edit.setPlainText("6.79")
         self.param_edit = QPlainTextEdit(Dialog)
         self.param_edit.setObjectName(u"param_edit")
         self.param_edit.setGeometry(QRect(970, 425, 60, 31))
-        self.param_edit.setPlainText("1.1")
+        self.param_edit.setPlainText("1.0395")
         
 
         # --- Power, Voltage, Current ---

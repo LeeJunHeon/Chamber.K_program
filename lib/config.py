@@ -74,7 +74,7 @@ DC_TOLERANCE_WATT = 0.5    # 목표 Power 허용 오차(W)
 DC_MAX_ERROR_COUNT = 5     # 연속 실패 허용 횟수
 
 # --- RFpower ---
-RF_FORWARD_SCALING_MAX_WATT  = 580.0  # for.p 센서 교정 상수
+RF_FORWARD_SCALING_MAX_WATT  = 594.5  # for.p 센서 교정 상수
 RF_REFLECTED_SCALING_MAX_WATT = 200.0 # ref.p 센서 교정 상수
 RF_DAC_FULL_SCALE = 4000   # PLC DAC 풀스케일(모듈 사양에 맞게)
 RF_MAX_POWER = 600.0       # RF Power 장비 최대값 (W)

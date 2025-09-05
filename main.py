@@ -180,8 +180,8 @@ class MainDialog(QDialog):
                 "rf_power": float(self.ui.RF_power_edit.toPlainText().strip() or 0) if self.ui.rf_power_checkbox.isChecked() else 0,
                 "shutter_delay": float(self.ui.Shutter_delay_edit.toPlainText().strip()),
                 "process_time": float(self.ui.process_time_edit.toPlainText().strip()),
-                "rf_offset": float(offset_text or 5),
-                "rf_param": float(param_text or 1.1),
+                "rf_offset": float(offset_text or 6.79),
+                "rf_param": float(param_text or 1.0395),
                 "use_g1": self.ui.G1_checkbox.isChecked(),
                 "use_g2": self.ui.G2_checkbox.isChecked(),
             }
