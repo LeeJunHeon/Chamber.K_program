@@ -142,7 +142,14 @@ MFC_COMMANDS = {
     'VALVE_OPEN': "O",  # Throttle Valve를 엽니다. 
     'VALVE_CLOSE': "C", # Throttle Valve를 닫습니다. 
     'PS_ZEROING': "Z1", # 압력 센서(게이지)를 Zeroing합니다. 
-    'SP4_ON': "D4",     # Set-point 4를 실행합니다. 
-    'SP1_ON': "D1",     # Set-point 1을 실행합니다. 
-    'SP1_SET': lambda value: f"S1 {value}", # Set-point 1의 목표 압력 값을 설정합니다. 
+
+    # --- Set-Point 실행/설정 ---
+    'SP1_ON':  "D1",
+    'SP2_ON':  "D2",
+    'SP3_ON':  "D3",
+    'SP4_ON':  "D4",
+    'SP1_SET': lambda value: f"S1 {value}",
+    'SP2_SET': lambda value: f"S2 {value}",
+    'SP3_SET': lambda value: f"S3 {value}",
+    'SP4_SET': lambda value: f"S4 {value}",
 }

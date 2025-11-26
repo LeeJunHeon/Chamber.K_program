@@ -533,8 +533,31 @@ class MFCController(QObject):
                         after_sent, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS,
                         tag=f"[SP1_SET {ui_val:.2f}]", allow_no_reply=True)
             return
+        
+        if cmd == "SP2_SET":
+            ui_val = float(params.get("value", 0.0))
+            hw_val = self._to_hw_pressure(ui_val)
 
-        if cmd in ("SP1_ON", "SP4_ON"):
+            dec = int(MFC_PRESSURE_DECIMALS)
+            val_str = f"{hw_val:.{dec}f}"
+
+            def after_sent(_line, ui_val=ui_val):
+                if _line:
+                    self.status_message.emit("MFC < 확인", f"SP2 <- {ui_val:.2f}")
+                # 여기서는 간단히 확인만 하고 넘어가고, 필요하면 별도 verify 추가 가능
+                self.command_confirmed.emit("SP2_SET")
+
+            self.enqueue(
+                MFC_COMMANDS["SP2_SET"](value=val_str),
+                after_sent,
+                timeout_ms=MFC_TIMEOUT,
+                gap_ms=MFC_GAP_MS,
+                tag=f"[SP2_SET {ui_val:.2f}]",
+                allow_no_reply=True,
+            )
+            return
+
+        if cmd in ("SP1_ON", "SP2_ON","SP4_ON"):
             scmd = MFC_COMMANDS[cmd]
             def after_simple(_line, _cmd=cmd):
                 self._verify_simple_async(_cmd, {})
@@ -625,12 +648,21 @@ class MFCController(QObject):
             self.enqueue(rd, on_reply, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS, tag='[VERIFY SP1_SET]')
             return
 
-        if cmd in ("SP1_ON", "SP4_ON"):
+        if cmd in ("SP1_ON", "SP2_ON", "SP4_ON"):
             rd = MFC_COMMANDS['READ_SYSTEM_STATUS']
+            # 각 SP에 해당하는 기대 문자 매핑
+            sp_map = {
+                "SP1_ON": "1",
+                "SP2_ON": "2",
+                "SP4_ON": "4",
+            }
 
             def on_reply(line: Optional[str], attempt=attempt, cmd=cmd):
                 s = (line or "").strip()
-                ok = bool(s and s.startswith("M") and s[1] == ('1' if cmd == "SP1_ON" else '4'))
+                expect = sp_map.get(cmd, "")
+                ok = bool(
+                    s and s.startswith("M") and len(s) > 1 and s[1] == expect
+                )
                 if ok:
                     self.status_message.emit("MFC < 확인", f"{cmd} 활성화 확인")
                     self.command_confirmed.emit(cmd)
@@ -642,12 +674,16 @@ class MFCController(QObject):
                         )
                         QTimer.singleShot(
                             delay_ms,
-                            lambda: self._verify_simple_async(cmd, params, attempt + 1, max_attempts, delay_ms)
+                            lambda: self._verify_simple_async(
+                                cmd, params, attempt + 1, max_attempts, delay_ms
+                            )
                         )
                     else:
                         self.command_failed.emit(cmd, f"{cmd} 상태 확인 실패")
 
-            self.enqueue(rd, on_reply, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS, tag=f'[VERIFY {cmd}]')
+            self.enqueue(rd, on_reply,
+                         timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS,
+                         tag=f'[VERIFY {cmd}]')
             return
 
     # ---------- 파서/유틸 ----------
