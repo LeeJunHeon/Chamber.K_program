@@ -307,13 +307,7 @@ class SputterProcessController(QObject):
                 params=('SP4_ON', {}),
             )
         )
-        steps.append(
-            ProcessStep(
-                ActionType.MFC_CMD,
-                f"SP1={sp1_ui:.2f} 설정",
-                params=('SP1_SET', {'value': sp1_ui}),
-            )
-        )
+
         steps.append(
             ProcessStep(
                 ActionType.DELAY,
@@ -347,6 +341,41 @@ class SputterProcessController(QObject):
                 "파워 목표치 도달 대기",
             )
         )
+
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                f"SP1={sp1_ui:.2f} 설정",
+                params=('SP1_SET', {'value': sp1_ui}),
+            )
+        )
+
+        if sp1_ui < 5.0:
+            # SP2 = 5.00 설정
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    "SP2=5.00 설정",
+                    params=('SP2_SET', {'value': 5.0}),
+                )
+            )
+            # SP2 ON
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    "SP2 ON",
+                    params=('SP2_ON', {}),
+                )
+            )
+
+            # SP2 상태에서 60초 대기
+            steps.append(
+                ProcessStep(
+                    ActionType.DELAY,
+                    "압력 안정화 대기 (SP2, 60초)",
+                    duration_sec=60,
+                )
+            )
 
         # 압력 제어 시작
         steps.append(

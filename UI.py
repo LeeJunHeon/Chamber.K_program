@@ -174,24 +174,25 @@ class Ui_Dialog(object):
         self.pushButton_13.setEnabled(False)
         self.pushButton_13.setGeometry(QRect(220, 270, 265, 31))
         self.pushButton_13.setStyleSheet(u"QPushButton {background: #b2b2b2; color: #888; font-weight: bold; font-size: 18pt; border: none; border-radius: 8px;}")
-        self.comboBox = QComboBox(Dialog)
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.addItem("")
-        self.comboBox.setObjectName(u"comboBox")
-        self.comboBox.setGeometry(QRect(590, 280, 121, 28))
-        self.label = QLabel(Dialog)
-        self.label.setObjectName(u"label")
-        self.label.setGeometry(QRect(580, 260, 141, 20))
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # --- Process List / Select File (CSV) ---
+        self.process_list_label = QLabel(Dialog)
+        self.process_list_label.setObjectName(u"process_list_label")
+        self.process_list_label.setGeometry(QRect(575, 270, 130, 32))
+        self.process_list_label.setStyleSheet(u"font-size: 15pt;")
+        self.process_list_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.select_csv_button = QPushButton(Dialog)
+        self.select_csv_button.setObjectName(u"select_csv_button")
+        self.select_csv_button.setGeometry(QRect(590, 300, 130, 32))
+        self.select_csv_button.setStyleSheet(
+            "QPushButton {background: #ebebe9; color: black; font-size: 15pt; "
+            "border-radius: 6px; border: 1px solid #cccccc;}"
+            "QPushButton:pressed {background: #dcdcdc;}"
+        )
+
         self.Air_Indicator = QFrame(Dialog)
         self.Air_Indicator.setObjectName(u"Air_Indicator")
         self.Air_Indicator.setGeometry(QRect(20, 20, 51, 51))
@@ -404,7 +405,6 @@ class Ui_Dialog(object):
         self.param_edit.setGeometry(QRect(970, 425, 60, 31))
         self.param_edit.setPlainText("1.0395")
         
-
         # --- Power, Voltage, Current ---
         self.power_label = QLabel(Dialog)
         self.power_label.setObjectName(u"power_label")
@@ -460,8 +460,8 @@ class Ui_Dialog(object):
         self.BuzzStop_Button.raise_()
         self.ALL_STOP_button.raise_()
         self.Door_Button.raise_()
-        self.comboBox.raise_()
-        self.label.raise_()
+        self.process_list_label.raise_()
+        self.select_csv_button.raise_()
         self.Air_Indicator.raise_()
         self.G1_Indicator.raise_()
         self.G2_Indicator.raise_()
@@ -527,19 +527,12 @@ class Ui_Dialog(object):
         self.pushButton_11.setText("")
         self.pushButton_12.setText("")
         self.pushButton_13.setText("")
-        self.comboBox.setItemText(0, QCoreApplication.translate("Dialog", u"COM3", None))
-        self.comboBox.setItemText(1, QCoreApplication.translate("Dialog", u"COM4", None))
-        self.comboBox.setItemText(2, QCoreApplication.translate("Dialog", u"COM5", None))
-        self.comboBox.setItemText(3, QCoreApplication.translate("Dialog", u"COM6", None))
-        self.comboBox.setItemText(4, QCoreApplication.translate("Dialog", u"COM7", None))
-        self.comboBox.setItemText(5, QCoreApplication.translate("Dialog", u"COM8", None))
-        self.comboBox.setItemText(6, QCoreApplication.translate("Dialog", u"COM9", None))
-        self.comboBox.setItemText(7, QCoreApplication.translate("Dialog", u"COM10", None))
-        self.comboBox.setItemText(8, QCoreApplication.translate("Dialog", u"COM11", None))
-        self.comboBox.setItemText(9, QCoreApplication.translate("Dialog", u"COM12", None))
-        self.comboBox.setItemText(10, QCoreApplication.translate("Dialog", u"COM13", None))
-
-        self.label.setText(QCoreApplication.translate("Dialog", u"VISA resource name", None))
+        self.process_list_label.setText(
+            QCoreApplication.translate("Dialog", u"Process List", None)
+        )
+        self.select_csv_button.setText(
+            QCoreApplication.translate("Dialog", u"Select File", None)
+        )
         self.label_2.setText(QCoreApplication.translate("Dialog", u"Air", None))
         self.label_3.setText(QCoreApplication.translate("Dialog", u"G1", None))
         self.label_4.setText(QCoreApplication.translate("Dialog", u"G2", None))
