@@ -11,7 +11,7 @@
 from PyQt6.QtCore import (QCoreApplication, QMetaObject, QRect, Qt)
 from PyQt6.QtGui import (QFont)
 from PyQt6.QtWidgets import (QComboBox, QFrame, QLabel, QCheckBox,
-    QPlainTextEdit, QPushButton, QTextEdit, QRadioButton, QButtonGroup)
+    QPlainTextEdit, QPushButton, QTextEdit)
 
 class Ui_Dialog(object):
     def setupUi(self, Dialog):
@@ -288,20 +288,16 @@ class Ui_Dialog(object):
         # self.O2_gas_label = QLabel(Dialog)
         # self.O2_gas_label.setObjectName(u"O2_gas_label")
         # self.O2_gas_label.setGeometry(QRect(895, 120, 51, 20))
-        self.Ar_gas_radio = QRadioButton(Dialog)
+        self.Ar_gas_radio = QCheckBox(Dialog)
         self.Ar_gas_radio.setObjectName(u"Ar_gas_radio")
         self.Ar_gas_radio.setGeometry(QRect(760, 65, 71, 26))
         self.Ar_gas_radio.setText("Ar ON")
         self.Ar_gas_radio.setChecked(True)
-        self.O2_gas_radio = QRadioButton(Dialog)
+        self.O2_gas_radio = QCheckBox(Dialog)
         self.O2_gas_radio.setObjectName(u"O2_gas_radio")
         self.O2_gas_radio.setGeometry(QRect(840, 65, 71, 26))
         self.O2_gas_radio.setText("O2 ON")
         self.O2_gas_radio.setChecked(False)
-        self.gas_radio_group = QButtonGroup(Dialog)
-        self.gas_radio_group.addButton(self.Ar_gas_radio)
-        self.gas_radio_group.addButton(self.O2_gas_radio)
-        self.gas_radio_group.setExclusive(True)
 
         # --- G1, G2 ---
         self.G1_checkbox = QCheckBox(Dialog)

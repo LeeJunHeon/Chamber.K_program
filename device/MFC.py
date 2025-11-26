@@ -516,16 +516,22 @@ class MFCController(QObject):
         # SP1/4 
         if cmd == "SP1_SET":
             ui_val = float(params.get("value", 0.0))
-            hw_val = self._to_hw_pressure(ui_val)  # UI→HW (×스케일)
-            def after_sent(_):
-                # 응답 없이 전송만 하고, 아래 검증은 별도 실행
-                self._verify_simple_async("SP1_SET", {"value": hw_val, "_ui_value": ui_val})
-            self.enqueue(
-                MFC_COMMANDS["SP1_SET"](value=hw_val),
-                after_sent,
-                timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS,
-                tag="[SP1_SET]", allow_no_reply=True
-            )
+            hw_val = self._to_hw_pressure(ui_val)
+
+            # ✨ 추가: 장비 송신 값(하드웨어 스케일)을 지정 소수 자리로 문자열 포맷
+            dec = int(MFC_PRESSURE_DECIMALS)
+            val_str = f"{hw_val:.{dec}f}"
+
+            def after_sent(line, ui_val=ui_val):
+                if line:
+                    self.status_message.emit("MFC < 확인", f"SP1 <- {ui_val:.2f}")
+                # ✅ 검증도 HW값 기준으로 비교
+                self._verify_simple_async("SP1_SET", {"value": hw_val, "_dec": dec})
+
+            # ✨ 변경: value=hw_val  →  value=val_str
+            self.enqueue(MFC_COMMANDS["SP1_SET"](value=val_str),
+                        after_sent, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS,
+                        tag=f"[SP1_SET {ui_val:.2f}]", allow_no_reply=True)
             return
 
         if cmd in ("SP1_ON", "SP4_ON"):

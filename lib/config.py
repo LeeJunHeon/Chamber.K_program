@@ -3,17 +3,17 @@ from typing import Dict, List, Tuple
 
 """
 장비 시리얼 통신, 공정 파라미터, 기본 명령어 등 전역 설정 파일
-이 파일에서 시리얼 포트, 바우드레이트, MFC 번호 등 관리!
+이 파일에서 시리얼 포트, 바우드레이트, MFC 번호 등 관리
 """
 
 # 시리얼 포트 설정 (포트 이름은 실제 환경에 맞게 수정)
-MFC_PORT = "COM4"
+MFC_PORT = "COM11"
 MFC_BAUD = 9600
 
-DC_PORT = "COM8"
+DC_PORT = "COM5"
 DC_BAUDRATE = 9600
 
-PLC_PORT = "COM3"
+PLC_PORT = "COM4"
 PLC_BAUD = 115200
 PLC_SLAVE_ID = 1
 PLC_TIMEOUT = 0.5   # 초
@@ -53,15 +53,13 @@ PLC_COIL_MAP: Dict[str, int] = {
     "BuzzStop_Button": 33,   # M00021 (버저)
 }
 
-# === 센서 DI (입력: FC=2) ===
-# 표: Air/G1/G2/ATM/Water = [DI0]~[DI4]
-SENSOR_DI_BASE = 100  # DI0가 시작점이므로 0
+# === 센서 DI (입력: FC=1) ===
 PLC_SENSOR_BITS: Dict[str, int] = {
-    "Air":   0,  # [DI0]
-    "G1":    1,  # [DI1]
-    "G2":    2,  # [DI2]
-    "ATM":   3,  # [DI3]
-    "Water": 4,  # [DI4]
+    "Air":   160,  # M00100
+    "G1":    161,  # M00101
+    "G2":    162,  # M00102
+    "ATM":   163,  # M00103
+    "Water": 164,  # M00104
 }
 
 # --- DCpower ---

@@ -71,7 +71,7 @@ class RFPowerController(QObject):
         self.update_rf_status_display.emit(for_p, ref_p)
 
                 # --- [수정된 반사파 대기 로직] ---
-        if ref_p is not None and ref_p > 3.0:
+        if ref_p is not None and ref_p > 30.0:
             if self.state != "REF_P_WAITING":
                 # 대기 상태가 아니었다면, 현재 상태를 저장하고 대기 시작
                 self.previous_state = self.state
@@ -86,7 +86,7 @@ class RFPowerController(QObject):
 
             return # 대기 중이므로 아래 로직은 실행하지 않고 다음 틱까지 대기
 
-        # 반사파가 3.0W 이하로 안정된 경우
+        # 반사파가 30.0W 이하로 안정된 경우
         if self.state == "REF_P_WAITING":
             self.status_message.emit("RFpower(정보)", f"반사파 안정화 완료 ({ref_p:.1f}W). 공정을 재개합니다.")
             self.state = self.previous_state # 이전 상태(RAMPING_UP 또는 MAINTAINING)로 복귀

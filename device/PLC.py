@@ -7,7 +7,7 @@ import minimalmodbus
 
 from lib.config import (
     PLC_PORT, PLC_SLAVE_ID, PLC_BAUD,
-    PLC_TIMEOUT, PLC_COIL_MAP, SENSOR_DI_BASE,
+    PLC_TIMEOUT, PLC_COIL_MAP,
     PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR,
     RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
     RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0,
@@ -167,7 +167,7 @@ class PLCController(QObject):
 
     def _safe_read_discrete_inputs(self, start_addr: int, count: int) -> List[bool]:
         assert self.instrument is not None
-        return self.instrument.read_bits(start_addr, count, functioncode=2)
+        return self.instrument.read_bits(start_addr, count, functioncode=1)
 
     # ============== 폴링 ======================
     @Slot()
@@ -195,18 +195,15 @@ class PLCController(QObject):
                     self._last_button_states["Door_Button"] = door_state
                     self.update_button_display.emit("Door_Button", door_state)
 
-            # 2) 센서 DI 읽기
+            # 2) 센서(코일) 읽기 — FC=1, 절대 코일 주소
             if PLC_SENSOR_BITS:
-                di_count = max(PLC_SENSOR_BITS.values()) + 1
                 try:
-                    bits = self._safe_read_discrete_inputs(SENSOR_DI_BASE, di_count)
-                    for name, bit in PLC_SENSOR_BITS.items():
-                        if bit < len(bits):
-                            self.update_sensor_display.emit(name, bool(bits[bit]))
-                        else:
-                            self.status_message.emit("PLC(경고)", f"DI 인덱스 초과: {name}->{bit} (len={len(bits)})")
+                    coil_addrs = list(PLC_SENSOR_BITS.values())               # [256,257,258,259,260]
+                    addr_to_state = self._read_coils_grouped(coil_addrs)      # FC=1로 그룹 폴링 (이미 구현됨)
+                    for name, addr in PLC_SENSOR_BITS.items():
+                        self.update_sensor_display.emit(name, bool(addr_to_state.get(addr, False)))
                 except Exception as ex:
-                    self.status_message.emit("PLC(경고)", f"DI 읽기 실패: {ex}")
+                    self.status_message.emit("PLC(경고)", f"센서(코일) 읽기 실패: {ex}")
 
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"폴링 실패: {e}")

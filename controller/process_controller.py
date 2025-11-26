@@ -106,6 +106,10 @@ class SputterProcessController(QObject):
         self._process_channel: int = 1
         self._gas_valve_button: str = "Ar_Button"
 
+        # 다중 가스용: 사용 중인 채널/밸브 목록
+        self._active_channels: list[int] = [1]      # [1]=Ar, [2]=O2
+        self._gas_valve_buttons: list[str] = ["Ar_Button"]
+
         # 사용 여부
         self.is_dc_on = False
         self.is_rf_on = False
@@ -158,9 +162,35 @@ class SputterProcessController(QObject):
             return
 
         # 채널/버튼/파워 사용여부
-        gas = params.get('selected_gas', 'Ar')
-        self._process_channel = 1 if gas == "Ar" else 2
-        self._gas_valve_button = 'Ar_Button' if gas == 'Ar' else 'O2_Button'
+        use_ar = bool(params.get('use_ar_gas', False))
+        use_o2 = bool(params.get('use_o2_gas', False))
+
+        active_channels: list[int] = []
+        gas_buttons: list[str] = []
+
+        if use_ar:
+            active_channels.append(1)
+            gas_buttons.append("Ar_Button")
+
+        if use_o2:
+            active_channels.append(2)
+            gas_buttons.append("O2_Button")
+
+        # 아무 가스도 체크 안 된 경우 → 옛날 single-gas 파라미터로 fallback
+        if not active_channels:
+            gas = params.get('selected_gas', 'Ar')
+            ch = 1 if gas == "Ar" else 2
+            active_channels = [ch]
+            gas_buttons = ['Ar_Button' if ch == 1 else 'O2_Button']
+
+        # 내부 상태 저장
+        self._active_channels = active_channels
+        self._gas_valve_buttons = gas_buttons
+
+        # 기존 코드와의 호환(여러 곳에서 여전히 첫 채널만 쓰고 있음)
+        self._process_channel = active_channels[0]
+        self._gas_valve_button = gas_buttons[0]
+
         self.is_dc_on = float(params.get('dc_power', 0) or 0) > 0
         self.is_rf_on = float(params.get('rf_power', 0) or 0) > 0
 
@@ -172,70 +202,214 @@ class SputterProcessController(QObject):
         self._next_step()
 
     # ==================== 스텝 구성 ====================
-
     def _build_steps(self, p: Dict[str, Any]) -> List[ProcessStep]:
-        ch   = 1 if p.get('selected_gas', 'Ar') == 'Ar' else 2
-        flow = float(p.get('mfc_flow', 0.0))
+        """
+        params에서 선택된 가스(Ar/O2)에 따라
+        - 여러 채널의 Flow OFF / ZEROING / Flow Set / Flow ON
+        - 여러 가스 밸브 Open/Close
+        를 처리한다.
+        """
+        # --- 1) 사용할 채널 목록 결정 (start_process_flow에서 세팅한 값 우선) ---
+        channels = getattr(self, "_active_channels", None)
+        if not channels:
+            # 백워드 호환: selected_gas / mfc_flow 기반 단일 채널
+            ch = 1 if p.get('selected_gas', 'Ar') == 'Ar' else 2
+            channels = [ch]
+
+        # --- 2) 채널별 유량 설정 ---
+        flows: Dict[int, float] = {}
+        default_flow = float(p.get('mfc_flow', 0.0))
+
+        if 1 in channels:
+            flows[1] = float(p.get('ar_flow', default_flow))
+        if 2 in channels:
+            flows[2] = float(p.get('o2_flow', default_flow))
+
         # (중요) SP1_SET 값은 UI 그대로 보냄 — MFC가 1/10 스케일 변환
         sp1_ui = float(p.get('sp1_set', 0.0))
 
-        steps: List[ProcessStep] = [
-            # 초기화: Flow Off, Valve Open, Zeroing
-            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} Flow OFF", params=('FLOW_OFF', {'channel': ch})),
-            ProcessStep(ActionType.MFC_CMD, "MFC Valve Open", params=('VALVE_OPEN', {})),
-            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} ZEROING", params=('MFC_ZEROING', {'channel': ch})),
-            ProcessStep(ActionType.MFC_CMD, "PS ZEROING",     params=('PS_ZEROING', {})),
+        steps: List[ProcessStep] = []
 
-            # 가스 밸브(PLC)
-            ProcessStep(ActionType.PLC_CMD, f"{p.get('selected_gas')} Valve Open",
-                        params=(self._gas_valve_button, True)),
+        # --- 3) 초기화: 각 채널 Flow OFF ---
+        for ch in channels:
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    f"Ch{ch} Flow OFF",
+                    params=('FLOW_OFF', {'channel': ch}),
+                )
+            )
 
-            # 유량 설정 & ON
-            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} {flow:.2f}sccm 설정",
-                        params=('FLOW_SET', {'channel': ch, 'value': flow})),
-            ProcessStep(ActionType.MFC_CMD, f"Ch{ch} Flow ON",
-                        params=('FLOW_ON', {'channel': ch})),
+        # MFC 메인 밸브 Open (공용 1회)
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                "MFC Valve Open",
+                params=('VALVE_OPEN', {}),
+            )
+        )
 
-            # 압력 제어 준비 및 목표 설정(SP1=UI값)
-            ProcessStep(ActionType.MFC_CMD, "SP4 ON", params=('SP4_ON', {})),
-            ProcessStep(ActionType.MFC_CMD, f"SP1={sp1_ui:.2f} 설정", params=('SP1_SET', {'value': sp1_ui})),
-            ProcessStep(ActionType.DELAY, "압력 안정화 대기(60초)", duration_sec=60),
-        ]
+        # 각 채널 Zeroing
+        for ch in channels:
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    f"Ch{ch} ZEROING",
+                    params=('MFC_ZEROING', {'channel': ch}),
+                )
+            )
 
-        # 선택: 건 셔터
+        # Power Supply Zeroing
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                "PS ZEROING",
+                params=('PS_ZEROING', {}),
+            )
+        )
+
+        # --- 4) 가스 밸브(PLC) Open: 선택된 모든 가스에 대해 ---
+        gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
+        for btn in gas_buttons:
+            gas_name = "Ar" if "Ar" in btn else "O2"
+            steps.append(
+                ProcessStep(
+                    ActionType.PLC_CMD,
+                    f"{gas_name} Valve Open",
+                    params=(btn, True),
+                )
+            )
+
+        # --- 5) 채널별 유량 설정 & Flow ON ---
+        for ch in channels:
+            flow = float(flows.get(ch, 0.0))
+            if flow > 0.0:
+                steps.append(
+                    ProcessStep(
+                        ActionType.MFC_CMD,
+                        f"Ch{ch} {flow:.2f}sccm 설정",
+                        params=('FLOW_SET', {'channel': ch, 'value': flow}),
+                    )
+                )
+                steps.append(
+                    ProcessStep(
+                        ActionType.MFC_CMD,
+                        f"Ch{ch} Flow ON",
+                        params=('FLOW_ON', {'channel': ch}),
+                    )
+                )
+
+        # --- 6) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                "SP4 ON",
+                params=('SP4_ON', {}),
+            )
+        )
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                f"SP1={sp1_ui:.2f} 설정",
+                params=('SP1_SET', {'value': sp1_ui}),
+            )
+        )
+        steps.append(
+            ProcessStep(
+                ActionType.DELAY,
+                "압력 안정화 대기(60초)",
+                duration_sec=60,
+            )
+        )
+
+        # --- 7) 건 셔터 선택적 Open (기존 로직 그대로) ---
         if p.get('use_g1', False):
-            steps.append(ProcessStep(ActionType.PLC_CMD, "Gun Shutter 1 Open", params=('S1_button', True)))
+            steps.append(
+                ProcessStep(
+                    ActionType.PLC_CMD,
+                    "Gun Shutter 1 Open",
+                    params=('S1_button', True),
+                )
+            )
         if p.get('use_g2', False):
-            steps.append(ProcessStep(ActionType.PLC_CMD, "Gun Shutter 2 Open", params=('S2_button', True)))
+            steps.append(
+                ProcessStep(
+                    ActionType.PLC_CMD,
+                    "Gun Shutter 2 Open",
+                    params=('S2_button', True),
+                )
+            )
 
         # 파워 안정화
-        steps.append(ProcessStep(ActionType.POWER_WAIT, "파워 목표치 도달 대기"))
+        steps.append(
+            ProcessStep(
+                ActionType.POWER_WAIT,
+                "파워 목표치 도달 대기",
+            )
+        )
 
         # 압력 제어 시작
-        steps.append(ProcessStep(ActionType.MFC_CMD, "SP1 ON", params=('SP1_ON', {})))
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                "SP1 ON",
+                params=('SP1_ON', {}),
+            )
+        )
 
-        # Shutter Delay
+        # --- 8) Shutter Delay ---
         sd_sec = max(0, int(math.ceil(float(p.get('shutter_delay', 0.0)) * 60)))
         if sd_sec > 0:
-            steps.append(ProcessStep(ActionType.DELAY, f"Shutter Delay {sd_sec}s",
-                                     duration_sec=sd_sec, timer_purpose='shutter'))
+            steps.append(
+                ProcessStep(
+                    ActionType.DELAY,
+                    f"Shutter Delay {sd_sec}s",
+                    duration_sec=sd_sec,
+                    timer_purpose='shutter',
+                )
+            )
 
         # Main Shutter
         if float(p.get('process_time', 0.0)) > 0:
-            steps.append(ProcessStep(ActionType.PLC_CMD, "Main Shutter Open", params=('MS_button', True)))
+            steps.append(
+                ProcessStep(
+                    ActionType.PLC_CMD,
+                    "Main Shutter Open",
+                    params=('MS_button', True),
+                )
+            )
 
         # 메인 공정(이 구간만 폴링 ON)
         pt_sec = max(0, int(math.ceil(float(p.get('process_time', 0.0)) * 60)))
         if pt_sec > 0:
-            steps.append(ProcessStep(ActionType.DELAY, f"메인 공정 {pt_sec}s 진행",
-                                     duration_sec=pt_sec, timer_purpose='process', polling=True))
+            steps.append(
+                ProcessStep(
+                    ActionType.DELAY,
+                    f"메인 공정 {pt_sec}s 진행",
+                    duration_sec=pt_sec,
+                    timer_purpose='process',
+                    polling=True,
+                )
+            )
 
-        # 종료: Main Shutter 닫기, 가스 닫기
-        steps.extend([
-            ProcessStep(ActionType.PLC_CMD, "Main Shutter Close", params=('MS_button', False)),
-            ProcessStep(ActionType.PLC_CMD, f"{p.get('selected_gas')} Valve Close",
-                        params=(self._gas_valve_button, False)),
-        ])
+        # --- 9) 종료: Main Shutter 닫기, 가스 밸브 모두 닫기 ---
+        steps.append(
+            ProcessStep(
+                ActionType.PLC_CMD,
+                "Main Shutter Close",
+                params=('MS_button', False),
+            )
+        )
+
+        for btn in gas_buttons:
+            gas_name = "Ar" if "Ar" in btn else "O2"
+            steps.append(
+                ProcessStep(
+                    ActionType.PLC_CMD,
+                    f"{gas_name} Valve Close",
+                    params=(btn, False),
+                )
+            )
 
         return steps
 
@@ -549,18 +723,30 @@ class SputterProcessController(QObject):
                 pass
             self._rfdown_wait = None
 
-        # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 기존 코드 그대로
-        ch = self._process_channel
+        # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리
+        channels = getattr(self, "_active_channels", None)
+        if not channels:
+            channels = [self._process_channel]
+
         loop = QEventLoop()
         def _quit(*_):
-            try: loop.quit()
-            except: pass
+            try:
+                loop.quit()
+            except:
+                pass
+
         self.mfc.command_confirmed.connect(_quit)
         self.mfc.command_failed.connect(_quit)
-        self.command_requested.emit("FLOW_OFF", {'channel': ch})
-        loop.exec()
+
+        # 선택된 모든 채널 Flow OFF
+        for ch in channels:
+            self.command_requested.emit("FLOW_OFF", {'channel': ch})
+            loop.exec()
+
+        # 공용 밸브는 한 번만 VALVE_OPEN (안전하게 잔압 해소)
         self.command_requested.emit("VALVE_OPEN", {})
         loop.exec()
+
         try:
             self.mfc.command_confirmed.disconnect(_quit)
             self.mfc.command_failed.disconnect(_quit)
@@ -570,9 +756,12 @@ class SputterProcessController(QObject):
         # 건 셔터/가스 닫기
         self.update_plc_port.emit('S1_button', False)
         self.update_plc_port.emit('S2_button', False)
-        gas_name = "Ar" if ch == 1 else "O2"
-        self.status_message.emit("PLC", f"{gas_name} Valve Close")
-        self.update_plc_port.emit(self._gas_valve_button, False)
+
+        gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
+        for btn in gas_buttons:
+            gas_name = "Ar" if "Ar" in btn else "O2"
+            self.status_message.emit("PLC", f"{gas_name} Valve Close")
+            self.update_plc_port.emit(btn, False)
 
         QTimer.singleShot(800, self._finish_stop)
         self._stop_pending = False

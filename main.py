@@ -154,15 +154,29 @@ class MainDialog(QDialog):
             return
     
         try:
-            if self.ui.Ar_gas_radio.isChecked():
-                selected_gas = "Ar"
-                flow_text = self.ui.Ar_flow_edit.toPlainText().strip()
-            elif self.ui.O2_gas_radio.isChecked():
-                selected_gas = "O2"
-                flow_text = self.ui.O2_flow_edit.toPlainText().strip()
-            else:
-                raise ValueError("Ar 또는 O2 가스를 선택해야 합니다.")
-            
+            # --- 가스 선택: Ar / O2 를 각각 체크박스로 처리 ---
+            use_ar = self.ui.Ar_gas_radio.isChecked()
+            use_o2 = self.ui.O2_gas_radio.isChecked()
+
+            if not (use_ar or use_o2):
+                raise ValueError("Ar 또는 O2 가스를 하나 이상 선택해야 합니다.")
+
+            ar_flow = 0.0
+            o2_flow = 0.0
+
+            if use_ar:
+                ar_text = self.ui.Ar_flow_edit.toPlainText().strip()
+                if not ar_text:
+                    raise ValueError("Ar 가스 유량을 입력해야 합니다.")
+                ar_flow = float(ar_text)
+
+            if use_o2:
+                o2_text = self.ui.O2_flow_edit.toPlainText().strip()
+                if not o2_text:
+                    raise ValueError("O2 가스 유량을 입력해야 합니다.")
+                o2_flow = float(o2_text)
+
+            # 기존 RF offset/param 체크 로직 그대로 유지
             offset_text = self.ui.offset_edit.toPlainText().strip()
             param_text = self.ui.param_edit.toPlainText().strip()
 
@@ -172,9 +186,30 @@ class MainDialog(QDialog):
                 if not param_text:
                     raise ValueError("RF 파워의 Param 값을 입력해야 합니다.")
 
+            # --- selected_gas / mfc_flow는 기존 코드 호환용으로 유지 ---
+            if use_ar and not use_o2:
+                selected_gas = "Ar"
+                mfc_flow = ar_flow
+            elif use_o2 and not use_ar:
+                selected_gas = "O2"
+                mfc_flow = o2_flow
+            else:
+                # 둘 다 쓰는 경우: 기본은 Ar 기준
+                selected_gas = "Ar"
+                mfc_flow = ar_flow
+
             params = {
+                # ▼ 새 다중 가스 파라미터
+                "use_ar_gas": use_ar,
+                "use_o2_gas": use_o2,
+                "ar_flow": ar_flow,
+                "o2_flow": o2_flow,
+
+                # ▼ 기존 단일 가스 방식(백워드 호환용)
                 "selected_gas": selected_gas,
-                "mfc_flow": float(flow_text),
+                "mfc_flow": float(mfc_flow),
+
+                # ▼ 나머지 기존 파라미터들 그대로 유지
                 "sp1_set": float(self.ui.working_pressure_edit.toPlainText().strip()),
                 "dc_power": float(self.ui.DC_power_edit.toPlainText().strip() or 0) if self.ui.dc_power_checkbox.isChecked() else 0,
                 "rf_power": float(self.ui.RF_power_edit.toPlainText().strip() or 0) if self.ui.rf_power_checkbox.isChecked() else 0,
@@ -259,6 +294,10 @@ class MainDialog(QDialog):
         self.ui.Current_edit.setPlainText("0.0")
         self.ui.for_p_edit.setPlainText("0.0")
         self.ui.ref_p_edit.setPlainText("0.0")
+
+        # ▼ 추가: 가스 유량 표시값 초기화
+        self.ui.Ar_flow_edit.setPlainText("0.0")
+        self.ui.O2_flow_edit.setPlainText("0.0")
 
         # [추가] 공정 종료 시 UI의 타이머 값을 기본값 "0"으로 초기화
         self.ui.Shutter_delay_edit.setPlainText("5")

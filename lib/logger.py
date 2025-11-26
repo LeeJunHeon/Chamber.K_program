@@ -18,7 +18,7 @@ def log_message_to_monitor(level, message):
         sb = _monitor_widget.verticalScrollBar()
         sb.setValue(sb.maximum())
     # --- 파일에도 로그 추가 ---
-    log_message_to_file(level, message)
+    #log_message_to_file(level, message)
 
 def log_message_to_file(level, message):
     """log.txt에 로그 남기기"""

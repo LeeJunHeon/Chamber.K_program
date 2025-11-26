@@ -1,8 +1,8 @@
-Air        P00000    M00100 [DI0]
-Gauge1    P00001    M00101 [DI1]
-Gauge2    P00002    M00102 [DI2]
-ATM        P00003    M00103 [DI3]
-Water        P00004    M00104 [DI4]
+Air        P00000    M00100 [DI0]   160
+Gauge1    P00001    M00101 [DI1]    161
+Gauge2    P00002    M00102 [DI2]    162
+ATM        P00003    M00103 [DI3]   163
+Water        P00004    M00104 [DI4] 164
 
 Rotary[0]    M00000    P00040 [P020]
 RV[1]        M00001    P00041 [P021]
