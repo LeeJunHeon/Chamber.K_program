@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
-from lib.logger import set_monitor_widget, log_message_to_monitor
+from lib.logger import set_monitor_widget, log_message_to_monitor, set_process_log_file
 from controller.process_controller import SputterProcessController
 from device.PLC import PLCController
 from device.MFC import MFCController
@@ -230,6 +230,10 @@ class MainDialog(QDialog):
         except (ValueError, TypeError) as e:
             QMessageBox.warning(self, "입력 오류", f"공정 파라미터가 잘못되었습니다:\n{e}")
             return
+        
+        # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
+        set_process_log_file(prefix="CHK")
+        log_message_to_monitor("정보", "=== CHK 공정 시작 ===")
 
         self.process_controller.start_requested.emit(params)
         self.process_running = True
