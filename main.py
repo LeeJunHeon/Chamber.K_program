@@ -4,10 +4,11 @@ from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEvent
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
 from pathlib import Path
 import csv
+import datetime
 
 from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
-from lib.logger import set_monitor_widget, log_message_to_monitor, set_process_log_file
+from lib.logger import set_monitor_widget, log_message_to_monitor, set_process_log_file, append_chk_csv_row
 from controller.process_controller import SputterProcessController
 from device.PLC import PLCController
 from device.MFC import MFCController
@@ -24,6 +25,9 @@ class MainDialog(QDialog):
         self.ui = Ui_Dialog()
         self.ui.setupUi(self)
         set_monitor_widget(self.ui.error_monitor)
+
+        # ★ 이번 공정 이름(단일/CSV 공정 공통)
+        self.current_process_name: str = ""
 
         # --- [최종] 모든 컨트롤러를 Worker-Object 패턴으로 생성 ---
 
@@ -250,6 +254,9 @@ class MainDialog(QDialog):
             QMessageBox.warning(self, "입력 오류", f"공정 파라미터가 잘못되었습니다:\n{e}")
             return
         
+        # ★ 단일 공정(수동 Start)일 때의 공정 이름
+        self.current_process_name = "Single CHK"
+        
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
         set_process_log_file(prefix="CHK")
         log_message_to_monitor("정보", "=== CHK 공정 시작 ===")
@@ -353,9 +360,94 @@ class MainDialog(QDialog):
     #     self.on_status_message("경고", "STOP 버튼 클릭됨")
     #     if self.process_controller and self.process_running:
     #         self.process_controller.stop_process()
+
+    # ==================== ChK CSV 로그용 헬퍼 ====================
+    def _build_chk_csv_row(self) -> dict:
+        """
+        현재 UI에 표시되어 있는 값들을 이용해 ChK_log.csv에 기록할 row 생성.
+        - 평균값은 아직 계산 안 하고, 공정 종료 시점 값 그대로 사용.
+        """
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        process_name = self.current_process_name or ""
+
+        # 작은 헬퍼: QPlainTextEdit에서 텍스트 안전하게 꺼내기
+        def _get_text(widget_name: str) -> str:
+            w = getattr(self.ui, widget_name, None)
+            if w is None:
+                return ""
+            try:
+                return w.toPlainText().strip()
+            except Exception:
+                return ""
+
+        shutter_delay = _get_text("Shutter_delay_edit")
+        process_time  = _get_text("process_time_edit")
+
+        # Main Shutter: process_time > 0 이면 ON 으로 간주
+        try:
+            pt_val = float(process_time or 0)
+        except Exception:
+            pt_val = 0.0
+        main_shutter = "ON" if pt_val > 0 else ""
+
+        # 타겟 사용 여부 (체크박스)
+        try:
+            g1_on = self.ui.G1_checkbox.isChecked()
+        except Exception:
+            g1_on = False
+        try:
+            g2_on = self.ui.G2_checkbox.isChecked()
+        except Exception:
+            g2_on = False
+
+        g1_target = "ON" if g1_on else ""
+        g2_target = "ON" if g2_on else ""
+
+        # 가스/압력/파워 값들
+        ar_flow   = _get_text("Ar_flow_edit")
+        o2_flow   = _get_text("O2_flow_edit")
+        work_p    = _get_text("working_pressure_edit")
+
+        rf_for_p  = _get_text("for_p_edit")
+        rf_ref_p  = _get_text("ref_p_edit")
+
+        dc_p      = _get_text("Power_edit")
+        dc_v      = _get_text("Voltage_edit")
+        dc_i      = _get_text("Current_edit")
+
+        row = {
+            "Timestamp":      now,
+            "Process Name":   process_name,
+            "Main Shutter":   main_shutter,
+            "Shutter Delay":  shutter_delay,
+            "G1 Target":      g1_target,
+            "G2 Target":      g2_target,
+            "Ar flow":        ar_flow,
+            "O2 flow":        o2_flow,
+            "Working Pressure": work_p,
+            "Process Time":   process_time,
+            "RF: For.P":      rf_for_p,
+            "RF: Ref. P":     rf_ref_p,
+            "DC: V":          dc_v,
+            "DC: I":          dc_i,
+            "DC: P":          dc_p,
+        }
+        return row
         
     def _handle_process_finished(self):
         self.on_status_message("정보", "프로세스 종료중...")
+
+        # ★ 공정이 끝날 때마다 ChK_log.csv 에 한 줄 추가
+        try:
+            row = self._build_chk_csv_row()
+            ok = append_chk_csv_row(row)
+            if ok:
+                log_message_to_monitor("정보", "ChK CSV 로그 저장 완료")
+            else:
+                log_message_to_monitor("경고", "ChK CSV 로그 저장 실패")
+        except Exception as e:
+            log_message_to_monitor("경고", f"ChK CSV 로그 처리 중 예외 발생: {e!r}")
 
         # 1) CSV 리스트 공정 모드인 경우 → 다음 행 실행
         if self.csv_mode and self.csv_rows:
@@ -635,6 +727,10 @@ class MainDialog(QDialog):
 
         # 로그/스테이지 표시
         name = params.get("process_name") or f"STEP {self.csv_index + 1}/{len(self.csv_rows)}"
+
+        # ★ CSV STEP 공정 이름 저장 (ChK CSV용)
+        self.current_process_name = name
+
         log_message_to_monitor("Process", f"CSV 공정 리스트 {self.csv_index + 1}/{len(self.csv_rows)} 실행: {name}")
         self.update_stage_monitor(name)
 

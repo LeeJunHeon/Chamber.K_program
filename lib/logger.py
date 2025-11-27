@@ -2,6 +2,9 @@
 import datetime
 from pathlib import Path
 from typing import Optional
+import csv  # ★ 추가
+
+from lib.config import CHK_CSV_PATH, CHK_CSV_COLUMNS  # ★ 추가
 
 _monitor_widget = None  # 전역 변수(로그 모니터)
 
@@ -86,4 +89,40 @@ def log_message_to_file(level, message):
         except Exception:
             # 정말 쓸 수 있는 데가 없으면 조용히 무시
             pass
+
+def append_chk_csv_row(row: dict) -> bool:
+    """
+    Chamber-K 공정 요약 데이터를 CSV(ChK_log.csv)에 한 줄 append.
+    - row 는 CHK_CSV_COLUMNS 의 컬럼명을 key 로 갖는 dict 여야 함.
+    - 부족한 컬럼은 ""(빈 문자열)로 채워서 기록.
+    - NAS 접근 실패 시 로컬 Logs 폴더로 폴백.
+    """
+    target_path = Path(CHK_CSV_PATH)
+
+    try:
+        # 1) NAS 경로 시도
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            use_path = target_path
+        except Exception:
+            # NAS 폴더 생성 실패 → 로컬 Logs 폴더로 폴백
+            local_dir = Path.cwd() / "Logs"
+            local_dir.mkdir(parents=True, exist_ok=True)
+            use_path = local_dir / "ChK_log.csv"
+
+        first = not use_path.exists()
+
+        with use_path.open("a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=CHK_CSV_COLUMNS)
+            if first:
+                writer.writeheader()
+            writer.writerow({k: row.get(k, "") for k in CHK_CSV_COLUMNS})
+
+        return True
+
+    except Exception as e:
+        # 실패하면 모니터에만 경고 남기고 False
+        if _monitor_widget is not None:
+            log_message_to_monitor("경고", f"ChK CSV 로그 기록 실패: {e!r}")
+        return False
 
