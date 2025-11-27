@@ -153,3 +153,25 @@ MFC_COMMANDS = {
     'SP3_SET': lambda value: f"S3 {value}",
     'SP4_SET': lambda value: f"S4 {value}",
 }
+
+# === Chamber-K NAS CSV 로그 경로 ===
+CHK_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database\ChK_log.csv"
+
+CHK_CSV_COLUMNS = [
+    "Timestamp",
+    "Process Name",
+    "Base Pressure",
+    "Main Shutter",
+    "Shutter Delay",
+    "G1 Target",
+    "G2 Target",
+    "Ar flow",
+    "O2 flow",
+    "Working Pressure",
+    "Process Time",
+    "RF: For.P",
+    "RF: Ref. P",
+    "DC: V",
+    "DC: I",
+    "DC: P",
+]
