@@ -335,7 +335,7 @@ class MainDialog(QDialog):
             color = "#38d62f" if state else "#d6252f"
             frame.setStyleSheet(f"background: {color}; border-radius: 25px; border: 2px solid #333;")
         else:
-            print(f"[set_indicator] '{frame_name}' 인디케이터가 UI에 없습니다.")
+            log_message_to_monitor("WARN", f"[set_indicator] '{frame_name}' 인디케이터가 UI에 없습니다.")
 
     @Slot(str, bool)
     def update_ui_button_display(self, button_name, state):
@@ -354,7 +354,7 @@ class MainDialog(QDialog):
             button.setChecked(state)
             button.blockSignals(False)
         else:
-            print(f"[update_ui_button_display] '{button_name}' 버튼이 UI에 없습니다.")
+            log_message_to_monitor("WARN", f"[update_ui_button_display] '{button_name}' 버튼이 UI에 없습니다.")
 
     # def _handle_sputter_stop(self):
     #     self.on_status_message("경고", "STOP 버튼 클릭됨")
@@ -701,6 +701,80 @@ class MainDialog(QDialog):
 
         return params
     
+    def _apply_params_to_ui(self, params: dict) -> None:
+        """
+        CSV 한 단계(params)를 현재 UI 위젯에 반영.
+        - CH1/CH2처럼, 실행 중인 스텝의 설정이 UI에도 보이도록 한다.
+        """
+        # 가스 선택
+        use_ar = bool(params.get("use_ar_gas"))
+        use_o2 = bool(params.get("use_o2_gas"))
+
+        # 체크박스/라디오 버튼 반영
+        try:
+            self.ui.Ar_gas_radio.blockSignals(True)
+            self.ui.O2_gas_radio.blockSignals(True)
+            self.ui.Ar_gas_radio.setChecked(use_ar)
+            self.ui.O2_gas_radio.setChecked(use_o2)
+        finally:
+            self.ui.Ar_gas_radio.blockSignals(False)
+            self.ui.O2_gas_radio.blockSignals(False)
+
+        # 유량
+        ar_flow = params.get("ar_flow")
+        o2_flow = params.get("o2_flow")
+        if ar_flow is not None:
+            self.ui.Ar_flow_edit.setPlainText(f"{float(ar_flow):.2f}")
+        if o2_flow is not None:
+            self.ui.O2_flow_edit.setPlainText(f"{float(o2_flow):.2f}")
+
+        # 작업 압력(sp1_set)
+        sp1_set = params.get("sp1_set")
+        if sp1_set is not None:
+            self.ui.working_pressure_edit.setPlainText(str(sp1_set))
+
+        # DC 파워
+        dc_power = float(params.get("dc_power") or 0.0)
+        try:
+            self.ui.dc_power_checkbox.blockSignals(True)
+            self.ui.dc_power_checkbox.setChecked(dc_power > 0)
+        finally:
+            self.ui.dc_power_checkbox.blockSignals(False)
+        self.ui.DC_power_edit.setPlainText(f"{dc_power:.1f}" if dc_power > 0 else "0")
+
+        # RF 파워
+        rf_power = float(params.get("rf_power") or 0.0)
+        try:
+            self.ui.rf_power_checkbox.blockSignals(True)
+            self.ui.rf_power_checkbox.setChecked(rf_power > 0)
+        finally:
+            self.ui.rf_power_checkbox.blockSignals(False)
+        self.ui.RF_power_edit.setPlainText(f"{rf_power:.1f}" if rf_power > 0 else "0")
+
+        # Shutter delay / process time (분 단위 그대로)
+        sh_delay = params.get("shutter_delay")
+        proc_time = params.get("process_time")
+        if sh_delay is not None:
+            self.ui.Shutter_delay_edit.setPlainText(str(sh_delay))
+        if proc_time is not None:
+            self.ui.process_time_edit.setPlainText(str(proc_time))
+
+        # RF 보정값
+        rf_offset = params.get("rf_offset")
+        rf_param  = params.get("rf_param")
+        if rf_offset is not None:
+            self.ui.offset_edit.setPlainText(str(rf_offset))
+        if rf_param is not None:
+            self.ui.param_edit.setPlainText(str(rf_param))
+
+        # Gun 선택
+        use_g1 = params.get("use_g1")
+        use_g2 = params.get("use_g2")
+        if use_g1 is not None:
+            self.ui.G1_checkbox.setChecked(bool(use_g1))
+        if use_g2 is not None:
+            self.ui.G2_checkbox.setChecked(bool(use_g2))
+    
     def _start_next_csv_step(self):
         """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료."""
         self.csv_index += 1
@@ -718,6 +792,9 @@ class MainDialog(QDialog):
 
         row = self.csv_rows[self.csv_index]
         params = self._build_params_from_csv_row(row)
+
+        # ✅ 이 단계의 파라미터를 UI에 반영 (CH1/CH2처럼 보이게)
+        self._apply_params_to_ui(params)
 
         # ★★★ 이 CSV STEP 전용 로그 파일 생성 ★★★
         set_process_log_file(prefix="CHK")
