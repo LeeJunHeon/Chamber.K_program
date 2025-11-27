@@ -1,0 +1,4 @@
+Timestamp,Process Name,Main Shutter,Shutter Delay,G1 Target,G2 Target,Ar flow,O2 flow,Working Pressure,Process Time,RF: For.P,RF: Ref. P,DC: V,DC: I,DC: P
+2025-11-27 17:01:37,test1,ON,10.0,ON,ON,10.00,10.00,5.0,25.0,,,,,
+2025-11-27 17:01:38,test2,ON,5.0,ON,,15.00,0.00,10.0,15.0,,,,,
+2025-11-27 17:01:41,test3,ON,15.0,,ON,0.00,15.00,15.0,35.0,,,,,

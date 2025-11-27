@@ -278,16 +278,26 @@ class MainDialog(QDialog):
         if not path:
             return
 
-        # 실제 존재하는지 한번 더 확인(선택 취소 대비)
         p = Path(path)
         if not p.exists():
             QMessageBox.warning(self, "파일 오류", "선택한 CSV 파일을 찾을 수 없습니다.")
             return
 
         self.csv_file_path = str(p)
-        # 라벨에 파일명 표시
-        #self.ui.process_list_label.setText(f"Process List: {p.name}")
+        # 라벨에 파일명 표시 (원하면 이 줄은 빼도 됨)
+        # self.ui.process_list_label.setText(f"Process List: {p.name}")
         log_message_to_monitor("정보", f"CSV 공정 리스트 파일 선택: {p}")
+
+        # 🔹 CSV를 미리 읽어서 1번째 스텝을 UI에 반영
+        if self._load_csv_process_list() and self.csv_rows:
+            first_row = self.csv_rows[0]
+            params = self._build_params_from_csv_row(first_row)
+            self._apply_params_to_ui(params)
+
+            name = params.get("process_name") or "STEP 1"
+            self.update_stage_monitor(
+                f"CSV 미리보기: 1/{len(self.csv_rows)} - {name}"
+            )
 
     def _load_csv_process_list(self) -> bool:
         """
@@ -574,7 +584,7 @@ class MainDialog(QDialog):
         sputter_process_recipe.csv 한 줄(row)을 기반으로
         process_controller 에 전달할 params dict 생성.
 
-        CSV 헤더(예시):
+        CSV 헤더(현재 파일 기준):
         #,Process_name,main_shutter,base_pressure,working_pressure,
         process_time,shutter_delay,Ar,O2,Ar_flow,O2_flow,
         use_dc_power,dc_power,use_rf_power,rf_power,
@@ -596,10 +606,9 @@ class MainDialog(QDialog):
             s = str(v).strip().lower()
             if s == "":
                 return default
-            # 1 / y / yes / true / on 등을 모두 True로 처리
             return s in ("1", "y", "yes", "true", "t", "on")
 
-        # UI 기본값 (레시피에서 비워두면 이 값 사용)
+        # UI 기본값
         ar_flow_ui   = _float_from(self.ui.Ar_flow_edit.toPlainText(), 0.0)
         o2_flow_ui   = _float_from(self.ui.O2_flow_edit.toPlainText(), 0.0)
         work_p_ui    = _float_from(self.ui.working_pressure_edit.toPlainText(), 0.0)
@@ -625,11 +634,8 @@ class MainDialog(QDialog):
         sh_delay  = _float_from(row.get("shutter_delay",   sh_delay_ui),  sh_delay_ui)
 
         # 파워 (use_*가 0/false 이면 강제로 0W 처리)
-        use_dc_csv = row.get("use_dc_power")
-        use_rf_csv = row.get("use_rf_power")
-
-        use_dc = _bool_from(use_dc_csv, None)
-        use_rf = _bool_from(use_rf_csv, None)
+        use_dc = _bool_from(row.get("use_dc_power"), None)
+        use_rf = _bool_from(row.get("use_rf_power"), None)
 
         dc_power_val = _float_from(row.get("dc_power", dc_power_ui), dc_power_ui)
         rf_power_val = _float_from(row.get("rf_power", rf_power_ui), rf_power_ui)
@@ -644,16 +650,14 @@ class MainDialog(QDialog):
         else:
             rf_power = rf_power_val
 
-        # Gun 사용 여부 (G1/G2 → gun1/gun2)
+        # Gun 사용 여부
         use_g1 = _bool_from(row.get("gun1"), use_g1_ui)
         use_g2 = _bool_from(row.get("gun2"), use_g2_ui)
 
         process_name = (row.get("Process_name") or "").strip()
-
-        # 메인 셔터: CSV에 값이 없으면 "process_time > 0" 기준
         main_shutter = _bool_from(row.get("main_shutter"), (proc_time > 0))
 
-        # 3) selected_gas / mfc_flow 생성 (기존 코드와 동일한 방식)
+        # selected_gas / mfc_flow (기존 단일 공정 로직과 맞춤)
         if use_ar_gas and not use_o2_gas:
             selected_gas = "Ar"
             mfc_flow = ar_flow
@@ -661,7 +665,6 @@ class MainDialog(QDialog):
             selected_gas = "O2"
             mfc_flow = o2_flow
         else:
-            # 둘 다 쓰면 Ar 기준
             selected_gas = "Ar"
             mfc_flow = ar_flow
 
@@ -671,7 +674,6 @@ class MainDialog(QDialog):
         rf_offset = _float_from(offset_text or 6.79, 6.79)
         rf_param  = _float_from(param_text  or 1.0395, 1.0395)
 
-        # 4) 최종 params (단일 공정 모드와 최대한 동일한 구조)
         params = {
             "use_ar_gas": use_ar_gas,
             "use_o2_gas": use_o2_gas,
@@ -710,7 +712,6 @@ class MainDialog(QDialog):
         use_ar = bool(params.get("use_ar_gas"))
         use_o2 = bool(params.get("use_o2_gas"))
 
-        # 체크박스/라디오 버튼 반영
         try:
             self.ui.Ar_gas_radio.blockSignals(True)
             self.ui.O2_gas_radio.blockSignals(True)
@@ -751,7 +752,7 @@ class MainDialog(QDialog):
             self.ui.rf_power_checkbox.blockSignals(False)
         self.ui.RF_power_edit.setPlainText(f"{rf_power:.1f}" if rf_power > 0 else "0")
 
-        # Shutter delay / process time (분 단위 그대로)
+        # Shutter delay / process time (분 단위)
         sh_delay = params.get("shutter_delay")
         proc_time = params.get("process_time")
         if sh_delay is not None:
