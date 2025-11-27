@@ -1,1 +1,4 @@
-﻿#,Process_name,main_shutter,base_pressure,working_pressure,process_time,shutter_delay,Ar,O2,Ar_flow,O2_flow,use_dc_power,dc_power,use_rf_power,rf_power,gun1,gun2,G1 Target,G2 Target
+﻿#,Process_name,main_shutter,working_pressure,process_time,shutter_delay,Ar,O2,Ar_flow,O2_flow,use_dc_power,dc_power,use_rf_power,rf_power,gun1,gun2,G1 Target,G2 Target
+1,test1,F,5,25,10,T,T,10,10,T,100,T,100,T,T,test1,test2
+2,test2,F,10,15,5,T,F,15,0,T,100,F,0,T,F,test3,test4
+3,test3,F,15,35,15,F,T,0,15,F,0,T,100,F,T,test5,test6

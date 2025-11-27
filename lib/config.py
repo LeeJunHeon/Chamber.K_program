@@ -160,7 +160,6 @@ CHK_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database\ChK_log.csv"
 CHK_CSV_COLUMNS = [
     "Timestamp",
     "Process Name",
-    "Base Pressure",
     "Main Shutter",
     "Shutter Delay",
     "G1 Target",
