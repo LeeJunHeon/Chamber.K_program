@@ -279,7 +279,7 @@ class MainDialog(QDialog):
 
         self.csv_file_path = str(p)
         # 라벨에 파일명 표시
-        self.ui.process_list_label.setText(f"Process List: {p.name}")
+        #self.ui.process_list_label.setText(f"Process List: {p.name}")
         log_message_to_monitor("정보", f"CSV 공정 리스트 파일 선택: {p}")
 
     def _load_csv_process_list(self) -> bool:
@@ -479,17 +479,18 @@ class MainDialog(QDialog):
     # ============= csv 공정 =============
     def _build_params_from_csv_row(self, row: dict) -> dict:
         """
-        CSV 한 줄(row)을 기반으로 process_controller 에 전달할 params dict 생성.
-        - CSV 컬럼이 없으면 현재 UI 값을 사용(폴백)
-        - CSV 컬럼 이름 예시는 아래와 같이 가정:
-          Ar_sccm, O2_sccm, Working_mTorr, RF_W, DC_W,
-          Shutter_min, Process_min, Use_Ar, Use_O2, Use_RF, Use_DC, Process_name
+        sputter_process_recipe.csv 한 줄(row)을 기반으로
+        process_controller 에 전달할 params dict 생성.
+
+        CSV 헤더(예시):
+        #,Process_name,main_shutter,base_pressure,working_pressure,
+        process_time,shutter_delay,Ar,O2,Ar_flow,O2_flow,
+        use_dc_power,dc_power,use_rf_power,rf_power,
+        gun1,gun2,G1 Target,G2 Target
         """
-        # 1) UI 현재 상태를 기본값으로 먼저 읽음
+        # 1) UI 현재 상태를 기본값으로 먼저 읽음 (컬럼이 비어있을 때 폴백용)
         use_ar_gas = self.ui.Ar_gas_radio.isChecked()
         use_o2_gas = self.ui.O2_gas_radio.isChecked()
-        use_rf     = self.ui.rf_power_checkbox.isChecked()
-        use_dc     = self.ui.dc_power_checkbox.isChecked()
 
         def _float_from(text, default=0.0):
             try:
@@ -497,7 +498,16 @@ class MainDialog(QDialog):
             except Exception:
                 return default
 
-        # UI 기본값
+        def _bool_from(v, default=False):
+            if v is None:
+                return default
+            s = str(v).strip().lower()
+            if s == "":
+                return default
+            # 1 / y / yes / true / on 등을 모두 True로 처리
+            return s in ("1", "y", "yes", "true", "t", "on")
+
+        # UI 기본값 (레시피에서 비워두면 이 값 사용)
         ar_flow_ui   = _float_from(self.ui.Ar_flow_edit.toPlainText(), 0.0)
         o2_flow_ui   = _float_from(self.ui.O2_flow_edit.toPlainText(), 0.0)
         work_p_ui    = _float_from(self.ui.working_pressure_edit.toPlainText(), 0.0)
@@ -505,41 +515,95 @@ class MainDialog(QDialog):
         dc_power_ui  = _float_from(self.ui.DC_power_edit.toPlainText(), 0.0)
         sh_delay_ui  = _float_from(self.ui.Shutter_delay_edit.toPlainText(), 0.0)
         proc_time_ui = _float_from(self.ui.process_time_edit.toPlainText(), 0.0)
+        use_g1_ui    = self.ui.G1_checkbox.isChecked()
+        use_g2_ui    = self.ui.G2_checkbox.isChecked()
 
-        # 2) CSV 컬럼이 있으면 덮어쓰기
-        def _bool_from(v, default):
-            if v is None or str(v).strip() == "":
-                return default
-            s = str(v).strip().lower()
-            return s in ("1", "y", "yes", "true", "t")
+        # 2) CSV 컬럼으로 덮어쓰기
+        # 가스 선택
+        use_ar_gas = _bool_from(row.get("Ar"), use_ar_gas)
+        use_o2_gas = _bool_from(row.get("O2"), use_o2_gas)
 
-        use_ar_gas = _bool_from(row.get("Use_Ar"), use_ar_gas)
-        use_o2_gas = _bool_from(row.get("Use_O2"), use_o2_gas)
-        use_rf     = _bool_from(row.get("Use_RF"), use_rf)
-        use_dc     = _bool_from(row.get("Use_DC"), use_dc)
+        # 유량
+        ar_flow = _float_from(row.get("Ar_flow", ar_flow_ui), ar_flow_ui)
+        o2_flow = _float_from(row.get("O2_flow", o2_flow_ui), o2_flow_ui)
 
-        ar_flow   = _float_from(row.get("Ar_sccm", ar_flow_ui),   ar_flow_ui)
-        o2_flow   = _float_from(row.get("O2_sccm", o2_flow_ui),   o2_flow_ui)
-        work_p    = _float_from(row.get("Working_mTorr", work_p_ui), work_p_ui)
-        rf_power  = _float_from(row.get("RF_W", rf_power_ui),     rf_power_ui)
-        dc_power  = _float_from(row.get("DC_W", dc_power_ui),     dc_power_ui)
-        sh_delay  = _float_from(row.get("Shutter_min", sh_delay_ui), sh_delay_ui)
-        proc_time = _float_from(row.get("Process_min", proc_time_ui), proc_time_ui)
+        # 압력 / 시간
+        work_p    = _float_from(row.get("working_pressure", work_p_ui), work_p_ui)
+        proc_time = _float_from(row.get("process_time",    proc_time_ui), proc_time_ui)
+        sh_delay  = _float_from(row.get("shutter_delay",   sh_delay_ui),  sh_delay_ui)
+
+        # 파워 (use_*가 0/false 이면 강제로 0W 처리)
+        use_dc_csv = row.get("use_dc_power")
+        use_rf_csv = row.get("use_rf_power")
+
+        use_dc = _bool_from(use_dc_csv, None)
+        use_rf = _bool_from(use_rf_csv, None)
+
+        dc_power_val = _float_from(row.get("dc_power", dc_power_ui), dc_power_ui)
+        rf_power_val = _float_from(row.get("rf_power", rf_power_ui), rf_power_ui)
+
+        if use_dc is False:
+            dc_power = 0.0
+        else:
+            dc_power = dc_power_val
+
+        if use_rf is False:
+            rf_power = 0.0
+        else:
+            rf_power = rf_power_val
+
+        # Gun 사용 여부 (G1/G2 → gun1/gun2)
+        use_g1 = _bool_from(row.get("gun1"), use_g1_ui)
+        use_g2 = _bool_from(row.get("gun2"), use_g2_ui)
 
         process_name = (row.get("Process_name") or "").strip()
 
+        # 메인 셔터: CSV에 값이 없으면 "process_time > 0" 기준
+        main_shutter = _bool_from(row.get("main_shutter"), (proc_time > 0))
+
+        # 3) selected_gas / mfc_flow 생성 (기존 코드와 동일한 방식)
+        if use_ar_gas and not use_o2_gas:
+            selected_gas = "Ar"
+            mfc_flow = ar_flow
+        elif use_o2_gas and not use_ar_gas:
+            selected_gas = "O2"
+            mfc_flow = o2_flow
+        else:
+            # 둘 다 쓰면 Ar 기준
+            selected_gas = "Ar"
+            mfc_flow = ar_flow
+
+        # RF 보정값은 CSV에 없으므로 UI 값을 그대로 사용
+        offset_text = self.ui.offset_edit.toPlainText().strip()
+        param_text  = self.ui.param_edit.toPlainText().strip()
+        rf_offset = _float_from(offset_text or 6.79, 6.79)
+        rf_param  = _float_from(param_text  or 1.0395, 1.0395)
+
+        # 4) 최종 params (단일 공정 모드와 최대한 동일한 구조)
         params = {
             "use_ar_gas": use_ar_gas,
             "use_o2_gas": use_o2_gas,
             "ar_flow": ar_flow,
             "o2_flow": o2_flow,
-            "working_pressure": work_p,
-            "use_rf": use_rf,
-            "use_dc": use_dc,
-            "rf_power": rf_power,
+
+            "selected_gas": selected_gas,
+            "mfc_flow": mfc_flow,
+
+            # ★ 중요: process_controller 는 sp1_set 키를 사용함
+            "sp1_set": work_p,
+
             "dc_power": dc_power,
+            "rf_power": rf_power,
             "shutter_delay": sh_delay,
             "process_time": proc_time,
+
+            "rf_offset": rf_offset,
+            "rf_param": rf_param,
+
+            "use_g1": use_g1,
+            "use_g2": use_g2,
+
+            "main_shutter": main_shutter,
             "process_name": process_name,
         }
 
