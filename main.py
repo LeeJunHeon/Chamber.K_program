@@ -1,7 +1,9 @@
 import sys
 from functools import partial
 from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop
-from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
+from pathlib import Path
+import csv
 
 from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
@@ -65,6 +67,12 @@ class MainDialog(QDialog):
         self.process_controller.moveToThread(self.process_thread)
 
         self._connect_signals()
+
+        # --- CSV 기반 Process List 상태 ---
+        self.csv_file_path: str | None = None         # 선택한 CSV 파일 전체 경로
+        self.csv_rows: list[dict] = []                # CSV 한 줄 = dict
+        self.csv_index: int = -1                      # 현재 실행 중인 줄 index
+        self.csv_mode: bool = False                  # True면 '리스트 공정 모드'
 
         # --- 모든 스레드 시작 ---
         self.plc_thread.start()
@@ -146,11 +154,22 @@ class MainDialog(QDialog):
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
         self.process_controller.status_message.connect(self.on_status_message)
+        
+        self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
 
     @Slot()
     def _handle_start_process(self):
         if self.process_running:
             QMessageBox.warning(self, "경고", "이미 공정이 진행 중입니다.")
+            return
+        
+        # === 1) CSV 모드인지 먼저 확인 ===
+        if self.csv_file_path:
+            # CSV 로딩 & 리스트 공정 모드 진입
+            if not self._load_csv_process_list():
+                return  # 로딩 실패
+            self.csv_mode = True
+            self._start_next_csv_step()
             return
     
         try:
@@ -240,6 +259,55 @@ class MainDialog(QDialog):
         self.ui.Sputter_Start_Button.setEnabled(False)
         self.ui.Sputter_Stop_Button.setEnabled(True)
 
+    @Slot()
+    def _on_select_csv_clicked(self):
+        """Process List용 CSV 파일 선택."""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "공정 리스트 CSV 선택",
+            "",
+            "CSV Files (*.csv);;All Files (*)"
+        )
+        if not path:
+            return
+
+        # 실제 존재하는지 한번 더 확인(선택 취소 대비)
+        p = Path(path)
+        if not p.exists():
+            QMessageBox.warning(self, "파일 오류", "선택한 CSV 파일을 찾을 수 없습니다.")
+            return
+
+        self.csv_file_path = str(p)
+        # 라벨에 파일명 표시
+        self.ui.process_list_label.setText(f"Process List: {p.name}")
+        log_message_to_monitor("정보", f"CSV 공정 리스트 파일 선택: {p}")
+
+    def _load_csv_process_list(self) -> bool:
+        """
+        self.csv_file_path 에 지정된 CSV를 읽어서
+        self.csv_rows 에 List[dict] 형태로 저장.
+        성공하면 True, 실패하면 False.
+        """
+        if not self.csv_file_path:
+            QMessageBox.warning(self, "CSV 없음", "먼저 CSV 파일을 선택해 주세요.")
+            return False
+
+        try:
+            with open(self.csv_file_path, "r", encoding="utf-8-sig") as f:
+                reader = csv.DictReader(f)
+                rows = [row for row in reader if any(v.strip() for v in row.values())]
+        except Exception as ex:
+            QMessageBox.critical(self, "CSV 읽기 오류", f"CSV 파일을 읽는 중 오류가 발생했습니다.\n\n{ex}")
+            return False
+
+        if not rows:
+            QMessageBox.warning(self, "CSV 비어있음", "CSV 파일에 유효한 공정 행이 없습니다.")
+            return False
+
+        self.csv_rows = rows
+        self.csv_index = -1
+        return True
+
     @Slot(str)
     def _handle_connection_failure(self, error_message):
         QMessageBox.critical(self, "연결 실패", error_message)
@@ -288,9 +356,20 @@ class MainDialog(QDialog):
         
     def _handle_process_finished(self):
         self.on_status_message("정보", "프로세스 종료중...")
+
+        # 1) CSV 리스트 공정 모드인 경우 → 다음 행 실행
+        if self.csv_mode and self.csv_rows:
+            # 현재 단계가 실패로 끝났는지 여부에 따라
+            # 전체 중단할지, 다음 단계로 갈지 분기하고 싶다면
+            # 여기서 추가 로직을 넣으면 됩니다.
+            self.process_running = False
+            self._start_next_csv_step()
+            return
+
         self.process_running = False
         self.ui.Sputter_Start_Button.setEnabled(True)
         self.ui.Sputter_Stop_Button.setEnabled(False)
+        self.update_stage_monitor("공정 종료")
         
         # ▼ 추가: 파워/리플렉트 표시값 초기화
         self.ui.Power_edit.setPlainText("0.0")
@@ -396,6 +475,105 @@ class MainDialog(QDialog):
             event.accept()
         else:
             event.ignore()
+
+    # ============= csv 공정 =============
+    def _build_params_from_csv_row(self, row: dict) -> dict:
+        """
+        CSV 한 줄(row)을 기반으로 process_controller 에 전달할 params dict 생성.
+        - CSV 컬럼이 없으면 현재 UI 값을 사용(폴백)
+        - CSV 컬럼 이름 예시는 아래와 같이 가정:
+          Ar_sccm, O2_sccm, Working_mTorr, RF_W, DC_W,
+          Shutter_min, Process_min, Use_Ar, Use_O2, Use_RF, Use_DC, Process_name
+        """
+        # 1) UI 현재 상태를 기본값으로 먼저 읽음
+        use_ar_gas = self.ui.Ar_gas_radio.isChecked()
+        use_o2_gas = self.ui.O2_gas_radio.isChecked()
+        use_rf     = self.ui.rf_power_checkbox.isChecked()
+        use_dc     = self.ui.dc_power_checkbox.isChecked()
+
+        def _float_from(text, default=0.0):
+            try:
+                return float(str(text).strip())
+            except Exception:
+                return default
+
+        # UI 기본값
+        ar_flow_ui   = _float_from(self.ui.Ar_flow_edit.toPlainText(), 0.0)
+        o2_flow_ui   = _float_from(self.ui.O2_flow_edit.toPlainText(), 0.0)
+        work_p_ui    = _float_from(self.ui.working_pressure_edit.toPlainText(), 0.0)
+        rf_power_ui  = _float_from(self.ui.RF_power_edit.toPlainText(), 0.0)
+        dc_power_ui  = _float_from(self.ui.DC_power_edit.toPlainText(), 0.0)
+        sh_delay_ui  = _float_from(self.ui.Shutter_delay_edit.toPlainText(), 0.0)
+        proc_time_ui = _float_from(self.ui.process_time_edit.toPlainText(), 0.0)
+
+        # 2) CSV 컬럼이 있으면 덮어쓰기
+        def _bool_from(v, default):
+            if v is None or str(v).strip() == "":
+                return default
+            s = str(v).strip().lower()
+            return s in ("1", "y", "yes", "true", "t")
+
+        use_ar_gas = _bool_from(row.get("Use_Ar"), use_ar_gas)
+        use_o2_gas = _bool_from(row.get("Use_O2"), use_o2_gas)
+        use_rf     = _bool_from(row.get("Use_RF"), use_rf)
+        use_dc     = _bool_from(row.get("Use_DC"), use_dc)
+
+        ar_flow   = _float_from(row.get("Ar_sccm", ar_flow_ui),   ar_flow_ui)
+        o2_flow   = _float_from(row.get("O2_sccm", o2_flow_ui),   o2_flow_ui)
+        work_p    = _float_from(row.get("Working_mTorr", work_p_ui), work_p_ui)
+        rf_power  = _float_from(row.get("RF_W", rf_power_ui),     rf_power_ui)
+        dc_power  = _float_from(row.get("DC_W", dc_power_ui),     dc_power_ui)
+        sh_delay  = _float_from(row.get("Shutter_min", sh_delay_ui), sh_delay_ui)
+        proc_time = _float_from(row.get("Process_min", proc_time_ui), proc_time_ui)
+
+        process_name = (row.get("Process_name") or "").strip()
+
+        params = {
+            "use_ar_gas": use_ar_gas,
+            "use_o2_gas": use_o2_gas,
+            "ar_flow": ar_flow,
+            "o2_flow": o2_flow,
+            "working_pressure": work_p,
+            "use_rf": use_rf,
+            "use_dc": use_dc,
+            "rf_power": rf_power,
+            "dc_power": dc_power,
+            "shutter_delay": sh_delay,
+            "process_time": proc_time,
+            "process_name": process_name,
+        }
+
+        return params
+    
+    def _start_next_csv_step(self):
+        """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료."""
+        self.csv_index += 1
+
+        # 모든 행을 다 돌았으면 종료
+        if self.csv_index >= len(self.csv_rows):
+            QMessageBox.information(self, "CSV 공정 완료", "CSV에 있는 모든 공정을 완료했습니다.")
+            self.csv_mode = False
+            self.csv_rows = []
+            self.csv_index = -1
+            self.process_running = False
+            self.ui.Sputter_Start_Button.setEnabled(True)
+            self.ui.Sputter_Stop_Button.setEnabled(False)
+            return
+
+        row = self.csv_rows[self.csv_index]
+        params = self._build_params_from_csv_row(row)
+
+        # 로그/스테이지 표시
+        name = params.get("process_name") or f"STEP {self.csv_index + 1}/{len(self.csv_rows)}"
+        log_message_to_monitor("Process", f"CSV 공정 리스트 {self.csv_index + 1}/{len(self.csv_rows)} 실행: {name}")
+        self.update_stage_monitor(name)
+
+        # 실제 공정 시작
+        self.process_running = True
+        self.ui.Sputter_Start_Button.setEnabled(False)
+        self.ui.Sputter_Stop_Button.setEnabled(True)
+        self.process_controller.start_process_flow(params)
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
