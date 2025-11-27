@@ -563,6 +563,12 @@ class MainDialog(QDialog):
         row = self.csv_rows[self.csv_index]
         params = self._build_params_from_csv_row(row)
 
+        # ★★★ 이 CSV STEP 전용 로그 파일 생성 ★★★
+        set_process_log_file(prefix="CHK")
+        step_no = self.csv_index + 1
+        total   = len(self.csv_rows)
+        log_message_to_monitor("정보", f"=== CHK CSV STEP {step_no}/{total} 시작 ===")
+
         # 로그/스테이지 표시
         name = params.get("process_name") or f"STEP {self.csv_index + 1}/{len(self.csv_rows)}"
         log_message_to_monitor("Process", f"CSV 공정 리스트 {self.csv_index + 1}/{len(self.csv_rows)} 실행: {name}")
