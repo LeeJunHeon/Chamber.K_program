@@ -227,6 +227,12 @@ class MainDialog(QDialog):
                 selected_gas = "Ar"
                 mfc_flow = ar_flow
 
+            # --- G1/G2 사용 여부 + 타겟 이름 ---
+            use_g1_flag = self.ui.G1_checkbox.isChecked()
+            use_g2_flag = self.ui.G2_checkbox.isChecked()
+            g1_target_name = self.ui.G1_edit.toPlainText().strip()
+            g2_target_name = self.ui.G2_edit.toPlainText().strip()
+
             params = {
                 # ▼ 새 다중 가스 파라미터
                 "use_ar_gas": use_ar,
@@ -248,6 +254,12 @@ class MainDialog(QDialog):
                 "rf_param": float(param_text or 1.0395),
                 "use_g1": self.ui.G1_checkbox.isChecked(),
                 "use_g2": self.ui.G2_checkbox.isChecked(),
+
+                # ▼ G1/G2 사용 여부 + 타겟 이름
+                "use_g1": use_g1_flag,
+                "use_g2": use_g2_flag,
+                "g1_target_name": g1_target_name,
+                "g2_target_name": g2_target_name,
             }
             params['main_shutter'] = (params['process_time'] > 0)
 
@@ -266,9 +278,6 @@ class MainDialog(QDialog):
         # ★ 수동 공정도 CSV 공정과 동일한 로그 포맷을 위해
         #    이번 공정 파라미터를 저장 + 평균값 누적 초기화
         self._last_params = dict(params)
-        # 수동 공정에는 타겟 이름이 없으니 빈 문자열로 맞춰둠
-        self._last_params.setdefault("g1_target_name", "")
-        self._last_params.setdefault("g2_target_name", "")
         self._reset_chk_stats()
         
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
@@ -419,20 +428,9 @@ class MainDialog(QDialog):
         ms_bool = bool(params.get("main_shutter"))
         main_shutter = "T" if ms_bool else "F"
 
-        # --- G1/G2 타겟 + 사용 여부 ---
-        use_g1 = bool(params.get("use_g1"))
-        use_g2 = bool(params.get("use_g2"))
-        g1_name = (params.get("g1_target_name") or "").strip()
-        g2_name = (params.get("g2_target_name") or "").strip()
-
-        def _fmt_target(use: bool, name: str) -> str:
-            flag = "T" if use else "F"
-            if name:
-                return f"{flag}:{name}"
-            return flag
-
-        g1_target = _fmt_target(use_g1, g1_name)
-        g2_target = _fmt_target(use_g2, g2_name)
+        # --- G1/G2 타겟 이름 (포맷 없이 그대로) ---
+        g1_target = (params.get("g1_target_name") or "").strip()
+        g2_target = (params.get("g2_target_name") or "").strip()
 
         # --- 평균값 (없으면 레시피/입력값으로 폴백) ---
         ar_flow   = _avg(self._sum_ar,  self._cnt_ar,  params.get("ar_flow"))
@@ -451,8 +449,8 @@ class MainDialog(QDialog):
             "Process Name":     process_name,
             "Main Shutter":     main_shutter,      # ← 항상 T / F
             "Shutter Delay":    shutter_delay,     # ← 입력 분 값
-            "G1 Target":        g1_target,         # ← 예: "T:VO2"
-            "G2 Target":        g2_target,         # ← 예: "F:TiO2"
+            "G1 Target":        g1_target,         # ← 입력/CSV 문자열 그대로
+            "G2 Target":        g2_target,         # ← 입력/CSV 문자열 그대로
             "Ar flow":          ar_flow,           # ← 전체 공정 평균
             "O2 flow":          o2_flow,           # ← 전체 공정 평균
             "Working Pressure": work_p,            # ← 전체 공정 평균
@@ -463,6 +461,7 @@ class MainDialog(QDialog):
             "DC: I":            dc_i,              # ← 전체 공정 평균
             "DC: P":            dc_p,              # ← 전체 공정 평균
         }
+
         return row
     
     def _reset_chk_stats(self):
@@ -873,6 +872,14 @@ class MainDialog(QDialog):
             self.ui.G1_checkbox.setChecked(bool(use_g1))
         if use_g2 is not None:
             self.ui.G2_checkbox.setChecked(bool(use_g2))
+
+        # G1/G2 타겟 이름 UI 반영
+        g1_name = params.get("g1_target_name")
+        g2_name = params.get("g2_target_name")
+        if g1_name is not None:
+            self.ui.G1_edit.setPlainText(str(g1_name))
+        if g2_name is not None:
+            self.ui.G2_edit.setPlainText(str(g2_name))
     
     def _start_next_csv_step(self):
         """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료."""
