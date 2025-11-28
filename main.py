@@ -81,6 +81,9 @@ class MainDialog(QDialog):
         # --- ChK CSV용 평균값 누적 변수 초기화 ---
         self._reset_chk_stats()
 
+        # CSV 상태 아래에 추가
+        self._last_params: dict | None = None
+
         # --- 모든 스레드 시작 ---
         self.plc_thread.start()
         self.mfc_thread.start()
