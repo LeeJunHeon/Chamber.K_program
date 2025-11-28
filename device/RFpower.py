@@ -131,7 +131,22 @@ class RFPowerController(QObject):
 
     @Slot()
     def stop_process(self):
-        if self._is_ramping_down or not self._is_running: return
+        # 이미 램프다운 중이면 두 번 하지 않음
+        if self._is_ramping_down:
+            return
+
+        # 🔵 아직 RF가 한 번도 켜진 적 없는 상태에서 stop이 들어온 경우
+        if not self._is_running:
+            # ProcessController 쪽에서는 ramp_down_finished를 기다리고 있기 때문에
+            # 여기서 바로 "아무것도 할 것 없음"을 알려주고 종료 신호를 보낸다.
+            self.status_message.emit("RFpower", "이미 정지 상태 → 램프다운 없이 종료")
+            # UI도 안전하게 0으로 정리
+            self.update_rf_status_display.emit(0.0, 0.0)
+            # ★ 중요: ramp_down_finished를 emit 해서 wait 루프를 깨운다
+            self.ramp_down_finished.emit()
+            return
+
+        # 🔵 실제로 동작 중일 때는 기존 로직대로 램프다운
         self.status_message.emit("RFpower", "정지 신호 수신됨.")
         self._is_running = False
         self.state = "IDLE"
