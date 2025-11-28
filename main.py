@@ -81,6 +81,7 @@ class MainDialog(QDialog):
 
         # --- ChK CSV용 평균값 누적 변수 초기화 ---
         self._reset_chk_stats()
+        self._chk_process_ok: bool = False  # 이번 공정이 정상 종료되었는지 여부
 
         # CSV 상태 아래에 추가
         self._last_params: dict | None = None
@@ -280,6 +281,7 @@ class MainDialog(QDialog):
         #    이번 공정 파라미터를 저장 + 평균값 누적 초기화
         self._last_params = dict(params)
         self._reset_chk_stats()
+        self._chk_process_ok = True   # 이번 공정은 정상 종료로 가정하고 시작
         
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
         set_process_log_file(prefix="CHK")
@@ -352,12 +354,15 @@ class MainDialog(QDialog):
     @Slot(str)
     def _handle_connection_failure(self, error_message):
         QMessageBox.critical(self, "연결 실패", error_message)
+        self._chk_process_ok = False  # 연결 실패도 실패 처리
         self._handle_process_finished()
 
     def on_status_message(self, level, message):
         log_message_to_monitor(level, message)
         if level == "재시작":
             log_message_to_monitor("재시작", "모든 공정을 중지합니다. 다시 시작하십시오.")
+            # 재시작으로 중단된 공정도 정상 종료가 아니라고 간주
+            self._chk_process_ok = False
             if self.process_controller and self.process_running:
                 self.request_process_stop.emit()   
 
@@ -393,6 +398,8 @@ class MainDialog(QDialog):
     @Slot()
     def _on_sputter_stop_clicked(self):
         """STOP 버튼 공통 처리: 현재 STEP 중단 + CSV 모드면 전체 리스트 취소."""
+        # STOP으로 중단된 공정은 정상 종료로 보지 않는다.
+        self._chk_process_ok = False
         self.on_status_message("경고", "STOP 버튼 클릭됨")
 
         # ✅ CSV 리스트 공정 중이면, 이후 STEP들을 모두 취소하도록 플래그 설정
@@ -475,14 +482,14 @@ class MainDialog(QDialog):
         return row
     
     def _reset_chk_stats(self):
-        """ChK CSV 평균 계산용 누적값 초기화."""
-        # 가스 유량
+        """ChK CSV 평균 계산용 누적값 + 샘플링 상태 초기화."""
+        # 가스 유량(Ar/O2)
         self._sum_ar = 0.0
-        self._cnt_ar = 0
         self._sum_o2 = 0.0
+        self._cnt_ar = 0
         self._cnt_o2 = 0
 
-        # 작업 압력
+        # Working Pressure
         self._sum_wp = 0.0
         self._cnt_wp = 0
 
@@ -495,25 +502,33 @@ class MainDialog(QDialog):
         self._sum_dc_p = 0.0
         self._sum_dc_v = 0.0
         self._sum_dc_i = 0.0
-        self._cnt_dc = 0
+        self._cnt_dc  = 0
+
+        # Shutter delay → Process time 구간만 누적하기 위한 플래그
+        self._chk_sampling_enabled: bool = False
+        self._chk_sampling_started: bool = False
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
         self.on_status_message("정보", "프로세스 종료중.")
 
-        # ★ 공정이 끝날 때마다 ChK_log.csv 에 한 줄 추가
+        # ★ 정상적으로 완료된 공정만 ChK_log.csv 에 한 줄 추가
         try:
-            row = self._build_chk_csv_row()
-            ok = append_chk_csv_row(row)
-            if ok:
-                log_message_to_monitor("정보", "ChK CSV 로그 저장 완료")
+            if getattr(self, "_chk_process_ok", False):
+                row = self._build_chk_csv_row()
+                ok = append_chk_csv_row(row)
+                if ok:
+                    log_message_to_monitor("정보", "ChK CSV 로그 저장 완료")
+                else:
+                    log_message_to_monitor("경고", "ChK CSV 로그 저장 실패")
             else:
-                log_message_to_monitor("경고", "ChK CSV 로그 저장 실패")
+                log_message_to_monitor("정보", "이번 공정은 비정상 종료 → ChK CSV에 기록하지 않음")
         except Exception as e:
             log_message_to_monitor("경고", f"ChK CSV 로그 처리 중 예외 발생: {e!r}")
         finally:
-            # 다음 공정을 위해 평균 누적값 초기화
+            # 다음 공정을 위해 평균 누적값/상태 초기화
             self._reset_chk_stats()
+            self._chk_process_ok = False
 
         # ✅ 1) CSV 리스트 공정 모드인 경우
         if self.csv_mode and self.csv_rows:
@@ -574,12 +589,18 @@ class MainDialog(QDialog):
     @Slot(str)
     def _handle_critical_error(self, error_message):
         QMessageBox.critical(self, "치명적 오류", f"장비와의 통신에 문제가 발생하여 공정을 중단했습니다.\n\n사유: {error_message}")
+        self._chk_process_ok = False  # 에러로 끝난 공정은 실패
         self._handle_process_finished()
 
     def update_stage_monitor(self, stage_text):
         self.ui.stage_monitor.setPlainText(stage_text)
 
     def update_shutter_delay_timer(self, seconds_left):
+        # Shutter delay 카운트다운이 처음 시작되는 시점부터 샘플링 시작
+        if not getattr(self, "_chk_sampling_started", False):
+            self._chk_sampling_started = True
+            self._chk_sampling_enabled = True
+
         m, s = divmod(seconds_left, 60)
         text = f"{m:02d}:{s:02d}"
         self.ui.Shutter_delay_edit.setPlainText(text)
@@ -589,65 +610,66 @@ class MainDialog(QDialog):
         text = f"{m:02d}:{s:02d}"
         self.ui.process_time_edit.setPlainText(text)
 
-    @Slot(str, float)
-    def update_mfc_flow_display(self, gas, value):
-        # 평균 계산용 누적
-        if gas == "Ar":
-            self._sum_ar += float(value)
-            self._cnt_ar += 1
-            edit = self.ui.Ar_flow_edit
-        else:
-            self._sum_o2 += float(value)
-            self._cnt_o2 += 1
-            edit = self.ui.O2_flow_edit
+        # process time이 끝났으면 샘플링 종료
+        if seconds_left <= 0:
+            self._chk_sampling_enabled = False
 
-        # UI 표시
+    def update_mfc_flow_display(self, gas, value):
+        edit = self.ui.Ar_flow_edit if gas == "Ar" else self.ui.O2_flow_edit
         edit.setPlainText(f"{value:.2f}")
 
+        # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
+        if not getattr(self, "_chk_sampling_enabled", False):
+            return
+
+        try:
+            v = float(value)
+        except Exception:
+            return
+
+        if gas == "Ar":
+            self._sum_ar += v
+            self._cnt_ar += 1
+        elif gas == "O2":
+            self._sum_o2 += v
+            self._cnt_o2 += 1
+
     def update_mfc_pressure_display(self, pressure):
+        self.ui.working_pressure_edit.setPlainText("ERROR" if pressure is None else str(pressure))
+
+        if not getattr(self, "_chk_sampling_enabled", False):
+            return
+
         if pressure is not None:
             try:
                 v = float(pressure)
             except Exception:
-                v = None
-            else:
-                self._sum_wp += v
-                self._cnt_wp += 1
+                return
+            self._sum_wp += v
+            self._cnt_wp += 1
 
-        self.ui.working_pressure_edit.setPlainText("ERROR" if pressure is None else str(pressure))
+    def update_dc_status_display(self, voltage, current):
+        self.ui.Voltage_edit.setPlainText(f"{voltage:.2f}")
+        self.ui.Current_edit.setPlainText(f"{current:.3f}")
+        power = voltage * current
+        self.ui.Power_edit.setPlainText(f"{power:.2f}")
 
-    def update_dc_status_display(self, power, voltage, current):
-        if None not in (power, voltage, current):
-            try:
-                p = float(power)
-                v = float(voltage)
-                i = float(current)
-            except Exception:
-                pass
-            else:
-                self._sum_dc_p += p
-                self._sum_dc_v += v
-                self._sum_dc_i += i
-                self._cnt_dc += 1
+        # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
+        if getattr(self, "_chk_sampling_enabled", False):
+            self._sum_dc_p += power
+            self._sum_dc_v += voltage
+            self._sum_dc_i += current
+            self._cnt_dc += 1
 
-        self.ui.Power_edit.setPlainText("ERROR" if power is None else f"{power:.3f}")
-        self.ui.Voltage_edit.setPlainText("ERROR" if voltage is None else f"{voltage:.3f}")
-        self.ui.Current_edit.setPlainText("ERROR" if current is None else f"{current:.3f}")
+    def update_rf_status_display(self, forward_power, reflected_power):
+        self.ui.for_p_edit.setPlainText(f"{forward_power:.2f}")
+        self.ui.ref_p_edit.setPlainText(f"{reflected_power:.2f}")
 
-    def update_rf_status_display(self, for_power, ref_power):
-        if None not in (for_power, ref_power):
-            try:
-                f = float(for_power)
-                r = float(ref_power)
-            except Exception:
-                pass
-            else:
-                self._sum_rf_for += f
-                self._sum_rf_ref += r
-                self._cnt_rf += 1
-
-        self.ui.for_p_edit.setPlainText("ERROR" if for_power is None else f"{for_power:.2f}")
-        self.ui.ref_p_edit.setPlainText("ERROR" if ref_power is None else f"{ref_power:.2f}")
+        # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
+        if getattr(self, "_chk_sampling_enabled", False):
+            self._sum_rf_for += forward_power
+            self._sum_rf_ref += reflected_power
+            self._cnt_rf += 1
 
     @Slot(bool)
     def _on_ui_door_toggled(self, checked: bool):
@@ -957,6 +979,7 @@ class MainDialog(QDialog):
         #    파라미터 저장 + 평균값 누적 초기화
         self._last_params = dict(params)
         self._reset_chk_stats()
+        self._chk_process_ok = True   # 이 STEP이 정상 종료했을 때만 CSV에 기록
 
         # ✅ 이 단계의 파라미터를 UI에 반영 (CH1/CH2처럼 보이게)
         self._apply_params_to_ui(params)
