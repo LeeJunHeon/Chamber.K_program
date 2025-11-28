@@ -78,6 +78,9 @@ class MainDialog(QDialog):
         self.csv_index: int = -1                      # 현재 실행 중인 줄 index
         self.csv_mode: bool = False                  # True면 '리스트 공정 모드'
 
+        # --- ChK CSV용 평균값 누적 변수 초기화 ---
+        self._reset_chk_stats()
+
         # --- 모든 스레드 시작 ---
         self.plc_thread.start()
         self.mfc_thread.start()
@@ -374,76 +377,117 @@ class MainDialog(QDialog):
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _build_chk_csv_row(self) -> dict:
         """
-        현재 UI에 표시되어 있는 값들을 이용해 ChK_log.csv에 기록할 row 생성.
-        - 평균값은 아직 계산 안 하고, 공정 종료 시점 값 그대로 사용.
+        현재 공정(수동 Start / CSV STEP 공통)에 대해,
+        입력 파라미터(self._last_params) + 진행 동안 측정된 평균값으로
+        ChK_log.csv에 기록할 row 생성.
         """
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        process_name = self.current_process_name or ""
+        # 공정 이름: 수동/CSV 공통
+        params = self._last_params or {}
+        process_name = self.current_process_name or params.get("process_name", "")
 
-        # 작은 헬퍼: QPlainTextEdit에서 텍스트 안전하게 꺼내기
-        def _get_text(widget_name: str) -> str:
-            w = getattr(self.ui, widget_name, None)
-            if w is None:
+        def _fmt_min(v) -> str:
+            """분 단위 값 -> 문자열 (빈값 허용)"""
+            if v is None:
                 return ""
             try:
-                return w.toPlainText().strip()
+                return f"{float(v):.3f}"
             except Exception:
                 return ""
 
-        shutter_delay = _get_text("Shutter_delay_edit")
-        process_time  = _get_text("process_time_edit")
+        def _fmt_float(v) -> str:
+            if v is None:
+                return ""
+            try:
+                return f"{float(v):.3f}"
+            except Exception:
+                return ""
 
-        # Main Shutter: process_time > 0 이면 ON 으로 간주
-        try:
-            pt_val = float(process_time or 0)
-        except Exception:
-            pt_val = 0.0
-        main_shutter = "ON" if pt_val > 0 else ""
+        def _avg(sum_, cnt) -> str:
+            if cnt <= 0:
+                return ""
+            return _fmt_float(sum_ / cnt)
 
-        # 타겟 사용 여부 (체크박스)
-        try:
-            g1_on = self.ui.G1_checkbox.isChecked()
-        except Exception:
-            g1_on = False
-        try:
-            g2_on = self.ui.G2_checkbox.isChecked()
-        except Exception:
-            g2_on = False
+        # --- Shutter Delay / Process Time : '입력값(분)' 사용 ---
+        sh_delay_val = params.get("shutter_delay")
+        proc_time_val = params.get("process_time")
+        shutter_delay = _fmt_min(sh_delay_val)
+        process_time  = _fmt_min(proc_time_val)
 
-        g1_target = "ON" if g1_on else ""
-        g2_target = "ON" if g2_on else ""
+        # --- Main Shutter : T/F (레시피/입력 기준) ---
+        ms_bool = bool(params.get("main_shutter"))
+        main_shutter = "T" if ms_bool else "F"
 
-        # 가스/압력/파워 값들
-        ar_flow   = _get_text("Ar_flow_edit")
-        o2_flow   = _get_text("O2_flow_edit")
-        work_p    = _get_text("working_pressure_edit")
+        # --- G1/G2 타겟 + 사용 여부 ---
+        use_g1 = bool(params.get("use_g1"))
+        use_g2 = bool(params.get("use_g2"))
+        g1_name = (params.get("g1_target_name") or "").strip()
+        g2_name = (params.get("g2_target_name") or "").strip()
 
-        rf_for_p  = _get_text("for_p_edit")
-        rf_ref_p  = _get_text("ref_p_edit")
+        def _fmt_target(use: bool, name: str) -> str:
+            flag = "T" if use else "F"
+            if name:
+                return f"{flag}:{name}"
+            return flag
 
-        dc_p      = _get_text("Power_edit")
-        dc_v      = _get_text("Voltage_edit")
-        dc_i      = _get_text("Current_edit")
+        g1_target = _fmt_target(use_g1, g1_name)
+        g2_target = _fmt_target(use_g2, g2_name)
+
+        # --- 평균값 (flow / 압력 / RF / DC) ---
+        ar_flow   = _avg(self._sum_ar,  self._cnt_ar)
+        o2_flow   = _avg(self._sum_o2,  self._cnt_o2)
+        work_p    = _avg(self._sum_wp,  self._cnt_wp)
+
+        rf_for_p  = _avg(self._sum_rf_for, self._cnt_rf)
+        rf_ref_p  = _avg(self._sum_rf_ref, self._cnt_rf)
+
+        dc_p      = _avg(self._sum_dc_p, self._cnt_dc)
+        dc_v      = _avg(self._sum_dc_v, self._cnt_dc)
+        dc_i      = _avg(self._sum_dc_i, self._cnt_dc)
 
         row = {
-            "Timestamp":      now,
-            "Process Name":   process_name,
-            "Main Shutter":   main_shutter,
-            "Shutter Delay":  shutter_delay,
-            "G1 Target":      g1_target,
-            "G2 Target":      g2_target,
-            "Ar flow":        ar_flow,
-            "O2 flow":        o2_flow,
-            "Working Pressure": work_p,
-            "Process Time":   process_time,
-            "RF: For.P":      rf_for_p,
-            "RF: Ref. P":     rf_ref_p,
-            "DC: V":          dc_v,
-            "DC: I":          dc_i,
-            "DC: P":          dc_p,
+            "Timestamp":        now,
+            "Process Name":     process_name,
+            "Main Shutter":     main_shutter,      # ← 항상 T/F
+            "Shutter Delay":    shutter_delay,     # ← 입력 분
+            "G1 Target":        g1_target,         # ← 예: "T:VO2"
+            "G2 Target":        g2_target,         # ← 예: "F:TiO2"
+            "Ar flow":          ar_flow,           # ← 전체 시간 평균
+            "O2 flow":          o2_flow,           # ← 전체 시간 평균
+            "Working Pressure": work_p,            # ← 전체 시간 평균
+            "Process Time":     process_time,      # ← 입력 분
+            "RF: For.P":        rf_for_p,          # ← 전체 시간 평균
+            "RF: Ref. P":       rf_ref_p,          # ← 전체 시간 평균
+            "DC: V":            dc_v,              # ← 전체 시간 평균
+            "DC: I":            dc_i,              # ← 전체 시간 평균
+            "DC: P":            dc_p,              # ← 전체 시간 평균
         }
         return row
+    
+    def _reset_chk_stats(self):
+        """ChK CSV 평균 계산용 누적값 초기화."""
+        # 가스 유량
+        self._sum_ar = 0.0
+        self._cnt_ar = 0
+        self._sum_o2 = 0.0
+        self._cnt_o2 = 0
+
+        # 작업 압력
+        self._sum_wp = 0.0
+        self._cnt_wp = 0
+
+        # RF 파워(for/ref)
+        self._sum_rf_for = 0.0
+        self._sum_rf_ref = 0.0
+        self._cnt_rf = 0
+
+        # DC 파워(V/I/P)
+        self._sum_dc_p = 0.0
+        self._sum_dc_v = 0.0
+        self._sum_dc_i = 0.0
+        self._cnt_dc = 0
+    # ==================== ChK CSV 로그용 헬퍼 ====================
         
     def _handle_process_finished(self):
         self.on_status_message("정보", "프로세스 종료중...")
@@ -508,18 +552,61 @@ class MainDialog(QDialog):
 
     @Slot(str, float)
     def update_mfc_flow_display(self, gas, value):
-        edit = self.ui.Ar_flow_edit if gas == "Ar" else self.ui.O2_flow_edit
+        # 평균 계산용 누적
+        if gas == "Ar":
+            self._sum_ar += float(value)
+            self._cnt_ar += 1
+            edit = self.ui.Ar_flow_edit
+        else:
+            self._sum_o2 += float(value)
+            self._cnt_o2 += 1
+            edit = self.ui.O2_flow_edit
+
+        # UI 표시
         edit.setPlainText(f"{value:.2f}")
 
     def update_mfc_pressure_display(self, pressure):
+        if pressure is not None:
+            try:
+                v = float(pressure)
+            except Exception:
+                v = None
+            else:
+                self._sum_wp += v
+                self._cnt_wp += 1
+
         self.ui.working_pressure_edit.setPlainText("ERROR" if pressure is None else str(pressure))
 
     def update_dc_status_display(self, power, voltage, current):
+        if None not in (power, voltage, current):
+            try:
+                p = float(power)
+                v = float(voltage)
+                i = float(current)
+            except Exception:
+                pass
+            else:
+                self._sum_dc_p += p
+                self._sum_dc_v += v
+                self._sum_dc_i += i
+                self._cnt_dc += 1
+
         self.ui.Power_edit.setPlainText("ERROR" if power is None else f"{power:.3f}")
         self.ui.Voltage_edit.setPlainText("ERROR" if voltage is None else f"{voltage:.3f}")
         self.ui.Current_edit.setPlainText("ERROR" if current is None else f"{current:.3f}")
 
     def update_rf_status_display(self, for_power, ref_power):
+        if None not in (for_power, ref_power):
+            try:
+                f = float(for_power)
+                r = float(ref_power)
+            except Exception:
+                pass
+            else:
+                self._sum_rf_for += f
+                self._sum_rf_ref += r
+                self._cnt_rf += 1
+
         self.ui.for_p_edit.setPlainText("ERROR" if for_power is None else f"{for_power:.2f}")
         self.ui.ref_p_edit.setPlainText("ERROR" if ref_power is None else f"{ref_power:.2f}")
 
