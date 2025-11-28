@@ -77,6 +77,7 @@ class MainDialog(QDialog):
         self.csv_rows: list[dict] = []                # CSV 한 줄 = dict
         self.csv_index: int = -1                      # 현재 실행 중인 줄 index
         self.csv_mode: bool = False                  # True면 '리스트 공정 모드'
+        self.csv_cancelled: bool = False              # ✅ STOP 시 리스트 전체 취소 플래그
 
         # --- ChK CSV용 평균값 누적 변수 초기화 ---
         self._reset_chk_stats()
@@ -110,8 +111,8 @@ class MainDialog(QDialog):
         self.ui.Sputter_Start_Button.clicked.connect(self._handle_start_process)
         #self.ui.Sputter_Stop_Button.clicked.connect(self._handle_sputter_stop)
         self.ui.ALL_STOP_button.clicked.connect(self.plc_controller.on_emergency_stop)
-        # UI에서 'Sputter 중지' 버튼을 누르면, 새로 만든 신호를 통해 비동기적으로 중단 요청
-        self.ui.Sputter_Stop_Button.clicked.connect(self.request_process_stop)
+        # ✅ STOP 버튼 전용 핸들러에서 CSV 전체 취소 여부를 먼저 표시
+        self.ui.Sputter_Stop_Button.clicked.connect(self._on_sputter_stop_clicked)
 
         # PLC 버튼 연결
         for btn_name in PLC_COIL_MAP.keys():
@@ -389,10 +390,19 @@ class MainDialog(QDialog):
         else:
             log_message_to_monitor("WARN", f"[update_ui_button_display] '{button_name}' 버튼이 UI에 없습니다.")
 
-    # def _handle_sputter_stop(self):
-    #     self.on_status_message("경고", "STOP 버튼 클릭됨")
-    #     if self.process_controller and self.process_running:
-    #         self.process_controller.stop_process()
+    @Slot()
+    def _on_sputter_stop_clicked(self):
+        """STOP 버튼 공통 처리: 현재 STEP 중단 + CSV 모드면 전체 리스트 취소."""
+        self.on_status_message("경고", "STOP 버튼 클릭됨")
+
+        # ✅ CSV 리스트 공정 중이면, 이후 STEP들을 모두 취소하도록 플래그 설정
+        if self.csv_mode:
+            self.csv_cancelled = True
+            log_message_to_monitor("정보", "사용자 STOP → CSV 리스트 전체 취소 플래그 설정")
+
+        # 실제 공정이 돌고 있으면 프로세스 스레드 쪽에 중단 요청
+        if self.process_controller and self.process_running:
+            self.request_process_stop.emit()
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _build_chk_csv_row(self) -> dict:
@@ -486,10 +496,10 @@ class MainDialog(QDialog):
         self._sum_dc_v = 0.0
         self._sum_dc_i = 0.0
         self._cnt_dc = 0
+
     # ==================== ChK CSV 로그용 헬퍼 ====================
-        
     def _handle_process_finished(self):
-        self.on_status_message("정보", "프로세스 종료중...")
+        self.on_status_message("정보", "프로세스 종료중.")
 
         # ★ 공정이 끝날 때마다 ChK_log.csv 에 한 줄 추가
         try:
@@ -505,15 +515,42 @@ class MainDialog(QDialog):
             # 다음 공정을 위해 평균 누적값 초기화
             self._reset_chk_stats()
 
-        # 1) CSV 리스트 공정 모드인 경우 → 다음 행 실행
+        # ✅ 1) CSV 리스트 공정 모드인 경우
         if self.csv_mode and self.csv_rows:
-            # 현재 단계가 실패로 끝났는지 여부에 따라
-            # 전체 중단할지, 다음 단계로 갈지 분기하고 싶다면
-            # 여기서 추가 로직을 넣으면 됩니다.
             self.process_running = False
+
+            # ✅ (1) 사용자가 STOP을 눌러 전체 리스트 취소한 경우
+            if getattr(self, "csv_cancelled", False):
+                # 플래그 리셋
+                self.csv_cancelled = False
+
+                # CSV 상태 전체 초기화
+                self.csv_mode = False
+                self.csv_rows = []
+                self.csv_index = -1
+
+                # UI 버튼/표시 초기화
+                self.ui.Sputter_Start_Button.setEnabled(True)
+                self.ui.Sputter_Stop_Button.setEnabled(False)
+                self.update_stage_monitor("CSV 공정 취소됨")
+
+                # 단일 공정 종료와 동일하게 표시값 리셋
+                self.ui.Power_edit.setPlainText("0.0")
+                self.ui.Voltage_edit.setPlainText("0.0")
+                self.ui.Current_edit.setPlainText("0.0")
+                self.ui.for_p_edit.setPlainText("0.0")
+                self.ui.ref_p_edit.setPlainText("0.0")
+                self.ui.Ar_flow_edit.setPlainText("0.0")
+                self.ui.O2_flow_edit.setPlainText("0.0")
+                self.ui.Shutter_delay_edit.setPlainText("5")
+                self.ui.process_time_edit.setPlainText("10")
+                return
+
+            # (2) STOP이 아닌 정상 종료/기타 사유 → 다음 STEP 진행
             self._start_next_csv_step()
             return
 
+        # 🔻 여기 이하(단일 공정 종료 처리)는 그대로 유지
         self.process_running = False
         self.ui.Sputter_Start_Button.setEnabled(True)
         self.ui.Sputter_Stop_Button.setEnabled(False)
@@ -530,7 +567,7 @@ class MainDialog(QDialog):
         self.ui.Ar_flow_edit.setPlainText("0.0")
         self.ui.O2_flow_edit.setPlainText("0.0")
 
-        # [추가] 공정 종료 시 UI의 타이머 값을 기본값 "0"으로 초기화
+        # [추가] 공정 종료 시 UI의 타이머 값을 기본값으로 초기화
         self.ui.Shutter_delay_edit.setPlainText("5")
         self.ui.process_time_edit.setPlainText("10")
 
@@ -892,8 +929,25 @@ class MainDialog(QDialog):
             self.csv_rows = []
             self.csv_index = -1
             self.process_running = False
+
+            # ✅ 이번 CSV 회차 공정 이름/파라미터 흔적 제거
+            self.current_process_name = ""
+            self._last_params = None
+
+            # ✅ UI도 대기 상태로 정리
             self.ui.Sputter_Start_Button.setEnabled(True)
             self.ui.Sputter_Stop_Button.setEnabled(False)
+            self.update_stage_monitor("CSV 공정 완료")
+
+            self.ui.Power_edit.setPlainText("0.0")
+            self.ui.Voltage_edit.setPlainText("0.0")
+            self.ui.Current_edit.setPlainText("0.0")
+            self.ui.for_p_edit.setPlainText("0.0")
+            self.ui.ref_p_edit.setPlainText("0.0")
+            self.ui.Ar_flow_edit.setPlainText("0.0")
+            self.ui.O2_flow_edit.setPlainText("0.0")
+            self.ui.Shutter_delay_edit.setPlainText("5")
+            self.ui.process_time_edit.setPlainText("10")
             return
 
         row = self.csv_rows[self.csv_index]
