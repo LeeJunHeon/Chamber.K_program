@@ -83,6 +83,10 @@ class MFCController(QObject):
         self.last_setpoints = {1: 0.0, 2: 0.0}  # 장비 단위(=UI 단위와 동일)
         self.flow_error_counters = {1: 0, 2: 0}
 
+        # 🔹 ProcessController에서 알려주는 "이번 공정 활성 채널"
+        #    기본값은 두 채널 모두 활성
+        self._active_channels: list[int] = [1, 2]
+
         self._stabilizing_channel: Optional[int] = None
         self._stabilizing_target: float = 0.0
         self.stabilization_attempts = 0
@@ -478,6 +482,29 @@ class MFCController(QObject):
     # ---------- 외부 명령(프로세스 컨트롤러) ----------
     @Slot(str, dict)
     def handle_command(self, cmd: str, params: dict):
+        # 🔹 활성 채널 설정 (ProcessController → MFC)
+        if cmd == "set_active_channels":
+            chans = params.get("channels") or []
+            try:
+                # 1 또는 2만 허용, 중복 제거 후 정렬
+                lst = sorted({int(c) for c in chans if int(c) in (1, 2)})
+            except Exception:
+                lst = [1, 2]
+
+            if not lst:
+                lst = [1, 2]
+
+            self._active_channels = lst
+
+            # 이번 공정에서 사용하지 않는 채널은 세트포인트/에러 카운터를 초기화
+            for ch in (1, 2):
+                if ch not in lst:
+                    self.last_setpoints[ch] = 0.0
+                    self.flow_error_counters[ch] = 0
+
+            self.status_message.emit("MFC", f"활성 채널 설정: {self._active_channels}")
+            return
+        
         # 폴링 ON/OFF (챔버K 프로세스 컨트롤러 호환용)
         if cmd == "set_polling":
             enable = bool(params.get("enable", False))
@@ -936,10 +963,19 @@ class MFCController(QObject):
         self._read_flow_all_async(on_done=_after_all, tag=f"[STAB R60 ch{ch}]")
 
     def _monitor_flow(self, channel: int, actual_flow: float):
+        # 0) 이번 공정에서 사용하지 않는 채널이면 모니터링하지 않음
+        actives = getattr(self, "_active_channels", None)
+        if actives and (channel not in actives):
+            # 혹시 이전 공정 세트포인트가 남아 있으면 정리
+            self.last_setpoints[channel] = 0.0
+            self.flow_error_counters[channel] = 0
+            return
+        
         target_flow = self.last_setpoints.get(channel, 0.0)
         if target_flow < 0.1:
             self.flow_error_counters[channel] = 0
             return
+        
         if abs(actual_flow - target_flow) > (target_flow * FLOW_ERROR_TOLERANCE):
             self.flow_error_counters[channel] += 1
             if self.flow_error_counters[channel] >= FLOW_ERROR_MAX_COUNT:

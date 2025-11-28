@@ -191,6 +191,13 @@ class SputterProcessController(QObject):
         self._process_channel = active_channels[0]
         self._gas_valve_button = gas_buttons[0]
 
+        # 🔹 MFC 쪽에도 이번 공정에서 실제 사용하는 채널 정보 전달
+        #    예: [1] 또는 [1, 2]
+        try:
+            self.command_requested.emit("set_active_channels", {"channels": active_channels})
+        except Exception:
+            pass
+
         self.is_dc_on = float(params.get('dc_power', 0) or 0) > 0
         self.is_rf_on = float(params.get('rf_power', 0) or 0) > 0
 
