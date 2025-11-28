@@ -262,6 +262,14 @@ class MainDialog(QDialog):
         
         # ★ 단일 공정(수동 Start)일 때의 공정 이름
         self.current_process_name = "Single CHK"
+
+        # ★ 수동 공정도 CSV 공정과 동일한 로그 포맷을 위해
+        #    이번 공정 파라미터를 저장 + 평균값 누적 초기화
+        self._last_params = dict(params)
+        # 수동 공정에는 타겟 이름이 없으니 빈 문자열로 맞춰둠
+        self._last_params.setdefault("g1_target_name", "")
+        self._last_params.setdefault("g2_target_name", "")
+        self._reset_chk_stats()
         
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
         set_process_log_file(prefix="CHK")
@@ -386,18 +394,9 @@ class MainDialog(QDialog):
         """
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # 공정 이름: 수동/CSV 공통
-        params = self._last_params or {}
+        # 수동/CSV 공통으로 저장해 둔 params 사용
+        params = getattr(self, "_last_params", {}) or {}
         process_name = self.current_process_name or params.get("process_name", "")
-
-        def _fmt_min(v) -> str:
-            """분 단위 값 -> 문자열 (빈값 허용)"""
-            if v is None:
-                return ""
-            try:
-                return f"{float(v):.3f}"
-            except Exception:
-                return ""
 
         def _fmt_float(v) -> str:
             if v is None:
@@ -407,18 +406,16 @@ class MainDialog(QDialog):
             except Exception:
                 return ""
 
-        def _avg(sum_, cnt) -> str:
-            if cnt <= 0:
-                return ""
-            return _fmt_float(sum_ / cnt)
+        def _avg(sum_, cnt, fallback=None) -> str:
+            if cnt and cnt > 0:
+                return _fmt_float(sum_ / cnt)
+            return _fmt_float(fallback)
 
-        # --- Shutter Delay / Process Time : '입력값(분)' 사용 ---
-        sh_delay_val = params.get("shutter_delay")
-        proc_time_val = params.get("process_time")
-        shutter_delay = _fmt_min(sh_delay_val)
-        process_time  = _fmt_min(proc_time_val)
+        # --- Shutter Delay / Process Time : 레시피/입력 분(min) 값 ---
+        shutter_delay = _fmt_float(params.get("shutter_delay"))
+        process_time  = _fmt_float(params.get("process_time"))
 
-        # --- Main Shutter : T/F (레시피/입력 기준) ---
+        # --- Main Shutter : 레시피/입력 기준 T/F ---
         ms_bool = bool(params.get("main_shutter"))
         main_shutter = "T" if ms_bool else "F"
 
@@ -437,34 +434,34 @@ class MainDialog(QDialog):
         g1_target = _fmt_target(use_g1, g1_name)
         g2_target = _fmt_target(use_g2, g2_name)
 
-        # --- 평균값 (flow / 압력 / RF / DC) ---
-        ar_flow   = _avg(self._sum_ar,  self._cnt_ar)
-        o2_flow   = _avg(self._sum_o2,  self._cnt_o2)
-        work_p    = _avg(self._sum_wp,  self._cnt_wp)
+        # --- 평균값 (없으면 레시피/입력값으로 폴백) ---
+        ar_flow   = _avg(self._sum_ar,  self._cnt_ar,  params.get("ar_flow"))
+        o2_flow   = _avg(self._sum_o2,  self._cnt_o2,  params.get("o2_flow"))
+        work_p    = _avg(self._sum_wp,  self._cnt_wp,  params.get("sp1_set"))
 
-        rf_for_p  = _avg(self._sum_rf_for, self._cnt_rf)
-        rf_ref_p  = _avg(self._sum_rf_ref, self._cnt_rf)
+        rf_for_p  = _avg(self._sum_rf_for, self._cnt_rf, params.get("rf_power"))
+        rf_ref_p  = _avg(self._sum_rf_ref, self._cnt_rf, 0.0)
 
-        dc_p      = _avg(self._sum_dc_p, self._cnt_dc)
-        dc_v      = _avg(self._sum_dc_v, self._cnt_dc)
-        dc_i      = _avg(self._sum_dc_i, self._cnt_dc)
+        dc_p      = _avg(self._sum_dc_p, self._cnt_dc, params.get("dc_power"))
+        dc_v      = _avg(self._sum_dc_v, self._cnt_dc, None)
+        dc_i      = _avg(self._sum_dc_i, self._cnt_dc, None)
 
         row = {
             "Timestamp":        now,
             "Process Name":     process_name,
-            "Main Shutter":     main_shutter,      # ← 항상 T/F
-            "Shutter Delay":    shutter_delay,     # ← 입력 분
+            "Main Shutter":     main_shutter,      # ← 항상 T / F
+            "Shutter Delay":    shutter_delay,     # ← 입력 분 값
             "G1 Target":        g1_target,         # ← 예: "T:VO2"
             "G2 Target":        g2_target,         # ← 예: "F:TiO2"
-            "Ar flow":          ar_flow,           # ← 전체 시간 평균
-            "O2 flow":          o2_flow,           # ← 전체 시간 평균
-            "Working Pressure": work_p,            # ← 전체 시간 평균
-            "Process Time":     process_time,      # ← 입력 분
-            "RF: For.P":        rf_for_p,          # ← 전체 시간 평균
-            "RF: Ref. P":       rf_ref_p,          # ← 전체 시간 평균
-            "DC: V":            dc_v,              # ← 전체 시간 평균
-            "DC: I":            dc_i,              # ← 전체 시간 평균
-            "DC: P":            dc_p,              # ← 전체 시간 평균
+            "Ar flow":          ar_flow,           # ← 전체 공정 평균
+            "O2 flow":          o2_flow,           # ← 전체 공정 평균
+            "Working Pressure": work_p,            # ← 전체 공정 평균
+            "Process Time":     process_time,      # ← 입력 분 값
+            "RF: For.P":        rf_for_p,          # ← 전체 공정 평균
+            "RF: Ref. P":       rf_ref_p,          # ← 전체 공정 평균
+            "DC: V":            dc_v,              # ← 전체 공정 평균
+            "DC: I":            dc_i,              # ← 전체 공정 평균
+            "DC: P":            dc_p,              # ← 전체 공정 평균
         }
         return row
     
@@ -505,6 +502,9 @@ class MainDialog(QDialog):
                 log_message_to_monitor("경고", "ChK CSV 로그 저장 실패")
         except Exception as e:
             log_message_to_monitor("경고", f"ChK CSV 로그 처리 중 예외 발생: {e!r}")
+        finally:
+            # 다음 공정을 위해 평균 누적값 초기화
+            self._reset_chk_stats()
 
         # 1) CSV 리스트 공정 모드인 경우 → 다음 행 실행
         if self.csv_mode and self.csv_rows:
@@ -744,6 +744,10 @@ class MainDialog(QDialog):
         use_g1 = _bool_from(row.get("gun1"), use_g1_ui)
         use_g2 = _bool_from(row.get("gun2"), use_g2_ui)
 
+        # ★ G1/G2 타겟 이름 (없으면 빈 문자열)
+        g1_target_name = (row.get("G1 Target") or "").strip()
+        g2_target_name = (row.get("G2 Target") or "").strip()
+
         process_name = (row.get("Process_name") or "").strip()
         main_shutter = _bool_from(row.get("main_shutter"), (proc_time > 0))
 
@@ -786,6 +790,10 @@ class MainDialog(QDialog):
 
             "use_g1": use_g1,
             "use_g2": use_g2,
+
+            # ★ 로그용 타겟 이름
+            "g1_target_name": g1_target_name,
+            "g2_target_name": g2_target_name,
 
             "main_shutter": main_shutter,
             "process_name": process_name,
@@ -883,6 +891,11 @@ class MainDialog(QDialog):
 
         row = self.csv_rows[self.csv_index]
         params = self._build_params_from_csv_row(row)
+
+        # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해
+        #    파라미터 저장 + 평균값 누적 초기화
+        self._last_params = dict(params)
+        self._reset_chk_stats()
 
         # ✅ 이 단계의 파라미터를 UI에 반영 (CH1/CH2처럼 보이게)
         self._apply_params_to_ui(params)
