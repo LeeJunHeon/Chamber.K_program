@@ -543,6 +543,9 @@ class MainDialog(QDialog):
                 self.csv_mode = False
                 self.csv_rows = []
                 self.csv_index = -1
+                self.csv_file_path = None          # ★ CSV 파일 선택도 해제
+                self.current_process_name = ""     # (선택) 이름 흔적 제거
+                self._last_params = None           # (선택) 파라미터 흔적 제거
 
                 # UI 버튼/표시 초기화
                 self.ui.Sputter_Start_Button.setEnabled(True)
@@ -955,6 +958,7 @@ class MainDialog(QDialog):
             # ✅ 이번 CSV 회차 공정 이름/파라미터 흔적 제거
             self.current_process_name = ""
             self._last_params = None
+            self.csv_file_path = None      # ★ CSV 파일 선택도 해제
 
             # ✅ UI도 대기 상태로 정리
             self.ui.Sputter_Start_Button.setEnabled(True)
