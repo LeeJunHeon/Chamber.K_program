@@ -402,6 +402,7 @@ class SputterProcessController(QObject):
                     f"Shutter Delay {sd_sec}s",
                     duration_sec=sd_sec,
                     timer_purpose='shutter',
+                    polling=True,
                 )
             )
 
