@@ -5,7 +5,7 @@ from lib.config import (
     RF_MAX_POWER, RF_RAMP_STEP, RF_MAX_ERROR_COUNT, 
     RF_TOLERANCE_POWER, RF_FORWARD_SCALING_MAX_WATT, 
     RF_REFLECTED_SCALING_MAX_WATT, RF_DAC_FULL_SCALE,
-    RF_RAMP_DOWN_STEP
+    RF_RAMP_DOWN_STEP, RF_POWER_ERROR_RATIO, RF_POWER_ERROR_MAX_COUNT,
 )
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -32,8 +32,8 @@ class RFPowerController(QObject):
         self.current_power_step = 0.0
 
         self.state = "IDLE"
-        # [추가] 반사파 대기 상태 관리를 위한 변수
-        self.previous_state = "IDLE"
+        self.power_error_count = 0 # ★ RF 파워 편차(±5%) 모니터링용 카운터
+        self.previous_state = "IDLE" # [추가] 반사파 대기 상태 관리를 위한 변수
         self.ref_p_wait_start_time = None
         self.control_timer = QTimer(self)
         self.control_timer.setInterval(1000) # 1초마다 tick
@@ -52,6 +52,10 @@ class RFPowerController(QObject):
         
         self.current_power_step = 0.0
         self.current_pwm_value = 0
+
+        # ★ 새 공정 시작 시 편차 카운터/반사파 대기 상태 초기화
+        self.power_error_count = 0
+        self.ref_p_wait_start_time = None
 
         self._is_running = True
         self.state = "RAMPING_UP"
@@ -119,6 +123,26 @@ class RFPowerController(QObject):
 
         elif self.state == "MAINTAINING":
             error = self.target_power - for_p
+
+            # ★ Forward Power가 목표 대비 ±5% 이상 연속 3회 벗어나면 공정 중단
+            threshold_w = max(RF_TOLERANCE_POWER, self.target_power * RF_POWER_ERROR_RATIO)
+            if abs(error) > threshold_w:
+                self.power_error_count += 1
+                if self.power_error_count >= RF_POWER_ERROR_MAX_COUNT:
+                    self.status_message.emit(
+                        "재시작",
+                        (
+                            f"RF Forward Power가 목표 {self.target_power:.1f}W에서 "
+                            f"±{RF_POWER_ERROR_RATIO*100:.1f}% 이상 "
+                            f"연속 {RF_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다."
+                        ),
+                    )
+                    self.stop_process()
+                    return
+            else:
+                # 허용 범위 안으로 돌아오면 카운터 리셋
+                self.power_error_count = 0
+
             if abs(error) > RF_TOLERANCE_POWER:
                 adjustment = 1 if error > 0 else -1
                 self.current_pwm_value = max(0, min(RF_DAC_FULL_SCALE, self.current_pwm_value + adjustment))
@@ -147,6 +171,9 @@ class RFPowerController(QObject):
             return
 
         # 🔵 실제로 동작 중일 때는 기존 로직대로 램프다운
+        # ★ 여기서부터는 실제 동작 중이므로 편차 카운터/반사파 대기 상태 초기화
+        self.power_error_count = 0
+        self.ref_p_wait_start_time = None
         self.status_message.emit("RFpower", "정지 신호 수신됨.")
         self._is_running = False
         self.state = "IDLE"
