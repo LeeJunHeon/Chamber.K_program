@@ -11,6 +11,7 @@ from lib.config import (
     DC_PORT, DC_BAUDRATE,
     DC_INITIAL_VOLTAGE, DC_INITIAL_CURRENT, DC_MAX_VOLTAGE,
     DC_MAX_CURRENT, DC_MAX_POWER, DC_TOLERANCE_WATT, DC_MAX_ERROR_COUNT,
+    DC_POWER_ERROR_RATIO, DC_POWER_ERROR_MAX_COUNT,
 )
 
 class DCPowerController(QObject):
@@ -24,6 +25,7 @@ class DCPowerController(QObject):
         self._is_running: bool = False
         self.state: str = "IDLE"
         self.error_count: int = 0
+        self.power_error_count: int = 0 # ★ DC 파워 편차(±5%) 모니터링용 카운터
 
         self.current_voltage: float = DC_INITIAL_VOLTAGE
         self.current_current: float = DC_INITIAL_CURRENT
@@ -89,6 +91,7 @@ class DCPowerController(QObject):
                 return
 
         self.target_power = max(0.0, min(DC_MAX_POWER, float(target_power)))
+        self.power_error_count = 0 # ★ 새 공정 시작 시 편차 카운터 초기화
         self.status_message.emit("DCpower", f"프로세스 시작 (목표: {self.target_power:.1f} W)")
 
         # 초기화: 전압·전류 동시 설정(APPLy) + 출력 ON
@@ -148,6 +151,27 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower", f"Ramping({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
 
         elif self.state == "MAINTAINING":
+            # ★ 유지 구간에서 목표 파워 대비 편차 감시
+            #    - 기준: max(DC_TOLERANCE_WATT, target * 5%)
+            threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
+            if abs(diff) > threshold_w:
+                self.power_error_count += 1
+                if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
+                    # 메인에서 전체 공정을 중단하도록 "재시작" 레벨로 알림
+                    self.status_message.emit(
+                        "재시작",
+                        (
+                            f"DC 파워가 목표 {self.target_power:.1f}W에서 "
+                            f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
+                            f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다."
+                        ),
+                    )
+                    self.stop_process()
+                    return
+            else:
+                # 허용 범위 안으로 돌아오면 카운터 리셋
+                self.power_error_count = 0
+
             if abs(diff) <= DC_TOLERANCE_WATT:
                 return
 
@@ -188,6 +212,7 @@ class DCPowerController(QObject):
         self._is_running = False
         self.state = "IDLE"
         self.control_timer.stop()
+        self.power_error_count = 0 # ★ 편차 카운터도 초기화
         self._send_noresp("OUTP OFF")
         self.status_message.emit("DCpower", "출력 OFF, 대기 상태로 전환")
 
