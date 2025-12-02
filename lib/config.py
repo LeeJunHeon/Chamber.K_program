@@ -71,6 +71,10 @@ DC_MAX_POWER = 500.0       # 최대 파워
 DC_TOLERANCE_WATT = 0.5    # 목표 Power 허용 오차(W)
 DC_MAX_ERROR_COUNT = 5     # 연속 실패 허용 횟수
 
+# ★ 추가: DC 파워 편차 감시용
+DC_POWER_ERROR_RATIO = 0.05      # 목표 파워의 ±5%까지 허용
+DC_POWER_ERROR_MAX_COUNT = 3     # 3회 연속 초과 시 에러
+
 # --- RFpower ---
 RF_FORWARD_SCALING_MAX_WATT  = 594.5  # for.p 센서 교정 상수
 RF_REFLECTED_SCALING_MAX_WATT = 200.0 # ref.p 센서 교정 상수
@@ -81,6 +85,10 @@ RF_RAMP_DOWN_STEP = 8      # 램프다운 스텝 (W)
 RF_RAMP_DELAY = 1          # 램프업 딜레이 (초)
 RF_MAX_ERROR_COUNT = 5     # 연속 실패 허용 횟수
 RF_TOLERANCE_POWER = 1.0   # 목표 Power 허용 오차
+
+# ★ 추가: RF 파워 편차 감시용
+RF_POWER_ERROR_RATIO = 0.05      # 목표 파워의 ±5%까지 허용
+RF_POWER_ERROR_MAX_COUNT = 3     # 3회 연속 초과 시 에러
 
 # === MFC ===
 FLOW_ERROR_TOLERANCE = 0.05  # 5% 오차 허용
