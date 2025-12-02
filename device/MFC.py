@@ -83,6 +83,10 @@ class MFCController(QObject):
         self.last_setpoints = {1: 0.0, 2: 0.0}  # 장비 단위(=UI 단위와 동일)
         self.flow_error_counters = {1: 0, 2: 0}
 
+        # 압력 모니터링용 (SP1 기준, UI 단위)
+        self.last_pressure_setpoint: float = 0.0
+        self.pressure_error_count: int = 0
+
         # 🔹 ProcessController에서 알려주는 "이번 공정 활성 채널"
         #    기본값은 두 채널 모두 활성
         self._active_channels: list[int] = [1, 2]
@@ -474,6 +478,13 @@ class MFCController(QObject):
             ui_val = self._to_ui_pressure(val_hw)
             fmt = "{:." + str(int(MFC_PRESSURE_DECIMALS)) + "f}"
             self.update_pressure.emit(fmt.format(ui_val))
+            # SP1 설정값 대비 압력 모니터링
+            try:
+                self._monitor_pressure(ui_val)
+            except Exception:
+                # 모니터링 중 예외로 폴링이 죽지 않도록 방어
+                traceback.print_exc()
+
         self.enqueue(
             MFC_COMMANDS['READ_PRESSURE'],
             on_p, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS, tag='[POLL PRESS]'
@@ -510,7 +521,9 @@ class MFCController(QObject):
             enable = bool(params.get("enable", False))
             self.set_process_status(enable)
             if not enable:
+                # 공정 딜레이(셔터/메인 공정) 종료 시 카운터 초기화
                 self.flow_error_counters = {1: 0, 2: 0}
+                self.pressure_error_count = 0
             return
 
         # FLOW_SET (스케일 변환 없음)
@@ -544,6 +557,10 @@ class MFCController(QObject):
         if cmd == "SP1_SET":
             ui_val = float(params.get("value", 0.0))
             hw_val = self._to_hw_pressure(ui_val)
+            
+            # 압력 모니터링용 SP1 설정값(UI 단위) 저장
+            self.last_pressure_setpoint = float(ui_val)
+            self.pressure_error_count = 0
 
             # ✨ 추가: 장비 송신 값(하드웨어 스케일)을 지정 소수 자리로 문자열 포맷
             dec = int(MFC_PRESSURE_DECIMALS)
@@ -970,19 +987,55 @@ class MFCController(QObject):
             self.last_setpoints[channel] = 0.0
             self.flow_error_counters[channel] = 0
             return
-        
+
         target_flow = self.last_setpoints.get(channel, 0.0)
         if target_flow < 0.1:
+            # 거의 0에 가까운 세트포인트는 모니터링 대상 아님
             self.flow_error_counters[channel] = 0
             return
-        
-        if abs(actual_flow - target_flow) > (target_flow * FLOW_ERROR_TOLERANCE):
+
+        tol = abs(target_flow) * FLOW_ERROR_TOLERANCE
+        if abs(actual_flow - target_flow) > tol:
+            # 허용 범위 밖 → 연속 카운트 증가
             self.flow_error_counters[channel] += 1
             if self.flow_error_counters[channel] >= FLOW_ERROR_MAX_COUNT:
-                self.status_message.emit("MFC(경고)", f"Ch{channel} 유량 불안정! (목표: {target_flow:.2f}, 현재: {actual_flow:.2f})")
+                msg = (
+                    f"Ch{channel} 유량이 설정값에서 5% 이상 벗어났습니다. "
+                    f"(목표: {target_flow:.2f}, 현재: {actual_flow:.2f})"
+                )
+                # UI 로그 + 프로세스 중단 신호
+                self.status_message.emit("MFC(오류)", msg)
+                self.command_failed.emit("FLOW_MON", msg)
+                # 다시 처음부터 연속 카운트
                 self.flow_error_counters[channel] = 0
         else:
-            self.flow_error_counters[channel] = 0
+            # 허용 범위 안으로 돌아오면 연속 카운트 리셋
+            if self.flow_error_counters[channel]:
+                self.flow_error_counters[channel] = 0
+
+    def _monitor_pressure(self, actual_pressure_ui: float) -> None:
+        target = float(getattr(self, "last_pressure_setpoint", 0.0) or 0.0)
+        if target <= 0.0:
+            # 설정값이 없으면 카운터 리셋
+            self.pressure_error_count = 0
+            return
+
+        tol = abs(target) * FLOW_ERROR_TOLERANCE
+        if abs(actual_pressure_ui - target) > tol:
+            # 허용 범위를 벗어남 → 연속 카운트 증가
+            self.pressure_error_count += 1
+            if self.pressure_error_count >= FLOW_ERROR_MAX_COUNT:
+                msg = (
+                    "압력이 설정값에서 5% 이상 벗어났습니다. "
+                    f"(목표: {target:.3f}, 현재: {actual_pressure_ui:.3f})"
+                )
+                self.status_message.emit("MFC(오류)", msg)
+                self.command_failed.emit("PRESS_MON", msg)
+                self.pressure_error_count = 0
+        else:
+            # 허용 범위 안 → 연속 카운트 리셋
+            if self.pressure_error_count:
+                self.pressure_error_count = 0
 
     # ---------- 보조 ----------
     def _parse_r69_bits(self, resp: str) -> str:
