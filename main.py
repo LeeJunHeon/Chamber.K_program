@@ -263,7 +263,6 @@ class MainDialog(QDialog):
                 "g1_target_name": g1_target_name,
                 "g2_target_name": g2_target_name,
             }
-            params['main_shutter'] = (params['process_time'] > 0)
 
             if not (params['dc_power'] > 0 or params['rf_power'] > 0):
                 raise ValueError("RF 또는 DC 파워 중 하나 이상을 입력해야 합니다.")
@@ -442,8 +441,9 @@ class MainDialog(QDialog):
         process_time  = _fmt_float(params.get("process_time"))
 
         # --- Main Shutter : 레시피/입력 기준 T/F ---
-        ms_bool = bool(params.get("main_shutter"))
-        main_shutter = "T" if ms_bool else "F"
+        # ms_bool = bool(params.get("main_shutter"))
+        # main_shutter = "T" if ms_bool else "F"
+        # 챔버K는 별도로 main shutter를 지정하지 않음
 
         # --- G1/G2 타겟 이름 (포맷 없이 그대로) ---
         g1_target = (params.get("g1_target_name") or "").strip()
@@ -464,7 +464,6 @@ class MainDialog(QDialog):
         row = {
             "Timestamp":        now,
             "Process Name":     process_name,
-            "Main Shutter":     main_shutter,      # ← 항상 T / F
             "Shutter Delay":    shutter_delay,     # ← 입력 분 값
             "G1 Target":        g1_target,         # ← 입력/CSV 문자열 그대로
             "G2 Target":        g2_target,         # ← 입력/CSV 문자열 그대로
@@ -736,7 +735,7 @@ class MainDialog(QDialog):
         process_controller 에 전달할 params dict 생성.
 
         CSV 헤더(현재 파일 기준):
-        #,Process_name,main_shutter,base_pressure,working_pressure,
+        #,Process_name,base_pressure,working_pressure,
         process_time,shutter_delay,Ar,O2,Ar_flow,O2_flow,
         use_dc_power,dc_power,use_rf_power,rf_power,
         gun1,gun2,G1 Target,G2 Target
@@ -810,7 +809,6 @@ class MainDialog(QDialog):
         g2_target_name = (row.get("G2 Target") or "").strip()
 
         process_name = (row.get("Process_name") or "").strip()
-        main_shutter = _bool_from(row.get("main_shutter"), (proc_time > 0))
 
         # selected_gas / mfc_flow (기존 단일 공정 로직과 맞춤)
         if use_ar_gas and not use_o2_gas:
@@ -856,7 +854,6 @@ class MainDialog(QDialog):
             "g1_target_name": g1_target_name,
             "g2_target_name": g2_target_name,
 
-            "main_shutter": main_shutter,
             "process_name": process_name,
         }
 
