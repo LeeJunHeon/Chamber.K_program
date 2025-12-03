@@ -14,6 +14,9 @@ from lib.config import (
     DC_POWER_ERROR_RATIO, DC_POWER_ERROR_MAX_COUNT,
 )
 
+# DC power 유지 구간에서 허용하는 최소 전류 (A)
+DC_MIN_CURRENT_ABORT = 0.05
+
 class DCPowerController(QObject):
     update_dc_status_display = Signal(float, float, float)  # (P, V, I)
     status_message = Signal(str, str)
@@ -151,6 +154,16 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower", f"Ramping({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
 
         elif self.state == "MAINTAINING":
+            # ★ 유지 구간에서 전류(I)가 너무 낮으면 공정 중단
+            if now_i <= DC_MIN_CURRENT_ABORT:
+                self.status_message.emit(
+                    "재시작",
+                    f"DC 전류(I={now_i:.4f}A)가 최소 허용값 "
+                    f"{DC_MIN_CURRENT_ABORT:.3f}A 이하입니다. 공정을 중단합니다."
+                )
+                self.stop_process()
+                return
+    
             # 유지 구간에서는 setpoint 편차로 공정을 중단하지 않고,
             # 목표 파워와의 차이가 DC_TOLERANCE_WATT 이하이면 그대로 유지.
             if abs(diff) <= DC_TOLERANCE_WATT:
