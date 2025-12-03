@@ -1034,33 +1034,27 @@ class MFCController(QObject):
                 self.flow_error_counters[channel] = 0
 
     def _monitor_pressure(self, actual_pressure_ui: float) -> None:
-        # 🔸 Shutter Delay / Process Time 구간이 아니면 압력 에러 체크 안 함
-        if not getattr(self, "_pressure_monitoring_enabled", False):
-            self.pressure_error_count = 0
-            return
-
-        target = float(getattr(self, "last_pressure_setpoint", 0.0) or 0.0)
-        if target <= 0.0:
-            # 설정값이 없으면 카운터 리셋
-            self.pressure_error_count = 0
-            return
-
-        tol = abs(target) * FLOW_ERROR_TOLERANCE
-        if abs(actual_pressure_ui - target) > tol:
-            # 허용 범위를 벗어남 → 연속 카운트 증가
-            self.pressure_error_count += 1
-            if self.pressure_error_count >= FLOW_ERROR_MAX_COUNT:
-                msg = (
-                    "압력이 설정값에서 5% 이상 벗어났습니다. "
-                    f"(목표: {target:.3f}, 현재: {actual_pressure_ui:.3f})"
-                )
-                self.status_message.emit("MFC(오류)", msg)
-                self.command_failed.emit("PRESS_MON", msg)
+            """
+            공정 중 압력 모니터링:
+            - 압력값은 계속 읽어서 내부에 유지
+            - setpoint와 비교는 하더라도, 공정 중단/에러로는 사용하지 않음
+            - 알림창(QMessageBox)을 띄우는 critical_error 도 트리거하지 않음
+            """
+            # 폴링이 꺼져 있으면 카운터만 리셋하고 리턴
+            if not getattr(self, "_pressure_monitoring_enabled", False):
                 self.pressure_error_count = 0
-        else:
-            # 허용 범위 안 → 연속 카운트 리셋
+                return
+
+            # 마지막 실제 압력값을 내부에만 저장(필요하면 다른 데서 참고 가능)
+            self.last_pressure_value = actual_pressure_ui
+
+            # 더 이상 압력으로 에러/중단을 걸지 않기 때문에
+            # 에러 카운터는 항상 0 으로 유지
             if self.pressure_error_count:
                 self.pressure_error_count = 0
+
+            # ※ 여기서 setpoint(target) 계산, 오차(tol) 비교, status_message.emit,
+            #    command_failed.emit("PRESS_MON", ...) 등은 모두 제거
 
     # ---------- 보조 ----------
     def _parse_r69_bits(self, resp: str) -> str:
