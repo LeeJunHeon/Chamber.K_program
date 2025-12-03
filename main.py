@@ -650,10 +650,12 @@ class MainDialog(QDialog):
             self._sum_wp += v
             self._cnt_wp += 1
 
-    def update_dc_status_display(self, voltage, current):
+    def update_dc_status_display(self, power, voltage, current):
+        """DC 파워 측정값 (P, V, I)을 UI에 표시"""
+        # 전압 / 전류
         self.ui.Voltage_edit.setPlainText(f"{voltage:.2f}")
         self.ui.Current_edit.setPlainText(f"{current:.3f}")
-        power = voltage * current
+        # 파워는 장비에서 계산된 값 사용
         self.ui.Power_edit.setPlainText(f"{power:.2f}")
 
         # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
