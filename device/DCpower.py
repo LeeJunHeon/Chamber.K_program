@@ -151,32 +151,13 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower", f"Ramping({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
 
         elif self.state == "MAINTAINING":
-            # ★ 유지 구간에서 목표 파워 대비 편차 감시
-            #    - 기준: max(DC_TOLERANCE_WATT, target * 5%)
-            threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
-            if abs(diff) > threshold_w:
-                self.power_error_count += 1
-                if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
-                    # 메인에서 전체 공정을 중단하도록 "재시작" 레벨로 알림
-                    self.status_message.emit(
-                        "재시작",
-                        (
-                            f"DC 파워가 목표 {self.target_power:.1f}W에서 "
-                            f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
-                            f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다."
-                        ),
-                    )
-                    self.stop_process()
-                    return
-            else:
-                # 허용 범위 안으로 돌아오면 카운터 리셋
-                self.power_error_count = 0
-
+            # 유지 구간에서는 setpoint 편차로 공정을 중단하지 않고,
+            # 목표 파워와의 차이가 DC_TOLERANCE_WATT 이하이면 그대로 유지.
             if abs(diff) <= DC_TOLERANCE_WATT:
                 return
 
             if overshoot_trig:
-                # ★ 유지구간에서도 오버슈트면 강하게 끌어내림
+                # 유지구간에서도 오버슈트면 강하게 끌어내림
                 drop_i = overshoot_w / max(now_v, 1.0)
                 step_i = -min(self.step_down_fast, max(self.step_down, drop_i))
                 why = "FAST"
@@ -192,7 +173,56 @@ class DCPowerController(QObject):
 
             self.current_current = self._clamp_i(self.current_current + step_i)
             self._send_noresp(f"CURR {self.current_current:.4f}")
-            self.status_message.emit("DCpower", f"Maintain({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
+            self.status_message.emit(
+                "DCpower",
+                f"Maintain({why}) P={now_power:.2f}W → diff={diff:+.2f}W, "
+                f"dI={step_i:+.4f}A, I={self.current_current:.4f}A"
+            )
+
+        # ==================== setpoint를 5% 이상 이탈시 종료하는 로직 ====================
+        # elif self.state == "MAINTAINING":
+        #     # ★ 유지 구간에서 목표 파워 대비 편차 감시
+        #     #    - 기준: max(DC_TOLERANCE_WATT, target * 5%)
+        #     threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
+        #     if abs(diff) > threshold_w:
+        #         self.power_error_count += 1
+        #         if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
+        #             # 메인에서 전체 공정을 중단하도록 "재시작" 레벨로 알림
+        #             self.status_message.emit(
+        #                 "재시작",
+        #                 (
+        #                     f"DC 파워가 목표 {self.target_power:.1f}W에서 "
+        #                     f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
+        #                     f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다."
+        #                 ),
+        #             )
+        #             self.stop_process()
+        #             return
+        #     else:
+        #         # 허용 범위 안으로 돌아오면 카운터 리셋
+        #         self.power_error_count = 0
+
+        #     if abs(diff) <= DC_TOLERANCE_WATT:
+        #         return
+
+        #     if overshoot_trig:
+        #         # ★ 유지구간에서도 오버슈트면 강하게 끌어내림
+        #         drop_i = overshoot_w / max(now_v, 1.0)
+        #         step_i = -min(self.step_down_fast, max(self.step_down, drop_i))
+        #         why = "FAST"
+        #     else:
+        #         # 전압 가드 근처면 상승은 억제
+        #         if now_v >= self.voltage_guard and diff > 0:
+        #             step_i = -self.step_down
+        #             why = "V-GUARD"
+        #         else:
+        #             # 부족(+): 조금씩 올림 / 과다(-): 조금 더 내림
+        #             step_i = self.step_up if diff > 0 else -self.step_down
+        #             why = "NORM"
+
+        #     self.current_current = self._clamp_i(self.current_current + step_i)
+        #     self._send_noresp(f"CURR {self.current_current:.4f}")
+        #     self.status_message.emit("DCpower", f"Maintain({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
 
     # ---------------- 초기화/종료 ----------------
     def _initialize_power_supply(self, voltage: float, current: float) -> bool:
