@@ -87,6 +87,10 @@ class MFCController(QObject):
         self.last_pressure_setpoint: float = 0.0
         self.pressure_error_count: int = 0
 
+        # 🔹 Shutter Delay / Process Time 구간에서만 에러 체크할지 여부
+        self._flow_monitoring_enabled: bool = False
+        self._pressure_monitoring_enabled: bool = False
+
         # 🔹 ProcessController에서 알려주는 "이번 공정 활성 채널"
         #    기본값은 두 채널 모두 활성
         self._active_channels: list[int] = [1, 2]
@@ -458,6 +462,11 @@ class MFCController(QObject):
     def set_process_status(self, should_poll: bool):
         if not self.polling_timer:
             return
+
+        # 🔸 Shutter Delay / Process Time 구간에서만 모니터링 켜기
+        self._flow_monitoring_enabled = bool(should_poll)
+        self._pressure_monitoring_enabled = bool(should_poll)
+
         if should_poll:
             if not self.polling_timer.isActive():
                 self.status_message.emit("MFC", "주기적 읽기(Polling) 시작")
@@ -467,6 +476,10 @@ class MFCController(QObject):
                 self.polling_timer.stop()
                 self.status_message.emit("MFC", "주기적 읽기(Polling) 중지")
             self._purge_poll_reads_only(cancel_inflight=True, reason="polling off/shutter closed")
+
+            # 🔸 모니터링 구간이 끝날 때는 에러 카운터도 리셋
+            self.flow_error_counters = {1: 0, 2: 0}
+            self.pressure_error_count = 0
 
     def _enqueue_poll_cycle(self):
         self._read_flow_all_async(tag="[POLL R60]")
@@ -980,6 +993,13 @@ class MFCController(QObject):
         self._read_flow_all_async(on_done=_after_all, tag=f"[STAB R60 ch{ch}]")
 
     def _monitor_flow(self, channel: int, actual_flow: float):
+        # 🔸 Shutter Delay / Process Time 구간이 아니면 에러 체크 안 함
+        if not getattr(self, "_flow_monitoring_enabled", False):
+            # 가스 ON/안정화 구간에서 쌓인 카운터는 의미 없으니 리셋
+            if channel in self.flow_error_counters:
+                self.flow_error_counters[channel] = 0
+            return
+
         # 0) 이번 공정에서 사용하지 않는 채널이면 모니터링하지 않음
         actives = getattr(self, "_active_channels", None)
         if actives and (channel not in actives):
@@ -1014,6 +1034,11 @@ class MFCController(QObject):
                 self.flow_error_counters[channel] = 0
 
     def _monitor_pressure(self, actual_pressure_ui: float) -> None:
+        # 🔸 Shutter Delay / Process Time 구간이 아니면 압력 에러 체크 안 함
+        if not getattr(self, "_pressure_monitoring_enabled", False):
+            self.pressure_error_count = 0
+            return
+
         target = float(getattr(self, "last_pressure_setpoint", 0.0) or 0.0)
         if target <= 0.0:
             # 설정값이 없으면 카운터 리셋
