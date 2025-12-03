@@ -507,6 +507,46 @@ class MainDialog(QDialog):
         self._chk_sampling_enabled: bool = False
         self._chk_sampling_started: bool = False
 
+    def _reset_process_ui_fields(self):
+        """공정 종료/중단 후 Sputter 관련 UI를 '초기 상태'로 리셋."""
+        # --- Gas 선택 (UI.py 기본값: Ar 체크, O2 해제) ---
+        self.ui.Ar_gas_radio.setChecked(True)
+        self.ui.O2_gas_radio.setChecked(False)
+
+        # --- Flow (UI.py 기본값: Ar=5, O2 공백) ---
+        self.ui.Ar_flow_edit.setPlainText("5")
+        self.ui.O2_flow_edit.setPlainText("")
+
+        # --- Working pressure (UI.py 기본값: 2) ---
+        self.ui.working_pressure_edit.setPlainText("2")
+
+        # --- Power setpoint + 체크박스 (UI.py 기본값) ---
+        self.ui.rf_power_checkbox.setChecked(False)
+        self.ui.dc_power_checkbox.setChecked(False)
+        self.ui.RF_power_edit.setPlainText("200")
+        self.ui.DC_power_edit.setPlainText("200")
+
+        # --- Shutter delay / Process time (UI.py 기본값) ---
+        self.ui.Shutter_delay_edit.setPlainText("5")
+        self.ui.process_time_edit.setPlainText("10")
+
+        # --- G1/G2 타겟 및 사용 여부 (기본은 사용 안 함 + 공백) ---
+        self.ui.G1_checkbox.setChecked(False)
+        self.ui.G2_checkbox.setChecked(False)
+        self.ui.G1_edit.clear()
+        self.ui.G2_edit.clear()
+
+        # --- RF 보정값 (UI.py 기본값) ---
+        self.ui.offset_edit.setPlainText("6.79")
+        self.ui.param_edit.setPlainText("1.0395")
+
+        # --- 측정값(파워/전압/전류/for/ref)은 0으로 초기화 ---
+        self.ui.Power_edit.setPlainText("0.0")
+        self.ui.Voltage_edit.setPlainText("0.0")
+        self.ui.Current_edit.setPlainText("0.0")
+        self.ui.for_p_edit.setPlainText("0.0")
+        self.ui.ref_p_edit.setPlainText("0.0")
+
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
         self.on_status_message("정보", "프로세스 종료중.")
@@ -546,21 +586,8 @@ class MainDialog(QDialog):
                 self.current_process_name = ""     # (선택) 이름 흔적 제거
                 self._last_params = None           # (선택) 파라미터 흔적 제거
 
-                # UI 버튼/표시 초기화
-                self.ui.Sputter_Start_Button.setEnabled(True)
-                self.ui.Sputter_Stop_Button.setEnabled(False)
-                self.update_stage_monitor("CSV 공정 취소됨")
-
-                # 단일 공정 종료와 동일하게 표시값 리셋
-                self.ui.Power_edit.setPlainText("0.0")
-                self.ui.Voltage_edit.setPlainText("0.0")
-                self.ui.Current_edit.setPlainText("0.0")
-                self.ui.for_p_edit.setPlainText("0.0")
-                self.ui.ref_p_edit.setPlainText("0.0")
-                self.ui.Ar_flow_edit.setPlainText("0.0")
-                self.ui.O2_flow_edit.setPlainText("0.0")
-                self.ui.Shutter_delay_edit.setPlainText("5")
-                self.ui.process_time_edit.setPlainText("10")
+                # ▶ 공통 UI 초기화
+                self._reset_process_ui_fields()
                 return
 
             # (2) STOP이 아닌 정상 종료/기타 사유 → 다음 STEP 진행
@@ -573,20 +600,8 @@ class MainDialog(QDialog):
         self.ui.Sputter_Stop_Button.setEnabled(False)
         self.update_stage_monitor("공정 종료")
         
-        # ▼ 추가: 파워/리플렉트 표시값 초기화
-        self.ui.Power_edit.setPlainText("0.0")
-        self.ui.Voltage_edit.setPlainText("0.0")
-        self.ui.Current_edit.setPlainText("0.0")
-        self.ui.for_p_edit.setPlainText("0.0")
-        self.ui.ref_p_edit.setPlainText("0.0")
-
-        # ▼ 추가: 가스 유량 표시값 초기화
-        self.ui.Ar_flow_edit.setPlainText("0.0")
-        self.ui.O2_flow_edit.setPlainText("0.0")
-
-        # [추가] 공정 종료 시 UI의 타이머 값을 기본값으로 초기화
-        self.ui.Shutter_delay_edit.setPlainText("5")
-        self.ui.process_time_edit.setPlainText("10")
+        # ▶ 공통 UI 초기화
+        self._reset_process_ui_fields()
 
     @Slot(str)
     def _handle_critical_error(self, error_message):
@@ -973,15 +988,8 @@ class MainDialog(QDialog):
             self.ui.Sputter_Stop_Button.setEnabled(False)
             self.update_stage_monitor("CSV 공정 완료")
 
-            self.ui.Power_edit.setPlainText("0.0")
-            self.ui.Voltage_edit.setPlainText("0.0")
-            self.ui.Current_edit.setPlainText("0.0")
-            self.ui.for_p_edit.setPlainText("0.0")
-            self.ui.ref_p_edit.setPlainText("0.0")
-            self.ui.Ar_flow_edit.setPlainText("0.0")
-            self.ui.O2_flow_edit.setPlainText("0.0")
-            self.ui.Shutter_delay_edit.setPlainText("5")
-            self.ui.process_time_edit.setPlainText("10")
+            # ▶ 공통 UI 초기화
+            self._reset_process_ui_fields()
             return
 
         row = self.csv_rows[self.csv_index]
