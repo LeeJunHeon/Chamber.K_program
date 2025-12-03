@@ -944,6 +944,15 @@ class MainDialog(QDialog):
     
     def _start_next_csv_step(self):
         """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료."""
+        # ✅ STOP 등으로 CSV 리스트 전체가 취소된 뒤에
+        #    _start_next_csv_step 이 호출되면 아무 것도 하지 않고 무시
+        if not self.csv_mode or not self.csv_rows or self.csv_cancelled:
+            log_message_to_monitor(
+                "정보",
+                "_start_next_csv_step 호출됐지만 CSV 모드가 아니거나 취소 플래그가 켜져 있어서 무시합니다.",
+            )
+            return
+
         self.csv_index += 1
 
         # 모든 행을 다 돌았으면 종료
