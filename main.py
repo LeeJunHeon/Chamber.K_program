@@ -551,9 +551,12 @@ class MainDialog(QDialog):
     def _handle_process_finished(self):
         self.on_status_message("정보", "프로세스 종료중.")
 
+        # ★ 이번 STEP이 정상 종료됐는지 여부를 먼저 보관
+        last_step_ok = getattr(self, "_chk_process_ok", False)
+
         # ★ 정상적으로 완료된 공정만 ChK_log.csv 에 한 줄 추가
         try:
-            if getattr(self, "_chk_process_ok", False):
+            if last_step_ok:
                 row = self._build_chk_csv_row()
                 ok = append_chk_csv_row(row)
                 if ok:
@@ -586,13 +589,40 @@ class MainDialog(QDialog):
                 self.current_process_name = ""     # (선택) 이름 흔적 제거
                 self._last_params = None           # (선택) 파라미터 흔적 제거
 
-                # ▶ 공통 UI 초기화
+                # ▶ 공정 상태 및 UI 초기화
+                self.ui.Sputter_Start_Button.setEnabled(True)
+                self.ui.Sputter_Stop_Button.setEnabled(False)
+                self.update_stage_monitor("CSV 공정 취소됨")
                 self._reset_process_ui_fields()
                 return
 
-            # (2) STOP이 아닌 정상 종료/기타 사유 → 다음 STEP 진행
-            self._start_next_csv_step()
-            return
+            # ✅ (2) STOP이 아닌 경우: 성공/실패에 따라 분기
+            if last_step_ok:
+                # 이전 STEP이 정상 종료된 경우에만 다음 STEP으로 진행
+                self._start_next_csv_step()
+                return
+            else:
+                # ❌ 실패/에러로 끝난 경우 → 이후 STEP들은 실행하지 않고 CSV 리스트 공정 종료
+                log_message_to_monitor(
+                    "경고",
+                    "CSV 공정 중 실패 발생 → 다음 공정을 실행하지 않고 리스트 공정을 종료합니다.",
+                )
+
+                # CSV 상태 전체 초기화
+                self.csv_mode = False
+                self.csv_rows = []
+                self.csv_index = -1
+                self.csv_file_path = None
+                self.current_process_name = ""
+                self._last_params = None
+
+                # 공정 상태 및 UI 초기화
+                self.process_running = False
+                self.ui.Sputter_Start_Button.setEnabled(True)
+                self.ui.Sputter_Stop_Button.setEnabled(False)
+                self.update_stage_monitor("CSV 공정 실패로 중단됨")
+                self._reset_process_ui_fields()
+                return
 
         # 🔻 여기 이하(단일 공정 종료 처리)는 그대로 유지
         self.process_running = False
