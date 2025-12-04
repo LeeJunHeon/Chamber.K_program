@@ -316,24 +316,20 @@ class Ui_Dialog(object):
         # --- Gas (Ar, O2) ---
         self.Ar_gas_radio = QCheckBox(Dialog)
         self.Ar_gas_radio.setObjectName(u"Ar_gas_radio")
-        self.Ar_gas_radio.setGeometry(QRect(760, 133, 71, 26))
+        self.Ar_gas_radio.setGeometry(QRect(760, 133, 171, 26))
         self.Ar_gas_radio.setChecked(True)
+
         self.O2_gas_radio = QCheckBox(Dialog)
         self.O2_gas_radio.setObjectName(u"O2_gas_radio")
-        self.O2_gas_radio.setGeometry(QRect(900, 133, 71, 26))
-        self.O2_gas_radio.setChecked(False)
+        self.O2_gas_radio.setGeometry(QRect(900, 133, 171, 26))
+        self.O2_gas_radio.setChecked(False) 
 
         # --- Flow ---
-        self.Ar_flow_label = QLabel(Dialog)
-        self.Ar_flow_label.setObjectName(u"Ar_flow_label")
-        self.Ar_flow_label.setGeometry(QRect(785, 135, 120, 20))
         self.Ar_flow_edit = QPlainTextEdit(Dialog)
         self.Ar_flow_edit.setObjectName(u"Ar_flow_edit")
         self.Ar_flow_edit.setGeometry(QRect(760, 155, 131, 31))
         self.Ar_flow_edit.setPlainText("5")
-        self.O2_flow_label = QLabel(Dialog)
-        self.O2_flow_label.setObjectName(u"Ar_flow_label")
-        self.O2_flow_label.setGeometry(QRect(925, 135, 120, 20))
+
         self.O2_flow_edit = QPlainTextEdit(Dialog)
         self.O2_flow_edit.setObjectName(u"O2_flow_edit")
         self.O2_flow_edit.setGeometry(QRect(900, 155, 131, 31))
@@ -348,24 +344,19 @@ class Ui_Dialog(object):
         self.working_pressure_edit.setPlainText("2")
 
         # --- Power (RF, DC) ---
-        self.rf_power_label = QLabel(Dialog)
-        self.rf_power_label.setObjectName(u"rf_power_label")
-        self.rf_power_label.setGeometry(QRect(780, 245, 81, 20))
         self.rf_power_checkbox = QCheckBox(Dialog)
         self.rf_power_checkbox.setObjectName(u"rf_power_checkbox")
-        self.rf_power_checkbox.setGeometry(QRect(760, 245, 20, 20))
+        self.rf_power_checkbox.setGeometry(QRect(760, 245, 131, 20))
 
-        self.dc_power_label = QLabel(Dialog)
-        self.dc_power_label.setObjectName(u"dc_power_label")
-        self.dc_power_label.setGeometry(QRect(920, 245, 81, 20))
         self.dc_power_checkbox = QCheckBox(Dialog)
         self.dc_power_checkbox.setObjectName(u"dc_power_checkbox")
-        self.dc_power_checkbox.setGeometry(QRect(900, 245, 20, 20))
+        self.dc_power_checkbox.setGeometry(QRect(900, 245, 131, 20))
 
         self.RF_power_edit = QPlainTextEdit(Dialog)
         self.RF_power_edit.setObjectName(u"RF_power_edit")
         self.RF_power_edit.setGeometry(QRect(760, 265, 131, 31))
         self.RF_power_edit.setPlainText("200")
+
         self.DC_power_edit = QPlainTextEdit(Dialog)
         self.DC_power_edit.setObjectName(u"DC_power_edit")
         self.DC_power_edit.setGeometry(QRect(900, 265, 131, 31))
@@ -557,11 +548,27 @@ class Ui_Dialog(object):
         # self.target_pressure_label.setText(QCoreApplication.translate("Dialog", u"target pressure", None))
         # self.Ar_gas_label.setText(QCoreApplication.translate("Dialog", u"Ar", None))
         # self.O2_gas_label.setText(QCoreApplication.translate("Dialog", u"O2", None))
-        self.Ar_flow_label.setText(QCoreApplication.translate("Dialog", u"Ar flow [sccm]", None))
-        self.O2_flow_label.setText(QCoreApplication.translate("Dialog", u"O2 flow [sccm]", None))
-        self.working_pressure_label.setText(QCoreApplication.translate("Dialog", u"working pressure [mTorr]", None))
-        self.rf_power_label.setText(QCoreApplication.translate("Dialog", u"RF power", None))
-        self.dc_power_label.setText(QCoreApplication.translate("Dialog", u"DC power", None))
+        
+        # ▶ Ar/O2 텍스트를 체크박스에 표시
+        self.Ar_gas_radio.setText(
+            QCoreApplication.translate("Dialog", u"Ar flow [sccm]", None)
+        )
+        self.O2_gas_radio.setText(
+            QCoreApplication.translate("Dialog", u"O2 flow [sccm]", None)
+        )
+
+        self.working_pressure_label.setText(
+            QCoreApplication.translate("Dialog", u"working pressure [mTorr]", None)
+        )
+
+        # ▶ RF/DC 텍스트도 체크박스에 표시
+        self.rf_power_checkbox.setText(
+            QCoreApplication.translate("Dialog", u"RF power", None)
+        )
+        self.dc_power_checkbox.setText(
+            QCoreApplication.translate("Dialog", u"DC power", None)
+        )
+
         self.shutter_delay_label.setText(QCoreApplication.translate("Dialog", u"Shutter delay [min]", None))
         self.process_time_label.setText(QCoreApplication.translate("Dialog", u"process time [min]", None))
         self.for_p_label.setText(QCoreApplication.translate("Dialog", u"for.P", None))
