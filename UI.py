@@ -317,12 +317,12 @@ class Ui_Dialog(object):
         self.Ar_gas_radio = QCheckBox(Dialog)
         self.Ar_gas_radio.setObjectName(u"Ar_gas_radio")
         self.Ar_gas_radio.setGeometry(QRect(760, 133, 171, 26))
-        self.Ar_gas_radio.setChecked(True)
+        #self.Ar_gas_radio.setChecked(True)
 
         self.O2_gas_radio = QCheckBox(Dialog)
         self.O2_gas_radio.setObjectName(u"O2_gas_radio")
         self.O2_gas_radio.setGeometry(QRect(900, 133, 171, 26))
-        self.O2_gas_radio.setChecked(False) 
+        #self.O2_gas_radio.setChecked(False) 
 
         # --- Flow ---
         self.Ar_flow_edit = QPlainTextEdit(Dialog)

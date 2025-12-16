@@ -1,8 +1,10 @@
 import sys
 from functools import partial
-from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop
+from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
 from pathlib import Path
+
+import re
 import csv
 import datetime
 
@@ -78,6 +80,13 @@ class MainDialog(QDialog):
         self.csv_index: int = -1                      # 현재 실행 중인 줄 index
         self.csv_mode: bool = False                  # True면 '리스트 공정 모드'
         self.csv_cancelled: bool = False              # ✅ STOP 시 리스트 전체 취소 플래그
+
+        # --- CSV Delay(공정 사이 대기) 상태 ---
+        self._csv_delay_timer: QTimer | None = None
+        self._csv_delay_active: bool = False
+        self._csv_delay_total_sec: int = 0
+        self._csv_delay_remaining_sec: int = 0
+        self._csv_delay_name: str = ""
 
         # --- ChK CSV용 평균값 누적 변수 초기화 ---
         self._reset_chk_stats()
@@ -316,13 +325,16 @@ class MainDialog(QDialog):
         # 🔹 CSV를 미리 읽어서 1번째 스텝을 UI에 반영
         if self._load_csv_process_list() and self.csv_rows:
             first_row = self.csv_rows[0]
-            params = self._build_params_from_csv_row(first_row)
-            self._apply_params_to_ui(params)
+            first_name = (first_row.get("Process_name") or "").strip()
+            delay_sec = self._parse_csv_delay_seconds(first_name)
 
-            name = params.get("process_name") or "STEP 1"
-            self.update_stage_monitor(
-                f"CSV 미리보기: 1/{len(self.csv_rows)} - {name}"
-            )
+            if delay_sec is not None:
+                self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {first_name} (대기 스텝)")
+            else:
+                params = self._build_params_from_csv_row(first_row)
+                self._apply_params_to_ui(params)
+                name = params.get("process_name") or "STEP 1"
+                self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {name}")
 
     def _load_csv_process_list(self) -> bool:
         """
@@ -405,6 +417,12 @@ class MainDialog(QDialog):
         if self.csv_mode:
             self.csv_cancelled = True
             log_message_to_monitor("정보", "사용자 STOP → CSV 리스트 전체 취소 플래그 설정")
+
+        # ✅ CSV Delay(대기) 중이면 즉시 타이머 끊고 리스트 정리
+        if getattr(self, "_csv_delay_active", False):
+            log_message_to_monitor("정보", "CSV Delay 중 STOP → 딜레이 즉시 중단 및 리스트 공정 취소")
+            self._cancel_csv_list_now("CSV 공정 취소됨")
+            return
 
         # 실제 공정이 돌고 있으면 프로세스 스레드 쪽에 중단 요청
         if self.process_controller and self.process_running:
@@ -510,7 +528,7 @@ class MainDialog(QDialog):
     def _reset_process_ui_fields(self):
         """공정 종료/중단 후 Sputter 관련 UI를 '초기 상태'로 리셋."""
         # --- Gas 선택 (UI.py 기본값: Ar 체크, O2 해제) ---
-        self.ui.Ar_gas_radio.setChecked(True)
+        self.ui.Ar_gas_radio.setChecked(False)
         self.ui.O2_gas_radio.setChecked(False)
 
         # --- Flow (UI.py 기본값: Ar=5, O2 공백) ---
@@ -546,6 +564,125 @@ class MainDialog(QDialog):
         self.ui.Current_edit.setPlainText("0.0")
         self.ui.for_p_edit.setPlainText("0.0")
         self.ui.ref_p_edit.setPlainText("0.0")
+
+    # ============= CSV Delay (공정 사이 대기) =============
+    _CSV_DELAY_RE = re.compile(r"^\s*delay\s+(\d+(?:\.\d+)?)\s*([smhd])\s*$", re.IGNORECASE)
+
+    def _parse_csv_delay_seconds(self, process_name: str) -> int | None:
+        """Process_name이 'delay 60m' 같은 형태면 대기 시간(초)을 반환, 아니면 None."""
+        if not process_name:
+            return None
+        m = self._CSV_DELAY_RE.match(process_name)
+        if not m:
+            return None
+
+        try:
+            num = float(m.group(1))
+        except Exception:
+            return None
+
+        unit = (m.group(2) or "m").lower()
+        mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(unit)
+        if mult is None:
+            return None
+
+        sec = int(num * mult)
+        return max(sec, 0)
+
+    def _fmt_hms(self, seconds: int) -> str:
+        seconds = max(int(seconds or 0), 0)
+        h, r = divmod(seconds, 3600)
+        m, s = divmod(r, 60)
+        return f"{h:d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
+
+    def _stop_csv_delay_timer(self) -> None:
+        t = getattr(self, "_csv_delay_timer", None)
+        if t is not None:
+            try:
+                t.stop()
+                t.deleteLater()
+            except Exception:
+                pass
+        self._csv_delay_timer = None
+
+    def _cancel_csv_list_now(self, stage_text: str = "CSV 공정 취소됨") -> None:
+        """CSV 리스트 공정을 즉시 정리(딜레이/공정 중 어디서 STOP을 눌러도 공통으로 사용)."""
+        self._stop_csv_delay_timer()
+        self._csv_delay_active = False
+        self._csv_delay_total_sec = 0
+        self._csv_delay_remaining_sec = 0
+        self._csv_delay_name = ""
+
+        self.csv_cancelled = False
+        self.csv_mode = False
+        self.csv_rows = []
+        self.csv_index = -1
+        self.csv_file_path = None
+        self.current_process_name = ""
+        self._last_params = None
+
+        self.process_running = False
+        self.ui.Sputter_Start_Button.setEnabled(True)
+        self.ui.Sputter_Stop_Button.setEnabled(False)
+        self.update_stage_monitor(stage_text)
+        self._reset_process_ui_fields()
+
+    def _start_csv_delay_step(self, delay_sec: int, raw_name: str) -> None:
+        """CSV 리스트 중 'delay Xm' 스텝 실행: UI는 멈추지 않고(타이머로) 카운트다운."""
+        self._stop_csv_delay_timer()
+
+        self._csv_delay_active = True
+        self._csv_delay_total_sec = max(int(delay_sec), 0)
+        self._csv_delay_remaining_sec = self._csv_delay_total_sec
+        self._csv_delay_name = raw_name
+
+        step_no = self.csv_index + 1
+        total = len(self.csv_rows)
+
+        # 공정처럼 보이게 UI 버튼 상태 유지
+        self.process_running = True
+        self.ui.Sputter_Start_Button.setEnabled(False)
+        self.ui.Sputter_Stop_Button.setEnabled(True)
+
+        log_message_to_monitor(
+            "Process",
+            f"CSV DELAY STEP {step_no}/{total} 시작: {raw_name} (총 {self._fmt_hms(self._csv_delay_total_sec)})",
+        )
+
+        # 즉시 1회 표시 (UI에 알아보기 쉽게)
+        self.update_stage_monitor(
+            f"CSV {step_no}/{total} - {raw_name} (남은 {self._fmt_hms(self._csv_delay_remaining_sec)})"
+        )
+
+        # 1초마다 카운트다운
+        self._csv_delay_timer = QTimer(self)
+        self._csv_delay_timer.setInterval(1000)
+        self._csv_delay_timer.timeout.connect(self._on_csv_delay_tick)
+        self._csv_delay_timer.start()
+
+    @Slot()
+    def _on_csv_delay_tick(self) -> None:
+        # 외부에서 취소/종료된 경우
+        if (not self.csv_mode) or self.csv_cancelled or (not self._csv_delay_active):
+            self._stop_csv_delay_timer()
+            return
+
+        self._csv_delay_remaining_sec -= 1
+
+        step_no = self.csv_index + 1
+        total = len(self.csv_rows)
+
+        if self._csv_delay_remaining_sec <= 0:
+            self._stop_csv_delay_timer()
+            self._csv_delay_active = False
+            self.process_running = False
+            log_message_to_monitor("정보", f"CSV DELAY 완료: {self._csv_delay_name}")
+            self._start_next_csv_step()
+            return
+
+        self.update_stage_monitor(
+            f"CSV {step_no}/{total} - {self._csv_delay_name} (남은 {self._fmt_hms(self._csv_delay_remaining_sec)})"
+        )
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
@@ -1023,6 +1160,18 @@ class MainDialog(QDialog):
             return
 
         row = self.csv_rows[self.csv_index]
+
+        raw_name = (row.get("Process_name") or "").strip()
+        delay_sec = self._parse_csv_delay_seconds(raw_name)
+        if delay_sec is not None:
+            if delay_sec <= 0:
+                log_message_to_monitor("정보", f"CSV DELAY 스킵: {raw_name} (0초)")
+                self._start_next_csv_step()
+                return
+
+            self._start_csv_delay_step(delay_sec, raw_name)
+            return
+
         params = self._build_params_from_csv_row(row)
 
         # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해
