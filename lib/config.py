@@ -105,7 +105,7 @@ RF_FAIL_MAX_TICKS = 10         # 1초 tick 기준, 20초 연속이면 실패로 
 
 # === MFC ===
 FLOW_ERROR_TOLERANCE = 0.05  # 5% 오차 허용
-FLOW_ERROR_MAX_COUNT = 3     # 3회 연속 불일치 시 경고
+FLOW_ERROR_MAX_COUNT = 5     # 3회 연속 불일치 시 경고
 
 # === MFC 타이밍/간격 상수 ===
 # 주기/타이머

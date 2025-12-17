@@ -82,6 +82,7 @@ class MFCController(QObject):
         self.gas_map = {1: "Ar", 2: "O2"}       # ← 2채널만
         self.last_setpoints = {1: 0.0, 2: 0.0}  # 장비 단위(=UI 단위와 동일)
         self.flow_error_counters = {1: 0, 2: 0}
+        self._flow_oob_latched = False
 
         # 압력 모니터링용 (SP1 기준, UI 단위)
         self.last_pressure_setpoint: float = 0.0
@@ -480,6 +481,9 @@ class MFCController(QObject):
             # 🔸 모니터링 구간이 끝날 때는 에러 카운터도 리셋
             self.flow_error_counters = {1: 0, 2: 0}
             self.pressure_error_count = 0
+            
+            # FLOW_MON 트리거 후 Stop 완료 전까지 중복 실패 발화 방지
+            self._flow_oob_latched = False
 
     def _enqueue_poll_cycle(self):
         self._read_flow_all_async(tag="[POLL R60]")
@@ -998,7 +1002,11 @@ class MFCController(QObject):
             # 가스 ON/안정화 구간에서 쌓인 카운터는 의미 없으니 리셋
             if channel in self.flow_error_counters:
                 self.flow_error_counters[channel] = 0
+            self._flow_oob_latched = False  # ✅ 모니터링 구간 밖이면 latch 해제
             return
+        
+        if getattr(self, "_flow_oob_latched", False):
+            return  # ✅ 이미 FLOW_MON으로 STOP 들어갔으면 추가 발화 방지
 
         # 0) 이번 공정에서 사용하지 않는 채널이면 모니터링하지 않음
         actives = getattr(self, "_active_channels", None)
@@ -1019,6 +1027,7 @@ class MFCController(QObject):
             # 허용 범위 밖 → 연속 카운트 증가
             self.flow_error_counters[channel] += 1
             if self.flow_error_counters[channel] >= FLOW_ERROR_MAX_COUNT:
+                self._flow_oob_latched = True  # ✅ FLOW_MON 트리거 후 중복 발화 방지
                 msg = (
                     f"Ch{channel} 유량이 설정값에서 5% 이상 벗어났습니다. "
                     f"(목표: {target_flow:.2f}, 현재: {actual_flow:.2f})"

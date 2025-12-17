@@ -1,6 +1,6 @@
 import sys
 from functools import partial
-from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QTimer
+from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QTimer, Qt
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
 from pathlib import Path
 
@@ -147,7 +147,8 @@ class MainDialog(QDialog):
         # MFC -> Process (결과 보고)
         self.mfc_controller.command_confirmed.connect(self.process_controller._on_mfc_confirmed)
         self.mfc_controller.command_failed.connect(
-            lambda cmd, why: self.process_controller._on_mfc_failed(f"{cmd}: {why}")
+            self.process_controller._on_mfc_failed,
+            type=Qt.ConnectionType.QueuedConnection
         )
         
         # 새로 만든 신호를 Process Controller의 stop_process 슬롯에 연결
@@ -788,9 +789,11 @@ class MainDialog(QDialog):
 
     @Slot(str)
     def _handle_critical_error(self, error_message):
-        QMessageBox.critical(self, "치명적 오류", f"장비와의 통신에 문제가 발생하여 공정을 중단했습니다.\n\n사유: {error_message}")
-        self._chk_process_ok = False  # 에러로 끝난 공정은 실패
-        self._handle_process_finished()
+        QMessageBox.critical(self, "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
+        self._chk_process_ok = False
+
+        # ✅ 여기서 _handle_process_finished()를 직접 호출하지 마세요.
+        # stop 시퀀스가 끝나면 ProcessController.finished가 1번만 호출해줍니다.
 
     def update_stage_monitor(self, stage_text):
         self.ui.stage_monitor.setPlainText(stage_text)
@@ -850,6 +853,9 @@ class MainDialog(QDialog):
 
     def update_dc_status_display(self, power, voltage, current):
         """DC 파워 측정값 (P, V, I)을 UI에 표시"""
+        if not getattr(self, "process_running", False):
+            return
+
         # 전압 / 전류
         self.ui.Voltage_edit.setPlainText(f"{voltage:.2f}")
         self.ui.Current_edit.setPlainText(f"{current:.3f}")

@@ -525,10 +525,18 @@ class SputterProcessController(QObject):
                 self.status_message.emit("경고", f"MFC 확인 무시: '{cmd}', 기대 '{expected}'")
         # 다른 액션 중일 때 들어온 확인은 무시
 
-    @Slot(str)
-    def _on_mfc_failed(self, why: str):
+    @Slot(str, str)
+    def _on_mfc_failed(self, cmd: str, why: str):
         if not self._running:
             return
+        
+        # 1) 유량 모니터링 실패(가스 부족/불안정 등)
+        if cmd == "FLOW_MON":
+            self.status_message.emit("MFC(실패)", f"[FLOW_MON] {why}")
+            self.critical_error.emit(f"가스 유량 이탈로 공정 중단: {why}")
+            self.stop_process()
+            return
+        
         step = self._steps[self._idx] if 0 <= self._idx < len(self._steps) else None
         bad = (step.params[0] if (step and step.params) else "?")
         self.status_message.emit("MFC(실패)", f"'{bad}' 실패: {why}")
