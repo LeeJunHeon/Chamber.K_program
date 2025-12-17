@@ -17,6 +17,11 @@ from lib.config import (
 # DC power 유지 구간에서 허용하는 최소 전류 (A)
 DC_MIN_CURRENT_ABORT = 0.05
 
+# ---- 램프업 무응답 보호(최소 수정) ----
+DC_FAIL_ISET_THRESHOLD = 0.20   # 설정 전류가 이 이상인데도
+DC_FAIL_POWER_THRESHOLD = 1.0   # 측정 파워가 이 값보다 계속 낮으면(=거의 0으로 간주)
+DC_FAIL_MAX_TICKS = 20          # 1초 tick 기준, 20초 연속이면 실패로 판단
+
 class DCPowerController(QObject):
     update_dc_status_display = Signal(float, float, float)  # (P, V, I)
     status_message = Signal(str, str)
@@ -50,6 +55,8 @@ class DCPowerController(QObject):
         self.step_up               = 0.001 # 부족 시(+) 1초당 +3mA
         self.step_down             = 0.001 # 과다 시(-) 1초당 -6mA
         self.step_down_fast        = 0.005 # "빠른 하강"시 1초당 -40mA (공격적)
+
+        self._fail_no_output_ticks = 0
 
     # ---------------- 연결 ----------------
     @Slot()
@@ -97,6 +104,8 @@ class DCPowerController(QObject):
         self.power_error_count = 0 # ★ 새 공정 시작 시 편차 카운터 초기화
         self.status_message.emit("DCpower", f"프로세스 시작 (목표: {self.target_power:.1f} W)")
 
+        self._fail_no_output_ticks = 0
+
         # 초기화: 전압·전류 동시 설정(APPLy) + 출력 ON
         #  - APPLy는 전압·전류를 동시에 설정할 때만 사용
         if not self._initialize_power_supply(self._clamp_v(DC_MAX_VOLTAGE), self._clamp_i(DC_INITIAL_CURRENT)):
@@ -131,6 +140,21 @@ class DCPowerController(QObject):
                 self.status_message.emit("DCpower", f"{self.target_power:.1f}W 도달. 파워 유지 시작")
                 self.target_reached.emit()
                 return
+            
+            # --- 램프업 무응답 보호: 설정전류는 올렸는데 파워가 계속 '거의 0'이면 실패 ---
+            if diff > 0 and self.current_current >= DC_FAIL_ISET_THRESHOLD and now_power <= DC_FAIL_POWER_THRESHOLD:
+                self._fail_no_output_ticks += 1
+                if self._fail_no_output_ticks >= DC_FAIL_MAX_TICKS:
+                    self.status_message.emit(
+                        "재시작",
+                        (f"DC 램프업 실패: Iset≥{DC_FAIL_ISET_THRESHOLD}A인데 P≤{DC_FAIL_POWER_THRESHOLD}W가 "
+                        f"{DC_FAIL_MAX_TICKS}s 지속. 장비 OFF/인터락/부하/케이블 확인 필요. "
+                        f"(P={now_power:.2f}W, V={now_v:.2f}V, I={now_i:.4f}A, Iset={self.current_current:.4f}A)")
+                    )
+                    self.stop_process()
+                    return
+            else:
+                self._fail_no_output_ticks = 0
 
             if now_v > 1.0:
                 # 기본 권장 변화량(dI ≈ dP/V)
