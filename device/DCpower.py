@@ -11,16 +11,9 @@ from lib.config import (
     DC_PORT, DC_BAUDRATE,
     DC_INITIAL_VOLTAGE, DC_INITIAL_CURRENT, DC_MAX_VOLTAGE,
     DC_MAX_CURRENT, DC_MAX_POWER, DC_TOLERANCE_WATT, DC_MAX_ERROR_COUNT,
-    DC_POWER_ERROR_RATIO, DC_POWER_ERROR_MAX_COUNT,
+    DC_MIN_CURRENT_ABORT, DC_FAIL_ISET_THRESHOLD, DC_FAIL_POWER_THRESHOLD,
+    DC_FAIL_MAX_TICKS,
 )
-
-# DC power 유지 구간에서 허용하는 최소 전류 (A)
-DC_MIN_CURRENT_ABORT = 0.05
-
-# ---- 램프업 무응답 보호(최소 수정) ----
-DC_FAIL_ISET_THRESHOLD = 0.20   # 설정 전류가 이 이상인데도
-DC_FAIL_POWER_THRESHOLD = 1.0   # 측정 파워가 이 값보다 계속 낮으면(=거의 0으로 간주)
-DC_FAIL_MAX_TICKS = 20          # 1초 tick 기준, 20초 연속이면 실패로 판단
 
 class DCPowerController(QObject):
     update_dc_status_display = Signal(float, float, float)  # (P, V, I)

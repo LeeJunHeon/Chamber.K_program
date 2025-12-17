@@ -75,6 +75,14 @@ DC_MAX_ERROR_COUNT = 5     # 연속 실패 허용 횟수
 DC_POWER_ERROR_RATIO = 0.05      # 목표 파워의 ±5%까지 허용
 DC_POWER_ERROR_MAX_COUNT = 3     # 3회 연속 초과 시 에러
 
+# DC power 유지 구간에서 허용하는 최소 전류 (A)
+DC_MIN_CURRENT_ABORT = 0.05
+
+# ---- 램프업 무응답 보호(최소 수정) ----
+DC_FAIL_ISET_THRESHOLD = 0.20   # 설정 전류가 이 이상인데도
+DC_FAIL_POWER_THRESHOLD = 1.0   # 측정 파워가 이 값보다 계속 낮으면(=거의 0으로 간주)
+DC_FAIL_MAX_TICKS = 20          # 1초 tick 기준, 20초 연속이면 실패로 판단
+
 # --- RFpower ---
 RF_FORWARD_SCALING_MAX_WATT  = 594.5  # for.p 센서 교정 상수
 RF_REFLECTED_SCALING_MAX_WATT = 200.0 # ref.p 센서 교정 상수
@@ -89,6 +97,11 @@ RF_TOLERANCE_POWER = 1.0   # 목표 Power 허용 오차
 # ★ 추가: RF 파워 편차 감시용
 RF_POWER_ERROR_RATIO = 0.05      # 목표 파워의 ±5%까지 허용
 RF_POWER_ERROR_MAX_COUNT = 3     # 3회 연속 초과 시 에러
+
+# ---- 최소 보호 로직(장비 OFF/인터락/출력 무응답 대비) ----
+RF_FAIL_DAC_THRESHOLD = 100   # DAC가 이 이상인데도
+RF_FAIL_FORP_THRESHOLD = 1.0   # for.p가 이 값보다 계속 낮으면(=거의 0으로 간주)
+RF_FAIL_MAX_TICKS = 10         # 1초 tick 기준, 20초 연속이면 실패로 판단
 
 # === MFC ===
 FLOW_ERROR_TOLERANCE = 0.05  # 5% 오차 허용

@@ -2,19 +2,13 @@
 import time
 from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer
 from lib.config import (
-    RF_MAX_POWER, RF_RAMP_STEP, RF_MAX_ERROR_COUNT, 
-    RF_TOLERANCE_POWER, RF_FORWARD_SCALING_MAX_WATT, 
-    RF_REFLECTED_SCALING_MAX_WATT, RF_DAC_FULL_SCALE,
-    RF_RAMP_DOWN_STEP, RF_POWER_ERROR_RATIO, RF_POWER_ERROR_MAX_COUNT,
+    RF_MAX_POWER, RF_RAMP_STEP, RF_FAIL_DAC_THRESHOLD, 
+    RF_TOLERANCE_POWER, RF_FAIL_FORP_THRESHOLD, RF_FAIL_MAX_TICKS,
+    RF_DAC_FULL_SCALE, RF_RAMP_DOWN_STEP, 
 )
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from device.PLC import PLCController
-
-# ---- 최소 보호 로직(장비 OFF/인터락/출력 무응답 대비) ----
-RF_FAIL_DAC_THRESHOLD = 100   # DAC가 이 이상인데도
-RF_FAIL_FORP_THRESHOLD = 1.0   # for.p가 이 값보다 계속 낮으면(=거의 0으로 간주)
-RF_FAIL_MAX_TICKS = 10         # 1초 tick 기준, 20초 연속이면 실패로 판단
 
 class RFPowerController(QObject):
     update_rf_status_display = Signal(float, float)
