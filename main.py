@@ -331,7 +331,12 @@ class MainDialog(QDialog):
             if delay_sec is not None:
                 self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {first_name} (대기 스텝)")
             else:
-                params = self._build_params_from_csv_row(first_row)
+                try:
+                    params = self._build_params_from_csv_row(first_row)
+                except Exception as e:
+                    QMessageBox.warning(self, "CSV 레시피 오류", f"첫 번째 공정 파라미터가 잘못되었습니다:\n{e}")
+                    self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - (오류)")
+                    return
                 self._apply_params_to_ui(params)
                 name = params.get("process_name") or "STEP 1"
                 self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {name}")
@@ -349,7 +354,18 @@ class MainDialog(QDialog):
         try:
             with open(self.csv_file_path, "r", encoding="utf-8-sig") as f:
                 reader = csv.DictReader(f)
-                rows = [row for row in reader if any(v.strip() for v in row.values())]
+                def _has_content(row: dict) -> bool:
+                    for k, v in (row or {}).items():
+                        if (k or "").strip() == "#":
+                            continue
+                        if v is None:
+                            continue
+                        if str(v).strip() != "":
+                            return True
+                    return False
+
+                rows = [row for row in reader if _has_content(row)]
+
         except Exception as ex:
             QMessageBox.critical(self, "CSV 읽기 오류", f"CSV 파일을 읽는 중 오류가 발생했습니다.\n\n{ex}")
             return False
@@ -915,86 +931,96 @@ class MainDialog(QDialog):
     # ============= csv 공정 =============
     def _build_params_from_csv_row(self, row: dict) -> dict:
         """
-        sputter_process_recipe.csv 한 줄(row)을 기반으로
-        process_controller 에 전달할 params dict 생성.
-
-        CSV 헤더(현재 파일 기준):
-        #,Process_name,base_pressure,working_pressure,
-        process_time,shutter_delay,Ar,O2,Ar_flow,O2_flow,
-        use_dc_power,dc_power,use_rf_power,rf_power,
-        gun1,gun2,G1 Target,G2 Target
+        ✅ 변경(중요)
+        - CSV 값이 비어있을 때(UI 값으로) 폴백하지 않음
+        - 필요한 값이 비어있거나 형식이 잘못되면 ValueError로 즉시 중단
+        - use_* 가 False(또는 비어있음)인 기능은 안전하게 OFF(0) 처리
         """
-        # 1) UI 현재 상태를 기본값으로 먼저 읽음 (컬럼이 비어있을 때 폴백용)
-        use_ar_gas = self.ui.Ar_gas_radio.isChecked()
-        use_o2_gas = self.ui.O2_gas_radio.isChecked()
 
-        def _float_from(text, default=0.0):
-            try:
-                return float(str(text).strip())
-            except Exception:
-                return default
-
-        def _bool_from(v, default=False):
+        def _s(key: str):
+            v = (row or {}).get(key)
             if v is None:
+                return None
+            s = str(v).strip()
+            return s if s != "" else None
+
+        def _b(key: str, default: bool = False) -> bool:
+            s = _s(key)
+            if s is None:
                 return default
-            s = str(v).strip().lower()
-            if s == "":
+            return s.lower() in ("1", "y", "yes", "true", "t", "on")
+
+        def _f(key: str, *, required: bool = False, default: float | None = None) -> float | None:
+            s = _s(key)
+            if s is None:
+                if required:
+                    raise ValueError(f"CSV '{key}' 값이 비어 있습니다.")
                 return default
-            return s in ("1", "y", "yes", "true", "t", "on")
+            try:
+                return float(s)
+            except Exception:
+                raise ValueError(f"CSV '{key}' 값이 숫자가 아닙니다: {s!r}")
 
-        # UI 기본값
-        ar_flow_ui   = _float_from(self.ui.Ar_flow_edit.toPlainText(), 0.0)
-        o2_flow_ui   = _float_from(self.ui.O2_flow_edit.toPlainText(), 0.0)
-        work_p_ui    = _float_from(self.ui.working_pressure_edit.toPlainText(), 0.0)
-        rf_power_ui  = _float_from(self.ui.RF_power_edit.toPlainText(), 0.0)
-        dc_power_ui  = _float_from(self.ui.DC_power_edit.toPlainText(), 0.0)
-        sh_delay_ui  = _float_from(self.ui.Shutter_delay_edit.toPlainText(), 0.0)
-        proc_time_ui = _float_from(self.ui.process_time_edit.toPlainText(), 0.0)
-        use_g1_ui    = self.ui.G1_checkbox.isChecked()
-        use_g2_ui    = self.ui.G2_checkbox.isChecked()
+        process_name = (_s("Process_name") or "").strip()
 
-        # 2) CSV 컬럼으로 덮어쓰기
-        # 가스 선택
-        use_ar_gas = _bool_from(row.get("Ar"), use_ar_gas)
-        use_o2_gas = _bool_from(row.get("O2"), use_o2_gas)
+        # ---- 가스(필수) ----
+        use_ar_gas = _b("Ar", False)
+        use_o2_gas = _b("O2", False)
+        if not (use_ar_gas or use_o2_gas):
+            raise ValueError(f"[{process_name or 'STEP'}] Ar/O2 중 하나 이상을 1(ON)로 지정해야 합니다.")
 
-        # 유량
-        ar_flow = _float_from(row.get("Ar_flow", ar_flow_ui), ar_flow_ui)
-        o2_flow = _float_from(row.get("O2_flow", o2_flow_ui), o2_flow_ui)
+        ar_flow = 0.0
+        o2_flow = 0.0
+        if use_ar_gas:
+            ar_flow = _f("Ar_flow", required=True)  # type: ignore
+            if ar_flow is None or ar_flow <= 0:
+                raise ValueError(f"[{process_name or 'STEP'}] Ar=ON 인데 Ar_flow가 비어있거나 0 이하입니다.")
+        if use_o2_gas:
+            o2_flow = _f("O2_flow", required=True)  # type: ignore
+            if o2_flow is None or o2_flow <= 0:
+                raise ValueError(f"[{process_name or 'STEP'}] O2=ON 인데 O2_flow가 비어있거나 0 이하입니다.")
 
-        # 압력 / 시간
-        work_p    = _float_from(row.get("working_pressure", work_p_ui), work_p_ui)
-        proc_time = _float_from(row.get("process_time",    proc_time_ui), proc_time_ui)
-        sh_delay  = _float_from(row.get("shutter_delay",   sh_delay_ui),  sh_delay_ui)
+        # ---- 압력/시간(필수) ----
+        work_p = _f("working_pressure", required=True)  # type: ignore
+        proc_time = _f("process_time", required=True)   # type: ignore
+        sh_delay = _f("shutter_delay", required=False, default=0.0)
 
-        # 파워 (use_*가 0/false 이면 강제로 0W 처리)
-        use_dc = _bool_from(row.get("use_dc_power"), None)
-        use_rf = _bool_from(row.get("use_rf_power"), None)
+        if work_p is None or work_p <= 0:
+            raise ValueError(f"[{process_name or 'STEP'}] working_pressure가 비어있거나 0 이하입니다.")
+        if proc_time is None or proc_time <= 0:
+            raise ValueError(f"[{process_name or 'STEP'}] process_time이 비어있거나 0 이하입니다.")
+        if sh_delay is None:
+            sh_delay = 0.0
+        if sh_delay < 0:
+            raise ValueError(f"[{process_name or 'STEP'}] shutter_delay는 0 이상이어야 합니다.")
 
-        dc_power_val = _float_from(row.get("dc_power", dc_power_ui), dc_power_ui)
-        rf_power_val = _float_from(row.get("rf_power", rf_power_ui), rf_power_ui)
+        # ---- 파워(선택) : use_*가 비어있으면 OFF로 간주 ----
+        use_dc = _b("use_dc_power", False)
+        use_rf = _b("use_rf_power", False)
 
-        if use_dc is False:
-            dc_power = 0.0
-        else:
-            dc_power = dc_power_val
+        dc_power = 0.0
+        rf_power = 0.0
 
-        if use_rf is False:
-            rf_power = 0.0
-        else:
-            rf_power = rf_power_val
+        if use_dc:
+            dc_power_val = _f("dc_power", required=True)  # type: ignore
+            if dc_power_val is None or dc_power_val <= 0:
+                raise ValueError(f"[{process_name or 'STEP'}] use_dc_power=ON 인데 dc_power가 비어있거나 0 이하입니다.")
+            dc_power = float(dc_power_val)
 
-        # Gun 사용 여부
-        use_g1 = _bool_from(row.get("gun1"), use_g1_ui)
-        use_g2 = _bool_from(row.get("gun2"), use_g2_ui)
+        if use_rf:
+            rf_power_val = _f("rf_power", required=True)  # type: ignore
+            if rf_power_val is None or rf_power_val <= 0:
+                raise ValueError(f"[{process_name or 'STEP'}] use_rf_power=ON 인데 rf_power가 비어있거나 0 이하입니다.")
+            rf_power = float(rf_power_val)
 
-        # ★ G1/G2 타겟 이름 (없으면 빈 문자열)
-        g1_target_name = (row.get("G1 Target") or "").strip()
-        g2_target_name = (row.get("G2 Target") or "").strip()
+        # ---- Gun(선택) ----
+        use_g1 = _b("gun1", False)
+        use_g2 = _b("gun2", False)
 
-        process_name = (row.get("Process_name") or "").strip()
+        g1_target_name = (_s("G1 Target") or "").strip()
+        g2_target_name = (_s("G2 Target") or "").strip()
 
-        # selected_gas / mfc_flow (기존 단일 공정 로직과 맞춤)
+        # selected_gas / mfc_flow (백워드 호환용)
         if use_ar_gas and not use_o2_gas:
             selected_gas = "Ar"
             mfc_flow = ar_flow
@@ -1005,43 +1031,49 @@ class MainDialog(QDialog):
             selected_gas = "Ar"
             mfc_flow = ar_flow
 
-        # RF 보정값은 CSV에 없으므로 UI 값을 그대로 사용
+        # RF 보정값은 CSV에 없으므로 UI 값을 그대로 사용(단, RF를 쓰는 경우 값이 비면 오류)
         offset_text = self.ui.offset_edit.toPlainText().strip()
         param_text  = self.ui.param_edit.toPlainText().strip()
-        rf_offset = _float_from(offset_text or 6.79, 6.79)
-        rf_param  = _float_from(param_text  or 1.0395, 1.0395)
 
-        params = {
+        def _float_ui(text, default):
+            try:
+                return float(str(text).strip())
+            except Exception:
+                return default
+
+        if use_rf and (not offset_text or not param_text):
+            raise ValueError(f"[{process_name or 'STEP'}] RF 사용인데 Offset/Param 값이 UI에 비어있습니다.")
+
+        rf_offset = _float_ui(offset_text or 6.79, 6.79)
+        rf_param  = _float_ui(param_text  or 1.0395, 1.0395)
+
+        return {
             "use_ar_gas": use_ar_gas,
             "use_o2_gas": use_o2_gas,
-            "ar_flow": ar_flow,
-            "o2_flow": o2_flow,
+            "ar_flow": float(ar_flow),
+            "o2_flow": float(o2_flow),
 
             "selected_gas": selected_gas,
-            "mfc_flow": mfc_flow,
+            "mfc_flow": float(mfc_flow),
 
-            # ★ 중요: process_controller 는 sp1_set 키를 사용함
-            "sp1_set": work_p,
+            "sp1_set": float(work_p),
 
-            "dc_power": dc_power,
-            "rf_power": rf_power,
-            "shutter_delay": sh_delay,
-            "process_time": proc_time,
+            "dc_power": float(dc_power),
+            "rf_power": float(rf_power),
+            "shutter_delay": float(sh_delay),
+            "process_time": float(proc_time),
 
-            "rf_offset": rf_offset,
-            "rf_param": rf_param,
+            "rf_offset": float(rf_offset),
+            "rf_param": float(rf_param),
 
-            "use_g1": use_g1,
-            "use_g2": use_g2,
+            "use_g1": bool(use_g1),
+            "use_g2": bool(use_g2),
 
-            # ★ 로그용 타겟 이름
             "g1_target_name": g1_target_name,
             "g2_target_name": g2_target_name,
 
             "process_name": process_name,
         }
-
-        return params
     
     def _apply_params_to_ui(self, params: dict) -> None:
         """
@@ -1172,7 +1204,30 @@ class MainDialog(QDialog):
             self._start_csv_delay_step(delay_sec, raw_name)
             return
 
-        params = self._build_params_from_csv_row(row)
+        # (안전) '#'(번호)만 채워진 빈 행은 그냥 스킵
+        def _is_blank_row(r: dict) -> bool:
+            for k, v in (r or {}).items():
+                if (k or "").strip() == "#":
+                    continue
+                if v is None:
+                    continue
+                if str(v).strip() != "":
+                    return False
+            return True
+
+        if _is_blank_row(row):
+            log_message_to_monitor("정보", f"CSV 빈 행 스킵: index={self.csv_index + 1}")
+            self._start_next_csv_step()
+            return
+
+        try:
+            params = self._build_params_from_csv_row(row)
+        except Exception as e:
+            QMessageBox.critical(self, "CSV 레시피 오류",
+                                f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}")
+            log_message_to_monitor("ERROR", f"CSV 레시피 오류로 리스트 공정을 중단합니다: {e}")
+            self._cancel_csv_list_now("CSV 레시피 오류로 중단")
+            return
 
         # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해
         #    파라미터 저장 + 평균값 누적 초기화
