@@ -11,6 +11,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from device.PLC import PLCController
 
+# ---- 최소 보호 로직(장비 OFF/인터락/출력 무응답 대비) ----
+RF_FAIL_DAC_THRESHOLD = 100   # DAC가 이 이상인데도
+RF_FAIL_FORP_THRESHOLD = 1.0   # for.p가 이 값보다 계속 낮으면(=거의 0으로 간주)
+RF_FAIL_MAX_TICKS = 10         # 1초 tick 기준, 20초 연속이면 실패로 판단
+
 class RFPowerController(QObject):
     update_rf_status_display = Signal(float, float)
     status_message = Signal(str, str)
@@ -39,6 +44,8 @@ class RFPowerController(QObject):
         self.control_timer.setInterval(1000) # 1초마다 tick
         self.control_timer.timeout.connect(self._on_timer_tick)
 
+        self._fail_no_output_ticks = 0
+
     @Slot(dict)
     def start_process(self, power_params):
         if self._is_running:
@@ -56,6 +63,7 @@ class RFPowerController(QObject):
         # ★ 새 공정 시작 시 편차 카운터/반사파 대기 상태 초기화
         self.power_error_count = 0
         self.ref_p_wait_start_time = None
+        self._fail_no_output_ticks = 0
 
         self._is_running = True
         self.state = "RAMPING_UP"
@@ -104,6 +112,20 @@ class RFPowerController(QObject):
                 self.state = "MAINTAINING"
                 self.target_reached.emit()
                 return
+            
+            # --- 최소 보호: DAC가 충분히 큰데 for.p가 계속 '거의 0'이면 실패 처리 ---
+            if self.current_pwm_value >= RF_FAIL_DAC_THRESHOLD and for_p <= RF_FAIL_FORP_THRESHOLD:
+                self._fail_no_output_ticks += 1
+                if self._fail_no_output_ticks >= RF_FAIL_MAX_TICKS:
+                    self.status_message.emit(
+                        "재시작",
+                        f"RF 출력 무응답 감지: DAC≥{RF_FAIL_DAC_THRESHOLD}인데 for.p≤{RF_FAIL_FORP_THRESHOLD}W가 "
+                        f"{RF_FAIL_MAX_TICKS}s 지속. (for={for_p:.1f}W, ref={ref_p if ref_p is not None else -1:.1f}W, PWM={self.current_pwm_value})"
+                    )
+                    self.stop_process()
+                    return
+            else:
+                self._fail_no_output_ticks = 0
 
             # 2. 현재 스텝 목표치에 도달했는지 확인
             if for_p >= self.current_power_step:
