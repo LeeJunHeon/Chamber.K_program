@@ -818,6 +818,9 @@ class MainDialog(QDialog):
             self._chk_sampling_enabled = False
 
     def update_mfc_flow_display(self, gas, value):
+        if not getattr(self, "process_running", False):
+            return
+        
         edit = self.ui.Ar_flow_edit if gas == "Ar" else self.ui.O2_flow_edit
         edit.setPlainText(f"{value:.2f}")
 
@@ -838,6 +841,9 @@ class MainDialog(QDialog):
             self._cnt_o2 += 1
 
     def update_mfc_pressure_display(self, pressure):
+        if not getattr(self, "process_running", False):
+            return
+
         self.ui.working_pressure_edit.setPlainText("ERROR" if pressure is None else str(pressure))
 
         if not getattr(self, "_chk_sampling_enabled", False):
@@ -870,6 +876,9 @@ class MainDialog(QDialog):
             self._cnt_dc += 1
 
     def update_rf_status_display(self, forward_power, reflected_power):
+        if not getattr(self, "process_running", False):
+            return
+
         self.ui.for_p_edit.setPlainText(f"{forward_power:.2f}")
         self.ui.ref_p_edit.setPlainText(f"{reflected_power:.2f}")
 
