@@ -148,8 +148,10 @@ class SputterProcessController(QObject):
         self._invoke_self("_setup_timers")
 
         # 장치 연결 확인
+        # 시작 전 Power OFF를 위해 DC는 가능하면 미리 연결 시도 (DC 미사용 공정이면 실패해도 진행)
+        _invoke_connect(self.dc, "connect_dcpower_device")
+
         if float(params.get('dc_power', 0) or 0) > 0:
-            _invoke_connect(self.dc, "connect_dcpower_device")
             if not self._is_connected(self.dc):
                 self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
                 self._running = False
@@ -236,6 +238,11 @@ class SputterProcessController(QObject):
         sp1_ui = float(p.get('sp1_set', 0.0))
 
         steps: List[ProcessStep] = []
+
+        # --- 2.5) 시작 전 안전 정리: Power OFF 먼저 (이전 공정 잔류 방지) ---
+        steps.append(ProcessStep(ActionType.DC_POWER_STOP, "PRE: DC Power OFF"))
+        steps.append(ProcessStep(ActionType.RF_POWER_STOP, "PRE: RF Power OFF"))
+        steps.append(ProcessStep(ActionType.DELAY, "PRE: Power OFF settle", duration_sec=1))
 
         # --- 3) 초기화: 각 채널 Flow OFF ---
         for ch in channels:
