@@ -20,6 +20,7 @@ from device.RFpower import RFPowerController
 class MainDialog(QDialog):
     shutdown_requested = Signal()
     request_process_stop = Signal()
+    clear_plc_fault = Signal()  # 새 공정 시작 시 PLC 통신 실패 래치 해제
 
     """메인 UI 및 전체 공정/장치 연결 클래스"""
     def __init__(self):
@@ -154,6 +155,7 @@ class MainDialog(QDialog):
         # 새로 만든 신호를 Process Controller의 stop_process 슬롯에 연결
         # 이렇게 하면 stop_process는 Process 스레드에서 안전하게 실행됩니다.
         self.request_process_stop.connect(self.process_controller.stop_process) # <<< ▼ 이 줄을 추가하세요 ▼
+        self.clear_plc_fault.connect(self.plc_controller.clear_fault_latch)
 
         # --- 4. 컨트롤러 -> UI 상태 업데이트 연결 ---
         self.process_controller.finished.connect(self._handle_process_finished)
@@ -184,6 +186,8 @@ class MainDialog(QDialog):
         if self.process_running:
             QMessageBox.warning(self, "경고", "이미 공정이 진행 중입니다.")
             return
+        
+        self.clear_plc_fault.emit()
         
         # === 1) CSV 모드인지 먼저 확인 ===
         if self.csv_file_path:
@@ -388,11 +392,21 @@ class MainDialog(QDialog):
     def on_status_message(self, level, message):
         log_message_to_monitor(level, message)
         if level == "재시작":
-            log_message_to_monitor("재시작", "모든 공정을 중지합니다. 다시 시작하십시오.")
-            # 재시작으로 중단된 공정도 정상 종료가 아니라고 간주
+            log_message_to_monitor("재시작", "PLC 통신 이상 → 모든 공정을 중지합니다.")
             self._chk_process_ok = False
+
+            # ✅ CSV 리스트가 진행중이면, 다음 스텝이 이어지지 않도록 취소 플래그부터 세팅
+            if getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None):
+                self.csv_cancelled = True
+
+                # (1) 지금이 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
+                if getattr(self, "_csv_delay_active", False) or (not self.process_running):
+                    self._cancel_csv_list_now("PLC 통신 끊김 → CSV 공정 취소")
+                    return
+
+            # (2) 실제 공정 스텝이 돌고 있으면: stop_process로 안전 종료
             if self.process_controller and self.process_running:
-                self.request_process_stop.emit()   
+                self.request_process_stop.emit()
 
     @Slot(str, bool)
     def set_indicator(self, name, state: bool):
@@ -1272,8 +1286,9 @@ class MainDialog(QDialog):
         self.process_running = True
         self.ui.Sputter_Start_Button.setEnabled(False)
         self.ui.Sputter_Stop_Button.setEnabled(True)
-        self.process_controller.start_process_flow(params)
 
+        self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
+        self.process_controller.start_process_flow(params)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

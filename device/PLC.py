@@ -92,9 +92,16 @@ class PLCController(QObject):
         self.rf_controller = None
         self._last_button_states: Dict[str, bool] = {}
 
+        self._coil_read_fail_latched = False
+
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
         self.rf_controller = rf_controller
+
+    @Slot()
+    def clear_fault_latch(self):
+        """새 공정 시작 전에 PLC 코일 읽기 실패 래치를 해제."""
+        self._coil_read_fail_latched = False
 
     # ============== 연결/해제 =================
     @Slot()
@@ -162,7 +169,14 @@ class PLCController(QObject):
                 for i, b in enumerate(bits):
                     result[s + i] = bool(b)
             except Exception as ex:
-                self.status_message.emit("PLC(경고)", f"Coils 읽기 실패 [{s}..{e}]: {ex}")
+                # 코일 읽기 실패는 PLC 통신 이상으로 간주 → 공정 중단(재시작) 트리거
+                if not getattr(self, "_coil_read_fail_latched", False):
+                    self._coil_read_fail_latched = True
+                    self.status_message.emit("재시작", f"PLC Coils 읽기 실패 [{s}..{e}]: {ex} → 공정을 중단합니다.")
+                else:
+                    # 이미 중단 트리거가 걸린 상태면 경고만 남김(로그 스팸 방지)
+                    self.status_message.emit("PLC(경고)", f"Coils 읽기 실패(반복) [{s}..{e}]: {ex}")
+
         return result
 
     def _safe_read_discrete_inputs(self, start_addr: int, count: int) -> List[bool]:
