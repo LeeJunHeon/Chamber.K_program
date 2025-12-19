@@ -429,25 +429,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # --- 9) 종료: Main Shutter 닫기, 가스 밸브 모두 닫기 ---
-        steps.append(
-            ProcessStep(
-                ActionType.PLC_CMD,
-                "Main Shutter Close",
-                params=('MS_button', False),
-            )
-        )
-
-        for btn in gas_buttons:
-            gas_name = "Ar" if "Ar" in btn else "O2"
-            steps.append(
-                ProcessStep(
-                    ActionType.PLC_CMD,
-                    f"{gas_name} Valve Close",
-                    params=(btn, False),
-                )
-            )
-
         return steps
 
     # ==================== 스텝 실행 ====================
