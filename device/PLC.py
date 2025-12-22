@@ -94,6 +94,8 @@ class PLCController(QObject):
 
         self._coil_read_fail_latched = False
 
+        self._last_sensor_states: Dict[str, bool] = {}
+
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
         self.rf_controller = rf_controller
@@ -215,7 +217,9 @@ class PLCController(QObject):
                     coil_addrs = list(PLC_SENSOR_BITS.values())               # [256,257,258,259,260]
                     addr_to_state = self._read_coils_grouped(coil_addrs)      # FC=1로 그룹 폴링 (이미 구현됨)
                     for name, addr in PLC_SENSOR_BITS.items():
-                        self.update_sensor_display.emit(name, bool(addr_to_state.get(addr, False)))
+                        v = bool(addr_to_state.get(addr, False))
+                        self._last_sensor_states[name] = v          # ★ 추가: 센서 상태 캐시
+                        self.update_sensor_display.emit(name, v)
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"센서(코일) 읽기 실패: {ex}")
 
@@ -224,6 +228,29 @@ class PLCController(QObject):
         finally:
             self._busy = False
             self._mutex.unlock()
+
+    def _is_atm_ok(self) -> bool:
+        """
+        ATM 상태면 True.
+        1) 폴링 캐시(_last_sensor_states) 우선 사용
+        2) 캐시가 False면, 폴링 타이밍 문제 방지를 위해 ATM만 즉시 1회 재조회 시도
+        """
+        # 1) 캐시 우선
+        if bool(self._last_sensor_states.get("ATM", False)):
+            return True
+
+        # 2) 캐시가 없거나 False면, 즉시 재조회(가능하면)
+        atm_addr = PLC_SENSOR_BITS.get("ATM")
+        if atm_addr is None or self.instrument is None:
+            return False
+
+        try:
+            v = bool(self._read_coils_grouped([atm_addr]).get(atm_addr, False))
+            # 즉시 읽은 값도 캐시에 반영해두면 UI/로직이 일관됨
+            self._last_sensor_states["ATM"] = v
+            return v
+        except Exception:
+            return False
 
     # ============== 쓰기(버튼 클릭 반영) =========
     @Slot(str, bool)
@@ -241,9 +268,26 @@ class PLCController(QObject):
             if btn_name == "Door_Button":
                 up_addr = PLC_COIL_MAP.get("Doorup_button")
                 dn_addr = PLC_COIL_MAP.get("Doordn_button")
+                
                 if up_addr is None or dn_addr is None:
                     self.status_message.emit("PLC(오류)", "Door up/down 주소가 설정되지 않았습니다.")
                     return
+
+                # ---- ATM 인터락: Door Open은 ATM일 때만 허용 ----
+                if state:  # Door Open(Up)
+                    if not self._is_atm_ok():
+                        self.status_message.emit("PLC(경고)", "ATM이 아니어서 Door Open(UP)을 차단했습니다.")
+
+                        # UI를 원복: Door_Button은 Up 상태 표시이므로 False로 되돌림
+                        self.update_button_display.emit("Door_Button", False)
+                        self._last_button_states["Door_Button"] = False
+
+                        # 개별 버튼도 쓰고 있다면 같이 원복
+                        self.update_button_display.emit("Doorup_button", False)
+                        self._last_button_states["Doorup_button"] = False
+
+                        # Down은 여기서 건드리지 않는 게 안전(예상치 못한 닫힘 방지)
+                        return
 
                 self.instrument.write_bit(up_addr, int(state), functioncode=5)
                 self.instrument.write_bit(dn_addr, int(not state), functioncode=5)
@@ -267,6 +311,18 @@ class PLCController(QObject):
                     return
 
                 if btn_name == "Doorup_button":
+                    if state and (not self._is_atm_ok()):
+                        if not self._is_atm_ok():
+                            self.status_message.emit("PLC(경고)", "ATM이 아니어서 Doorup을 차단했습니다.")
+
+                            # UI 원복
+                            self.update_button_display.emit("Door_Button", False)
+                            self._last_button_states["Door_Button"] = False
+                            self.update_button_display.emit("Doorup_button", False)
+                            self._last_button_states["Doorup_button"] = False
+
+                            return
+
                     # Up = state, Down은 동시에 켜지지 않도록
                     self.instrument.write_bit(up_addr, int(state), functioncode=5)
                     if state:
