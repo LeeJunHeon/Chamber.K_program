@@ -1,6 +1,6 @@
 import sys
 from functools import partial
-from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QTimer, Qt
+from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QTimer, Qt, QElapsedTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
 from pathlib import Path
 
@@ -84,6 +84,7 @@ class MainDialog(QDialog):
 
         # --- CSV Delay(공정 사이 대기) 상태 ---
         self._csv_delay_timer: QTimer | None = None
+        self._csv_delay_clock: QElapsedTimer | None = None   # ✅ 추가
         self._csv_delay_active: bool = False
         self._csv_delay_total_sec: int = 0
         self._csv_delay_remaining_sec: int = 0
@@ -635,6 +636,7 @@ class MainDialog(QDialog):
             except Exception:
                 pass
         self._csv_delay_timer = None
+        self._csv_delay_clock = None   # ✅ 추가
 
     def _cancel_csv_list_now(self, stage_text: str = "CSV 공정 취소됨") -> None:
         """CSV 리스트 공정을 즉시 정리(딜레이/공정 중 어디서 STOP을 눌러도 공통으로 사용)."""
@@ -643,6 +645,7 @@ class MainDialog(QDialog):
         self._csv_delay_total_sec = 0
         self._csv_delay_remaining_sec = 0
         self._csv_delay_name = ""
+        self._csv_delay_clock = None   # ✅ (중복이지만 안전)
 
         self.csv_cancelled = False
         self.csv_mode = False
@@ -667,6 +670,10 @@ class MainDialog(QDialog):
         self._csv_delay_remaining_sec = self._csv_delay_total_sec
         self._csv_delay_name = raw_name
 
+        # ✅ 시작시간(모노토닉) 기록
+        self._csv_delay_clock = QElapsedTimer()
+        self._csv_delay_clock.start()
+
         step_no = self.csv_index + 1
         total = len(self.csv_rows)
 
@@ -688,6 +695,7 @@ class MainDialog(QDialog):
         # 1초마다 카운트다운
         self._csv_delay_timer = QTimer(self)
         self._csv_delay_timer.setInterval(1000)
+        self._csv_delay_timer.setTimerType(Qt.TimerType.PreciseTimer)  # ✅ 권장
         self._csv_delay_timer.timeout.connect(self._on_csv_delay_tick)
         self._csv_delay_timer.start()
 
@@ -698,7 +706,13 @@ class MainDialog(QDialog):
             self._stop_csv_delay_timer()
             return
 
-        self._csv_delay_remaining_sec -= 1
+        # ✅ elapsed 기반으로 남은 시간 재계산 (UI 렉이 있어도 누적오차 없음)
+        if self._csv_delay_clock is not None:
+            elapsed_sec = int(self._csv_delay_clock.elapsed() // 1000)
+            self._csv_delay_remaining_sec = max(self._csv_delay_total_sec - elapsed_sec, 0)
+        else:
+            # 혹시 모를 fallback
+            self._csv_delay_remaining_sec = max(self._csv_delay_remaining_sec - 1, 0)
 
         step_no = self.csv_index + 1
         total = len(self.csv_rows)
