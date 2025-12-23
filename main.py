@@ -910,13 +910,12 @@ class MainDialog(QDialog):
         - False -> Doordn_button (문 닫기)
         """
         if checked:
+            self.plc_controller.update_port_state('Doordn_button', False)
             self.plc_controller.update_port_state('Doorup_button', True)
-            # 필요 시 반대 코일을 내려주고 싶으면 아래 줄 주석 해제
-            # self.plc_controller.update_port_state('Doordn_button', False)
         else:
+            self.plc_controller.update_port_state('Doorup_button', False)
             self.plc_controller.update_port_state('Doordn_button', True)
-            # self.plc_controller.update_port_state('Doorup_button', False)
-
+            
     def closeEvent(self, event):
         """[수정됨] 안전한 스레드 종료 로직"""
         reply = QMessageBox.question(
