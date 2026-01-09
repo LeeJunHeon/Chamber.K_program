@@ -392,17 +392,21 @@ class MainDialog(QDialog):
 
     def on_status_message(self, level, message):
         log_message_to_monitor(level, message)
+
         if level == "재시작":
-            log_message_to_monitor("재시작", "PLC 통신 이상 → 모든 공정을 중지합니다.")
+            # ✅ 여기서 'PLC 통신 이상' 같은 고정 문구를 추가로 찍지 않는다.
+            #    (원인은 message에 이미 들어오므로, 그걸 그대로 표시/전파)
             self._chk_process_ok = False
+
+            reason = (message or "").strip() or "오류"
 
             # ✅ CSV 리스트가 진행중이면, 다음 스텝이 이어지지 않도록 취소 플래그부터 세팅
             if getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None):
                 self.csv_cancelled = True
 
-                # (1) 지금이 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
+                # (1) 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
                 if getattr(self, "_csv_delay_active", False) or (not self.process_running):
-                    self._cancel_csv_list_now("PLC 통신 끊김 → CSV 공정 취소")
+                    self._cancel_csv_list_now(f"{reason} → CSV 공정 취소")
                     return
 
             # (2) 실제 공정 스텝이 돌고 있으면: stop_process로 안전 종료

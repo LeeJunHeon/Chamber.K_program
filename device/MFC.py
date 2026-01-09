@@ -431,10 +431,21 @@ class MFCController(QObject):
 
     # ---------- 폴링 ----------
     def _is_poll_read_cmd(self, cmd_str: str, tag: str = "") -> bool:
-        if (tag or "").startswith("[POLL "):
+        # 폴링 타이머에서 넣는 주기적 읽기만 "poll"로 취급한다.
+        # (VERIFY/READ/STAB 등은 R60/R5여도 poll로 보지 않음)
+        return (tag or "").startswith("[POLL")
+    
+    def _has_pending_poll(self) -> bool:
+        # in-flight가 poll이면 True
+        if self._inflight and self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
             return True
-        s = (cmd_str or "").lstrip().upper()
-        return s.startswith("R60") or s.startswith("R5")
+
+        # 큐에 poll이 하나라도 있으면 True
+        for c in self._cmd_q:
+            if self._is_poll_read_cmd(c.cmd_str, c.tag):
+                return True
+
+        return False
 
     def _purge_poll_reads_only(self, cancel_inflight: bool = True, reason: str = "") -> int:
         purged = 0
@@ -486,8 +497,18 @@ class MFCController(QObject):
             self._flow_oob_latched = False
 
     def _enqueue_poll_cycle(self):
+        # ✅ 포트가 열려있지 않으면 폴링이 큐에 쌓이기만 하므로 enqueue 하지 않음
+        if not (self.serial_mfc and self.serial_mfc.isOpen()):
+            return
+
+        # ✅ 이전 폴링(Flow/Pressure)이 아직 처리 중/대기 중이면 이번 tick은 스킵 (큐 폭증 방지)
+        if self._has_pending_poll():
+            return
+
+        # --- Flow ---
         self._read_flow_all_async(tag="[POLL R60]")
 
+        # --- Pressure ---
         def on_p(line: Optional[str]):
             val_hw = self._parse_pressure_value(line)
             if val_hw is None:
@@ -495,16 +516,17 @@ class MFCController(QObject):
             ui_val = self._to_ui_pressure(val_hw)
             fmt = "{:." + str(int(MFC_PRESSURE_DECIMALS)) + "f}"
             self.update_pressure.emit(fmt.format(ui_val))
-            # SP1 설정값 대비 압력 모니터링
             try:
                 self._monitor_pressure(ui_val)
             except Exception:
-                # 모니터링 중 예외로 폴링이 죽지 않도록 방어
                 traceback.print_exc()
 
         self.enqueue(
             MFC_COMMANDS['READ_PRESSURE'],
-            on_p, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS, tag='[POLL PRESS]'
+            on_p,
+            timeout_ms=MFC_TIMEOUT,
+            gap_ms=MFC_GAP_MS,
+            tag='[POLL PRESS]'
         )
 
     # ---------- 외부 명령(프로세스 컨트롤러) ----------
