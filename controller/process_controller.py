@@ -141,74 +141,78 @@ class SputterProcessController(QObject):
 
     @Slot(dict)
     def start_process_flow(self, params: Dict[str, Any]):
-        self.params = params
-        self._running = True
+        try:
+            self.params = params
+            self._running = True
 
-        # 타이머는 자신의 스레드에서 생성
-        self._invoke_self("_setup_timers")
+            # 타이머는 자신의 스레드에서 생성
+            self._invoke_self("_setup_timers")
 
-        # 장치 연결 확인
-        # 시작 전 Power OFF를 위해 DC는 가능하면 미리 연결 시도 (DC 미사용 공정이면 실패해도 진행)
-        _invoke_connect(self.dc, "connect_dcpower_device")
+            # 장치 연결 확인
+            # 시작 전 Power OFF를 위해 DC는 가능하면 미리 연결 시도 (DC 미사용 공정이면 실패해도 진행)
+            _invoke_connect(self.dc, "connect_dcpower_device")
 
-        if float(params.get('dc_power', 0) or 0) > 0:
-            if not self._is_connected(self.dc):
-                self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
+            if float(params.get('dc_power', 0) or 0) > 0:
+                if not self._is_connected(self.dc):
+                    self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
+                    self._running = False
+                    return
+
+            _invoke_connect(self.mfc, "connect_mfc_device")
+            if not self._is_connected(self.mfc):
+                self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
                 self._running = False
                 return
 
-        _invoke_connect(self.mfc, "connect_mfc_device")
-        if not self._is_connected(self.mfc):
-            self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
+            # 채널/버튼/파워 사용여부
+            use_ar = bool(params.get('use_ar_gas', False))
+            use_o2 = bool(params.get('use_o2_gas', False))
+
+            active_channels: list[int] = []
+            gas_buttons: list[str] = []
+
+            if use_ar:
+                active_channels.append(1)
+                gas_buttons.append("Ar_Button")
+
+            if use_o2:
+                active_channels.append(2)
+                gas_buttons.append("O2_Button")
+
+            # 아무 가스도 체크 안 된 경우 → 옛날 single-gas 파라미터로 fallback
+            if not active_channels:
+                gas = params.get('selected_gas', 'Ar')
+                ch = 1 if gas == "Ar" else 2
+                active_channels = [ch]
+                gas_buttons = ['Ar_Button' if ch == 1 else 'O2_Button']
+
+            # 내부 상태 저장
+            self._active_channels = active_channels
+            self._gas_valve_buttons = gas_buttons
+
+            # 기존 코드와의 호환(여러 곳에서 여전히 첫 채널만 쓰고 있음)
+            self._process_channel = active_channels[0]
+            self._gas_valve_button = gas_buttons[0]
+
+            # 🔹 MFC 쪽에도 이번 공정에서 실제 사용하는 채널 정보 전달
+            #    예: [1] 또는 [1, 2]
+            try:
+                self.command_requested.emit("set_active_channels", {"channels": active_channels})
+            except Exception:
+                pass
+
+            self.is_dc_on = float(params.get('dc_power', 0) or 0) > 0
+            self.is_rf_on = float(params.get('rf_power', 0) or 0) > 0
+
+            # 스텝 구성
+            self._steps = self._build_steps(params)
+            self._idx = -1
+
+            self.status_message.emit("정보", "Sputtering 공정을 시작합니다.")
+            self._next_step()
+        except Exception as e:
             self._running = False
-            return
-
-        # 채널/버튼/파워 사용여부
-        use_ar = bool(params.get('use_ar_gas', False))
-        use_o2 = bool(params.get('use_o2_gas', False))
-
-        active_channels: list[int] = []
-        gas_buttons: list[str] = []
-
-        if use_ar:
-            active_channels.append(1)
-            gas_buttons.append("Ar_Button")
-
-        if use_o2:
-            active_channels.append(2)
-            gas_buttons.append("O2_Button")
-
-        # 아무 가스도 체크 안 된 경우 → 옛날 single-gas 파라미터로 fallback
-        if not active_channels:
-            gas = params.get('selected_gas', 'Ar')
-            ch = 1 if gas == "Ar" else 2
-            active_channels = [ch]
-            gas_buttons = ['Ar_Button' if ch == 1 else 'O2_Button']
-
-        # 내부 상태 저장
-        self._active_channels = active_channels
-        self._gas_valve_buttons = gas_buttons
-
-        # 기존 코드와의 호환(여러 곳에서 여전히 첫 채널만 쓰고 있음)
-        self._process_channel = active_channels[0]
-        self._gas_valve_button = gas_buttons[0]
-
-        # 🔹 MFC 쪽에도 이번 공정에서 실제 사용하는 채널 정보 전달
-        #    예: [1] 또는 [1, 2]
-        try:
-            self.command_requested.emit("set_active_channels", {"channels": active_channels})
-        except Exception:
-            pass
-
-        self.is_dc_on = float(params.get('dc_power', 0) or 0) > 0
-        self.is_rf_on = float(params.get('rf_power', 0) or 0) > 0
-
-        # 스텝 구성
-        self._steps = self._build_steps(params)
-        self._idx = -1
-
-        self.status_message.emit("정보", "Sputtering 공정을 시작합니다.")
-        self._next_step()
+            self._abort_with_error(f"start_process_flow 예외: {e}")
 
     # ==================== 스텝 구성 ====================
     def _build_steps(self, p: Dict[str, Any]) -> List[ProcessStep]:
@@ -437,65 +441,98 @@ class SputterProcessController(QObject):
             )
 
         return steps
+    
+    # ==================== google chat 관련 추가 ====================
+    def _step_tag(self, step: Optional[ProcessStep] = None) -> str:
+        total = len(self._steps) if self._steps else 0
+        idx = self._idx
+        if step is None and 0 <= idx < total:
+            step = self._steps[idx]
+        act = step.action.value if step else "UNKNOWN"
+        msg = step.message if step else ""
+        if idx >= 0 and total > 0:
+            base = f"Step {idx+1}/{total} {act}"
+        else:
+            base = f"Step ?/{total} {act}"
+        return f"{base}: {msg}" if msg else base
+
+    def _abort_with_error(self, reason: str):
+        r = (reason or "").strip() or "오류"
+        try:
+            self.critical_error.emit(r)
+        except Exception:
+            pass
+        try:
+            self.request_stop()
+        except Exception:
+            # request_stop이 죽어도 UI가 안 멈추게 finished는 보장
+            try:
+                self._running = False
+                self.finished.emit()
+            except Exception:
+                pass
+    # ==================== google chat 관련 추가 ====================
 
     # ==================== 스텝 실행 ====================
-
     def _next_step(self):
-        if not self._running:
-            self.status_message.emit("오류", "중단 상태 — 다음 스텝 실행 안 함")
-            return
+        try:
+            if not self._running:
+                self.status_message.emit("오류", "중단 상태 — 다음 스텝 실행 안 함")
+                return
 
-        self._idx += 1
-        if self._idx >= len(self._steps):
-            self.status_message.emit("성공", "모든 스텝 완료 — 안전 종료로 이동")
-            self.stop_process()
-            return
+            self._idx += 1
+            if self._idx >= len(self._steps):
+                self.status_message.emit("성공", "모든 스텝 완료 — 안전 종료로 이동")
+                self.stop_process()
+                return
 
-        step = self._steps[self._idx]
-        self.stage_monitor.emit(f"[{self._idx+1}/{len(self._steps)}] {step.message}")
-        self.status_message.emit("공정", step.message)
+            step = self._steps[self._idx]
+            self.stage_monitor.emit(f"[{self._idx+1}/{len(self._steps)}] {step.message}")
+            self.status_message.emit("공정", step.message)
 
-        # 스텝 진입 시 폴링 설정
-        self.command_requested.emit("set_polling", {'enable': bool(step.polling)})
+            # 스텝 진입 시 폴링 설정
+            self.command_requested.emit("set_polling", {'enable': bool(step.polling)})
 
-        # 액션 분기
-        if step.action == ActionType.MFC_CMD:
-            cmd, args = step.params
-            self.command_requested.emit(cmd, dict(args))
+            # 액션 분기
+            if step.action == ActionType.MFC_CMD:
+                cmd, args = step.params
+                self.command_requested.emit(cmd, dict(args))
 
-        elif step.action == ActionType.PLC_CMD:
-            btn, st = step.params
-            self.update_plc_port.emit(str(btn), bool(st))
-            QTimer.singleShot(800, self._next_step)  # 릴레이/실린더 여유
+            elif step.action == ActionType.PLC_CMD:
+                btn, st = step.params
+                self.update_plc_port.emit(str(btn), bool(st))
+                QTimer.singleShot(800, self._next_step)  # 릴레이/실린더 여유
 
-        elif step.action == ActionType.DC_POWER_SET:
-            self.start_dc_power.emit(float(step.value or 0.0))
+            elif step.action == ActionType.DC_POWER_SET:
+                self.start_dc_power.emit(float(step.value or 0.0))
 
-        elif step.action == ActionType.DC_POWER_STOP:
-            self.stop_dc_power.emit()
-            QTimer.singleShot(100, self._next_step)
+            elif step.action == ActionType.DC_POWER_STOP:
+                self.stop_dc_power.emit()
+                QTimer.singleShot(100, self._next_step)
 
-        elif step.action == ActionType.RF_POWER_SET:
-            payload = {
-                'target': float(step.value or 0.0),
-                'offset': float(self.params.get('rf_offset', 0.0) or 0.0),
-                'param':  float(self.params.get('rf_param', 1.0) or 1.0),
-            }
-            self.start_rf_power.emit(payload)
+            elif step.action == ActionType.RF_POWER_SET:
+                payload = {
+                    'target': float(step.value or 0.0),
+                    'offset': float(self.params.get('rf_offset', 0.0) or 0.0),
+                    'param':  float(self.params.get('rf_param', 1.0) or 1.0),
+                }
+                self.start_rf_power.emit(payload)
 
-        elif step.action == ActionType.RF_POWER_STOP:
-            self.stop_rf_power.emit()
-            QTimer.singleShot(100, self._next_step)
+            elif step.action == ActionType.RF_POWER_STOP:
+                self.stop_rf_power.emit()
+                QTimer.singleShot(100, self._next_step)
 
-        elif step.action == ActionType.POWER_WAIT:
-            self._power_wait()
+            elif step.action == ActionType.POWER_WAIT:
+                self._power_wait()
 
-        elif step.action == ActionType.DELAY:
-            self._start_delay(int(step.duration_sec or 0), step.timer_purpose)
+            elif step.action == ActionType.DELAY:
+                self._start_delay(int(step.duration_sec or 0), step.timer_purpose)
 
-        else:
-            self.status_message.emit("오류", f"알 수 없는 액션: {step.action}")
-            self._next_step()
+            else:
+                self.status_message.emit("오류", f"알 수 없는 액션: {step.action}")
+                self._next_step()
+        except Exception as e:
+            self._abort_with_error(f"{self._step_tag()} | _next_step 예외: {e}")
 
     # ==================== 장치 콜백(MFC) ====================
 
@@ -519,17 +556,17 @@ class SputterProcessController(QObject):
             return
         
         # 1) 유량 모니터링 실패(가스 부족/불안정 등)
-        if cmd == "FLOW_MON":
-            self.status_message.emit("MFC(실패)", f"[FLOW_MON] {why}")
-            self.critical_error.emit(f"가스 유량 이탈로 공정 중단: {why}")
-            self.stop_process()
-            return
-        
         step = self._steps[self._idx] if 0 <= self._idx < len(self._steps) else None
+        tag = self._step_tag(step)
+
+        if cmd == "FLOW_MON":
+            self.status_message.emit("MFC(실패)", f"{tag} | [FLOW_MON] {why}")
+            self._abort_with_error(f"{tag} | 가스 유량 이탈로 공정 중단: {why}")
+            return
+
         bad = (step.params[0] if (step and step.params) else "?")
-        self.status_message.emit("MFC(실패)", f"'{bad}' 실패: {why}")
-        self.critical_error.emit(f"MFC 통신 오류: {why}")
-        self.stop_process()
+        self.status_message.emit("MFC(실패)", f"{tag} | '{bad}' 실패: {why}")
+        self._abort_with_error(f"{tag} | MFC '{bad}' 실패: {why}")
 
     # ==================== 파워 안정화 ====================
 
@@ -617,40 +654,43 @@ class SputterProcessController(QObject):
             self._next_step()
 
     def _on_tick(self):
-        # 프로세스 중이 아니면 타이머 정지 및 폴링 OFF
-        if not self._running:
-            if self._timer and self._timer.isActive():
-                self._timer.stop()
-            self.command_requested.emit("set_polling", {'enable': False})
-            return
+        try:
+            # 프로세스 중이 아니면 타이머 정지 및 폴링 OFF
+            if not self._running:
+                if self._timer and self._timer.isActive():
+                    self._timer.stop()
+                self.command_requested.emit("set_polling", {'enable': False})
+                return
 
-        # 딜레이 구간이 아닐 수 있음
-        if not self._delay_clock:
-            return
+            # 딜레이 구간이 아닐 수 있음
+            if not self._delay_clock:
+                return
 
-        # QElapsedTimer 기반으로 경과/잔여 시간 계산
-        elapsed_ms = self._delay_clock.elapsed()  # ms
-        elapsed_sec = int(elapsed_ms // 1000)
-        remaining = max(0, self._delay_total_sec - elapsed_sec)
+            # QElapsedTimer 기반으로 경과/잔여 시간 계산
+            elapsed_ms = self._delay_clock.elapsed()  # ms
+            elapsed_sec = int(elapsed_ms // 1000)
+            remaining = max(0, self._delay_total_sec - elapsed_sec)
 
-        # 초 단위로 값이 변했을 때만 UI 갱신
-        self._emit_delay_ui(remaining)
+            # 초 단위로 값이 변했을 때만 UI 갱신
+            self._emit_delay_ui(remaining)
 
-        # 종료 처리
-        if remaining <= 0:
-            # 하트비트 정지 및 폴링 OFF
-            if self._timer and self._timer.isActive():
-                self._timer.stop()
-            self.command_requested.emit("set_polling", {'enable': False})
+            # 종료 처리
+            if remaining <= 0:
+                # 하트비트 정지 및 폴링 OFF
+                if self._timer and self._timer.isActive():
+                    self._timer.stop()
+                self.command_requested.emit("set_polling", {'enable': False})
 
-            # 상태 초기화
-            self._delay_clock = None
-            self._delay_total_sec = 0
-            self._timer_purpose = None
-            self._last_emitted_sec = -1
+                # 상태 초기화
+                self._delay_clock = None
+                self._delay_total_sec = 0
+                self._timer_purpose = None
+                self._last_emitted_sec = -1
 
-            # 다음 스텝으로
-            self._next_step()
+                # 다음 스텝으로
+                self._next_step()
+        except Exception as e:
+            self._abort_with_error(f"{self._step_tag()} | timer(_on_tick) 예외: {e}")
 
     # ==================== 종료/정리 ====================
 
@@ -689,115 +729,132 @@ class SputterProcessController(QObject):
     @Slot()
     def _stop_impl(self):
         """실제 안전 종료(컨트롤러 스레드 안에서만 실행)."""
-        # 진행 중인 딜레이 즉시 중단
-        if self._timer and self._timer.isActive():
-            self._timer.stop()
-        self._delay_clock = None
-        self._delay_total_sec = 0
-        self._timer_purpose = None
-        self._last_emitted_sec = -1
+        try:
+            # 진행 중인 딜레이 즉시 중단
+            if self._timer and self._timer.isActive():
+                self._timer.stop()
+            self._delay_clock = None
+            self._delay_total_sec = 0
+            self._timer_purpose = None
+            self._last_emitted_sec = -1
 
-        # 파워 대기 루프가 돌고 있으면 즉시 깨움
-        if self._active_loops:
-            for _name, lp in self._active_loops:
-                try: lp.quit()
-                except: pass
-            self._active_loops.clear()
+            # 파워 대기 루프가 돌고 있으면 즉시 깨움
+            if self._active_loops:
+                for _name, lp in self._active_loops:
+                    try: lp.quit()
+                    except: pass
+                self._active_loops.clear()
 
-        # 여기서부터는 기존 stop_process 본문 그대로
-        if not self._running:
-            self.finished.emit()
-            self._stop_pending = False
-            return
+            # 여기서부터는 기존 stop_process 본문 그대로
+            if not self._running:
+                self.finished.emit()
+                self._stop_pending = False
+                return
 
-        self.status_message.emit("정보", "종료 시퀀스를 실행합니다.")
-        self._running = False
+            self.status_message.emit("정보", "종료 시퀀스를 실행합니다.")
+            self._running = False
 
-        # 폴링 OFF
-        self.command_requested.emit("set_polling", {'enable': False})
+            # 폴링 OFF
+            self.command_requested.emit("set_polling", {'enable': False})
 
-        # Main Shutter 닫기
-        self.stage_monitor.emit("M.S. close...")
-        self.update_plc_port.emit('MS_button', False)
+            # Main Shutter 닫기
+            self.stage_monitor.emit("M.S. close...")
+            self.update_plc_port.emit('MS_button', False)
 
-        # 파워 끄기
-        if self.is_dc_on:
-            self.status_message.emit("DCpower", "DC 파워 OFF")
-            self.stop_dc_power.emit()
-        if self.is_rf_on:
-            self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
+            # 파워 끄기
+            if self.is_dc_on:
+                self.status_message.emit("DCpower", "DC 파워 OFF")
+                self.stop_dc_power.emit()
+            if self.is_rf_on:
+                self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
 
-            # 이벤트 루프 준비
-            self._rfdown_wait = QEventLoop()
+                # 이벤트 루프 준비
+                self._rfdown_wait = QEventLoop()
 
-            # ★ RF → Process 스레드로 안전하게 큐드 연결
+                # ★ RF → Process 스레드로 안전하게 큐드 연결
+                try:
+                    self.rf.ramp_down_finished.connect(
+                        self._on_rf_rampdown_finished,
+                        type=Qt.ConnectionType.QueuedConnection
+                    )
+                except TypeError:
+                    # 일부 환경에서 type= 키워드가 안 먹으면 기본 Auto로도 무방
+                    self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
+
+                # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
+                QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
+
+                # 램프다운 시작
+                self.stop_rf_power.emit()
+
+                # 완료까지 대기
+                self._rfdown_wait.exec()
+
+                # 뒷정리
+                try:
+                    self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
+                except Exception:
+                    pass
+                self._rfdown_wait = None
+
+            # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리
+            channels = getattr(self, "_active_channels", None)
+            if not channels:
+                channels = [self._process_channel]
+
+            loop = QEventLoop()
+            def _quit(*_):
+                try:
+                    loop.quit()
+                except:
+                    pass
+
+            self.mfc.command_confirmed.connect(_quit)
+            self.mfc.command_failed.connect(_quit)
+
+            # 선택된 모든 채널 Flow OFF
+            for ch in channels:
+                self.command_requested.emit("FLOW_OFF", {'channel': ch})
+                loop.exec()
+
+            # 공용 밸브는 한 번만 VALVE_OPEN (안전하게 잔압 해소)
+            self.command_requested.emit("VALVE_OPEN", {})
+            loop.exec()
+
             try:
-                self.rf.ramp_down_finished.connect(
-                    self._on_rf_rampdown_finished,
-                    type=Qt.ConnectionType.QueuedConnection
-                )
-            except TypeError:
-                # 일부 환경에서 type= 키워드가 안 먹으면 기본 Auto로도 무방
-                self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
-
-            # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
-            QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
-
-            # 램프다운 시작
-            self.stop_rf_power.emit()
-
-            # 완료까지 대기
-            self._rfdown_wait.exec()
-
-            # 뒷정리
-            try:
-                self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
-            except Exception:
-                pass
-            self._rfdown_wait = None
-
-        # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리
-        channels = getattr(self, "_active_channels", None)
-        if not channels:
-            channels = [self._process_channel]
-
-        loop = QEventLoop()
-        def _quit(*_):
-            try:
-                loop.quit()
+                self.mfc.command_confirmed.disconnect(_quit)
+                self.mfc.command_failed.disconnect(_quit)
             except:
                 pass
 
-        self.mfc.command_confirmed.connect(_quit)
-        self.mfc.command_failed.connect(_quit)
+            # 건 셔터/가스 닫기
+            self.update_plc_port.emit('S1_button', False)
+            self.update_plc_port.emit('S2_button', False)
 
-        # 선택된 모든 채널 Flow OFF
-        for ch in channels:
-            self.command_requested.emit("FLOW_OFF", {'channel': ch})
-            loop.exec()
+            gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
+            for btn in gas_buttons:
+                gas_name = "Ar" if "Ar" in btn else "O2"
+                self.status_message.emit("PLC", f"{gas_name} Valve Close")
+                self.update_plc_port.emit(btn, False)
 
-        # 공용 밸브는 한 번만 VALVE_OPEN (안전하게 잔압 해소)
-        self.command_requested.emit("VALVE_OPEN", {})
-        loop.exec()
-
-        try:
-            self.mfc.command_confirmed.disconnect(_quit)
-            self.mfc.command_failed.disconnect(_quit)
-        except:
-            pass
-
-        # 건 셔터/가스 닫기
-        self.update_plc_port.emit('S1_button', False)
-        self.update_plc_port.emit('S2_button', False)
-
-        gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
-        for btn in gas_buttons:
-            gas_name = "Ar" if "Ar" in btn else "O2"
-            self.status_message.emit("PLC", f"{gas_name} Valve Close")
-            self.update_plc_port.emit(btn, False)
-
-        QTimer.singleShot(800, self._finish_stop)
-        self._stop_pending = False
+            QTimer.singleShot(800, self._finish_stop)
+            self._stop_pending = False
+        except Exception as e:
+            # 종료 시퀀스 중 예외도 잡아서 UI가 안 멈추게
+            try:
+                self.critical_error.emit(f"종료 시퀀스 예외: {e}")
+            except Exception:
+                pass
+            try:
+                self._running = False
+            except Exception:
+                pass
+            try:
+                self.finished.emit()
+            except Exception:
+                pass
+        finally:
+            self._stop_pending = False    
 
     @Slot()
     def _finish_stop(self):

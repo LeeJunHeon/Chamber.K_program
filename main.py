@@ -1,4 +1,6 @@
 import sys
+import threading
+import traceback
 from functools import partial
 from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QTimer, Qt, QElapsedTimer
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
@@ -48,6 +50,9 @@ class MainDialog(QDialog):
         # 공정 알림 상태
         self._chat_user_stopped: bool = False
         self._chat_errors: list[str] = []
+        self._chat_fail_notified: bool = False   # ✅ 실패 원인 일반채팅 중복 방지
+        self._chat_fail_reason: str = ""         # ✅ 이번 공정에서 “가장 먼저 잡힌” 실패 원인 1개
+
         # === Google Chat Notifier (CH.K) ===
 
         # ★ 이번 공정 이름(단일/CSV 공정 공통)
@@ -204,46 +209,144 @@ class MainDialog(QDialog):
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
 
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
-    def _chat_build_params(self, params: dict, process_name: str) -> dict:
-        p = dict(params or {})
-        p.setdefault('prefix', 'CHK Sputter')   # CH1&2 템플릿이 prefix에서 CH를 뽑음
-        p['process_note'] = process_name        # 공정 시작 카드 subtitle에 사용
-        p.setdefault('Process_name', process_name)
-        return p
-
     def _chat_reset_run_state(self):
         self._chat_user_stopped = False
         self._chat_errors = []
+        self._chat_fail_notified = False
+        self._chat_fail_reason = ""
+
+    def _chat_build_params(self, params: dict, process_name: str) -> dict:
+        """
+        CH1/CH2 템플릿과 동일한 구조로 ChatNotifier에 전달할 params를 만든다.
+        - CHK 구분: ch='CHK' 로 강제
+        - 공정명: process_note / Process_name 모두 채움
+        - 건/타겟 키 호환: g1_target_name -> G1_target_name 로 매핑
+        - 0W 표시 방지: dc_power/rf_power가 0이면 chat용 params에서 제거
+        """
+        p = dict(params or {})
+
+        # ✅ CHK로 확실히 구분되게 (카드 subtitle에 "CHK · ..."로 표시됨)
+        p["ch"] = "CHK"
+        p.setdefault("prefix", "CHK Sputter")
+
+        # ✅ 공정명(카드 표시용)
+        p["process_note"] = process_name
+        p.setdefault("Process_name", process_name)
+
+        # ✅ 건/타겟 키 매핑(현재 CHK UI 키는 g1_target_name 형태)
+        for i in (1, 2, 3):
+            low = f"g{i}_target_name"
+            hi  = f"G{i}_target_name"
+            if p.get(low) and not p.get(hi):
+                p[hi] = p.get(low)
+
+        # ✅ 0W 표기 방지(ChatNotifier는 값이 있으면 0도 표시할 수 있음)
+        try:
+            dc = float(p.get("dc_power", 0) or 0)
+        except Exception:
+            dc = 0
+        try:
+            rf = float(p.get("rf_power", 0) or 0)
+        except Exception:
+            rf = 0
+
+        p["use_dc_power"] = dc > 0
+        p["use_rf_power"] = rf > 0
+        if dc <= 0:
+            p.pop("dc_power", None)
+        if rf <= 0:
+            p.pop("rf_power", None)
+
+        return p
 
     def _chat_add_error(self, reason: str):
-        r = (reason or '').strip()
-        if r:
+        r = (reason or "").strip()
+        if not r:
+            return
+
+        # ✅ 중복 제거
+        if r not in self._chat_errors:
             self._chat_errors.append(r)
+
+        # ✅ 최초 실패 원인 1개 보관
+        if not self._chat_fail_reason:
+            self._chat_fail_reason = r
+
+    def _chat_notify_failed_now(self, reason: str, *, send_text: bool = False):
+        """
+        ✅ CH1&2 방식에 맞추기 위해 기본값(send_text=False)은 '저장만' 한다.
+        - 카드(종료) 이후에 실패 원인을 일반채팅으로 1회 추가 전송하는 건 _chat_notify_finished에서 수행
+        - 다만 필요하면 send_text=True로 즉시 전송도 가능
+        """
+        if not self.chat_chk:
+            return
+
+        r = (reason or "").strip()
+        if r:
+            self._chat_add_error(r)
+
+        # 즉시 전송을 원할 때만 (기본은 False)
+        if not send_text:
+            return
+
+        # STOP 중이거나 이미 보냈으면 중복 방지
+        if self._chat_user_stopped or self._chat_fail_notified:
+            return
+
+        name = self.current_process_name or "CHK"
+        self.chat_chk.notify_text(f"❌ CHK 공정 실패 이유: {name} | {r or '오류'}")
+        self.chat_chk.flush()
+        self._chat_fail_notified = True
 
     def _chat_notify_started(self, params: dict, process_name: str):
         if not self.chat_chk:
             return
-        self.chat_chk.notify_process_started(self._chat_build_params(params, process_name))
-        self.chat_chk.flush()
-
-    def _chat_notify_failed_now(self, reason: str):
-        if not self.chat_chk:
-            return
-        name = self.current_process_name or "CHK"
-        self.chat_chk.notify_text(f"❌ CHK 공정 실패 이유: {name} | {reason}")
+        chat_params = self._chat_build_params(params, process_name)
+        self.chat_chk.notify_process_started(chat_params)
         self.chat_chk.flush()
 
     def _chat_notify_finished(self, ok: bool):
         if not self.chat_chk:
             return
+
         name = self.current_process_name or "CHK"
+
         detail = {
             "process_name": name,
             "stopped": bool(self._chat_user_stopped),
             "aborting": False,
             "errors": list(self._chat_errors) if not ok else [],
         }
-        self.chat_chk.notify_process_finished_detail(bool(ok), detail)
+
+        # ✅ 종료 카드 먼저 전송
+        try:
+            self.chat_chk.notify_process_finished_detail(bool(ok), detail)
+            self.chat_chk.flush()
+        except Exception:
+            pass
+
+        # ✅ CH1&2처럼: "실패" && "STOP 아님"이면 카드 외에 일반채팅으로 원인 1줄 추가
+        if ok:
+            return
+        if detail.get("stopped", False):
+            return
+        if self._chat_fail_notified:
+            return
+
+        reason = (self._chat_fail_reason or "").strip()
+        if not reason and detail.get("errors"):
+            try:
+                reason = str(detail["errors"][0]).strip()
+            except Exception:
+                reason = ""
+
+        if reason:
+            try:
+                self.chat_chk.notify_text(f"❌ CHK 공정 실패 이유: {name} | {reason}")
+                self.chat_chk.flush()
+                self._chat_fail_notified = True
+            except Exception:
+                pass
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
 
     @Slot()
@@ -455,8 +558,10 @@ class MainDialog(QDialog):
     @Slot(str)
     def _handle_connection_failure(self, error_message):
         QMessageBox.critical(self, "연결 실패", error_message)
-        self._chat_add_error(error_message)
-        self._chat_notify_failed_now(error_message)
+
+        # ✅ 실패 원인 저장만 (종료 카드+실패 원인 일반챗은 _handle_process_finished에서)
+        self._chat_notify_failed_now(error_message, send_text=False)
+
         self._chk_process_ok = False  # 연결 실패도 실패 처리
         self._handle_process_finished()
 
@@ -464,14 +569,11 @@ class MainDialog(QDialog):
         log_message_to_monitor(level, message)
 
         if level == "재시작":
-            # ✅ 여기서 'PLC 통신 이상' 같은 고정 문구를 추가로 찍지 않는다.
-            #    (원인은 message에 이미 들어오므로, 그걸 그대로 표시/전파)
             self._chk_process_ok = False
 
-            self._chat_add_error("PLC 통신 이상(재시작)")
-            self._chat_notify_failed_now("PLC 통신 이상(재시작)")
-
-            reason = (message or "").strip() or "오류"
+            # ✅ 실제 원인(message)을 그대로 남김 (CH1/CH2처럼)
+            reason = (message or "").strip() or "PLC 통신 이상(재시작)"
+            self._chat_notify_failed_now(reason, send_text=False)   # 저장만(카드+일반챗은 finished에서)
 
             # ✅ CSV 리스트가 진행중이면, 다음 스텝이 이어지지 않도록 취소 플래그부터 세팅
             if getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None):
@@ -770,6 +872,17 @@ class MainDialog(QDialog):
         self.update_stage_monitor(
             f"CSV {step_no}/{total} - {raw_name} (남은 {self._fmt_hms(self._csv_delay_remaining_sec)})"
         )
+        
+        # ✅ 구글챗(딜레이 시작 1회)
+        try:
+            if self.chat_chk:
+                name = self.current_process_name or f"CSV {step_no}/{total} - {raw_name}"
+                self.chat_chk.notify_text(
+                    f"⏳ CHK 딜레이 시작: {name} | 총 {self._fmt_hms(self._csv_delay_total_sec)}"
+                )
+                self.chat_chk.flush()
+        except Exception:
+            pass
 
         # 1초마다 카운트다운
         self._csv_delay_timer = QTimer(self)
@@ -801,6 +914,16 @@ class MainDialog(QDialog):
             self._csv_delay_active = False
             self.process_running = False
             log_message_to_monitor("정보", f"CSV DELAY 완료: {self._csv_delay_name}")
+
+            # ✅ 구글챗(딜레이 완료 1회)
+            try:
+                if self.chat_chk:
+                    name = self.current_process_name or f"CSV {step_no}/{total} - {self._csv_delay_name}"
+                    self.chat_chk.notify_text(f"✅ CHK 딜레이 완료: {name}")
+                    self.chat_chk.flush()
+            except Exception:
+                pass
+
             self._start_next_csv_step()
             return
 
@@ -900,8 +1023,8 @@ class MainDialog(QDialog):
         QMessageBox.critical(self, "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
         self._chk_process_ok = False
 
-        self._chat_add_error(error_message)
-        self._chat_notify_failed_now(error_message)
+        # ✅ 저장만 (stop 시퀀스 끝나고 finished에서 카드+일반챗 1줄)
+        self._chat_notify_failed_now(error_message, send_text=False)
 
         # ✅ 여기서 _handle_process_finished()를 직접 호출하지 마세요.
         # stop 시퀀스가 끝나면 ProcessController.finished가 1번만 호출해줍니다.
@@ -1324,6 +1447,10 @@ class MainDialog(QDialog):
 
         row = self.csv_rows[self.csv_index]
 
+        # ✅ 여기서 step_no/total 먼저 고정(딜레이 포함 모든 분기에서 동일하게 쓰기)
+        step_no = self.csv_index + 1
+        total   = len(self.csv_rows)
+
         raw_name = (row.get("Process_name") or "").strip()
         delay_sec = self._parse_csv_delay_seconds(raw_name)
         if delay_sec is not None:
@@ -1331,6 +1458,9 @@ class MainDialog(QDialog):
                 log_message_to_monitor("정보", f"CSV DELAY 스킵: {raw_name} (0초)")
                 self._start_next_csv_step()
                 return
+
+            # ✅ 딜레이도 "현재 공정명"을 CSV 1/3 형태로 잡아두면 STOP/실패 텍스트가 안 헷갈림
+            self.current_process_name = f"CSV {step_no}/{total} - {raw_name}"
 
             self._start_csv_delay_step(delay_sec, raw_name)
             return
@@ -1371,21 +1501,31 @@ class MainDialog(QDialog):
 
         # ★★★ 이 CSV STEP 전용 로그 파일 생성 ★★★
         set_process_log_file(prefix="CHK")
-        step_no = self.csv_index + 1
-        total   = len(self.csv_rows)
+
+        # ✅ (위에서 step_no/total을 이미 만들었다면 여기 재정의 필요 없음)
+        # step_no = self.csv_index + 1
+        # total   = len(self.csv_rows)
+
         log_message_to_monitor("정보", f"=== CHK CSV STEP {step_no}/{total} 시작 ===")
 
         # 로그/스테이지 표시
-        name = params.get("process_name") or f"STEP {self.csv_index + 1}/{len(self.csv_rows)}"
+        base_name = (
+            params.get("process_name")
+            or params.get("Process_name")
+            or f"STEP {step_no}/{total}"
+        )
 
-        # ★ CSV STEP 공정 이름 저장 (ChK CSV용)
-        self.current_process_name = name
+        # ✅ 이 STEP의 표시명(=CSV 1/3 포함)으로 통일
+        display = f"CSV {step_no}/{total} - {base_name}"
+
+        # ✅ 공정 종료 카드/실패 텍스트가 이 값을 보게 됨 → CSV 1/3이 항상 유지됨
+        self.current_process_name = display
 
         self._chat_reset_run_state()
-        self._chat_notify_started(params, name)
+        self._chat_notify_started(params, display)
 
-        log_message_to_monitor("Process", f"CSV 공정 리스트 {self.csv_index + 1}/{len(self.csv_rows)} 실행: {name}")
-        self.update_stage_monitor(name)
+        log_message_to_monitor("Process", f"CSV 공정 리스트 {step_no}/{total} 실행: {display}")
+        self.update_stage_monitor(display)
 
         # 실제 공정 시작
         self.process_running = True
@@ -1397,6 +1537,37 @@ class MainDialog(QDialog):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    def _send_fatal_to_chat(msg: str):
+        try:
+            dlg = getattr(app, "_main_dlg", None)
+            if dlg and getattr(dlg, "chat_chk", None):
+                dlg.chat_chk.notify_text(msg)
+                dlg.chat_chk.flush()
+        except Exception:
+            pass
+
+    def _excepthook(exctype, value, tb):
+        try:
+            tb_text = "".join(traceback.format_exception(exctype, value, tb))
+            log_message_to_monitor("ERROR", f"[UNHANDLED] {tb_text}")
+        except Exception:
+            pass
+        _send_fatal_to_chat(f"❌ CHK 프로그램 예외(메인): {value!r}")
+
+    sys.excepthook = _excepthook
+
+    def _thread_excepthook(args):
+        try:
+            tb_text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+            log_message_to_monitor("ERROR", f"[UNHANDLED:{args.thread.name}] {tb_text}")
+        except Exception:
+            pass
+        _send_fatal_to_chat(f"❌ CHK 프로그램 예외({args.thread.name}): {args.exc_value!r}")
+
+    threading.excepthook = _thread_excepthook
+
     dlg = MainDialog()
+    app._main_dlg = dlg
     dlg.show()
     sys.exit(app.exec())
