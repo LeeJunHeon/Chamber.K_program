@@ -12,6 +12,7 @@ from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
 from lib.logger import set_monitor_widget, log_message_to_monitor, set_process_log_file, append_chk_csv_row
 from controller.process_controller import SputterProcessController
+from controller.chat_notifier import ChatNotifier
 from device.PLC import PLCController
 from device.MFC import MFCController
 from device.DCpower import DCPowerController
@@ -28,6 +29,26 @@ class MainDialog(QDialog):
         self.ui = Ui_Dialog()
         self.ui.setupUi(self)
         set_monitor_widget(self.ui.error_monitor)
+
+        # === Google Chat Notifier (CH.K) ===
+        try:
+            from lib import config_local as cfgl
+            url = (getattr(cfgl, 'CHAT_WEBHOOK_URL', '') or '').strip()
+        except Exception:
+            url = ''
+
+        self.chat_chk = ChatNotifier(url) if url else None
+        if self.chat_chk:
+            try:
+                self.chat_chk.setObjectName('ChatNotifier_CHK')
+            except Exception:
+                pass
+            self.chat_chk.start()
+
+        # 공정 알림 상태
+        self._chat_user_stopped: bool = False
+        self._chat_errors: list[str] = []
+        # === Google Chat Notifier (CH.K) ===
 
         # ★ 이번 공정 이름(단일/CSV 공정 공통)
         self.current_process_name: str = ""
@@ -182,6 +203,49 @@ class MainDialog(QDialog):
         
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
 
+    # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
+    def _chat_build_params(self, params: dict, process_name: str) -> dict:
+        p = dict(params or {})
+        p.setdefault('prefix', 'CHK Sputter')   # CH1&2 템플릿이 prefix에서 CH를 뽑음
+        p['process_note'] = process_name        # 공정 시작 카드 subtitle에 사용
+        p.setdefault('Process_name', process_name)
+        return p
+
+    def _chat_reset_run_state(self):
+        self._chat_user_stopped = False
+        self._chat_errors = []
+
+    def _chat_add_error(self, reason: str):
+        r = (reason or '').strip()
+        if r:
+            self._chat_errors.append(r)
+
+    def _chat_notify_started(self, params: dict, process_name: str):
+        if not self.chat_chk:
+            return
+        self.chat_chk.notify_process_started(self._chat_build_params(params, process_name))
+        self.chat_chk.flush()
+
+    def _chat_notify_failed_now(self, reason: str):
+        if not self.chat_chk:
+            return
+        name = self.current_process_name or "CHK"
+        self.chat_chk.notify_text(f"❌ CHK 공정 실패 이유: {name} | {reason}")
+        self.chat_chk.flush()
+
+    def _chat_notify_finished(self, ok: bool):
+        if not self.chat_chk:
+            return
+        name = self.current_process_name or "CHK"
+        detail = {
+            "process_name": name,
+            "stopped": bool(self._chat_user_stopped),
+            "aborting": False,
+            "errors": list(self._chat_errors) if not ok else [],
+        }
+        self.chat_chk.notify_process_finished_detail(bool(ok), detail)
+    # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
+
     @Slot()
     def _handle_start_process(self):
         if self.process_running:
@@ -301,7 +365,11 @@ class MainDialog(QDialog):
         set_process_log_file(prefix="CHK")
         log_message_to_monitor("정보", "=== CHK 공정 시작 ===")
 
+        self._chat_reset_run_state()
+        self._chat_notify_started(params, self.current_process_name)
+
         self.process_controller.start_requested.emit(params)
+
         self.process_running = True
         self.ui.Sputter_Start_Button.setEnabled(False)
         self.ui.Sputter_Stop_Button.setEnabled(True)
@@ -387,6 +455,8 @@ class MainDialog(QDialog):
     @Slot(str)
     def _handle_connection_failure(self, error_message):
         QMessageBox.critical(self, "연결 실패", error_message)
+        self._chat_add_error(error_message)
+        self._chat_notify_failed_now(error_message)
         self._chk_process_ok = False  # 연결 실패도 실패 처리
         self._handle_process_finished()
 
@@ -397,6 +467,9 @@ class MainDialog(QDialog):
             # ✅ 여기서 'PLC 통신 이상' 같은 고정 문구를 추가로 찍지 않는다.
             #    (원인은 message에 이미 들어오므로, 그걸 그대로 표시/전파)
             self._chk_process_ok = False
+
+            self._chat_add_error("PLC 통신 이상(재시작)")
+            self._chat_notify_failed_now("PLC 통신 이상(재시작)")
 
             reason = (message or "").strip() or "오류"
 
@@ -447,6 +520,8 @@ class MainDialog(QDialog):
         """STOP 버튼 공통 처리: 현재 STEP 중단 + CSV 모드면 전체 리스트 취소."""
         # STOP으로 중단된 공정은 정상 종료로 보지 않는다.
         self._chk_process_ok = False
+        self._chat_user_stopped = True
+        self._chat_add_error("사용자 STOP")
         self.on_status_message("경고", "STOP 버튼 클릭됨")
 
         # ✅ CSV 리스트 공정 중이면, 이후 STEP들을 모두 취소하도록 플래그 설정
@@ -739,6 +814,7 @@ class MainDialog(QDialog):
 
         # ★ 이번 STEP이 정상 종료됐는지 여부를 먼저 보관
         last_step_ok = getattr(self, "_chk_process_ok", False)
+        self._chat_notify_finished(last_step_ok)
 
         # ★ 정상적으로 완료된 공정만 ChK_log.csv 에 한 줄 추가
         try:
@@ -823,6 +899,9 @@ class MainDialog(QDialog):
     def _handle_critical_error(self, error_message):
         QMessageBox.critical(self, "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
         self._chk_process_ok = False
+
+        self._chat_add_error(error_message)
+        self._chat_notify_failed_now(error_message)
 
         # ✅ 여기서 _handle_process_finished()를 직접 호출하지 마세요.
         # stop 시퀀스가 끝나면 ProcessController.finished가 1번만 호출해줍니다.
@@ -968,6 +1047,12 @@ class MainDialog(QDialog):
                 log_message_to_monitor("정보", f"{thread_name} 스레드 종료 대기 중...")
                 if not thread.wait(3000): # 3초 타임아웃
                      log_message_to_monitor("경고", f"{thread_name} 스레드가 시간 내에 종료되지 않았습니다.")
+
+            try:
+                if self.chat_chk:
+                    self.chat_chk.shutdown()
+            except Exception:
+                pass
 
             log_message_to_monitor("정보", "모든 스레드가 종료되었습니다. 프로그램을 닫습니다.")
             event.accept()
@@ -1295,6 +1380,9 @@ class MainDialog(QDialog):
 
         # ★ CSV STEP 공정 이름 저장 (ChK CSV용)
         self.current_process_name = name
+
+        self._chat_reset_run_state()
+        self._chat_notify_started(params, name)
 
         log_message_to_monitor("Process", f"CSV 공정 리스트 {self.csv_index + 1}/{len(self.csv_rows)} 실행: {name}")
         self.update_stage_monitor(name)
