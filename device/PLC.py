@@ -215,13 +215,14 @@ class PLCController(QObject):
         inst.clear_buffers_before_each_transaction = True
         inst.handle_local_echo = False
 
-        # 일부 환경에선 명시적으로 open이 필요할 수 있음
+        # 일부 환경에선 명시적으로 open이 필요
         if inst.serial and not inst.serial.is_open:
             try:
                 inst.serial.open()
-            except Exception:
-                # minimalmodbus가 이후 트랜잭션에서 열 수도 있으니, 여기서 무조건 실패 처리하진 않음
-                pass
+            except Exception as e:
+                # ✅ 여기서 open이 실패하면 "재연결 실패 1회"로 카운팅되어야 함
+                #    (PermissionError/Access denied 같은 케이스에서 fatal로 반드시 도달)
+                raise
 
         self.instrument = inst
 
@@ -299,8 +300,11 @@ class PLCController(QObject):
 
         try:
             self._open_instrument()
-            # 여기서 _is_port_open()이 False여도, 실제 트랜잭션에서 열릴 수 있음.
-            # 최소한 instrument 생성 성공이면 "연결 시도 성공"으로 간주하고 폴링을 재개.
+            
+            # ✅ "진짜 연결" 확인: 포트가 열리지 않았으면 성공 취급 금지
+            if not self._is_port_open():
+                raise OSError(f"PLC serial not open after open_instrument (port={PLC_PORT})")
+            
             self.status_message.emit("PLC", f"재연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID} (attempt {attempt})")
 
             # 성공했으니 카운터 리셋

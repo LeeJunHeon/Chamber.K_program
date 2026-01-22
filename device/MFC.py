@@ -78,6 +78,12 @@ class MFCController(QObject):
         self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
         self._reconnect_pending = False
 
+        # ✅ 재연결 실패 카운트(PLC/DC와 동일 컨셉)
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = 5
+        self._last_disconnect_error = ""
+        self._fatal_latched = False
+
         # 안정화/모니터링
         self.gas_map = {1: "Ar", 2: "O2"}       # ← 2채널만
         self.last_setpoints = {1: 0.0, 2: 0.0}  # 장비 단위(=UI 단위와 동일)
@@ -148,6 +154,10 @@ class MFCController(QObject):
         self._ensure_serial_created()
         self._ensure_timers_created()
 
+        self._fatal_latched = False
+        self._reconnect_attempts = 0
+        self._last_disconnect_error = ""
+
         self._want_connected = True
         ok = self._open_port()
         if self._watchdog:
@@ -180,6 +190,8 @@ class MFCController(QObject):
         return True
 
     def _watch_connection(self):
+        if self._fatal_latched:
+            return
         if (not self._want_connected) or (self.serial_mfc and self.serial_mfc.isOpen()):
             return
         if self._reconnect_pending:
@@ -190,14 +202,44 @@ class MFCController(QObject):
 
     def _try_reconnect(self):
         self._reconnect_pending = False
+
+        if self._fatal_latched:
+            return
         if (not self._want_connected) or (self.serial_mfc and self.serial_mfc.isOpen()):
             return
-        if self._open_port():
-            self.status_message.emit("MFC", "재연결 성공. 대기 중 명령 재개.")
-            QTimer.singleShot(0, self._dequeue_and_send)
+
+        # ✅ 재연결 시도 카운트
+        self._reconnect_attempts += 1
+        attempt = self._reconnect_attempts
+
+        ok = False
+        try:
+            ok = self._open_port()
+        except Exception as e:
+            self._last_disconnect_error = repr(e)
+            ok = False
+
+        if ok:
+            self.status_message.emit("MFC", f"재연결 성공: {MFC_PORT} (attempt {attempt})")
+            self._reconnect_attempts = 0
             self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
-        else:
-            self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
+            return
+
+        # 실패
+        self._last_disconnect_error = self._last_disconnect_error or "open_port failed"
+        self.status_message.emit("MFC(경고)", f"재연결 실패 {attempt}/{self._max_reconnect_attempts}: {self._last_disconnect_error}")
+
+        if self._reconnect_attempts >= self._max_reconnect_attempts:
+            self._fatal_latched = True
+            self._want_connected = False
+
+            msg = f"MFC 재연결 {self._max_reconnect_attempts}회 실패: {self._last_disconnect_error} → 공정 전체 종료"
+            self.status_message.emit("재시작", msg)
+            return
+
+        # backoff 증가(기존 정책 유지)
+        self._reconnect_backoff_ms = min(MFC_RECONNECT_BACKOFF_MAX_MS, int(self._reconnect_backoff_ms * 2))
+        QTimer.singleShot(0, self._watch_connection)
 
     @Slot()
     def cleanup(self):

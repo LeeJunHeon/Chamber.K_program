@@ -582,6 +582,23 @@ class MainDialog(QDialog):
 
             reason = (message or "").strip() or "PLC 통신 이상(재시작)"
 
+            # ✅ 어떤 장비 문제로 재시작인지 기록(Stop 시퀀스 분기용)
+            src = "UNKNOWN"
+            r = reason.upper()
+            if r.startswith("PLC"):
+                src = "PLC"
+            elif r.startswith("MFC"):
+                src = "MFC"
+            elif "DC" in r or "DCPOWER" in r:
+                src = "POWER"
+            elif "RF" in r or "RFPOWER" in r:
+                src = "POWER"
+
+            if self.process_controller:
+                # process_controller 쪽에서 이 값을 보고 Stop 순서/스킵을 결정하도록
+                self.process_controller.abort_source = src
+                self.process_controller.abort_reason = reason
+
             # ✅ PLC 재연결 5회 실패는 즉시 일반채팅도 전송(요구사항)
             send_now = ("재연결" in reason) and ("5회" in reason or "5" in reason) and ("실패" in reason)
             self._chat_notify_failed_now(reason, send_text=send_now)

@@ -120,6 +120,9 @@ class SputterProcessController(QObject):
         # 램프다운 대기 루프 핸들
         self._rfdown_wait: Optional[QEventLoop] = None
 
+        self.abort_source = "UNKNOWN"
+        self.abort_reason = ""
+
     # ---------- 타이머 준비 ----------
     @Slot()
     def _setup_timers(self):
@@ -763,73 +766,95 @@ class SputterProcessController(QObject):
             # 폴링 OFF
             self.command_requested.emit("set_polling", {'enable': False})
 
-            # Main Shutter 닫기
-            self.stage_monitor.emit("M.S. close...")
-            self.update_plc_port.emit('MS_button', False)
+            src = getattr(self, "abort_source", "UNKNOWN") or "UNKNOWN"
 
-            # 파워 끄기
-            if self.is_dc_on:
-                self.status_message.emit("DCpower", "DC 파워 OFF")
-                self.stop_dc_power.emit()
-            if self.is_rf_on:
-                self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
+            # ====== 1) PLC 단계 (src=PLC면 스킵) ======
+            if src != "PLC":
+                self.stage_monitor.emit("M.S. close...")
+                self.update_plc_port.emit('MS_button', False)
 
-                # 이벤트 루프 준비
-                self._rfdown_wait = QEventLoop()
+            # ====== 2) Power 단계 (src=POWER면 스킵: 전원 자체 문제일 수 있음) ======
+            if src != "POWER":
+                if self.is_dc_on:
+                    self.status_message.emit("DCpower", "DC 파워 OFF")
+                    self.stop_dc_power.emit()
 
-                self.rf.ramp_down_finished.connect(
-                    self._on_rf_rampdown_finished,
-                    type=Qt.ConnectionType.QueuedConnection
-                )
-                self.rf.ramp_down_failed.connect(
-                    self._on_rf_rampdown_failed,
-                    type=Qt.ConnectionType.QueuedConnection
-                )
+                if self.is_rf_on:
+                    self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
 
-                # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
-                QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
+                    self._rfdown_wait = QEventLoop()
+                    try:
+                        self.rf.ramp_down_finished.connect(
+                            self._on_rf_rampdown_finished,
+                            type=Qt.ConnectionType.QueuedConnection
+                        )
+                    except TypeError:
+                        self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
 
-                # 램프다운 시작
-                self.stop_rf_power.emit()
+                    # 타임아웃
+                    QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
 
-                # 완료/실패까지 대기
-                self._rfdown_wait.exec()
+                    self.stop_rf_power.emit()
+                    self._rfdown_wait.exec()
 
-                # 뒷정리
+                    try:
+                        self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
+                    except Exception:
+                        pass
+                    self._rfdown_wait = None
+
+            # ====== 3) MFC 단계 (src=MFC면 스킵 + 타임아웃으로 무한대기 방지) ======
+            if src != "MFC":
+                channels = getattr(self, "_active_channels", None)
+                if not channels:
+                    channels = [self._process_channel]
+
+                loop = QEventLoop()
+
+                def _quit(*_):
+                    try:
+                        loop.quit()
+                    except:
+                        pass
+
+                # ✅ 타임아웃 유틸(예: 2000ms)
+                def _exec_loop_with_timeout(timeout_ms: int = 2000):
+                    t = QTimer()
+                    t.setSingleShot(True)
+                    t.timeout.connect(loop.quit)
+                    t.start(timeout_ms)
+                    loop.exec()
+                    try:
+                        t.stop()
+                    except Exception:
+                        pass
+
+                self.mfc.command_confirmed.connect(_quit)
+                self.mfc.command_failed.connect(_quit)
+
+                for ch in channels:
+                    self.command_requested.emit("FLOW_OFF", {'channel': ch})
+                    _exec_loop_with_timeout(2000)
+
+                self.command_requested.emit("VALVE_OPEN", {})
+                _exec_loop_with_timeout(2000)
+
                 try:
-                    self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
-                except Exception:
-                    pass
-                try:
-                    self.rf.ramp_down_failed.disconnect(self._on_rf_rampdown_failed)
-                except Exception:
-                    pass
-
-                self._rfdown_wait = None
-
-            # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리
-            channels = getattr(self, "_active_channels", None)
-            if not channels:
-                channels = [self._process_channel]
-
-            loop = QEventLoop()
-            def _quit(*_):
-                try:
-                    loop.quit()
+                    self.mfc.command_confirmed.disconnect(_quit)
+                    self.mfc.command_failed.disconnect(_quit)
                 except:
                     pass
 
-            self.mfc.command_confirmed.connect(_quit)
-            self.mfc.command_failed.connect(_quit)
+            # ====== 4) 나머지 PLC 닫기(가스/셔터) — src=PLC면 스킵 ======
+            if src != "PLC":
+                self.update_plc_port.emit('S1_button', False)
+                self.update_plc_port.emit('S2_button', False)
 
-            # 선택된 모든 채널 Flow OFF
-            for ch in channels:
-                self.command_requested.emit("FLOW_OFF", {'channel': ch})
-                loop.exec()
-
-            # 공용 밸브는 한 번만 VALVE_OPEN (안전하게 잔압 해소)
-            self.command_requested.emit("VALVE_OPEN", {})
-            loop.exec()
+                gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
+                for btn in gas_buttons:
+                    gas_name = "Ar" if "Ar" in btn else "O2"
+                    self.status_message.emit("PLC", f"{gas_name} Valve Close")
+                    self.update_plc_port.emit(btn, False)
 
             try:
                 self.mfc.command_confirmed.disconnect(_quit)
