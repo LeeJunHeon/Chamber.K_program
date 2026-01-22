@@ -563,9 +563,16 @@ class PLCController(QObject):
             except Exception as _:
                 pass
             self.status_message.emit("PLC > 전송", f"RF/DAC={int(pwm_value)} @D{RF_DAC_ADDR_CH0}")
+
         except Exception as e:
+            # ✅ 실패한 RF set도 "끊김 중 명령"으로 저장(유실 방지)
+            if COIL_ENABLE_DAC_CH0 is not None:
+                self._pending_bit_writes[COIL_ENABLE_DAC_CH0] = 1
+            self._pending_reg_writes[RF_DAC_ADDR_CH0] = int(pwm_value)
+
             self.status_message.emit("PLC(오류)", f"RF 파워 송신 실패: {e}")
             self._mark_disconnected("write_register[RF_DAC]", e)
+
         finally:
             self._busy = False
             self._mutex.unlock()
@@ -581,9 +588,12 @@ class PLCController(QObject):
             forward_watt   = (f_raw / RF_ADC_MAX_COUNT) * RF_FORWARD_SCALING_MAX_WATT
             reflected_watt = (r_raw / RF_ADC_MAX_COUNT) * RF_REFLECTED_SCALING_MAX_WATT
             return forward_watt, reflected_watt
+        
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"RF 피드백 읽기 실패: {e}")
+            self._mark_disconnected("read_register[RF_ADC]", e)  # ✅ 재연결 트리거
             return None, None
+
         finally:
             self._busy = False
             self._mutex.unlock()

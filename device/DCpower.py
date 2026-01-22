@@ -54,6 +54,26 @@ class DCPowerController(QObject):
 
         self._fail_no_output_ticks = 0
 
+        # ===== 재연결(최대 5회) =====
+        self._want_connected: bool = False
+        self._reconnect_attempts: int = 0
+        self._max_reconnect_attempts: int = 5
+        self._last_disconnect_error: str = ""
+        self._fatal_latched: bool = False
+
+        # 끊김 중 동작 복구용 플래그
+        self._resume_after_reconnect: bool = False     # 끊기기 전 공정 중이었으면 True
+        self._pending_start_power: Optional[float] = None  # 시작 요청이 있는데 아직 연결 안 됨
+        self._pending_outp_off: bool = False           # stop 중 끊긴 경우 OFF를 재시도
+
+        # 재연결 타이머 (single-shot)
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setSingleShot(True)
+        self._reconnect_timer.timeout.connect(self._try_reconnect)
+
+        # QSerialPort error signal 중복 연결 방지
+        self._serial_signals_connected: bool = False
+
     # ---------------- 연결 ----------------
     @Slot()
     def connect_dcpower_device(self) -> bool:
@@ -71,6 +91,14 @@ class DCPowerController(QObject):
             self.serial.setStopBits(QSerialPort.StopBits.OneStop)
             self.serial.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
 
+            # ✅ 시리얼 에러 감지(USB 끊김 등) → 재연결 트리거
+            if not self._serial_signals_connected:
+                try:
+                    self.serial.errorOccurred.connect(self._on_serial_error)
+                except Exception:
+                    pass
+                self._serial_signals_connected = True
+
         self.serial.setPortName(DC_PORT)
         if not self.serial.open(QIODeviceBase.OpenModeFlag.ReadWrite):
             self.status_message.emit("DCpower", f"연결 실패: {self.serial.errorString()}")
@@ -82,8 +110,183 @@ class DCPowerController(QObject):
         self.serial.clear(QS.Direction.AllDirections)
         self._rx.clear()
 
+        # 연결 성공
+        self._want_connected = True
+        self._fatal_latched = False
+
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort, LF 종단)")
         return True
+    
+    # ==================== 재연결 유틸 ====================
+    def _backoff_delay_ms(self, attempt_no: int) -> int:
+        # 1->500ms, 2->1000ms, 3->2000ms, 4->4000ms, 5->8000ms(캡)
+        return min(8000, 500 * (2 ** max(attempt_no - 1, 0)))
+
+    def _close_serial(self):
+        try:
+            if self.serial and self.serial.isOpen():
+                self.serial.close()
+        except Exception:
+            pass
+
+    def _schedule_reconnect(self):
+        if not self._want_connected or self._fatal_latched:
+            return
+        if self._reconnect_timer.isActive():
+            return
+        if self._reconnect_attempts >= self._max_reconnect_attempts:
+            self._fail_fatal()
+            return
+
+        next_attempt = self._reconnect_attempts + 1
+        delay_ms = self._backoff_delay_ms(next_attempt)
+        self.status_message.emit("DCpower", f"재연결 예약: {next_attempt}/{self._max_reconnect_attempts} (in {delay_ms}ms)")
+        self._reconnect_timer.start(delay_ms)
+
+    def _mark_disconnected(self, where: str, ex: Exception | str):
+        # 이미 fatal이면 더 진행 X
+        if self._fatal_latched:
+            return
+
+        self._last_disconnect_error = f"{where}: {ex!r}" if not isinstance(ex, str) else f"{where}: {ex}"
+
+        # 공정 제어 루프 정지(끊긴 상태에서 CURR 계속 보내면 의미 없음)
+        try:
+            if self.control_timer.isActive():
+                self.control_timer.stop()
+        except Exception:
+            pass
+
+        # 재연결이 필요함
+        self._want_connected = True
+
+        # 끊기기 직전에 공정 중이었다면, 붙으면 복구(OUTP ON + setpoint)해줄 것
+        self._resume_after_reconnect = bool(self._is_running)
+
+        # 포트 닫기
+        self._close_serial()
+
+        self.status_message.emit("DCpower(경고)", f"연결 끊김 감지({where}) → 재연결 시도")
+        self._schedule_reconnect()
+
+    def _restore_after_reconnect(self) -> bool:
+        """
+        재연결 성공 후 복구:
+        - stop 요청 중 끊겼으면 OUTP OFF 우선
+        - 공정 중 끊겼으면 OUTP ON + APPLy(현재 전압/전류) 재보장 후 타이머 재개
+        """
+        if not (self.serial and self.serial.isOpen()):
+            return False
+
+        # 1) stop 중 끊겼던 경우: OFF를 먼저 시도
+        if self._pending_outp_off:
+            self.status_message.emit("DCpower", "재연결 후 OUTP OFF 재시도")
+            ok = self._ensure_output_off(max_retries=3)
+            self._pending_outp_off = False
+            if not ok:
+                detail = "DC OUTPUT OFF 실패: 재연결 후에도 OUTP?=0 확인 불가"
+                self.status_message.emit("DCpower(에러)", detail)
+                self.output_off_failed.emit(detail)  # 기존 즉시 알림 루트 활용
+            return True  # stop 상태면 여기서 끝
+
+        # 2) 공정 중이었다면 상태 복구
+        if self._resume_after_reconnect:
+            try:
+                # Reset(*RST)은 위험할 수 있어 복구에서는 *CLS만 사용
+                if not self._send("*CLS"):
+                    return False
+                # 전압/전류 재보장 + 출력 ON
+                v = self._clamp_v(DC_MAX_VOLTAGE)
+                i = self._clamp_i(self.current_current)
+                if not self._send(f"APPLy {v:.2f},{i:.4f}"):
+                    return False
+                if not self._send("OUTP ON"):
+                    return False
+
+                self.status_message.emit("DCpower", f"재연결 복구 완료: OUTP ON, APPLy {v:.2f},{i:.4f}")
+                # 제어 루프 재개
+                self._is_running = True
+                self.control_timer.start()
+                return True
+            except Exception as e:
+                self.status_message.emit("DCpower(경고)", f"재연결 후 복구 실패: {e}")
+                return False
+
+        return True
+
+    def _fail_fatal(self):
+        if self._fatal_latched:
+            return
+        self._fatal_latched = True
+
+        # 모두 정지
+        try:
+            self.control_timer.stop()
+        except Exception:
+            pass
+        try:
+            self._reconnect_timer.stop()
+        except Exception:
+            pass
+
+        self._is_running = False
+        self.state = "IDLE"
+        self._want_connected = False
+        self._close_serial()
+
+        msg = f"DC 재연결 {self._max_reconnect_attempts}회 실패: {self._last_disconnect_error} → 공정 전체 종료"
+        self.status_message.emit("재시작", msg)
+
+    @Slot()
+    def _try_reconnect(self):
+        if not self._want_connected or self._fatal_latched:
+            return
+
+        if self._reconnect_attempts >= self._max_reconnect_attempts:
+            self._fail_fatal()
+            return
+
+        self._reconnect_attempts += 1
+        attempt = self._reconnect_attempts
+
+        self.status_message.emit("DCpower", f"재연결 시도 {attempt}/{self._max_reconnect_attempts}...")
+        try:
+            ok = self.connect_dcpower_device()
+            if not ok:
+                raise IOError("connect_dcpower_device failed")
+
+            # 성공
+            self.status_message.emit("DCpower", f"재연결 성공 (attempt {attempt})")
+            self._reconnect_attempts = 0
+            self._last_disconnect_error = ""
+
+            # 재연결 후 복구(OFF pending / 공정 resume)
+            if not self._restore_after_reconnect():
+                raise IOError("restore_after_reconnect failed")
+
+            # 시작 대기 중이었다면(연결이 늦어서 start 못한 케이스) 시작 수행
+            if self._pending_start_power is not None and (not self._is_running):
+                p = float(self._pending_start_power)
+                self._pending_start_power = None
+                self.status_message.emit("DCpower", f"재연결 후 start 재개: target={p:.1f}W")
+                self.start_process(p)
+
+        except Exception as e:
+            self._last_disconnect_error = f"reconnect_attempt_{attempt}: {e!r}"
+            self.status_message.emit("DCpower(경고)", f"재연결 실패 {attempt}/{self._max_reconnect_attempts}: {e}")
+
+            if self._reconnect_attempts >= self._max_reconnect_attempts:
+                self._fail_fatal()
+            else:
+                self._schedule_reconnect()
+
+    @Slot(int)
+    def _on_serial_error(self, err: int):
+        # QSerialPort 에러 이벤트(USB 끊김 등)에서 재연결 트리거
+        # 0(=NoError)은 무시
+        if err == 0:
+            return
+        self._mark_disconnected("QSerialPort.errorOccurred", f"err={err}")
 
     # ---------------- 공정 시작 ----------------
     @Slot(float)
@@ -93,7 +296,14 @@ class DCPowerController(QObject):
             return
 
         if self.serial is None or not self.serial.isOpen():
+            # ✅ 연결이 안 되면 start 요청을 보류하고 재연결 루프를 돌린다
             if not self.connect_dcpower_device():
+                self._pending_start_power = float(target_power)
+                self._want_connected = True
+                self._fatal_latched = False
+                self._reconnect_attempts = 0
+                self.status_message.emit("DCpower(경고)", "DC 포트 연결 실패 → 재연결 시도 후 start 재개 예정")
+                self._schedule_reconnect()
                 return
 
         self.target_power = max(0.0, min(DC_MAX_POWER, float(target_power)))
@@ -323,9 +533,17 @@ class DCPowerController(QObject):
         self.power_error_count = 0
 
         if not (self.serial and self.serial.isOpen()):
-            detail = "DC OUTPUT OFF 검증 불가: 시리얼 포트가 닫혀 있음(USB 끊김/권한 오류 가능)"
+            detail = "DC OUTPUT OFF 검증 불가: 포트 닫힘(USB 끊김 등) → 재연결 후 OFF 재시도 예정"
             self.status_message.emit("DCpower(에러)", detail)
-            self.output_off_failed.emit(detail)   # ✅ 구글챗 알림 트리거
+
+            # ✅ OFF를 나중에라도 시도하기 위한 플래그
+            self._pending_outp_off = True
+            self._want_connected = True
+            self._fatal_latched = False
+            self._schedule_reconnect()
+
+            # ✅ 즉시 알림은 기존 루트 유지
+            self.output_off_failed.emit(detail)
             return
 
         ok = self._ensure_output_off(max_retries=3)
@@ -340,6 +558,12 @@ class DCPowerController(QObject):
 
     @Slot()
     def close_connection(self):
+        self._want_connected = False
+        try:
+            self._reconnect_timer.stop()
+        except Exception:
+            pass
+
         self.stop_process()
         QThread.msleep(150)
         if self.serial and self.serial.isOpen():
@@ -371,13 +595,19 @@ class DCPowerController(QObject):
                     self.status_message.emit("DCpower", f"'{command}' 재시도...({attempt+1}/{DC_MAX_ERROR_COUNT})")
                 else:
                     self.status_message.emit("DCpower > 전송", command)
+
                 if not self._write_line(command):
                     raise IOError("write failed")
-                # 약간의 여유
+
                 QThread.msleep(120)
                 return True
+
             except Exception as e:
                 self.status_message.emit("DCpower(경고)", f"전송 예외: {e} (시도 {attempt+1})")
+                # ✅ 'write failed'류는 끊김으로 간주 → 재연결 트리거 후 즉시 종료
+                if "write failed" in str(e).lower():
+                    self._mark_disconnected("_send/write", e)
+                    return False
                 QThread.msleep(150)
         return False
 
@@ -387,9 +617,11 @@ class DCPowerController(QObject):
             ok = self._write_line(command)
             if not ok:
                 self.status_message.emit("DCpower(경고)", f"전송 실패(무응답): write failed ({command})")
+                self._mark_disconnected("send_noresp/write", "write failed")
+                return
         except Exception as e:
             self.status_message.emit("DCpower(경고)", f"전송 오류(무응답): {e}")
-
+            self._mark_disconnected("send_noresp/except", e)
 
     def _query(self, command: str, timeout_ms: int = 500) -> Optional[str]:
         # 잔여 입력을 readAll()로 비움 (clear(Input) 대신)
@@ -400,11 +632,15 @@ class DCPowerController(QObject):
         self.status_message.emit("DCpower > 전송", command)
         if not self._write_line(command):
             self.status_message.emit("DCpower", "전송 실패")
+            self._mark_disconnected("_query/write", "write failed")
             return None
 
         line = self._readline_blocking(timeout_ms)
         if line is None:
             self.status_message.emit("DCpower", "수신 타임아웃")
+            self._mark_disconnected("_query/timeout", f"timeout {timeout_ms}ms ({command})")
+            return None
+
         else:
             self.status_message.emit("DCpower < 응답", line)
         return line
