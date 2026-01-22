@@ -323,8 +323,9 @@ class DCPowerController(QObject):
         self.power_error_count = 0
 
         if not (self.serial and self.serial.isOpen()):
-            # 포트가 이미 죽었으면 OFF 검증 자체가 불가
-            self.status_message.emit("DCpower(경고)", "stop_process: 시리얼 포트가 닫혀 있어 OUTP OFF 검증 불가")
+            detail = "DC OUTPUT OFF 검증 불가: 시리얼 포트가 닫혀 있음(USB 끊김/권한 오류 가능)"
+            self.status_message.emit("DCpower(에러)", detail)
+            self.output_off_failed.emit(detail)   # ✅ 구글챗 알림 트리거
             return
 
         ok = self._ensure_output_off(max_retries=3)
@@ -381,12 +382,14 @@ class DCPowerController(QObject):
         return False
 
     def _send_noresp(self, command: str) -> None:
-        """응답 불필요한 빠른 명령(전류 미세조정 등)"""
         try:
             self.status_message.emit("DCpower > 전송", command)
-            self._write_line(command)
+            ok = self._write_line(command)
+            if not ok:
+                self.status_message.emit("DCpower(경고)", f"전송 실패(무응답): write failed ({command})")
         except Exception as e:
             self.status_message.emit("DCpower(경고)", f"전송 오류(무응답): {e}")
+
 
     def _query(self, command: str, timeout_ms: int = 500) -> Optional[str]:
         # 잔여 입력을 readAll()로 비움 (clear(Input) 대신)
