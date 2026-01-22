@@ -10,11 +10,19 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from device.PLC import PLCController
 
+# Ramp-down 검증 기본값(원하면 숫자만 튜닝)
+RF_RAMPDOWN_VERIFY_READS = 5              # 3~5 중 기본 5회
+RF_RAMPDOWN_VERIFY_MAX_CYCLES = 3         # 재시도 사이클 3회
+RF_RAMPDOWN_VERIFY_THRESHOLD_W = 1.0      # 임계값(W) - “0으로 떨어졌다” 판단 기준
+RF_RAMPDOWN_VERIFY_SETTLE_MS = 300        # DAC=0 전송 후 안정화 대기(ms)
+RF_RAMPDOWN_VERIFY_INTERVAL_MS = 250      # 피드백 읽기 간격(ms)
+
 class RFPowerController(QObject):
     update_rf_status_display = Signal(float, float)
     status_message = Signal(str, str)
     target_reached = Signal()
     ramp_down_finished = Signal()
+    ramp_down_failed = Signal(str)  # ✅ 추가: ramp-down 검증 실패 알림(상세 사유)
     
     def __init__(self, plc=None, parent=None):
         super().__init__(parent)
@@ -39,6 +47,12 @@ class RFPowerController(QObject):
         self.control_timer.timeout.connect(self._on_timer_tick)
 
         self._fail_no_output_ticks = 0
+
+        # ✅ Ramp-down 검증 상태
+        self._rd_cycle = 0
+        self._rd_reads = 0
+        self._rd_last_for = None
+        self._rd_last_ref = None
 
     @Slot(dict)
     def start_process(self, power_params):
@@ -226,14 +240,108 @@ class RFPowerController(QObject):
                 self._send_pwm_via_plc(self.current_pwm_value)
             else:
                 self.ramp_down_timer.stop()
+
+                # ✅ 마지막으로 DAC=0 전송
                 self._send_pwm_via_plc(0)
-                self.update_rf_status_display.emit(0.0, 0.0)
-                self.status_message.emit("RFpower", "RF 파워 ramp-down 완료")
-                self.ramp_down_finished.emit()
-                self._is_ramping_down = False
+
+                # ✅ 여기서부터 “피드백(ADC) 검증” 시작
+                self._start_rampdown_verify()
 
         self.ramp_down_timer.timeout.connect(ramp_down_step)
         self.ramp_down_timer.start(500)
+
+    def _start_rampdown_verify(self):
+        """
+        ✅ 요구사항:
+        - (사이클) DAC=0 재전송 → 안정화 대기 → 피드백 3~5회 읽기 → 임계값 이하인지 확인
+        - 사이클을 최대 3회 반복
+        - 실패 시 ramp_down_failed emit + (호환 위해) ramp_down_finished도 emit
+        """
+        if not self._is_ramping_down:
+            return
+
+        # 새 사이클 시작
+        self._rd_cycle += 1
+        self._rd_reads = 0
+        self._rd_last_for = None
+        self._rd_last_ref = None
+
+        self.status_message.emit(
+            "RFpower",
+            f"RF ramp-down 검증 시작 (cycle {self._rd_cycle}/{RF_RAMPDOWN_VERIFY_MAX_CYCLES})"
+        )
+
+        # ✅ 사이클 시작마다 DAC=0을 “다시” 전송
+        self._send_pwm_via_plc(0)
+
+        # ✅ 안정화 대기 후 첫 read 시작
+        QTimer.singleShot(RF_RAMPDOWN_VERIFY_SETTLE_MS, self._rampdown_verify_read_once)
+
+    def _rampdown_verify_read_once(self):
+        if not self._is_ramping_down:
+            return
+
+        # 피드백(=ADC/실측) 읽기
+        try:
+            fwd, ref = self.read_rf_power()
+        except Exception as e:
+            fwd, ref = None, None
+            self.status_message.emit("RFpower(경고)", f"ramp-down 검증 read 예외: {e!r}")
+
+        self._rd_reads += 1
+        self._rd_last_for = fwd
+        self._rd_last_ref = ref
+
+        if fwd is None:
+            self.status_message.emit(
+                "RFpower(경고)",
+                f"ramp-down 검증 read 실패 ({self._rd_reads}/{RF_RAMPDOWN_VERIFY_READS})"
+            )
+        else:
+            self.status_message.emit(
+                "RFpower",
+                f"ramp-down 검증 ({self._rd_reads}/{RF_RAMPDOWN_VERIFY_READS}) for={fwd:.1f}W"
+            )
+
+        # 3~5회(기본 5회) 다 읽을 때까지 반복
+        if self._rd_reads < RF_RAMPDOWN_VERIFY_READS:
+            QTimer.singleShot(RF_RAMPDOWN_VERIFY_INTERVAL_MS, self._rampdown_verify_read_once)
+            return
+
+        # ✅ 판정(요구사항 느낌 그대로: 여러 번 읽어도 “임계값 이하로 안 내려가면” 실패)
+        ok = (fwd is not None) and (float(fwd) <= RF_RAMPDOWN_VERIFY_THRESHOLD_W)
+
+        if ok:
+            # 성공 → 완료 시그널
+            self.update_rf_status_display.emit(0.0, 0.0)
+            self.status_message.emit("RFpower", "RF 파워 ramp-down 검증 완료(피드백 OK)")
+            self.ramp_down_finished.emit()
+            self._is_ramping_down = False
+            return
+
+        # 실패 → 사이클 재시도(최대 3회)
+        if self._rd_cycle < RF_RAMPDOWN_VERIFY_MAX_CYCLES:
+            self.status_message.emit(
+                "RFpower(경고)",
+                f"ramp-down 검증 실패: for={fwd}W > {RF_RAMPDOWN_VERIFY_THRESHOLD_W}W → DAC=0 재전송 후 재시도"
+            )
+            self._start_rampdown_verify()
+            return
+
+        # ✅ 최종 실패(3회 사이클 끝)
+        detail = (
+            f"RF ramp-down 검증 실패: DAC=0 재전송 {RF_RAMPDOWN_VERIFY_MAX_CYCLES}회 후에도 "
+            f"for={fwd}W (threshold={RF_RAMPDOWN_VERIFY_THRESHOLD_W}W) 이하로 내려가지 않음"
+        )
+        self.status_message.emit("RFpower(실패)", detail)
+
+        # ✅ 실패 시그널(메인에서 구글챗 알림용)
+        self.ramp_down_failed.emit(detail)
+
+        # ✅ 호환: ProcessController가 finished만 기다리는 경우를 위해 finished도 emit
+        self.ramp_down_finished.emit()
+
+        self._is_ramping_down = False    
 
     def read_rf_power(self):
         """PLC로부터 (forward_watt, reflected_watt) 튜플을 받는다."""

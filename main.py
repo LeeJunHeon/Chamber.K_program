@@ -208,10 +208,15 @@ class MainDialog(QDialog):
         # --- 5. 모든 로그 메시지를 UI 모니터에 연결 ---
         self.plc_controller.status_message.connect(self.on_status_message)
         self.mfc_controller.status_message.connect(self.on_status_message)
+
         self.dcpower_controller.status_message.connect(self.on_status_message)
         # ✅ DC Output OFF 검증 3회 실패 시: 즉시 구글챗 알림
         self.dcpower_controller.output_off_failed.connect(self._on_dcpower_output_off_failed)
+
         self.rfpower_controller.status_message.connect(self.on_status_message)
+        # ✅ RF ramp-down 검증 실패 시: 즉시 구글챗 알림
+        self.rfpower_controller.ramp_down_failed.connect(self._on_rfpower_rampdown_failed)
+
         self.process_controller.status_message.connect(self.on_status_message)
         
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
@@ -1626,6 +1631,31 @@ class MainDialog(QDialog):
                     f"⚠️ CHK DC Power OUTPUT OFF 실패(3회 재시도) | {name} | {detail}"
                 )
                 self.chat_chk.flush()
+                self._chat_fail_notified = True
+                if not self._chat_fail_reason:
+                    self._chat_fail_reason = detail
+        except Exception:
+            pass
+
+    @Slot(str)
+    def _on_rfpower_rampdown_failed(self, detail: str):
+        # 1) 모니터 표시
+        log_message_to_monitor("ERROR", f"[RF] {detail}")
+
+        # 2) 이번 공정은 실패로 기록
+        self._chk_process_ok = False
+        self._chat_add_error(detail)
+
+        # 3) ✅ 즉시 구글챗 알림
+        try:
+            if self.chat_chk:
+                name = self.current_process_name or "CHK"
+                self.chat_chk.notify_text(
+                    f"⚠️ CHK RF Power RAMP-DOWN 검증 실패(최대 3회 재시도) | {name} | {detail}"
+                )
+                self.chat_chk.flush()
+
+                # 중복 전송 방지 플래그
                 self._chat_fail_notified = True
                 if not self._chat_fail_reason:
                     self._chat_fail_reason = detail

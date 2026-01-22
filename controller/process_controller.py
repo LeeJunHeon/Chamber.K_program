@@ -700,6 +700,12 @@ class SputterProcessController(QObject):
         if self._rfdown_wait is not None and self._rfdown_wait.isRunning():
             self._rfdown_wait.quit()
 
+    @Slot(str)
+    def _on_rf_rampdown_failed(self, detail: str):
+        self.status_message.emit("경고", f"RF 램프다운 검증 실패 신호 수신: {detail}")
+        if self._rfdown_wait is not None and self._rfdown_wait.isRunning():
+            self._rfdown_wait.quit()
+
     @Slot()
     def teardown(self):
         if self._timer and self._timer.isActive():
@@ -771,15 +777,23 @@ class SputterProcessController(QObject):
                 # 이벤트 루프 준비
                 self._rfdown_wait = QEventLoop()
 
-                # ★ RF → Process 스레드로 안전하게 큐드 연결
+                # finished 연결
                 try:
                     self.rf.ramp_down_finished.connect(
                         self._on_rf_rampdown_finished,
                         type=Qt.ConnectionType.QueuedConnection
                     )
                 except TypeError:
-                    # 일부 환경에서 type= 키워드가 안 먹으면 기본 Auto로도 무방
                     self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
+
+                # ✅ failed 연결(추가)
+                try:
+                    self.rf.ramp_down_failed.connect(
+                        self._on_rf_rampdown_failed,
+                        type=Qt.ConnectionType.QueuedConnection
+                    )
+                except TypeError:
+                    self.rf.ramp_down_failed.connect(self._on_rf_rampdown_failed)
 
                 # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
                 QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
@@ -787,7 +801,7 @@ class SputterProcessController(QObject):
                 # 램프다운 시작
                 self.stop_rf_power.emit()
 
-                # 완료까지 대기
+                # 완료/실패까지 대기
                 self._rfdown_wait.exec()
 
                 # 뒷정리
@@ -795,6 +809,11 @@ class SputterProcessController(QObject):
                     self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
                 except Exception:
                     pass
+                try:
+                    self.rf.ramp_down_failed.disconnect(self._on_rf_rampdown_failed)
+                except Exception:
+                    pass
+
                 self._rfdown_wait = None
 
             # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리

@@ -116,8 +116,20 @@ class PLCController(QObject):
 
     @Slot()
     def clear_fault_latch(self):
-        """새 공정 시작 전에 PLC 코일 읽기 실패 래치를 해제."""
+        """새 공정 시작 전에 PLC 통신 실패 상태를 해제하고, 필요 시 재연결을 다시 시작."""
         self._coil_read_fail_latched = False
+
+        # ✅ fatal(재연결 5회 실패)까지 걸렸던 경우, 다음 공정에서는 다시 붙을 기회를 줌
+        if self._fatal_latched:
+            self._fatal_latched = False
+            self._want_connected = True
+            self._reconnect_attempts = 0
+            self._last_disconnect_error = ""
+            self.status_message.emit("PLC", "PLC 통신 실패(fatal) 래치 해제 → 재연결 재시도")
+
+        # ✅ 현재 끊긴 상태면 즉시 재연결 시도
+        if self.instrument is None and self._want_connected and (not self._reconnect_timer.isActive()):
+            self._reconnect_timer.start(0)
 
     # ============== 연결/해제 =================
     @Slot()
@@ -152,30 +164,6 @@ class PLCController(QObject):
         # 즉시 1회 연결 시도(실패하면 _try_reconnect 내부에서 backoff로 5회까지)
         self.status_message.emit("PLC", f"연결 시도 시작: {PLC_PORT}, ID={PLC_SLAVE_ID} (max {self._max_reconnect_attempts} tries)")
         self._reconnect_timer.start(0)
-
-    @Slot()
-    def start_polling(self):
-        if self._is_running:
-            return
-        try:
-            self.instrument = minimalmodbus.Instrument(
-                PLC_PORT, PLC_SLAVE_ID, mode=minimalmodbus.MODE_RTU
-            )
-            self.instrument.serial.baudrate = PLC_BAUD
-            self.instrument.serial.bytesize = 8
-            self.instrument.serial.parity   = 'N'
-            self.instrument.serial.stopbits = 1
-            self.instrument.serial.timeout  = PLC_TIMEOUT
-
-            self.instrument.close_port_after_each_call = False
-            self.instrument.clear_buffers_before_each_transaction = True
-            self.instrument.handle_local_echo = False
-
-            self._is_running = True
-            self.polling_timer.start()
-            self.status_message.emit("PLC", f"연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID}")
-        except Exception as e:
-            self.status_message.emit("PLC(오류)", f"연결 실패: {e}")
 
     @Slot()
     def cleanup(self):
