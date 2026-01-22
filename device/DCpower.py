@@ -574,16 +574,14 @@ class DCPowerController(QObject):
         self.power_error_count = 0
 
         if not (self.serial and self.serial.isOpen()):
-            detail = "DC OUTPUT OFF 검증 불가: 포트 닫힘(USB 끊김 등) → 재연결 후 OFF 재시도 예정"
+            detail = "DC OUTPUT OFF 검증 불가: 포트 닫힘(USB 끊김 등)"
             self.status_message.emit("DCpower(에러)", detail)
 
-            # ✅ OFF를 나중에라도 시도하기 위한 플래그
-            self._pending_outp_off = True
-            self._want_connected = True
-            self._fatal_latched = False
-            self._schedule_reconnect()
+            # ✅ 종료 중(close_connection에서 _want_connected=False)에는 재연결 예약 금지
+            if self._want_connected and (not self._fatal_latched):
+                self._pending_outp_off = True
+                self._schedule_reconnect()
 
-            # ✅ 즉시 알림은 기존 루트 유지
             self.output_off_failed.emit(detail)
             return
 
@@ -629,7 +627,7 @@ class DCPowerController(QObject):
 
     # ---------------- 전송/수신 (QtSerialPort 동기 래핑) ----------------
     def _send(self, command: str, timeout_ms: int = 500) -> bool:
-        """응답 없는 일반 명령 (간단 확인 위해, 에러시 재시도)"""
+        """응답을 읽지 않는 명령 전송용. write 실패/예외 시 재연결 트리거."""
         for attempt in range(DC_MAX_ERROR_COUNT):
             try:
                 if attempt > 0:
@@ -689,12 +687,14 @@ class DCPowerController(QObject):
     def _write_line(self, s: str) -> bool:
         if not (self.serial and self.serial.isOpen()):
             return False
-        data = (s.rstrip("\n") + "\n").encode("ascii")  # '\r\n' 사용
+        data = (s.rstrip("\n") + "\n").encode("ascii")  # LF 종단
         n = int(self.serial.write(data))
         if n <= 0:
             return False
         self.serial.flush()
-        self.serial.waitForBytesWritten(200)  # 실제 송신 보장
+        ok_wait = self.serial.waitForBytesWritten(200)
+        if not ok_wait:
+            return False
         return True
 
     def _readline_blocking(self, timeout_ms: int = 500) -> Optional[str]:
