@@ -53,6 +53,7 @@ class RFPowerController(QObject):
         self._rd_reads = 0
         self._rd_last_for = None
         self._rd_last_ref = None
+        self._rd_ok_streak = 0   # ✅ 추가: 임계값 이하 연속 카운터
 
     @Slot(dict)
     def start_process(self, power_params):
@@ -265,6 +266,7 @@ class RFPowerController(QObject):
         self._rd_reads = 0
         self._rd_last_for = None
         self._rd_last_ref = None
+        self._rd_ok_streak = 0   # ✅ 추가
 
         self.status_message.emit(
             "RFpower",
@@ -303,21 +305,35 @@ class RFPowerController(QObject):
                 f"ramp-down 검증 ({self._rd_reads}/{RF_RAMPDOWN_VERIFY_READS}) for={fwd:.1f}W"
             )
 
-        # 3~5회(기본 5회) 다 읽을 때까지 반복
+        # ✅ 연속 2회 임계값 이하(streak) 체크
+        try:
+            is_ok = (fwd is not None) and (float(fwd) <= RF_RAMPDOWN_VERIFY_THRESHOLD_W)
+        except Exception:
+            is_ok = False
+
+        if is_ok:
+            self._rd_ok_streak += 1
+        else:
+            self._rd_ok_streak = 0
+
+        # ✅ 연속 2회면 즉시 성공 종료
+        if self._rd_ok_streak >= 2:
+            self.update_rf_status_display.emit(0.0, 0.0)
+            self.status_message.emit(
+                "RFpower",
+                f"RF 파워 ramp-down 검증 완료(연속 2회 임계 이하). last_for={fwd:.1f}W"
+            )
+            self.ramp_down_finished.emit()
+            self._is_ramping_down = False
+            return
+
+        # 아직 2연속이 아니면 계속 읽기(최대 3~5회)
         if self._rd_reads < RF_RAMPDOWN_VERIFY_READS:
             QTimer.singleShot(RF_RAMPDOWN_VERIFY_INTERVAL_MS, self._rampdown_verify_read_once)
             return
 
-        # ✅ 판정(요구사항 느낌 그대로: 여러 번 읽어도 “임계값 이하로 안 내려가면” 실패)
-        ok = (fwd is not None) and (float(fwd) <= RF_RAMPDOWN_VERIFY_THRESHOLD_W)
-
-        if ok:
-            # 성공 → 완료 시그널
-            self.update_rf_status_display.emit(0.0, 0.0)
-            self.status_message.emit("RFpower", "RF 파워 ramp-down 검증 완료(피드백 OK)")
-            self.ramp_down_finished.emit()
-            self._is_ramping_down = False
-            return
+        # ✅ 여기까지 왔으면 (READS만큼 읽었지만) 연속 2회 조건을 못 만족 → 이 사이클 실패
+        # 아래 기존 “사이클 재시도/최종 실패” 로직 그대로 진행
 
         # 실패 → 사이클 재시도(최대 3회)
         if self._rd_cycle < RF_RAMPDOWN_VERIFY_MAX_CYCLES:
