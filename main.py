@@ -149,11 +149,9 @@ class MainDialog(QDialog):
         self.shutdown_requested.connect(self.rfpower_controller.close_connection)
         
         self.plc_thread.started.connect(self.plc_controller.start_polling)
-        #self.mfc_thread.started.connect(self.mfc_controller.start_polling)
 
         # --- 2. UI 이벤트 -> 컨트롤러 동작 연결 ---
         self.ui.Sputter_Start_Button.clicked.connect(self._handle_start_process)
-        #self.ui.Sputter_Stop_Button.clicked.connect(self._handle_sputter_stop)
         self.ui.ALL_STOP_button.clicked.connect(self.plc_controller.on_emergency_stop)
         # ✅ STOP 버튼 전용 핸들러에서 CSV 전체 취소 여부를 먼저 표시
         self.ui.Sputter_Stop_Button.clicked.connect(self._on_sputter_stop_clicked)
@@ -449,8 +447,6 @@ class MainDialog(QDialog):
                 "process_time": float(self.ui.process_time_edit.toPlainText().strip()),
                 "rf_offset": float(offset_text or 6.79),
                 "rf_param": float(param_text or 1.0395),
-                "use_g1": self.ui.G1_checkbox.isChecked(),
-                "use_g2": self.ui.G2_checkbox.isChecked(),
 
                 # ▼ G1/G2 사용 여부 + 타겟 이름
                 "use_g1": use_g1_flag,
