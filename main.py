@@ -579,9 +579,11 @@ class MainDialog(QDialog):
         if level == "재시작":
             self._chk_process_ok = False
 
-            # ✅ 실제 원인(message)을 그대로 남김 (CH1/CH2처럼)
             reason = (message or "").strip() or "PLC 통신 이상(재시작)"
-            self._chat_notify_failed_now(reason, send_text=False)   # 저장만(카드+일반챗은 finished에서)
+
+            # ✅ PLC 재연결 5회 실패는 즉시 일반채팅도 전송(요구사항)
+            send_now = ("재연결" in reason) and ("5회" in reason or "5" in reason) and ("실패" in reason)
+            self._chat_notify_failed_now(reason, send_text=send_now)
 
             # ✅ CSV 리스트가 진행중이면, 다음 스텝이 이어지지 않도록 취소 플래그부터 세팅
             if getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None):
