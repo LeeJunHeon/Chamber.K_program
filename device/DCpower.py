@@ -19,6 +19,9 @@ class DCPowerController(QObject):
     update_dc_status_display = Signal(float, float, float)  # (P, V, I)
     status_message = Signal(str, str)
     target_reached = Signal()
+    
+    # ✅ OUTP OFF 검증 3회 실패 → 메인에서 구글챗 보낼 수 있게
+    output_off_failed = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -264,17 +267,75 @@ class DCPowerController(QObject):
         self.current_voltage = voltage
         self.current_current = current
         return True
+    
+    def _parse_outp_state(self, resp: Optional[str]) -> Optional[int]:
+        """
+        OUTP? 응답 파싱: 0(OFF) / 1(ON)
+        - 메뉴얼: "0" 또는 "1" (공백 포함 가능)
+        """
+        if resp is None:
+            return None
+        s = str(resp).strip()
+        if not s:
+            return None
+        m = re.search(r"([01])", s)
+        return int(m.group(1)) if m else None
+
+    def _ensure_output_off(self, max_retries: int = 3) -> bool:
+        """
+        OUTP OFF 전송 후 OUTP?로 실제 OFF(0) 확인
+        - 최대 max_retries회 재시도
+        """
+        if not (self.serial and self.serial.isOpen()):
+            self.status_message.emit("DCpower(에러)", "OUTP OFF 검증 실패: 시리얼 포트가 열려있지 않음")
+            return False
+
+        last_resp: Optional[str] = None
+
+        for attempt in range(1, max_retries + 1):
+            self.status_message.emit("DCpower", f"OUTP OFF 검증 시도 {attempt}/{max_retries}")
+
+            # 1) OFF 명령 (응답 없음)
+            self._send_noresp("OUTP OFF")
+            QThread.msleep(200)
+
+            # 2) 상태 조회로 검증
+            last_resp = self._query("OUTP?", timeout_ms=900)
+            state = self._parse_outp_state(last_resp)
+
+            if state == 0:
+                self.status_message.emit("DCpower", f"OUTP?=0 확인(OFF) (attempt {attempt})")
+                return True
+
+            self.status_message.emit("DCpower(경고)", f"OUTP OFF 확인 실패: OUTP?={last_resp!r} → 재시도")
+            QThread.msleep(250)
+
+        self.status_message.emit("DCpower(에러)", f"OUTP OFF 최종 실패(3회): 마지막 OUTP?={last_resp!r}")
+        return False
 
     @Slot()
     def stop_process(self):
-        if not self._is_running:
-            return
+        # ✅ 이미 stop 상태여도 "출력 OFF 보장"을 위해 return하지 않음
+        was_running = self._is_running
         self._is_running = False
         self.state = "IDLE"
         self.control_timer.stop()
-        self.power_error_count = 0 # ★ 편차 카운터도 초기화
-        self._send_noresp("OUTP OFF")
-        self.status_message.emit("DCpower", "출력 OFF, 대기 상태로 전환")
+        self.power_error_count = 0
+
+        if not (self.serial and self.serial.isOpen()):
+            # 포트가 이미 죽었으면 OFF 검증 자체가 불가
+            self.status_message.emit("DCpower(경고)", "stop_process: 시리얼 포트가 닫혀 있어 OUTP OFF 검증 불가")
+            return
+
+        ok = self._ensure_output_off(max_retries=3)
+
+        if ok:
+            self.status_message.emit("DCpower", "출력 OFF 확인 완료, 대기 상태로 전환")
+        else:
+            detail = "DC OUTPUT OFF 실패: 3회 재시도 후에도 OUTP?=0 확인 불가"
+            self.status_message.emit("DCpower(에러)", detail)
+            # ✅ 메인에서 구글챗 보내도록 신호 발생
+            self.output_off_failed.emit(detail)
 
     @Slot()
     def close_connection(self):

@@ -209,6 +209,8 @@ class MainDialog(QDialog):
         self.plc_controller.status_message.connect(self.on_status_message)
         self.mfc_controller.status_message.connect(self.on_status_message)
         self.dcpower_controller.status_message.connect(self.on_status_message)
+        # ✅ DC Output OFF 검증 3회 실패 시: 즉시 구글챗 알림
+        self.dcpower_controller.output_off_failed.connect(self._on_dcpower_output_off_failed)
         self.rfpower_controller.status_message.connect(self.on_status_message)
         self.process_controller.status_message.connect(self.on_status_message)
         
@@ -1604,6 +1606,29 @@ class MainDialog(QDialog):
 
         self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
         self.process_controller.start_process_flow(params)
+
+    @Slot(str)
+    def _on_dcpower_output_off_failed(self, detail: str):
+        # 1) 모니터 표시
+        log_message_to_monitor("ERROR", f"[DC] {detail}")
+
+        # 2) 이번 공정은 실패로 기록
+        self._chk_process_ok = False
+        self._chat_add_error(detail)
+
+        # 3) ✅ 즉시 구글챗 알림 (3회 실패는 “즉시 알림”이 요구사항)
+        try:
+            if self.chat_chk:
+                name = self.current_process_name or "CHK"
+                self.chat_chk.notify_text(
+                    f"⚠️ CHK DC Power OUTPUT OFF 실패(3회 재시도) | {name} | {detail}"
+                )
+                self.chat_chk.flush()
+                self._chat_fail_notified = True
+                if not self._chat_fail_reason:
+                    self._chat_fail_reason = detail
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
