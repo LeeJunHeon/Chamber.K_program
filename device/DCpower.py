@@ -192,22 +192,39 @@ class DCPowerController(QObject):
         # 2) 공정 중이었다면 상태 복구
         if self._resume_after_reconnect:
             try:
-                # Reset(*RST)은 위험할 수 있어 복구에서는 *CLS만 사용
+                # ✅ 1) 재연결 직후 장비 에러 상태를 먼저 로깅(LOCAL/REMOTE/트립 등 디버깅 도움)
+                self._log_syst_err("after_reconnect")
+
+                # Reset(*RST)은 위험할 수 있어 복구에서는 *CLS만 사용 (성공 여부 체크)
                 if not self._send("*CLS"):
                     return False
-                # 전압/전류 재보장 + 출력 ON
+                
+                # 전압/전류 재보장
                 v = self._clamp_v(DC_MAX_VOLTAGE)
                 i = self._clamp_i(self.current_current)
                 if not self._send(f"APPLy {v:.2f},{i:.4f}"):
+                    self._log_syst_err("apply_failed")
                     return False
-                if not self._send("OUTP ON"):
+                
+                # ✅ 2) OUTP ON 전에 OUTP?로 상태 확인 → 이미 ON이면 생략
+                outp_on = self._is_output_on()
+                if outp_on is None:
+                    # OUTP? 자체가 실패 = 통신 불안정 가능 → 재연결 루프가 다시 돌게 됨(_query가 mark_disconnected)
                     return False
+                
+                if outp_on:
+                    self.status_message.emit("DCpower", "OUTP?=1(이미 ON) → OUTP ON 생략")
+                else:
+                    if not self._send("OUTP ON"):
+                        self._log_syst_err("outp_on_failed")
+                        return False
 
                 self.status_message.emit("DCpower", f"재연결 복구 완료: OUTP ON, APPLy {v:.2f},{i:.4f}")
                 # 제어 루프 재개
                 self._is_running = True
                 self.control_timer.start()
                 return True
+            
             except Exception as e:
                 self.status_message.emit("DCpower(경고)", f"재연결 후 복구 실패: {e}")
                 return False
@@ -522,6 +539,30 @@ class DCPowerController(QObject):
 
         self.status_message.emit("DCpower(에러)", f"OUTP OFF 최종 실패(3회): 마지막 OUTP?={last_resp!r}")
         return False
+    
+    def _log_syst_err(self, where: str) -> None:
+        """
+        재연결 직후/출력ON 실패 시점 등에 SYST:ERR?를 조회해 로그로 남긴다.
+        예: 0,"No error" 또는 에러 코드/메시지
+        """
+        resp = self._query("SYST:ERR?", timeout_ms=900)
+        if resp is None:
+            self.status_message.emit("DCpower(경고)", f"[{where}] SYST:ERR? 조회 실패")
+            return
+        self.status_message.emit("DCpower", f"[{where}] SYST:ERR? -> {resp}")
+
+    def _is_output_on(self) -> Optional[bool]:
+        """
+        OUTP? 상태 확인:
+        - True  : ON
+        - False : OFF
+        - None  : 응답 실패(끊김/타임아웃 등)
+        """
+        resp = self._query("OUTP?", timeout_ms=900)
+        state = self._parse_outp_state(resp)  # 0/1/None
+        if state is None:
+            return None
+        return (state == 1)
 
     @Slot()
     def stop_process(self):
