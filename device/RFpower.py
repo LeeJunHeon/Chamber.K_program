@@ -351,13 +351,11 @@ class RFPowerController(QObject):
         )
         self.status_message.emit("RFpower(실패)", detail)
 
-        # ✅ 실패 시그널(메인에서 구글챗 알림용)
+        # 상태 먼저 정리(재진입/중복 호출 방지)
+        self._is_ramping_down = False
+
+        # ✅ 실패 시그널(메인/프로세스컨트롤러에서 처리)
         self.ramp_down_failed.emit(detail)
-
-        # ✅ 호환: ProcessController가 finished만 기다리는 경우를 위해 finished도 emit
-        self.ramp_down_finished.emit()
-
-        self._is_ramping_down = False    
 
     def read_rf_power(self):
         """PLC로부터 (forward_watt, reflected_watt) 튜플을 받는다."""

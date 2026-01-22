@@ -777,23 +777,14 @@ class SputterProcessController(QObject):
                 # 이벤트 루프 준비
                 self._rfdown_wait = QEventLoop()
 
-                # finished 연결
-                try:
-                    self.rf.ramp_down_finished.connect(
-                        self._on_rf_rampdown_finished,
-                        type=Qt.ConnectionType.QueuedConnection
-                    )
-                except TypeError:
-                    self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
-
-                # ✅ failed 연결(추가)
-                try:
-                    self.rf.ramp_down_failed.connect(
-                        self._on_rf_rampdown_failed,
-                        type=Qt.ConnectionType.QueuedConnection
-                    )
-                except TypeError:
-                    self.rf.ramp_down_failed.connect(self._on_rf_rampdown_failed)
+                self.rf.ramp_down_finished.connect(
+                    self._on_rf_rampdown_finished,
+                    type=Qt.ConnectionType.QueuedConnection
+                )
+                self.rf.ramp_down_failed.connect(
+                    self._on_rf_rampdown_failed,
+                    type=Qt.ConnectionType.QueuedConnection
+                )
 
                 # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
                 QTimer.singleShot(120_000, self._on_rf_rampdown_finished)

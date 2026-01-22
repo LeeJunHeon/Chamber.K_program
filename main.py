@@ -1612,7 +1612,7 @@ class MainDialog(QDialog):
         self.ui.Sputter_Stop_Button.setEnabled(True)
 
         self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
-        self.process_controller.start_process_flow(params)
+        self.process_controller.start_requested.emit(params)
 
     @Slot(str)
     def _on_dcpower_output_off_failed(self, detail: str):
