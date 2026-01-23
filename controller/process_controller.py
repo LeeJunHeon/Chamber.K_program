@@ -803,8 +803,8 @@ class SputterProcessController(QObject):
                         pass
                     self._rfdown_wait = None
 
-            # ====== 3) MFC 단계 (src=MFC면 스킵 + 타임아웃으로 무한대기 방지) ======
-            if src != "MFC":
+            # ====== 3) MFC 단계 (src=MFC 또는 src=POWER면 스킵) ======
+            if src not in ("MFC", "POWER"):
                 channels = getattr(self, "_active_channels", None)
                 if not channels:
                     channels = [self._process_channel]
@@ -817,7 +817,6 @@ class SputterProcessController(QObject):
                     except:
                         pass
 
-                # ✅ 타임아웃 유틸(예: 2000ms)
                 def _exec_loop_with_timeout(timeout_ms: int = 2000):
                     t = QTimer()
                     t.setSingleShot(True)
@@ -844,6 +843,12 @@ class SputterProcessController(QObject):
                     self.mfc.command_failed.disconnect(_quit)
                 except:
                     pass
+            else:
+                # ✅ 요구사항: POWER 이상이면 MFC는 건드리지 않음
+                if src == "POWER":
+                    self.status_message.emit("경고", "POWER 이상 감지 → MFC 종료 명령(FLOW_OFF/VALVE_OPEN) 스킵")
+                elif src == "MFC":
+                    self.status_message.emit("경고", "MFC 이상 감지 → MFC 종료 명령(FLOW_OFF/VALVE_OPEN) 스킵")
 
             # ====== 4) 나머지 PLC 닫기(가스/셔터) — src=PLC면 스킵 ======
             if src != "PLC":
@@ -855,22 +860,6 @@ class SputterProcessController(QObject):
                     gas_name = "Ar" if "Ar" in btn else "O2"
                     self.status_message.emit("PLC", f"{gas_name} Valve Close")
                     self.update_plc_port.emit(btn, False)
-
-            try:
-                self.mfc.command_confirmed.disconnect(_quit)
-                self.mfc.command_failed.disconnect(_quit)
-            except:
-                pass
-
-            # 건 셔터/가스 닫기
-            self.update_plc_port.emit('S1_button', False)
-            self.update_plc_port.emit('S2_button', False)
-
-            gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
-            for btn in gas_buttons:
-                gas_name = "Ar" if "Ar" in btn else "O2"
-                self.status_message.emit("PLC", f"{gas_name} Valve Close")
-                self.update_plc_port.emit(btn, False)
 
             QTimer.singleShot(800, self._finish_stop)
             self._stop_pending = False
