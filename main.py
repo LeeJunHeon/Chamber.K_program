@@ -1625,6 +1625,10 @@ class MainDialog(QDialog):
         #    파라미터 저장 + 평균값 누적 초기화
         self._last_params = dict(params)
         self._reset_chk_stats()
+
+        # ✅ 새 STEP 시작 전, finished 처리 가드 리셋(다음 STEP finished가 무시되는 것 방지)
+        self._finish_handled = False
+
         self._chk_process_ok = True   # 이 STEP이 정상 종료했을 때만 CSV에 기록
 
         # ✅ 이 단계의 파라미터를 UI에 반영 (CH1/CH2처럼 보이게)
