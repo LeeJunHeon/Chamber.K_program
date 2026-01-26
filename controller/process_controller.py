@@ -564,11 +564,21 @@ class SputterProcessController(QObject):
 
         if cmd == "FLOW_MON":
             self.status_message.emit("MFC(실패)", f"{tag} | [FLOW_MON] {why}")
+
+            # ✅ MFC 문제로 중단 → stop 시퀀스에서 MFC 명령 스킵하도록 원인 지정
+            self.abort_source = "MFC"
+            self.abort_reason = f"{tag} | [FLOW_MON] {why}"
+
             self._abort_with_error(f"{tag} | 가스 유량 이탈로 공정 중단: {why}")
             return
 
         bad = (step.params[0] if (step and step.params) else "?")
         self.status_message.emit("MFC(실패)", f"{tag} | '{bad}' 실패: {why}")
+
+        # ✅ MFC 문제로 중단 → stop 시퀀스에서 MFC 명령 스킵
+        self.abort_source = "MFC"
+        self.abort_reason = f"{tag} | MFC '{bad}' 실패: {why}"
+
         self._abort_with_error(f"{tag} | MFC '{bad}' 실패: {why}")
 
     # ==================== 파워 안정화 ====================
@@ -783,24 +793,32 @@ class SputterProcessController(QObject):
                     self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
 
                     self._rfdown_wait = QEventLoop()
-                    try:
-                        self.rf.ramp_down_finished.connect(
-                            self._on_rf_rampdown_finished,
-                            type=Qt.ConnectionType.QueuedConnection
-                        )
-                    except TypeError:
-                        self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
 
-                    # 타임아웃
+                    # finished + failed 둘 다 stop 대기 루프를 깨움
+                    self.rf.ramp_down_finished.connect(
+                        self._on_rf_rampdown_finished,
+                        type=Qt.ConnectionType.QueuedConnection
+                    )
+                    self.rf.ramp_down_failed.connect(
+                        self._on_rf_rampdown_failed,
+                        type=Qt.ConnectionType.QueuedConnection
+                    )
+
                     QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
 
                     self.stop_rf_power.emit()
                     self._rfdown_wait.exec()
 
+                    # 연결 해제
                     try:
                         self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
                     except Exception:
                         pass
+                    try:
+                        self.rf.ramp_down_failed.disconnect(self._on_rf_rampdown_failed)
+                    except Exception:
+                        pass
+
                     self._rfdown_wait = None
 
             # ====== 3) MFC 단계 (src=MFC 또는 src=POWER면 스킵) ======

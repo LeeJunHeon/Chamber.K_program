@@ -566,17 +566,48 @@ class MainDialog(QDialog):
 
     @Slot(str)
     def _handle_connection_failure(self, error_message):
-        QMessageBox.critical(self, "연결 실패", error_message)
-
-        # ✅ 실패 원인 저장만 (종료 카드+실패 원인 일반챗은 _handle_process_finished에서)
+        # ✅ 1) 먼저 실패 확정 + 원인 저장
+        self._chk_process_ok = False
         self._chat_notify_failed_now(error_message, send_text=False)
 
-        self._chk_process_ok = False  # 연결 실패도 실패 처리
+        # ✅ 2) 종료 처리(카드/CSV로그 분기 포함)
         self._handle_process_finished()
+
+        # ✅ 3) 마지막에 팝업
+        QMessageBox.critical(self, "연결 실패", error_message)
 
     def on_status_message(self, level, message):
         log_message_to_monitor(level, message)
 
+        # ✅ (핵심) "(실패)"/ERROR/오류 메시지는 finished보다 먼저 올 수 있으니 여기서 즉시 실패 확정
+        lv = (level or "").strip()
+        if lv and ("(실패)" in lv or lv in ("ERROR", "오류")):
+            # 공정/CSV가 실제로 돌고 있을 때만 실패 확정(유휴 상태 보호)
+            in_run = bool(getattr(self, "process_running", False)) or bool(getattr(self, "csv_mode", False)) \
+                    or bool(getattr(self, "_csv_delay_active", False))
+            if in_run and not getattr(self, "_chat_user_stopped", False):
+                self._chk_process_ok = False
+
+                reason = f"{lv} {message}".strip()
+                self._chat_notify_failed_now(reason, send_text=False)
+
+                # Stop 시퀀스 분기용 원인(처음 1회만 세팅)
+                if self.process_controller:
+                    up = reason.upper()
+                    src = "UNKNOWN"
+                    if "MFC" in up:
+                        src = "MFC"
+                    elif "PLC" in up:
+                        src = "PLC"
+                    elif ("DC" in up) or ("RF" in up) or ("POWER" in up):
+                        src = "POWER"
+
+                    if getattr(self.process_controller, "abort_source", "UNKNOWN") in ("", "UNKNOWN"):
+                        self.process_controller.abort_source = src
+                    if not getattr(self.process_controller, "abort_reason", ""):
+                        self.process_controller.abort_reason = reason
+
+        # === 기존 재시작 로직 유지 ===
         if level == "재시작":
             self._chk_process_ok = False
 
@@ -595,24 +626,19 @@ class MainDialog(QDialog):
                 src = "POWER"
 
             if self.process_controller:
-                # process_controller 쪽에서 이 값을 보고 Stop 순서/스킵을 결정하도록
                 self.process_controller.abort_source = src
                 self.process_controller.abort_reason = reason
 
-            # ✅ PLC 재연결 5회 실패는 즉시 일반채팅도 전송(요구사항)
             send_now = ("재연결" in reason) and ("5회" in reason or "5" in reason) and ("실패" in reason)
             self._chat_notify_failed_now(reason, send_text=send_now)
 
-            # ✅ CSV 리스트가 진행중이면, 다음 스텝이 이어지지 않도록 취소 플래그부터 세팅
             if getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None):
                 self.csv_cancelled = True
 
-                # (1) 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
                 if getattr(self, "_csv_delay_active", False) or (not self.process_running):
                     self._cancel_csv_list_now("CSV 공정 취소", reason=reason)
                     return
 
-            # (2) 실제 공정 스텝이 돌고 있으면: stop_process로 안전 종료
             if self.process_controller and self.process_running:
                 self.request_process_stop.emit()
 
@@ -1082,14 +1108,12 @@ class MainDialog(QDialog):
 
     @Slot(str)
     def _handle_critical_error(self, error_message):
-        QMessageBox.critical(self, "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
+        # ✅ 1) 먼저 실패 확정 (finished가 먼저 와도 안전)
         self._chk_process_ok = False
-
-        # ✅ 저장만 (stop 시퀀스 끝나고 finished에서 카드+일반챗 1줄)
         self._chat_notify_failed_now(error_message, send_text=False)
 
-        # ✅ 여기서 _handle_process_finished()를 직접 호출하지 마세요.
-        # stop 시퀀스가 끝나면 ProcessController.finished가 1번만 호출해줍니다.
+        # ✅ 2) 그 다음 팝업 (사용자 확인은 나중)
+        QMessageBox.critical(self, "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
 
     def update_stage_monitor(self, stage_text):
         self.ui.stage_monitor.setPlainText(stage_text)
