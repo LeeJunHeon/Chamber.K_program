@@ -378,6 +378,12 @@ class ChatNotifier(QObject):
 
     @Slot(bool, dict)
     def notify_process_finished_detail(self, ok: bool, detail: dict):
+        # ✅ 종료 카드 중복 전송 방지
+        if self._finished_sent:
+            self._upsert_error_card()
+            self.flush()
+            return
+
         name = (detail or {}).get("process_name") or (self._last_started_params or {}).get("process_note") or "Untitled"
         stopped  = bool((detail or {}).get("stopped"))
         aborting = bool((detail or {}).get("aborting"))

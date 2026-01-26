@@ -59,6 +59,8 @@ class MainDialog(QDialog):
         self._chat_fail_notified: bool = False   # ✅ 실패 원인 일반채팅 중복 방지
         self._chat_fail_reason: str = ""         # ✅ 이번 공정에서 “가장 먼저 잡힌” 실패 원인 1개
 
+        self._finish_handled: bool = False       # ✅ _handle_process_finished 중복 호출 방지 가드
+
         # === Google Chat Notifier (CH.K) ===
 
         # ★ 이번 공정 이름(단일/CSV 공정 공통)
@@ -367,7 +369,10 @@ class MainDialog(QDialog):
             return
         
         self.clear_plc_fault.emit()
-        
+
+        # ✅ 공정 시작(수동/CSV 포함)마다 종료 처리 가드 리셋
+        self._finish_handled = False
+
         # === 1) CSV 모드인지 먼저 확인 ===
         if self.csv_file_path:
             # CSV 로딩 & 리스트 공정 모드 진입
@@ -471,6 +476,11 @@ class MainDialog(QDialog):
         #    이번 공정 파라미터를 저장 + 평균값 누적 초기화
         self._last_params = dict(params)
         self._reset_chk_stats()
+
+        # ✅ 이전 STEP에서 _handle_process_finished가 1회 처리되며 True가 됐을 수 있으니,
+        #    새 STEP 시작 전에 반드시 리셋해야 다음 finished가 무시되지 않음
+        self._finish_handled = False
+
         self._chk_process_ok = True   # 이번 공정은 정상 종료로 가정하고 시작
         
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
@@ -1021,6 +1031,11 @@ class MainDialog(QDialog):
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
+        # ✅ finished 시그널 + (connection_failed 등) 직접 호출이 겹칠 수 있으니 1회만 처리
+        if getattr(self, "_finish_handled", False):
+            return
+        self._finish_handled = True
+
         self.on_status_message("정보", "프로세스 종료중.")
 
         # ★ 이번 STEP이 정상 종료됐는지 여부를 먼저 보관
