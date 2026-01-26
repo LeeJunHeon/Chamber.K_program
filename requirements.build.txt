@@ -1,0 +1,12 @@
+# requirements.build.txt (CH.K_program)
+# Generated from current working environment (wnsgj)
+# PyQt runtime:
+#   PYQT_VERSION_STR = 6.10.0
+#   QT_VERSION_STR   = 6.10.0
+
+PyQt6==6.10.0
+minimalmodbus==2.1.1
+
+# build tools
+pyinstaller==6.14.2
+pyinstaller-hooks-contrib==2025.5
