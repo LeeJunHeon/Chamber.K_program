@@ -229,6 +229,9 @@ class MFCController(QObject):
             self.status_message.emit("MFC", f"재연결 성공: {MFC_PORT} (attempt {attempt})")
             self._reconnect_attempts = 0
             self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
+            
+            # ✅ 끊긴 동안 쌓인 명령(OFF 포함) 즉시 전송 재개
+            QTimer.singleShot(0, self._dequeue_and_send)
             return
 
         # 실패
@@ -374,6 +377,11 @@ class MFCController(QObject):
         self._cmd_q.append(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
         if (self._inflight is None) and (not (self._gap_timer and self._gap_timer.isActive())):
             QTimer.singleShot(0, self._dequeue_and_send)
+
+        # ✅ 포트가 닫혀 있으면: 큐만 쌓이고 끝나지 않도록 재연결도 트리거
+        if not (self.serial_mfc and self.serial_mfc.isOpen()):
+            if self._want_connected and (not self._reconnect_pending) and (not self._fatal_latched):
+                QTimer.singleShot(0, self._try_reconnect)
 
     def _dequeue_and_send(self):
         if self._inflight is not None or not self._cmd_q:

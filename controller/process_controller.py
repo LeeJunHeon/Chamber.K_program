@@ -783,35 +783,60 @@ class SputterProcessController(QObject):
             # src는 '로그/원인 기록'용으로만 두고, 스킵 판단은 '현재 연결 상태'로만 한다.
             src = getattr(self, "abort_source", "UNKNOWN") or "UNKNOWN"
 
-            plc_ok = self._is_connected(self.plc)
-            mfc_ok = self._is_connected(self.mfc)
-            dc_ok  = self._is_connected(self.dc)
-            # RF는 PLC로 제어/읽기하니 PLC 연결 여부가 사실상 RF 가능 여부
-            rf_ok  = plc_ok
+            def _snapshot_conn():
+                """종료 시퀀스 도중 '중간 끊김/재연결'을 반영하기 위해 매 단계마다 재판정."""
+                plc_ok = self._is_connected(self.plc)
+                mfc_ok = self._is_connected(self.mfc)
+                dc_ok  = self._is_connected(self.dc)
+                rf_ok  = plc_ok  # RF는 PLC로 제어/읽기하니 PLC 연결 여부가 사실상 RF 가능 여부
+                return plc_ok, mfc_ok, dc_ok, rf_ok
 
-            # ====== 1) PLC 단계 ======
+            # DC OFF 명령을 "한 번이라도" 보냈는지 추적 (DC가 끊겨서 OFF 자체를 못 보낸 상태면 MFC를 끄지 않기 위함)
+            dc_off_sent = False
+
+            def _should_keep_mfc_gas(plc_ok: bool, dc_ok: bool) -> bool:
+                """
+                네 요구사항을 그대로 반영한 보수 규칙:
+                1) DC 공정인데 DC가 끊겼거나(OFF 확인/추가제어 불가), DC OFF 명령을 아예 못 보냈으면 → MFC 끄지 않음
+                2) RF 공정인데 PLC가 끊겨 RF OFF를 못 하면 → MFC 끄지 않음
+                """
+                if self.is_dc_on and ((not dc_ok) or (not dc_off_sent)):
+                    return True
+                if self.is_rf_on and (not plc_ok):
+                    return True
+                return False
+
+            # ====== 1) PLC 단계 : Main Shutter close ======
+            plc_ok, mfc_ok, dc_ok, rf_ok = _snapshot_conn()
             if plc_ok:
-                self.stage_monitor.emit("M.S. close...")
+                self.stage_monitor.emit("M.S. close.")
                 self.update_plc_port.emit('MS_button', False)
             else:
                 self.status_message.emit("경고", f"PLC 미연결 → MS close 스킵 (abort_source={src})")
 
             # ====== 2) Power 단계 ======
             # ✅ abort_source=POWER라도, 지금 연결돼 있으면 '끄는 시도'는 한다(안전 종료 목적)
+
+            # ---- DC OFF ----
+            plc_ok, mfc_ok, dc_ok, rf_ok = _snapshot_conn()
             if self.is_dc_on:
                 if dc_ok:
                     self.status_message.emit("DCpower", "DC 파워 OFF")
                     self.stop_dc_power.emit()
+                    dc_off_sent = True
                 else:
+                    # DC가 끊겨서 OFF 명령 자체를 못 보낸 상태
                     self.status_message.emit("경고", f"DCpower 미연결 → DC OFF 스킵 (abort_source={src})")
+                    dc_off_sent = False
 
+            # ---- RF OFF (ramp-down) ----
+            plc_ok, mfc_ok, dc_ok, rf_ok = _snapshot_conn()
             if self.is_rf_on:
                 if rf_ok:
                     self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
 
                     self._rfdown_wait = QEventLoop()
 
-                    # finished + failed 둘 다 stop 대기 루프를 깨움
                     self.rf.ramp_down_finished.connect(
                         self._on_rf_rampdown_finished,
                         type=Qt.ConnectionType.QueuedConnection
@@ -826,7 +851,6 @@ class SputterProcessController(QObject):
                     self.stop_rf_power.emit()
                     self._rfdown_wait.exec()
 
-                    # 연결 해제
                     try:
                         self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
                     except Exception:
@@ -839,60 +863,79 @@ class SputterProcessController(QObject):
                     self._rfdown_wait = None
                 else:
                     self.status_message.emit("경고", f"PLC 미연결 → RF ramp-down 스킵 (abort_source={src})")
-                    # rampdown 대기루프를 만들지 않았다면 여기서 그냥 스킵
 
             # ====== 3) MFC 단계 ======
-            # ✅ abort_source가 뭐든, 지금 연결돼 있으면 FLOW_OFF/VALVE_OPEN을 수행
+            # ✅ “DC 끊김” 또는 “PLC 끊김+RF 사용”이면 MFC를 끄지 않음(네 요구사항)
+            plc_ok, mfc_ok, dc_ok, rf_ok = _snapshot_conn()
+            keep_mfc = _should_keep_mfc_gas(plc_ok, dc_ok)
+
             if mfc_ok:
-                channels = getattr(self, "_active_channels", None) or [self._process_channel]
+                if keep_mfc:
+                    reasons = []
+                    if self.is_dc_on and ((not dc_ok) or (not dc_off_sent)):
+                        reasons.append("DC 미연결/또는 DC OFF 미수행")
+                    if self.is_rf_on and (not plc_ok):
+                        reasons.append("PLC 미연결(RF OFF 불가)")
+                    self.status_message.emit(
+                        "경고",
+                        f"{' & '.join(reasons)} → MFC FLOW_OFF/VALVE_OPEN 스킵 (abort_source={src})"
+                    )
+                else:
+                    loop = QEventLoop()
 
-                loop = QEventLoop()
+                    def _quit(*args):
+                        try:
+                            loop.quit()
+                        except:
+                            pass
 
-                def _quit(*_):
-                    try:
-                        loop.quit()
-                    except:
-                        pass
+                    def _exec_loop_with_timeout(timeout_ms: int = 2000):
+                        t = QTimer()
+                        t.setSingleShot(True)
+                        t.timeout.connect(loop.quit)
+                        t.start(timeout_ms)
+                        loop.exec()
+                        try:
+                            t.stop()
+                        except Exception:
+                            pass
 
-                def _exec_loop_with_timeout(timeout_ms: int = 2000):
-                    t = QTimer()
-                    t.setSingleShot(True)
-                    t.timeout.connect(loop.quit)
-                    t.start(timeout_ms)
-                    loop.exec()
-                    try:
-                        t.stop()
-                    except Exception:
-                        pass
+                    self.mfc.command_confirmed.connect(_quit)
+                    self.mfc.command_failed.connect(_quit)
 
-                self.mfc.command_confirmed.connect(_quit)
-                self.mfc.command_failed.connect(_quit)
+                    channels = getattr(self, "_active_channels", None) or [self._process_channel]
+                    for ch in channels:
+                        self.command_requested.emit("FLOW_OFF", {'channel': ch})
+                        _exec_loop_with_timeout(2000)
 
-                for ch in channels:
-                    self.command_requested.emit("FLOW_OFF", {'channel': ch})
+                    self.command_requested.emit("VALVE_OPEN", {})
                     _exec_loop_with_timeout(2000)
 
-                self.command_requested.emit("VALVE_OPEN", {})
-                _exec_loop_with_timeout(2000)
-
-                try:
-                    self.mfc.command_confirmed.disconnect(_quit)
-                    self.mfc.command_failed.disconnect(_quit)
-                except:
-                    pass
+                    try:
+                        self.mfc.command_confirmed.disconnect(_quit)
+                        self.mfc.command_failed.disconnect(_quit)
+                    except:
+                        pass
             else:
                 self.status_message.emit("경고", f"MFC 미연결 → FLOW_OFF/VALVE_OPEN 스킵 (abort_source={src})")
 
             # ====== 4) 나머지 PLC 닫기 ======
+            # ✅ DC가 끊긴 경우: PLC는 MS만 닫고 gun/gas는 열어둔다 → 여기서는 S1/S2/가스밸브 close를 스킵
+            plc_ok, mfc_ok, dc_ok, rf_ok = _snapshot_conn()
             if plc_ok:
-                self.update_plc_port.emit('S1_button', False)
-                self.update_plc_port.emit('S2_button', False)
+                if self.is_dc_on and (not dc_ok):
+                    self.status_message.emit("경고", f"DCpower 미연결 → PLC는 MS만 닫고 Gun/Gas 유지 (abort_source={src})")
+                    # 혹시 MS close가 반영 안됐을 수 있어 한 번 더(멱등)
+                    self.update_plc_port.emit('MS_button', False)
+                else:
+                    self.update_plc_port.emit('S1_button', False)
+                    self.update_plc_port.emit('S2_button', False)
 
-                gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
-                for btn in gas_buttons:
-                    gas_name = "Ar" if "Ar" in btn else "O2"
-                    self.status_message.emit("PLC", f"{gas_name} Valve Close")
-                    self.update_plc_port.emit(btn, False)
+                    gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
+                    for btn in gas_buttons:
+                        gas_name = "Ar" if "Ar" in btn else "O2"
+                        self.status_message.emit("PLC", f"{gas_name} Valve Close")
+                        self.update_plc_port.emit(btn, False)
             else:
                 self.status_message.emit("경고", f"PLC 미연결 → 가스/셔터 닫기 스킵 (abort_source={src})")
 
