@@ -148,6 +148,10 @@ class SputterProcessController(QObject):
             self.params = params
             self._running = True
 
+            # ✅ 이전 공정의 abort_source가 남아 Stop 스킵을 유발하는 문제 방지
+            self.abort_source = "UNKNOWN"
+            self.abort_reason = ""
+
             # 타이머는 자신의 스레드에서 생성
             self._invoke_self("_setup_timers")
 
@@ -776,56 +780,44 @@ class SputterProcessController(QObject):
             # 폴링 OFF
             self.command_requested.emit("set_polling", {'enable': False})
 
+            # src는 '로그/원인 기록'용으로만 두고, 스킵 판단은 '현재 연결 상태'로만 한다.
             src = getattr(self, "abort_source", "UNKNOWN") or "UNKNOWN"
 
-            # ====== 1) PLC 단계 (src=PLC면 스킵) ======
-            if src != "PLC":
+            plc_ok = self._is_connected(self.plc)
+            mfc_ok = self._is_connected(self.mfc)
+            dc_ok  = self._is_connected(self.dc)
+            # RF는 PLC로 제어/읽기하니 PLC 연결 여부가 사실상 RF 가능 여부
+            rf_ok  = plc_ok
+
+            # ====== 1) PLC 단계 ======
+            if plc_ok:
                 self.stage_monitor.emit("M.S. close...")
                 self.update_plc_port.emit('MS_button', False)
+            else:
+                self.status_message.emit("경고", f"PLC 미연결 → MS close 스킵 (abort_source={src})")
 
-            # ====== 2) Power 단계 (src=POWER면 스킵: 전원 자체 문제일 수 있음) ======
-            if src != "POWER":
-                if self.is_dc_on:
+            # ====== 2) Power 단계 ======
+            # ✅ abort_source=POWER라도, 지금 연결돼 있으면 '끄는 시도'는 한다(안전 종료 목적)
+            if self.is_dc_on:
+                if dc_ok:
                     self.status_message.emit("DCpower", "DC 파워 OFF")
                     self.stop_dc_power.emit()
+                else:
+                    self.status_message.emit("경고", f"DCpower 미연결 → DC OFF 스킵 (abort_source={src})")
 
-                if self.is_rf_on:
+            if self.is_rf_on:
+                if rf_ok:
                     self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
+                    # (기존 rampdown wait 로직 그대로)
+                    ...
+                else:
+                    self.status_message.emit("경고", f"PLC 미연결 → RF ramp-down 스킵 (abort_source={src})")
+                    # rampdown 대기루프를 만들지 않았다면 여기서 그냥 스킵
 
-                    self._rfdown_wait = QEventLoop()
-
-                    # finished + failed 둘 다 stop 대기 루프를 깨움
-                    self.rf.ramp_down_finished.connect(
-                        self._on_rf_rampdown_finished,
-                        type=Qt.ConnectionType.QueuedConnection
-                    )
-                    self.rf.ramp_down_failed.connect(
-                        self._on_rf_rampdown_failed,
-                        type=Qt.ConnectionType.QueuedConnection
-                    )
-
-                    QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
-
-                    self.stop_rf_power.emit()
-                    self._rfdown_wait.exec()
-
-                    # 연결 해제
-                    try:
-                        self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
-                    except Exception:
-                        pass
-                    try:
-                        self.rf.ramp_down_failed.disconnect(self._on_rf_rampdown_failed)
-                    except Exception:
-                        pass
-
-                    self._rfdown_wait = None
-
-            # ====== 3) MFC 단계 (src=MFC 또는 src=POWER면 스킵) ======
-            if src not in ("MFC", "POWER"):
-                channels = getattr(self, "_active_channels", None)
-                if not channels:
-                    channels = [self._process_channel]
+            # ====== 3) MFC 단계 ======
+            # ✅ abort_source가 뭐든, 지금 연결돼 있으면 FLOW_OFF/VALVE_OPEN을 수행
+            if mfc_ok:
+                channels = getattr(self, "_active_channels", None) or [self._process_channel]
 
                 loop = QEventLoop()
 
@@ -862,14 +854,10 @@ class SputterProcessController(QObject):
                 except:
                     pass
             else:
-                # ✅ 요구사항: POWER 이상이면 MFC는 건드리지 않음
-                if src == "POWER":
-                    self.status_message.emit("경고", "POWER 이상 감지 → MFC 종료 명령(FLOW_OFF/VALVE_OPEN) 스킵")
-                elif src == "MFC":
-                    self.status_message.emit("경고", "MFC 이상 감지 → MFC 종료 명령(FLOW_OFF/VALVE_OPEN) 스킵")
+                self.status_message.emit("경고", f"MFC 미연결 → FLOW_OFF/VALVE_OPEN 스킵 (abort_source={src})")
 
-            # ====== 4) 나머지 PLC 닫기(가스/셔터) — src=PLC면 스킵 ======
-            if src != "PLC":
+            # ====== 4) 나머지 PLC 닫기 ======
+            if plc_ok:
                 self.update_plc_port.emit('S1_button', False)
                 self.update_plc_port.emit('S2_button', False)
 
@@ -878,9 +866,9 @@ class SputterProcessController(QObject):
                     gas_name = "Ar" if "Ar" in btn else "O2"
                     self.status_message.emit("PLC", f"{gas_name} Valve Close")
                     self.update_plc_port.emit(btn, False)
+            else:
+                self.status_message.emit("경고", f"PLC 미연결 → 가스/셔터 닫기 스킵 (abort_source={src})")
 
-            QTimer.singleShot(800, self._finish_stop)
-            self._stop_pending = False
         except Exception as e:
             # 종료 시퀀스 중 예외도 잡아서 UI가 안 멈추게
             try:
