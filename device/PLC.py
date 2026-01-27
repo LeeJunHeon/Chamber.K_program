@@ -265,25 +265,22 @@ class PLCController(QObject):
             pass
 
         self._close_instrument()
+
+        # ✅ 정책: 끊김 중 명령 보관 금지 → 남아있던 pending도 즉시 폐기
+        self._pending_bit_writes.clear()
+        self._pending_reg_writes.clear()
+
         self.status_message.emit("PLC(경고)", f"연결 끊김 감지({where}) → 재연결 시도")
         self._schedule_reconnect()
 
     def _flush_pending_writes(self) -> None:
-        """재연결 성공 후, 끊긴 동안 저장된 쓰기 요청(마지막 값)을 적용."""
-        if not self.instrument:
-            return
-        try:
-            for addr, val in list(self._pending_bit_writes.items()):
-                self.instrument.write_bit(addr, int(val), functioncode=5)
-            self._pending_bit_writes.clear()
-
-            for addr, val in list(self._pending_reg_writes.items()):
-                self.instrument.write_register(addr, int(val), functioncode=6)
-            self._pending_reg_writes.clear()
-
-            self.status_message.emit("PLC", "재연결 후 저장된 명령 flush 완료")
-        except Exception as e:
-            self._mark_disconnected("flush_pending", e)
+        """
+        ✅ 정책: 끊김 중 명령 '저장/보관'을 하지 않음.
+        혹시 남아있을 수 있는 pending이 있더라도 재연결 시 실행하지 않고 폐기한다.
+        """
+        self._pending_bit_writes.clear()
+        self._pending_reg_writes.clear()
+        self.status_message.emit("PLC", "재연결: pending 명령은 정책상 폐기(적용 안함)")
 
     @Slot()
     def _try_reconnect(self) -> None:
@@ -438,40 +435,9 @@ class PLCController(QObject):
     @Slot(str, bool)
     def update_port_state(self, btn_name: str, state: bool):
         if self.instrument is None:
-            # ✅ 끊김 중이면: "쓰기 명령만 저장"(마지막 값) + 재연결 시도
-            if btn_name == "Door_Button":
-                up_addr = PLC_COIL_MAP.get("Doorup_button")
-                dn_addr = PLC_COIL_MAP.get("Doordn_button")
-                if up_addr is not None and dn_addr is not None:
-                    self._pending_bit_writes[up_addr] = int(state)
-                    self._pending_bit_writes[dn_addr] = int(not state)
-                self.status_message.emit("PLC(경고)", "PLC 끊김: Door 명령 저장(대기) 후 재연결 시도")
-                self._schedule_reconnect()
-                return
-
-            if btn_name in ("Doorup_button", "Doordn_button"):
-                up_addr = PLC_COIL_MAP.get("Doorup_button")
-                dn_addr = PLC_COIL_MAP.get("Doordn_button")
-                if up_addr is not None and dn_addr is not None:
-                    if btn_name == "Doorup_button":
-                        self._pending_bit_writes[up_addr] = int(state)
-                        if state:
-                            self._pending_bit_writes[dn_addr] = 0
-                    else:
-                        self._pending_bit_writes[dn_addr] = int(state)
-                        if state:
-                            self._pending_bit_writes[up_addr] = 0
-                self.status_message.emit("PLC(경고)", "PLC 끊김: Door up/down 명령 저장(대기) 후 재연결 시도")
-                self._schedule_reconnect()
-                return
-
-            addr = PLC_COIL_MAP.get(btn_name)
-            if addr is not None:
-                self._pending_bit_writes[addr] = int(state)
-                self.status_message.emit("PLC(경고)", f"PLC 끊김: {btn_name} 명령 저장(대기) 후 재연결 시도")
-                self._schedule_reconnect()
-            else:
-                self.status_message.emit("PLC(오류)", f"알 수 없는 버튼: {btn_name}")
+            # ✅ 끊김 중이면: 전송도/저장도 하지 않고 재연결만 시도
+            self.status_message.emit("PLC(경고)", f"PLC 끊김: {btn_name} 명령 드롭(저장 안함) → 재연결 시도")
+            self._schedule_reconnect()
             return
 
         self._busy = True
@@ -551,13 +517,11 @@ class PLCController(QObject):
     # ============== RF (옵션) ==================
     def send_rfpower_command(self, pwm_value: int):
         if self.instrument is None:
-            # ✅ 끊김 중이면 마지막 set 값만 저장
-            if COIL_ENABLE_DAC_CH0 is not None:
-                self._pending_bit_writes[COIL_ENABLE_DAC_CH0] = 1
-            self._pending_reg_writes[RF_DAC_ADDR_CH0] = int(pwm_value)
-            self.status_message.emit("PLC(경고)", "PLC 끊김: RF/DAC 명령 저장(대기) 후 재연결 시도")
+            # ✅ 끊김 중이면: 전송도/저장도 하지 않고 재연결만 시도
+            self.status_message.emit("PLC(경고)", "PLC 끊김: RF/DAC 명령 드롭(저장 안함) → 재연결 시도")
             self._schedule_reconnect()
             return
+
         self._busy = True
         self._mutex.lock()
         try:
@@ -572,11 +536,7 @@ class PLCController(QObject):
             self.status_message.emit("PLC > 전송", f"RF/DAC={int(pwm_value)} @D{RF_DAC_ADDR_CH0}")
 
         except Exception as e:
-            # ✅ 실패한 RF set도 "끊김 중 명령"으로 저장(유실 방지)
-            if COIL_ENABLE_DAC_CH0 is not None:
-                self._pending_bit_writes[COIL_ENABLE_DAC_CH0] = 1
-            self._pending_reg_writes[RF_DAC_ADDR_CH0] = int(pwm_value)
-
+            # ✅ 끊김/실패 중에는 저장하지 않음 (상위 로직이 재시도)
             self.status_message.emit("PLC(오류)", f"RF 파워 송신 실패: {e}")
             self._mark_disconnected("write_register[RF_DAC]", e)
 
