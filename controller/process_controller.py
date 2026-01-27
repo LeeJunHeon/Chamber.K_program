@@ -808,8 +808,35 @@ class SputterProcessController(QObject):
             if self.is_rf_on:
                 if rf_ok:
                     self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
-                    # (기존 rampdown wait 로직 그대로)
-                    ...
+
+                    self._rfdown_wait = QEventLoop()
+
+                    # finished + failed 둘 다 stop 대기 루프를 깨움
+                    self.rf.ramp_down_finished.connect(
+                        self._on_rf_rampdown_finished,
+                        type=Qt.ConnectionType.QueuedConnection
+                    )
+                    self.rf.ramp_down_failed.connect(
+                        self._on_rf_rampdown_failed,
+                        type=Qt.ConnectionType.QueuedConnection
+                    )
+
+                    QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
+
+                    self.stop_rf_power.emit()
+                    self._rfdown_wait.exec()
+
+                    # 연결 해제
+                    try:
+                        self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
+                    except Exception:
+                        pass
+                    try:
+                        self.rf.ramp_down_failed.disconnect(self._on_rf_rampdown_failed)
+                    except Exception:
+                        pass
+
+                    self._rfdown_wait = None
                 else:
                     self.status_message.emit("경고", f"PLC 미연결 → RF ramp-down 스킵 (abort_source={src})")
                     # rampdown 대기루프를 만들지 않았다면 여기서 그냥 스킵
@@ -869,6 +896,8 @@ class SputterProcessController(QObject):
             else:
                 self.status_message.emit("경고", f"PLC 미연결 → 가스/셔터 닫기 스킵 (abort_source={src})")
 
+            QTimer.singleShot(800, self._finish_stop)
+            self._stop_pending = False
         except Exception as e:
             # 종료 시퀀스 중 예외도 잡아서 UI가 안 멈추게
             try:

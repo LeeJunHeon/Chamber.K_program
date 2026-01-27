@@ -23,6 +23,9 @@ class DCPowerController(QObject):
     # ✅ OUTP OFF 검증 3회 실패 → 메인에서 구글챗 보낼 수 있게
     output_off_failed = Signal(str)
 
+    # ✅ OUTP OFF 확인 성공
+    output_off_confirmed = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.target_power: float = 0.0
@@ -186,8 +189,11 @@ class DCPowerController(QObject):
             if not ok:
                 detail = "DC OUTPUT OFF 실패: 재연결 후에도 OUTP?=0 확인 불가"
                 self.status_message.emit("DCpower(에러)", detail)
-                self.output_off_failed.emit(detail)  # 기존 즉시 알림 루트 활용
-            return True  # stop 상태면 여기서 끝
+                self.output_off_failed.emit(detail)
+                return True
+            else:
+                self.output_off_confirmed.emit()
+                return True
 
         # 2) 공정 중이었다면 상태 복구
         if self._resume_after_reconnect:
@@ -589,6 +595,7 @@ class DCPowerController(QObject):
 
         if ok:
             self.status_message.emit("DCpower", "출력 OFF 확인 완료, 대기 상태로 전환")
+            self.output_off_confirmed.emit()
         else:
             detail = "DC OUTPUT OFF 실패: 3회 재시도 후에도 OUTP?=0 확인 불가"
             self.status_message.emit("DCpower(에러)", detail)
