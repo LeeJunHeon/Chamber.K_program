@@ -149,6 +149,12 @@ class MFCController(QObject):
             self._watchdog.timeout.connect(self._watch_connection)
 
     # ---------- 연결/해제 ----------
+    def is_connected(self) -> bool:
+        try:
+            return bool(self.serial_mfc and self.serial_mfc.isOpen())
+        except Exception:
+            return False
+
     @Slot()
     def connect_mfc_device(self) -> bool:
         self._ensure_serial_created()

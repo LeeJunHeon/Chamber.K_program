@@ -368,6 +368,10 @@ class MainDialog(QDialog):
             QMessageBox.warning(self, "경고", "이미 공정이 진행 중입니다.")
             return
         
+        if self.process_controller:
+            self.process_controller.abort_source = "UNKNOWN"
+            self.process_controller.abort_reason = ""
+        
         self.clear_plc_fault.emit()
 
         # ✅ 공정 시작(수동/CSV 포함)마다 종료 처리 가드 리셋
@@ -1111,6 +1115,10 @@ class MainDialog(QDialog):
                 self.update_stage_monitor("CSV 공정 실패로 중단됨")
                 self._reset_process_ui_fields()
                 return
+            
+        if self.process_controller:
+            self.process_controller.abort_source = "UNKNOWN"
+            self.process_controller.abort_reason = ""
 
         # 🔻 여기 이하(단일 공정 종료 처리)는 그대로 유지
         self.process_running = False
@@ -1666,6 +1674,10 @@ class MainDialog(QDialog):
         self.process_running = True
         self.ui.Sputter_Start_Button.setEnabled(False)
         self.ui.Sputter_Stop_Button.setEnabled(True)
+
+        if self.process_controller:
+            self.process_controller.abort_source = "UNKNOWN"
+            self.process_controller.abort_reason = ""
 
         self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
         self.process_controller.start_requested.emit(params)

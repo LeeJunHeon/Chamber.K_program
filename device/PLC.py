@@ -110,6 +110,9 @@ class PLCController(QObject):
         self._reconnect_timer.setSingleShot(True)
         self._reconnect_timer.timeout.connect(self._try_reconnect)
 
+    def is_connected(self) -> bool:
+        return (self.instrument is not None) and (not self._fatal_latched)
+
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
         self.rf_controller = rf_controller
