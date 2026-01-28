@@ -230,7 +230,7 @@ class MFCController(QObject):
             self._reconnect_attempts = 0
             self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
             
-            # ✅ 끊긴 동안 쌓인 명령(OFF 포함) 즉시 전송 재개
+            # ✅ 재연결 성공 후: 큐에 남아있는 명령이 있으면 전송 루프 재개
             QTimer.singleShot(0, self._dequeue_and_send)
             return
 
@@ -372,16 +372,24 @@ class MFCController(QObject):
                 timeout_ms: int = MFC_TIMEOUT, gap_ms: int = MFC_GAP_MS,
                 tag: str = "", retries_left: int = 5,
                 allow_no_reply: bool = False):
+        
+        # ✅ PLC처럼: 연결 안 되어 있으면 명령을 "보관/전송"하지 않는다.
+        if not (self.serial_mfc and self.serial_mfc.isOpen()):
+            self.status_message.emit("MFC(경고)", f"[SKIP] disconnected → {tag or cmd_str.strip()}")
+
+            # 상위/콜백에 즉시 알림 (대기/큐 적재 금지)
+            self._safe_callback(on_reply, None)
+            self.command_failed.emit(tag.strip() or "MFC_CMD", "MFC disconnected (command skipped)")
+
+            # 재연결은 기존 watchdog 정책대로
+            QTimer.singleShot(0, self._watch_connection)
+            return
+
         if not cmd_str.endswith('\r'):
             cmd_str += '\r'
         self._cmd_q.append(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
         if (self._inflight is None) and (not (self._gap_timer and self._gap_timer.isActive())):
             QTimer.singleShot(0, self._dequeue_and_send)
-
-        # ✅ 포트가 닫혀 있으면: 큐만 쌓이고 끝나지 않도록 재연결도 트리거
-        if not (self.serial_mfc and self.serial_mfc.isOpen()):
-            if self._want_connected and (not self._reconnect_pending) and (not self._fatal_latched):
-                QTimer.singleShot(0, self._try_reconnect)
 
     def _dequeue_and_send(self):
         if self._inflight is not None or not self._cmd_q:
@@ -474,7 +482,7 @@ class MFCController(QObject):
                 self._cmd_q.appendleft(cmd)
                 if self.serial_mfc and self.serial_mfc.isOpen():
                     self.serial_mfc.close()
-                self._try_reconnect()
+                QTimer.singleShot(0, self._watch_connection)   # ✅ 백오프/펜딩 정책대로 재연결
                 return
             self._safe_callback(cmd.callback, None)
             if self._gap_timer:
