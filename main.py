@@ -12,7 +12,13 @@ import datetime
 
 from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
-from lib.logger import set_monitor_widget, log_message_to_monitor, set_process_log_file, append_chk_csv_row
+from lib.logger import (
+    set_monitor_widget, 
+    log_message_to_monitor, 
+    set_process_log_file,
+    log_message_to_file, 
+    append_chk_csv_row,
+)
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
 from device.PLC import PLCController
@@ -581,7 +587,7 @@ class MainDialog(QDialog):
 
                 # (1) 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
                 if getattr(self, "_csv_delay_active", False) or (not self.process_running):
-                    self._cancel_csv_list_now(f"{reason} → CSV 공정 취소")
+                    self._cancel_csv_list_now("CSV 공정 취소", reason=reason)
                     return
 
             # (2) 실제 공정 스텝이 돌고 있으면: stop_process로 안전 종료
@@ -634,6 +640,12 @@ class MainDialog(QDialog):
         # ✅ CSV Delay(대기) 중이면 즉시 타이머 끊고 리스트 정리
         if getattr(self, "_csv_delay_active", False):
             log_message_to_monitor("정보", "CSV Delay 중 STOP → 딜레이 즉시 중단 및 리스트 공정 취소")
+            self._cancel_csv_list_now("CSV 공정 취소됨")   # ✅ 여기서 구글챗도 같이 보내게 됨(아래 _cancel_csv_list_now 수정)
+            return
+
+        # ✅ [추가] CSV 리스트인데 '스텝 사이'(process_running=False)라면 즉시 리스트 취소
+        if self.csv_mode and (not self.process_running):
+            log_message_to_monitor("정보", "CSV STEP 사이 STOP → 리스트 공정 즉시 취소")
             self._cancel_csv_list_now("CSV 공정 취소됨")
             return
 
@@ -819,14 +831,42 @@ class MainDialog(QDialog):
         self._csv_delay_timer = None
         self._csv_delay_clock = None   # ✅ 추가
 
-    def _cancel_csv_list_now(self, stage_text: str = "CSV 공정 취소됨") -> None:
-        """CSV 리스트 공정을 즉시 정리(딜레이/공정 중 어디서 STOP을 눌러도 공통으로 사용)."""
+    def _cancel_csv_list_now(
+        self,
+        stage_text: str = "CSV 공정 취소됨",
+        *,
+        notify_chat: bool = True,
+        reason: str | None = None,
+    ) -> None:
+        """CSV 리스트 공정을 즉시 정리(딜레이/스텝 사이/즉시 취소 등에서 공통 사용)."""
+
+        # ✅ (추가) finished 시그널을 안 거치는 케이스에서도 구글챗 종료/실패 알림 보장
+        if notify_chat and getattr(self, "chat_chk", None):
+            try:
+                # reason이 있으면 그걸 '실패 원인'으로 저장
+                if reason:
+                    self._chat_notify_failed_now(reason, send_text=False)
+                else:
+                    # STOP이면 stage_text를 굳이 error로 넣지 않게(카드가 깔끔)
+                    if not getattr(self, "_chat_user_stopped", False):
+                        self._chat_add_error(stage_text)
+
+                # 카드에 찍힐 공정명 보정
+                if not (getattr(self, "current_process_name", "") or "").strip():
+                    self.current_process_name = stage_text
+
+                # 종료 카드 + (실패면) 일반챗 1줄(단, STOP이면 일반챗 추가 전송 안 함)
+                self._chat_notify_finished(False)
+            except Exception:
+                pass
+
+        # === 기존 정리 로직 그대로 ===
         self._stop_csv_delay_timer()
         self._csv_delay_active = False
         self._csv_delay_total_sec = 0
         self._csv_delay_remaining_sec = 0
         self._csv_delay_name = ""
-        self._csv_delay_clock = None   # ✅ (중복이지만 안전)
+        self._csv_delay_clock = None
 
         self.csv_cancelled = False
         self.csv_mode = False
@@ -1102,6 +1142,12 @@ class MainDialog(QDialog):
         # 파워는 장비에서 계산된 값 사용
         self.ui.Power_edit.setPlainText(f"{power:.2f}")
 
+        # ✅ (추가) 읽을 때마다 1초 1줄 로그 저장
+        try:
+            log_message_to_file("DC", f"MEAS P={power:.2f}W, V={voltage:.2f}V, I={current:.3f}A")
+        except Exception:
+            pass
+
         # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
         if getattr(self, "_chk_sampling_enabled", False):
             self._sum_dc_p += power
@@ -1115,6 +1161,12 @@ class MainDialog(QDialog):
 
         self.ui.for_p_edit.setPlainText(f"{forward_power:.2f}")
         self.ui.ref_p_edit.setPlainText(f"{reflected_power:.2f}")
+
+        # ✅ (추가) 읽을 때마다 1초 1줄 로그 저장
+        try:
+            log_message_to_file("RF", f"MEAS For={forward_power:.2f}W, Ref={reflected_power:.2f}W")
+        except Exception:
+            pass
 
         # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
         if getattr(self, "_chk_sampling_enabled", False):
@@ -1484,10 +1536,28 @@ class MainDialog(QDialog):
         try:
             params = self._build_params_from_csv_row(row)
         except Exception as e:
-            QMessageBox.critical(self, "CSV 레시피 오류",
-                                f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}")
+            QMessageBox.critical(
+                self, "CSV 레시피 오류",
+                f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}"
+            )
             log_message_to_monitor("ERROR", f"CSV 레시피 오류로 리스트 공정을 중단합니다: {e}")
-            self._cancel_csv_list_now("CSV 레시피 오류로 중단")
+
+            # ✅ 구글챗에도 실패 알림(종료 카드 + 일반챗 1줄) 보장
+            self._chk_process_ok = False
+            try:
+                # 이 케이스는 '공정 started'를 안 보냈을 수도 있으니, 상태를 새로 잡아줌
+                self._chat_reset_run_state()
+
+                # 위에서 step_no/total을 이미 만든 상태(네 코드 기준)라서 그대로 사용
+                reason = f"CSV 레시피 오류: {e}"
+                self.current_process_name = f"CSV {step_no}/{total} - (레시피 오류)"
+                self._chat_notify_failed_now(reason, send_text=False)
+                self._chat_notify_finished(False)
+            except Exception:
+                pass
+
+            # ✅ 여기서는 중복 전송 방지 위해 notify_chat=False
+            self._cancel_csv_list_now("CSV 레시피 오류로 중단", notify_chat=False)
             return
 
         # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해
