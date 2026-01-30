@@ -6,6 +6,22 @@ from typing import Dict, List, Tuple
 이 파일에서 시리얼 포트, 바우드레이트, MFC 번호 등 관리
 """
 
+# ===============================
+# 공정 연결/끊김 정책 (신규)
+# ===============================
+
+# 공정 시작 시 장비 connect / 공정 종료 시 disconnect
+CONNECT_ON_PROCESS_START = True
+DISCONNECT_ON_PROCESS_END = True
+
+# PLC는 HMI 때문에 상시 연결 유지(공정 종료 시에도 disconnect 하지 않음)
+PLC_KEEP_CONNECTED_FOR_HMI = True
+
+# 링크 끊김을 "치명적 실패"로 확정하기 전 유예 시간(공정 중에만 적용)
+# (예: USB가 잠깐 리셋되는 순간을 흡수)
+USB_LINK_LOST_FAIL_MS = 10_000   # 10초
+
+
 # 시리얼 포트 설정 (포트 이름은 실제 환경에 맞게 수정)
 MFC_PORT = "COM6"
 MFC_BAUD = 9600
@@ -62,6 +78,27 @@ PLC_SENSOR_BITS: Dict[str, int] = {
     "Water": 164,  # M00104
 }
 
+# ===============================
+# PLC 재연결/폴링 정책 (신규)
+# ===============================
+
+# 폴링이 겹치지 않도록: 이전 poll이 아직 진행 중이면 이번 poll 스킵 권장
+PLC_POLL_SINGLE_FLIGHT = True
+
+# HMI 폴링용 timeout은 짧게(끊기는 순간 UI가 오래 멈추는 것 방지)
+PLC_POLL_TIMEOUT_S = 0.3    # (기존 PLC_TIMEOUT=0.5 보다 더 짧게 쓰고 싶으면 코드에서 분기)
+
+PLC_WATCHDOG_INTERVAL_MS = 500
+PLC_RECONNECT_BACKOFF_START_MS = 300
+PLC_RECONNECT_BACKOFF_MAX_MS   = 5000
+
+PLC_RECONNECT_BACKOFF_PORT_MISSING_START_MS = 2000
+PLC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS   = 30000
+
+# PLC가 끊겼을 때: HMI는 계속 재연결 시도(프로그램 종료 X), 공정은 FAIL 처리할지 여부
+PLC_FAIL_PROCESS_ON_LINK_LOST = True
+PLC_LINK_LOST_FAIL_MS = USB_LINK_LOST_FAIL_MS
+
 # --- DCpower ---
 DC_INITIAL_VOLTAGE = 450.0 # 초기 전압(V)
 DC_INITIAL_CURRENT = 0.1   # 초기 전류(A)
@@ -82,6 +119,21 @@ DC_MIN_CURRENT_ABORT = 0.05
 DC_FAIL_ISET_THRESHOLD = 0.20   # 설정 전류가 이 이상인데도
 DC_FAIL_POWER_THRESHOLD = 1.0   # 측정 파워가 이 값보다 계속 낮으면(=거의 0으로 간주)
 DC_FAIL_MAX_TICKS = 20          # 1초 tick 기준, 20초 연속이면 실패로 판단
+
+# ===============================
+# DCpower 재연결/타임아웃 (신규)
+# ===============================
+DC_TIMEOUT_MS = 1000
+
+DC_WATCHDOG_INTERVAL_MS = 1500
+DC_RECONNECT_BACKOFF_START_MS = 500
+DC_RECONNECT_BACKOFF_MAX_MS   = 8000
+
+DC_RECONNECT_BACKOFF_PORT_MISSING_START_MS = 2000
+DC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS   = 30000
+
+DC_LINK_LOST_FAIL_MS = USB_LINK_LOST_FAIL_MS
+
 
 # --- RFpower ---
 RF_FORWARD_SCALING_MAX_WATT  = 594.5  # for.p 센서 교정 상수
@@ -116,6 +168,13 @@ MFC_WATCHDOG_INTERVAL_MS      = 1500    # 포트가 닫혔는지 주기적으로
 # 재연결 백오프
 MFC_RECONNECT_BACKOFF_START_MS = 500    # 포트 오류/타임아웃 시 첫 재연결 대기시간
 MFC_RECONNECT_BACKOFF_MAX_MS   = 8000   # 지수 백오프 최대 상한
+
+# [신규] "원하는 COM 포트가 아예 없음" 상태에서는 backoff를 더 길게
+MFC_RECONNECT_BACKOFF_PORT_MISSING_START_MS = 2000
+MFC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS   = 30000
+
+# [신규] 공정 중 MFC 링크 끊김 지속 시 FAIL 트리거 기준
+MFC_LINK_LOST_FAIL_MS = USB_LINK_LOST_FAIL_MS
 
 # === 전역 통일 상수 ===
 MFC_TIMEOUT   = 1000         # 모든 명령 timeout
