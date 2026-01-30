@@ -127,8 +127,8 @@ class ChatNotifier(QObject):
         except Exception:
             pass
 
-    def _schedule_post(self, payload: dict, webhook_url: Optional[str]):
-        """daemon thread로 전송 → UI 프리징 방지"""
+    def _schedule_post(self, payload: dict, webhook_url: Optional[str], urgent: bool = False):
+        """urgent=True면 non-daemon thread로 전송(종료 직전에 같이 죽는 문제 방지)"""
         if not webhook_url:
             return
 
@@ -141,7 +141,8 @@ class ChatNotifier(QObject):
                 except Exception:
                     pass
 
-        t = threading.Thread(target=_runner, daemon=True)
+        # ✅ urgent면 non-daemon → 프로세스가 종료될 때 전송이 끝날 때까지 기다리게 됨(최대 timeout=3s)
+        t = threading.Thread(target=_runner, daemon=(not urgent))
         try:
             self._pending.add(t)
         except Exception:
@@ -164,14 +165,14 @@ class ChatNotifier(QObject):
         pending = self._buffer[:]
         self._buffer.clear()
         for pl, wh in pending:
-            self._schedule_post(pl, wh)
+            self._schedule_post(pl, wh, urgent=False)
 
     def _post_json(self, payload: dict, urgent: bool = False, route_params: Optional[dict] = None):
         webhook = self._resolve_webhook(route_params)
         if self._defer and not urgent:
             self._buffer.append((payload, webhook))
             return
-        self._schedule_post(payload, webhook)
+        self._schedule_post(payload, webhook, urgent=urgent)
 
     # ---------- 텍스트/카드 ----------
     def _post_text(self, text: str, urgent: bool = False, route_params: Optional[dict] = None):
@@ -242,7 +243,7 @@ class ChatNotifier(QObject):
         if self._defer:
             self._buffer.append((payload, webhook))
         else:
-            self._schedule_post(payload, webhook)
+            self._schedule_post(payload, webhook, urgent=False)
 
     # ---------- 내용 포맷 ----------
     def _guns_and_targets(self, p: dict) -> str:
@@ -419,7 +420,7 @@ class ChatNotifier(QObject):
                 preview += f"\n(+{len(warns)-3}건 더)"
             fields.setdefault("주의", preview)
 
-        self._post_card("공정 종료", subtitle, status, fields, route_params=detail)
+        self._post_card("공정 종료", subtitle, status, fields, urgent=(not ok), route_params=detail)
 
         # 종료 카드와 함께 누적 오류 집계 카드 1장도 같이 나가도록
         self._upsert_error_card()
@@ -437,7 +438,8 @@ class ChatNotifier(QObject):
         self._post_card(
             "공정 종료", "성공" if ok else "실패",
             "SUCCESS" if ok else "FAIL",
-            fields={"공정 이름": (self._last_started_params or {}).get("process_note", "Untitled")},
+            fields={...},
+            urgent=(not ok),                      # ✅ 실패면 urgent
             route_params=self._last_started_params
         )
         self._upsert_error_card()
@@ -448,7 +450,9 @@ class ChatNotifier(QObject):
 
     @Slot(str)
     def notify_text(self, text: str):
-        self._post_text(text, route_params=self._last_started_params)
+        t = (text or "").strip()
+        urgent = ("공정을 중단합니다" in t) or ("재시작" in t)
+        self._post_text(t, urgent=urgent, route_params=self._last_started_params)
 
     @Slot(str)
     def notify_error(self, reason: str):
