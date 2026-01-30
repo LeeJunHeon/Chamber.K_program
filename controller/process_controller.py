@@ -53,6 +53,25 @@ def _invoke_connect(obj, method_name: str) -> bool:
         return bool(ok)
     except Exception:
         return False
+    
+def _invoke_call1(obj, method_name: str, arg1) -> bool:
+    """obj.method_name(arg1)을 obj 스레드에서 호출 (가능하면 동기)."""
+    try:
+        if obj.thread() is QThread.currentThread():
+            getattr(obj, method_name)(arg1)
+            return True
+        ok = QMetaObject.invokeMethod(
+            obj, method_name,
+            Qt.ConnectionType.BlockingQueuedConnection,
+            arg1
+        )
+        return bool(ok)
+    except Exception:
+        try:
+            getattr(obj, method_name)(arg1)
+            return True
+        except Exception:
+            return False
 
 # ===================== 메인 컨트롤러 =====================
 
@@ -148,20 +167,24 @@ class SputterProcessController(QObject):
             # 타이머는 자신의 스레드에서 생성
             self._invoke_self("_setup_timers")
 
+            # ✅ 공정 시작: PLC 링크 끊김 FAIL 판정 구간 ON
+            # (PLC는 HMI 때문에 계속 살아있지만, 공정 중엔 끊김이 길면 공정 중단 트리거 필요)
+            _invoke_call1(self.plc, "set_process_critical", True)
+
             # 장치 연결 확인
             # 시작 전 Power OFF를 위해 DC는 가능하면 미리 연결 시도 (DC 미사용 공정이면 실패해도 진행)
             _invoke_connect(self.dc, "connect_dcpower_device")
 
             if float(params.get('dc_power', 0) or 0) > 0:
                 if not self._is_connected(self.dc):
-                    self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
                     self._running = False
+                    self._abort_with_error("DC Power 장치에 연결할 수 없습니다.")
                     return
 
             _invoke_connect(self.mfc, "connect_mfc_device")
             if not self._is_connected(self.mfc):
-                self.connection_failed.emit("MFC 장치에 연결할 수 없습니다.")
                 self._running = False
+                self._abort_with_error("MFC 장치에 연결할 수 없습니다.")
                 return
 
             # 채널/버튼/파워 사용여부
@@ -715,6 +738,10 @@ class SputterProcessController(QObject):
         """UI/다른 스레드에서 눌러도 항상 '내 스레드'에서 안전 종료."""
         if self._stop_pending:
             return
+        
+        # ✅ stop 누르는 순간부터는 PLC fail 판정 OFF (stop 시퀀스와 충돌 방지)
+        _invoke_call1(self.plc, "set_process_critical", False)
+
         self._stop_pending = True
         if self.thread() is QThread.currentThread():
             self._stop_impl()
@@ -858,6 +885,9 @@ class SputterProcessController(QObject):
 
     @Slot()
     def _finish_stop(self):
+        # ✅ 공정 종료: PLC FAIL 판정 구간 OFF
+        _invoke_call1(self.plc, "set_process_critical", False)
+
         self.status_message.emit("정보", "종료 완료")
         self.finished.emit()
 
