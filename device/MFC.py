@@ -10,10 +10,13 @@ MFC (Chamber-K) — PyQt6 QSerialPort 비동기 컨트롤러
 """
 
 from __future__ import annotations
+
 from collections import deque
 from dataclasses import dataclass
 from typing import Deque, Callable, Optional
+
 import re
+import time
 import traceback
 
 from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, pyqtSlot as Slot
@@ -31,13 +34,10 @@ class Command:
 
 # 필요한 설정만 가져옵니다(스케일 관련 상수는 사용하지 않음).
 from lib.config import (
-    MFC_PORT, MFC_BAUD, MFC_COMMANDS,
-    FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT,
-    MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS,
-    MFC_WATCHDOG_INTERVAL_MS, MFC_RECONNECT_BACKOFF_START_MS,
-    MFC_RECONNECT_BACKOFF_MAX_MS, MFC_TIMEOUT,
-    MFC_GAP_MS, MFC_DELAY_MS, MFC_DELAY_MS_VALVE,
-    MFC_PRESSURE_SCALE, MFC_PRESSURE_DECIMALS, MFC_SP1_VERIFY_TOL
+    MFC_PORT, MFC_BAUD, MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT, MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS,
+    MFC_WATCHDOG_INTERVAL_MS, MFC_RECONNECT_BACKOFF_START_MS, MFC_RECONNECT_BACKOFF_MAX_MS, MFC_TIMEOUT, MFC_GAP_MS, MFC_DELAY_MS, MFC_DELAY_MS_VALVE,
+    MFC_PRESSURE_SCALE, MFC_PRESSURE_DECIMALS, MFC_SP1_VERIFY_TOL, MFC_RECONNECT_BACKOFF_PORT_MISSING_START_MS, MFC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS,
+    MFC_LINK_LOST_FAIL_MS,
 )
 
 class MFCController(QObject):
@@ -77,6 +77,11 @@ class MFCController(QObject):
         self._want_connected = False
         self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
         self._reconnect_pending = False
+
+        # ✅ 링크 끊김/포트 미검출 누적 상태(신규)
+        self._link_lost_since_ms: Optional[int] = None
+        self._link_fail_latched: bool = False
+        self._last_port_missing: bool = False
 
         # 안정화/모니터링
         self.gas_map = {1: "Ar", 2: "O2"}       # ← 2채널만
@@ -142,6 +147,30 @@ class MFCController(QObject):
             self._watchdog.setInterval(MFC_WATCHDOG_INTERVAL_MS)
             self._watchdog.timeout.connect(self._watch_connection)
 
+    def _now_ms(self) -> int:
+        return int(time.monotonic() * 1000)
+
+    def _is_process_critical(self) -> bool:
+        return bool(self._flow_monitoring_enabled or self._pressure_monitoring_enabled)
+    
+    def _note_link_lost_and_maybe_fail(self, reason: str):
+        """
+        - 포트가 닫힌 상태가 지속되면 link_lost_since_ms 누적
+        - 공정 구간(critical)에서 MFC_LINK_LOST_FAIL_MS 이상 지속되면 '재시작' emit (공정 FAIL 트리거)
+        - 재연결 성공 시에는 _open_port()에서 리셋됨
+        """
+        if self._link_lost_since_ms is None:
+            self._link_lost_since_ms = self._now_ms()
+            self._link_fail_latched = False
+
+        if (not self._link_fail_latched) and self._is_process_critical():
+            elapsed = self._now_ms() - self._link_lost_since_ms
+            if elapsed >= int(MFC_LINK_LOST_FAIL_MS):
+                self._link_fail_latched = True
+                msg = f"MFC 링크 끊김 {elapsed}ms 지속({reason}) → 공정을 중단합니다."
+                # ✅ 메인/프로세스가 바로 FAIL 처리할 수 있도록 '재시작' 레벨로 올림
+                self.status_message.emit("재시작", msg)
+
     # ---------- 연결/해제 ----------
     @Slot()
     def connect_mfc_device(self) -> bool:
@@ -159,14 +188,29 @@ class MFCController(QObject):
             return True
 
         ports = {p.portName() for p in QSerialPortInfo.availablePorts()}
-        if MFC_PORT not in ports:
+        port_missing = (MFC_PORT not in ports)
+        self._last_port_missing = port_missing
+
+        if port_missing:
+            # ✅ 포트가 아예 없으면: 긴 backoff 정책으로 올림
+            self._reconnect_backoff_ms = max(self._reconnect_backoff_ms, int(MFC_RECONNECT_BACKOFF_PORT_MISSING_START_MS))
             self.status_message.emit("MFC", f"{MFC_PORT} 존재하지 않음. 사용 가능 포트: {sorted(ports)}")
+            # ✅ 링크 끊김 누적(공정 구간이면 FAIL 트리거 가능)
+            self._note_link_lost_and_maybe_fail("port missing")
             return False
 
         self.serial_mfc.setPortName(MFC_PORT)
         if not self.serial_mfc.open(QIODeviceBase.OpenModeFlag.ReadWrite):
+            self._last_port_missing = False
             self.status_message.emit("MFC", f"{MFC_PORT} 연결 실패: {self.serial_mfc.errorString()}")
+            # ✅ 포트는 있는데 open 실패도 링크 끊김으로 누적
+            self._note_link_lost_and_maybe_fail("open failed")
             return False
+
+        # ✅ 연결 성공 시 링크 끊김 상태 리셋
+        self._link_lost_since_ms = None
+        self._link_fail_latched = False
+        self._last_port_missing = False
 
         self.serial_mfc.setDataTerminalReady(True)
         self.serial_mfc.setRequestToSend(False)
@@ -182,6 +226,10 @@ class MFCController(QObject):
     def _watch_connection(self):
         if (not self._want_connected) or (self.serial_mfc and self.serial_mfc.isOpen()):
             return
+
+        # ✅ 끊김 누적/공정 구간이면 FAIL 트리거 가능
+        self._note_link_lost_and_maybe_fail("watchdog")
+
         if self._reconnect_pending:
             return
         self._reconnect_pending = True
@@ -197,7 +245,14 @@ class MFCController(QObject):
             QTimer.singleShot(0, self._dequeue_and_send)
             self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
         else:
-            self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
+            # ✅ 포트가 아예 없으면 더 길게(backoff, cap)
+            if self._last_port_missing:
+                self._reconnect_backoff_ms = min(
+                    max(self._reconnect_backoff_ms * 2, int(MFC_RECONNECT_BACKOFF_PORT_MISSING_START_MS)),
+                    int(MFC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS),
+                )
+            else:
+                self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
 
     @Slot()
     def cleanup(self):
@@ -480,6 +535,10 @@ class MFCController(QObject):
         self._pressure_monitoring_enabled = bool(should_poll)
 
         if should_poll:
+            # ✅ 공정 구간 진입 시: 끊김 타이머/래치 리셋 (이 시점부터 fail 카운트 시작)
+            self._link_lost_since_ms = None
+            self._link_fail_latched = False
+
             if not self.polling_timer.isActive():
                 self.status_message.emit("MFC", "주기적 읽기(Polling) 시작")
                 self.polling_timer.start()
