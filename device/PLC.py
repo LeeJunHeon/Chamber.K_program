@@ -1,18 +1,19 @@
 # device/PLC.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 from typing import Dict, List, Tuple
 from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer, QMutex
+
+import time
 import minimalmodbus
+import serial.tools.list_ports
 
 from lib.config import (
-    PLC_PORT, PLC_SLAVE_ID, PLC_BAUD,
-    PLC_TIMEOUT, PLC_COIL_MAP,
-    PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR,
-    RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
-    RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0,
-    RF_FORWARD_SCALING_MAX_WATT,
-    RF_REFLECTED_SCALING_MAX_WATT
+    PLC_PORT, PLC_SLAVE_ID, PLC_BAUD, PLC_TIMEOUT, PLC_COIL_MAP, PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR, RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
+    RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0, RF_FORWARD_SCALING_MAX_WATT, RF_REFLECTED_SCALING_MAX_WATT, PLC_POLL_SINGLE_FLIGHT, PLC_POLL_TIMEOUT_S,
+    PLC_WATCHDOG_INTERVAL_MS, PLC_RECONNECT_BACKOFF_START_MS, PLC_RECONNECT_BACKOFF_MAX_MS, PLC_LINK_LOST_FAIL_MS,
+    PLC_RECONNECT_BACKOFF_PORT_MISSING_START_MS, PLC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS, PLC_FAIL_PROCESS_ON_LINK_LOST,
 )
 
 # 주의: 아래 표에서 대괄호 […]가 실제 Modbus 주소(0-based, HEX 표시)입니다.
@@ -94,6 +95,21 @@ class PLCController(QObject):
 
         self._coil_read_fail_latched = False
 
+        # ✅ 공정 중(critical)일 때만 링크 끊김 FAIL 트리거
+        self._process_critical = False
+
+        # ✅ 재연결/백오프/끊김 누적
+        self._reconnect_backoff_ms = int(PLC_RECONNECT_BACKOFF_START_MS)
+        self._reconnect_pending = False
+        self._last_port_missing = False
+        self._link_lost_since_ms = None
+        self._link_fail_latched = False
+
+        # ✅ 재연결 타이머(singleShot)
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setSingleShot(True)
+        self._reconnect_timer.timeout.connect(self._try_reconnect)
+
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
         self.rf_controller = rf_controller
@@ -102,6 +118,15 @@ class PLCController(QObject):
     def clear_fault_latch(self):
         """새 공정 시작 전에 PLC 코일 읽기 실패 래치를 해제."""
         self._coil_read_fail_latched = False
+
+    @Slot(bool)
+    def set_process_critical(self, on: bool):
+        self._process_critical = bool(on)
+        if on:
+            # 공정 구간 진입 시 끊김 타이머 초기화
+            self._link_lost_since_ms = None
+            self._link_fail_latched = False
+            self._coil_read_fail_latched = False
 
     # ============== 연결/해제 =================
     @Slot()
@@ -116,7 +141,7 @@ class PLCController(QObject):
             self.instrument.serial.bytesize = 8
             self.instrument.serial.parity   = 'N'
             self.instrument.serial.stopbits = 1
-            self.instrument.serial.timeout  = PLC_TIMEOUT
+            self.instrument.serial.timeout  = float(PLC_POLL_TIMEOUT_S)
 
             self.instrument.close_port_after_each_call = False
             self.instrument.clear_buffers_before_each_transaction = True
@@ -131,6 +156,9 @@ class PLCController(QObject):
     @Slot()
     def cleanup(self):
         self.polling_timer.stop()
+        if self._reconnect_timer.isActive():
+            self._reconnect_timer.stop()
+
         self._is_running = False
         QThread.msleep(200)
         try:
@@ -169,25 +197,123 @@ class PLCController(QObject):
                 for i, b in enumerate(bits):
                     result[s + i] = bool(b)
             except Exception as ex:
-                # 코일 읽기 실패는 PLC 통신 이상으로 간주 → 공정 중단(재시작) 트리거
-                if not getattr(self, "_coil_read_fail_latched", False):
+                # ✅ 즉시 재시작 X → 재연결로 전환 (공정 중 지속 끊김이면 _note_link_lost...가 재시작 올림)
+                if not self._coil_read_fail_latched:
                     self._coil_read_fail_latched = True
-                    self.status_message.emit("재시작", f"PLC Coils 읽기 실패 [{s}..{e}]: {ex} → 공정을 중단합니다.")
+                    self.status_message.emit("PLC(경고)", f"PLC Coils 읽기 실패 [{s}..{e}]: {ex}")
                 else:
-                    # 이미 중단 트리거가 걸린 상태면 경고만 남김(로그 스팸 방지)
                     self.status_message.emit("PLC(경고)", f"Coils 읽기 실패(반복) [{s}..{e}]: {ex}")
+
+                self._on_comm_error(f"PLC Coils read [{s}..{e}]", ex)
 
         return result
 
     def _safe_read_discrete_inputs(self, start_addr: int, count: int) -> List[bool]:
         assert self.instrument is not None
         return self.instrument.read_bits(start_addr, count, functioncode=1)
+    
+    def _now_ms(self) -> int:
+        return int(time.monotonic() * 1000)
+
+    def _available_ports(self) -> set[str]:
+        # COM 고정이지만 "포트가 OS에서 사라짐" 감지용
+        return {p.device.upper().replace("\\\\.\\", "") for p in serial.tools.list_ports.comports()}
+
+    def _note_link_lost_and_maybe_fail(self, reason: str):
+        if self._link_lost_since_ms is None:
+            self._link_lost_since_ms = self._now_ms()
+            self._link_fail_latched = False
+
+        if (not self._link_fail_latched) and self._process_critical and PLC_FAIL_PROCESS_ON_LINK_LOST:
+            elapsed = self._now_ms() - self._link_lost_since_ms
+            if elapsed >= int(PLC_LINK_LOST_FAIL_MS):
+                self._link_fail_latched = True
+                self.status_message.emit("재시작", f"PLC 링크 끊김 {elapsed}ms 지속({reason}) → 공정을 중단합니다.")
+
+    def _schedule_reconnect(self, reason: str):
+        if self._reconnect_timer.isActive():
+            return
+
+        ports = self._available_ports()
+        port_missing = (PLC_PORT.upper() not in ports)
+        self._last_port_missing = port_missing
+
+        if port_missing:
+            backoff = min(
+                max(self._reconnect_backoff_ms, int(PLC_RECONNECT_BACKOFF_PORT_MISSING_START_MS)),
+                int(PLC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS),
+            )
+        else:
+            backoff = min(
+                max(self._reconnect_backoff_ms, int(PLC_RECONNECT_BACKOFF_START_MS)),
+                int(PLC_RECONNECT_BACKOFF_MAX_MS),
+            )
+
+        self.status_message.emit("PLC(경고)", f"{reason} → 재연결 대기 {backoff}ms (ports={sorted(ports)})")
+        self._reconnect_timer.start(backoff)
+
+        # 다음 backoff 증가
+        self._reconnect_backoff_ms = min(
+            backoff * 2,
+            int(PLC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS) if port_missing else int(PLC_RECONNECT_BACKOFF_MAX_MS)
+        )
+
+    def _try_reconnect(self):
+        # 포트가 없으면 다시 스케줄
+        ports = self._available_ports()
+        if PLC_PORT.upper() not in ports:
+            self._note_link_lost_and_maybe_fail("port missing")
+            self._schedule_reconnect("PLC 포트 미검출")
+            return
+
+        try:
+            inst = minimalmodbus.Instrument(PLC_PORT, PLC_SLAVE_ID, mode=minimalmodbus.MODE_RTU)
+            inst.serial.baudrate = PLC_BAUD
+            inst.serial.bytesize = 8
+            inst.serial.parity   = 'N'
+            inst.serial.stopbits = 1
+            inst.serial.timeout  = float(PLC_POLL_TIMEOUT_S)  # ✅ 폴링은 짧게
+
+            inst.close_port_after_each_call = False
+            inst.clear_buffers_before_each_transaction = True
+            inst.handle_local_echo = False
+
+            self.instrument = inst
+            self._reconnect_backoff_ms = int(PLC_RECONNECT_BACKOFF_START_MS)
+            self._link_lost_since_ms = None
+            self._link_fail_latched = False
+            self._coil_read_fail_latched = False
+            self.status_message.emit("PLC", f"재연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID}")
+        except Exception as e:
+            self.instrument = None
+            self._note_link_lost_and_maybe_fail(f"reconnect failed: {e}")
+            self._schedule_reconnect(f"PLC 재연결 실패: {e}")
+
+    def _on_comm_error(self, where: str, ex: Exception):
+        # 현재 instrument를 폐기하고 재연결 루프로 넘김
+        try:
+            if self.instrument and self.instrument.serial and self.instrument.serial.is_open:
+                self.instrument.serial.close()
+        except Exception:
+            pass
+        self.instrument = None
+        self._note_link_lost_and_maybe_fail(where)
+        self._schedule_reconnect(f"{where}: {ex}")
 
     # ============== 폴링 ======================
     @Slot()
     def _poll_status(self):
-        if not self._is_running or self._busy or self.instrument is None:
+        if not self._is_running:
             return
+        if PLC_POLL_SINGLE_FLIGHT and self._busy:
+            return
+
+        # ✅ 연결이 없으면 재연결만 스케줄하고 이번 폴은 종료
+        if self.instrument is None:
+            self._note_link_lost_and_maybe_fail("poll: instrument None")
+            self._schedule_reconnect("PLC 연결 끊김")
+            return
+
         self._busy = True
         self._mutex.lock()
         try:
@@ -230,6 +356,8 @@ class PLCController(QObject):
     def update_port_state(self, btn_name: str, state: bool):
         if self.instrument is None:
             self.status_message.emit("PLC(오류)", "포트가 열려 있지 않습니다.")
+            self._note_link_lost_and_maybe_fail("write: instrument None")
+            self._schedule_reconnect("PLC 연결 끊김(쓰기)")
             return
 
         self._busy = True
