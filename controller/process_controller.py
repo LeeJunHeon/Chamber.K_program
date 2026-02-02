@@ -186,6 +186,9 @@ class SputterProcessController(QObject):
                 self._running = False
                 self._abort_with_error("MFC 장치에 연결할 수 없습니다.")
                 return
+            
+            # ✅ 추가: 공정 중 MFC 링크 끊김 FAIL 판정 ON
+            _invoke_call1(self.mfc, "set_process_critical", True)
 
             # 채널/버튼/파워 사용여부
             use_ar = bool(params.get('use_ar_gas', False))
@@ -741,6 +744,7 @@ class SputterProcessController(QObject):
         
         # ✅ stop 누르는 순간부터는 PLC fail 판정 OFF (stop 시퀀스와 충돌 방지)
         _invoke_call1(self.plc, "set_process_critical", False)
+        _invoke_call1(self.mfc, "set_process_critical", False)
 
         self._stop_pending = True
         if self.thread() is QThread.currentThread():
@@ -887,6 +891,7 @@ class SputterProcessController(QObject):
     def _finish_stop(self):
         # ✅ 공정 종료: PLC FAIL 판정 구간 OFF
         _invoke_call1(self.plc, "set_process_critical", False)
+        _invoke_call1(self.mfc, "set_process_critical", False)
 
         self.status_message.emit("정보", "종료 완료")
         self.finished.emit()

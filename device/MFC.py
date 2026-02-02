@@ -108,6 +108,8 @@ class MFCController(QObject):
         # (호환성) self-loop로 들어와도 처리되게 자기 자신에 연결
         self.command_requested.connect(self.handle_command)
 
+        self._process_active = False
+
     # ---------- 타이머/시리얼 지연 생성 ----------
     def _ensure_serial_created(self):
         if self.serial_mfc is not None:
@@ -151,7 +153,7 @@ class MFCController(QObject):
         return int(time.monotonic() * 1000)
 
     def _is_process_critical(self) -> bool:
-        return bool(self._flow_monitoring_enabled or self._pressure_monitoring_enabled)
+        return bool(self._process_active)
     
     def _note_link_lost_and_maybe_fail(self, reason: str):
         """
@@ -1147,6 +1149,14 @@ class MFCController(QObject):
             #    command_failed.emit("PRESS_MON", ...) 등은 모두 제거
 
     # ---------- 보조 ----------
+    @Slot(bool)
+    def set_process_critical(self, on: bool):
+        self._process_active = bool(on)
+        if not self._process_active:
+            # 공정 종료 후에는 누적/래치 리셋(다음 공정에 영향 없게)
+            self._link_lost_since_ms = None
+            self._link_fail_latched = False
+
     def _parse_r69_bits(self, resp: str) -> str:
         s = (resp or "").strip()
         if s.startswith("L0"): payload = s[2:]
