@@ -12,7 +12,7 @@ import serial.tools.list_ports
 from lib.config import (
     PLC_PORT, PLC_SLAVE_ID, PLC_BAUD, PLC_TIMEOUT, PLC_COIL_MAP, PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR, RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
     RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0, RF_FORWARD_SCALING_MAX_WATT, RF_REFLECTED_SCALING_MAX_WATT, PLC_POLL_SINGLE_FLIGHT, PLC_POLL_TIMEOUT_S,
-    PLC_WATCHDOG_INTERVAL_MS, PLC_RECONNECT_BACKOFF_START_MS, PLC_RECONNECT_BACKOFF_MAX_MS, PLC_LINK_LOST_FAIL_MS,
+    PLC_WATCHDOG_INTERVAL_MS, PLC_RECONNECT_BACKOFF_START_MS, PLC_RECONNECT_BACKOFF_MAX_MS, PLC_LINK_LOST_FAIL_MS, PLC_POLL_INTERVAL_MS,
     PLC_RECONNECT_BACKOFF_PORT_MISSING_START_MS, PLC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS, PLC_FAIL_PROCESS_ON_LINK_LOST,
 )
 
@@ -83,7 +83,7 @@ class PLCController(QObject):
         super().__init__()
         self.instrument: minimalmodbus.Instrument | None = None
         self.polling_timer = QTimer(self)
-        self.polling_timer.setInterval(200)
+        self.polling_timer.setInterval(PLC_POLL_INTERVAL_MS)
         self.polling_timer.timeout.connect(self._poll_status)
 
         self._is_running = False
