@@ -1,7 +1,6 @@
 # DCPowerController_qtserial.py — PyQt6 QSerialPort 동기형(이벤트루프 대기) 구현
 from __future__ import annotations
 import re
-import time
 from typing import Optional, Tuple
 
 from PyQt6.QtCore import QObject, QTimer, QThread, QEventLoop, pyqtSignal as Signal, pyqtSlot as Slot, Qt
@@ -9,9 +8,11 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo, QSerialPort as QS
 from PyQt6.QtCore import QIODeviceBase
 
 from lib.config import (
-    DC_PORT, DC_BAUDRATE, DC_INITIAL_VOLTAGE, DC_INITIAL_CURRENT, DC_MAX_VOLTAGE, DC_MAX_CURRENT, DC_MAX_POWER, DC_TOLERANCE_WATT, DC_MAX_ERROR_COUNT,
-    DC_MIN_CURRENT_ABORT, DC_FAIL_ISET_THRESHOLD, DC_FAIL_POWER_THRESHOLD, DC_FAIL_MAX_TICKS, DC_TIMEOUT_MS, DC_WATCHDOG_INTERVAL_MS, DC_RECONNECT_BACKOFF_START_MS, 
-    DC_RECONNECT_BACKOFF_MAX_MS, DC_RECONNECT_BACKOFF_PORT_MISSING_START_MS, DC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS, DC_LINK_LOST_FAIL_MS,
+    DC_PORT, DC_BAUDRATE,
+    DC_INITIAL_VOLTAGE, DC_INITIAL_CURRENT, DC_MAX_VOLTAGE,
+    DC_MAX_CURRENT, DC_MAX_POWER, DC_TOLERANCE_WATT, DC_MAX_ERROR_COUNT,
+    DC_MIN_CURRENT_ABORT, DC_FAIL_ISET_THRESHOLD, DC_FAIL_POWER_THRESHOLD,
+    DC_FAIL_MAX_TICKS,
 )
 
 class DCPowerController(QObject):
@@ -50,46 +51,13 @@ class DCPowerController(QObject):
 
         self._fail_no_output_ticks = 0
 
-        # ===============================
-        # USB/COM 끊김 재연결/FAIL 정책 (신규)
-        # ===============================
-        self._want_connected: bool = False          # 평소엔 연결 유지/재연결 안 함
-        self._process_active: bool = False          # 공정 시작~종료(초기화 포함) True
-        self._reconnect_backoff_ms: int = int(DC_RECONNECT_BACKOFF_START_MS)
-        self._reconnect_pending: bool = False
-        self._last_port_missing: bool = False
-        self._link_lost_since_ms: Optional[int] = None
-        self._link_fail_latched: bool = False
-
-        self.watchdog_timer = QTimer(self)
-        self.watchdog_timer.setInterval(int(DC_WATCHDOG_INTERVAL_MS))
-        self.watchdog_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self.watchdog_timer.timeout.connect(self._watch_connection)
-
     # ---------------- 연결 ----------------
     @Slot()
     def connect_dcpower_device(self) -> bool:
-        # ✅ 이미 열려 있으면 '연결 성공'으로 취급 (불필요한 open() 재호출 방지)
-        if self.serial is not None and self.serial.isOpen():
-            try:
-                self.serial.clear(QS.Direction.AllDirections)
-            except Exception:
-                pass
-            self._rx.clear()
-            self.status_message.emit("DCpower", f"{self.serial.portName()} 이미 연결됨")
-            return True
-
         # 포트 존재 확인
         ports = {p.portName() for p in QSerialPortInfo.availablePorts()}
         if DC_PORT not in ports:
-            self._last_port_missing = True
-            self._reconnect_backoff_ms = max(self._reconnect_backoff_ms, int(DC_RECONNECT_BACKOFF_PORT_MISSING_START_MS))
-
             self.status_message.emit("DCpower", f"{DC_PORT} 포트를 찾을 수 없습니다. 사용 가능: {sorted(ports)}")
-            self._note_link_lost_and_maybe_fail("port missing")
-
-            if self._want_connected:
-                self._schedule_reconnect("DC 포트 미검출")
             return False
 
         if self.serial is None:
@@ -101,13 +69,8 @@ class DCPowerController(QObject):
             self.serial.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
 
         self.serial.setPortName(DC_PORT)
-
         if not self.serial.open(QIODeviceBase.OpenModeFlag.ReadWrite):
-            self._last_port_missing = False
             self.status_message.emit("DCpower", f"연결 실패: {self.serial.errorString()}")
-            self._note_link_lost_and_maybe_fail("open failed")
-            if self._want_connected:
-                self._schedule_reconnect("DC open 실패")
             return False
 
         # DTR/RTS 및 버퍼 초기화
@@ -116,31 +79,8 @@ class DCPowerController(QObject):
         self.serial.clear(QS.Direction.AllDirections)
         self._rx.clear()
 
-        self._last_port_missing = False
-        self._reconnect_backoff_ms = int(DC_RECONNECT_BACKOFF_START_MS)
-        self._link_lost_since_ms = None
-        self._link_fail_latched = False
-
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort, LF 종단)")
         return True
-    
-    def _hard_reset_serial(self, reason: str) -> None:
-        """쓰기/연결이 이상해졌을 때 즉시 close → 객체 폐기 → 재오픈 유도"""
-        try:
-            if self.serial:
-                try:
-                    self.serial.clear(QS.Direction.AllDirections)
-                except Exception:
-                    pass
-                if self.serial.isOpen():
-                    self.serial.close()
-        except Exception:
-            pass
-
-        self.serial = None
-        self._rx.clear()
-        self.status_message.emit("DCpower(경고)", f"시리얼 리셋: {reason}")
-        QThread.msleep(150)  # USB-Serial 드라이버가 정리할 시간
 
     # ---------------- 공정 시작 ----------------
     @Slot(float)
@@ -148,19 +88,10 @@ class DCPowerController(QObject):
         if self._is_running:
             self.status_message.emit("DCpower", "경고: DC 파워가 이미 동작 중입니다.")
             return
-        
-        # ✅ 공정 시작: 연결 유지/감시 ON
-        self._want_connected = True
-        self._process_active = True
-        self._link_lost_since_ms = None
-        self._reconnect_backoff_ms = int(DC_RECONNECT_BACKOFF_START_MS)
 
         if self.serial is None or not self.serial.isOpen():
             if not self.connect_dcpower_device():
                 return
-
-        if not self.watchdog_timer.isActive():
-            self.watchdog_timer.start()
 
         self.target_power = max(0.0, min(DC_MAX_POWER, float(target_power)))
         self.power_error_count = 0 # ★ 새 공정 시작 시 편차 카운터 초기화
@@ -172,15 +103,6 @@ class DCPowerController(QObject):
         #  - APPLy는 전압·전류를 동시에 설정할 때만 사용
         if not self._initialize_power_supply(self._clamp_v(DC_MAX_VOLTAGE), self._clamp_i(DC_INITIAL_CURRENT)):
             self.status_message.emit("DCpower(에러)", "초기화 실패")
-
-            # ✅ 공정 시작 롤백
-            self._process_active = False
-            self._want_connected = False
-            self._link_lost_since_ms = None
-            self._reconnect_pending = False
-            if self.watchdog_timer.isActive():
-                self.watchdog_timer.stop()
-
             return
 
         self._is_running = True
@@ -335,9 +257,6 @@ class DCPowerController(QObject):
     # ---------------- 초기화/종료 ----------------
     def _initialize_power_supply(self, voltage: float, current: float) -> bool:
         if not self._send("*RST"): return False
-
-        QThread.msleep(600)  # ✅ 리셋 후 안정화 대기
-        
         if not self._send("*CLS"): return False
         # 전압·전류 동시에 설정(APPLy v,i), 메뉴얼 7-3절
         if not self._send(f"APPLy {voltage:.2f},{current:.4f}"): return False
@@ -350,23 +269,9 @@ class DCPowerController(QObject):
     def stop_process(self):
         if not self._is_running:
             return
-        
-        # ✅ 공정 종료: 감시/재연결 끄기
-        self._process_active = False
-        self._want_connected = False
-        self._link_lost_since_ms = None
-
-        if self.watchdog_timer.isActive():
-            self.watchdog_timer.stop()
-
-        # singleShot 기반이라 별도 타이머 stop 불필요
-        self._reconnect_pending = False
-
         self._is_running = False
-        self.control_timer.stop()
-
         self.state = "IDLE"
-        
+        self.control_timer.stop()
         self.power_error_count = 0 # ★ 편차 카운터도 초기화
         self._send_noresp("OUTP OFF")
         self.status_message.emit("DCpower", "출력 OFF, 대기 상태로 전환")
@@ -374,10 +279,6 @@ class DCPowerController(QObject):
     @Slot()
     def close_connection(self):
         self.stop_process()
-        self._process_active = False
-        self._want_connected = False
-        self._reconnect_pending = False
-        
         QThread.msleep(150)
         if self.serial and self.serial.isOpen():
             self.serial.close()
@@ -400,28 +301,22 @@ class DCPowerController(QObject):
         return (p or 0.0, v or 0.0, i or 0.0)
 
     # ---------------- 전송/수신 (QtSerialPort 동기 래핑) ----------------
-    def _send(self, command: str, timeout_ms: int = DC_TIMEOUT_MS) -> bool:
+    def _send(self, command: str, timeout_ms: int = 500) -> bool:
+        """응답 없는 일반 명령 (간단 확인 위해, 에러시 재시도)"""
         for attempt in range(DC_MAX_ERROR_COUNT):
             try:
                 if attempt > 0:
                     self.status_message.emit("DCpower", f"'{command}' 재시도...({attempt+1}/{DC_MAX_ERROR_COUNT})")
                 else:
                     self.status_message.emit("DCpower > 전송", command)
-
-                ok = self._write_line(command, bytes_written_timeout_ms=max(1000, int(timeout_ms)))
-                if not ok:
-                    # ✅ 리셋된 상태면 즉시 재오픈 시도 (타이머 의존 X)
-                    if self._want_connected:
-                        self.connect_dcpower_device()
+                if not self._write_line(command):
                     raise IOError("write failed")
-
+                # 약간의 여유
                 QThread.msleep(120)
                 return True
-
             except Exception as e:
                 self.status_message.emit("DCpower(경고)", f"전송 예외: {e} (시도 {attempt+1})")
-                QThread.msleep(200)
-
+                QThread.msleep(150)
         return False
 
     def _send_noresp(self, command: str) -> None:
@@ -432,7 +327,7 @@ class DCPowerController(QObject):
         except Exception as e:
             self.status_message.emit("DCpower(경고)", f"전송 오류(무응답): {e}")
 
-    def _query(self, command: str, timeout_ms: int = DC_TIMEOUT_MS) -> Optional[str]:
+    def _query(self, command: str, timeout_ms: int = 500) -> Optional[str]:
         # 잔여 입력을 readAll()로 비움 (clear(Input) 대신)
         if self.serial and self.serial.bytesAvailable() > 0:
             try: self.serial.readAll()
@@ -450,32 +345,15 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower < 응답", line)
         return line
 
-    def _write_line(self, s: str, *, bytes_written_timeout_ms: int = 1000) -> bool:
+    def _write_line(self, s: str) -> bool:
         if not (self.serial and self.serial.isOpen()):
-            if self._want_connected:
-                self.connect_dcpower_device()
-            if not (self.serial and self.serial.isOpen()):
-                self._note_link_lost_and_maybe_fail("write while disconnected")
-                return False
-
-        # ✅ CRLF 권장 (장비 호환성↑)
-        data = (s.rstrip("\r\n") + "\r\n").encode("ascii")
-
+            return False
+        data = (s.rstrip("\n") + "\n").encode("ascii")  # '\r\n' 사용
         n = int(self.serial.write(data))
         if n <= 0:
-            self._note_link_lost_and_maybe_fail("write returned <=0")
-            # 즉시 리셋(예약 재연결 말고)
-            self._hard_reset_serial("write returned <=0")
             return False
-
         self.serial.flush()
-
-        if not self.serial.waitForBytesWritten(bytes_written_timeout_ms):
-            self._note_link_lost_and_maybe_fail("waitForBytesWritten timeout")
-            # ✅ 여기서 즉시 리셋해야, _send 재시도에서 재오픈이 됨
-            self._hard_reset_serial("bytesWritten timeout")
-            return False
-
+        self.serial.waitForBytesWritten(200)  # 실제 송신 보장
         return True
 
     def _readline_blocking(self, timeout_ms: int = 500) -> Optional[str]:
@@ -594,89 +472,3 @@ class DCPowerController(QObject):
 
     def is_connected(self) -> bool:
         return bool(self.serial and self.serial.isOpen())
-    
-    # ---------------- 시간/공정구간 판단 ----------------
-    def _now_ms(self) -> int:
-        return int(time.monotonic() * 1000)
-
-    def _is_process_critical(self) -> bool:
-        # DC는 공정 중에만 중요. start_process 들어오면 _process_active=True로 잡을 예정
-        return bool(self._process_active)
-    
-    # ---------------- 끊김 누적 + 공정 FAIL 트리거 ----------------
-    def _note_link_lost_and_maybe_fail(self, reason: str):
-        if self._link_lost_since_ms is None:
-            self._link_lost_since_ms = self._now_ms()
-            self._link_fail_latched = False
-
-        if (not self._link_fail_latched) and self._is_process_critical():
-            elapsed = self._now_ms() - self._link_lost_since_ms
-            if elapsed >= int(DC_LINK_LOST_FAIL_MS):
-                self._link_fail_latched = True
-                self.status_message.emit(
-                    "재시작",
-                    f"DC 링크 끊김 {elapsed}ms 지속({reason}) → 공정을 중단합니다."
-                )
-                # 출력 OFF는 시도하되, 끊긴 상태면 못 보낼 수 있으니 stop_process는 안전하게 진행
-                self.stop_process()
-
-    # ---------------- 끊김 누적 + 공정 FAIL 트리거 ----------------
-    def _schedule_reconnect(self, reason: str):
-        if self._reconnect_pending:
-            return
-        self._reconnect_pending = True
-
-        ports = {p.portName() for p in QSerialPortInfo.availablePorts()}
-        port_missing = (DC_PORT not in ports)
-        self._last_port_missing = port_missing
-
-        if port_missing:
-            backoff = min(
-                max(self._reconnect_backoff_ms, int(DC_RECONNECT_BACKOFF_PORT_MISSING_START_MS)),
-                int(DC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS),
-            )
-        else:
-            backoff = min(
-                max(self._reconnect_backoff_ms, int(DC_RECONNECT_BACKOFF_START_MS)),
-                int(DC_RECONNECT_BACKOFF_MAX_MS),
-            )
-
-        self.status_message.emit("DCpower(경고)", f"{reason} → 재연결 대기 {backoff}ms (ports={sorted(ports)})")
-        QTimer.singleShot(backoff, self._try_reconnect)
-
-        # 다음 backoff 증가
-        self._reconnect_backoff_ms = min(
-            backoff * 2,
-            int(DC_RECONNECT_BACKOFF_PORT_MISSING_MAX_MS) if port_missing else int(DC_RECONNECT_BACKOFF_MAX_MS),
-        )
-    # ---------------- 재연결 실제 수행 ----------------
-    def _try_reconnect(self):
-        self._reconnect_pending = False
-        if not self._want_connected:
-            return
-        if self.serial and self.serial.isOpen():
-            return
-
-        if self.connect_dcpower_device():
-            self.status_message.emit("DCpower", "재연결 성공")
-            self._reconnect_backoff_ms = int(DC_RECONNECT_BACKOFF_START_MS)
-            self._link_lost_since_ms = None
-            self._link_fail_latched = False
-        else:
-            # 실패했으면 다시 스케줄
-            self._note_link_lost_and_maybe_fail("reconnect failed")
-            self._schedule_reconnect("재연결 실패")
-
-    # ---------------- watchdog ----------------
-    def _watch_connection(self):
-        if not self._want_connected:
-            return
-        if self.serial and self.serial.isOpen():
-            # 연결 정상 → 끊김 타이머 리셋
-            self._link_lost_since_ms = None
-            self._link_fail_latched = False
-            return
-
-        # 연결 끊김 상태
-        self._note_link_lost_and_maybe_fail("watchdog")
-        self._schedule_reconnect("DC 연결 끊김")
