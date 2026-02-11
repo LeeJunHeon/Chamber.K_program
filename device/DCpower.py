@@ -69,6 +69,16 @@ class DCPowerController(QObject):
     # ---------------- 연결 ----------------
     @Slot()
     def connect_dcpower_device(self) -> bool:
+        # ✅ 이미 열려 있으면 '연결 성공'으로 취급 (불필요한 open() 재호출 방지)
+        if self.serial is not None and self.serial.isOpen():
+            try:
+                self.serial.clear(QS.Direction.AllDirections)
+            except Exception:
+                pass
+            self._rx.clear()
+            self.status_message.emit("DCpower", f"{self.serial.portName()} 이미 연결됨")
+            return True
+
         # 포트 존재 확인
         ports = {p.portName() for p in QSerialPortInfo.availablePorts()}
         if DC_PORT not in ports:
@@ -113,6 +123,24 @@ class DCPowerController(QObject):
 
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort, LF 종단)")
         return True
+    
+    def _hard_reset_serial(self, reason: str) -> None:
+        """쓰기/연결이 이상해졌을 때 즉시 close → 객체 폐기 → 재오픈 유도"""
+        try:
+            if self.serial:
+                try:
+                    self.serial.clear(QS.Direction.AllDirections)
+                except Exception:
+                    pass
+                if self.serial.isOpen():
+                    self.serial.close()
+        except Exception:
+            pass
+
+        self.serial = None
+        self._rx.clear()
+        self.status_message.emit("DCpower(경고)", f"시리얼 리셋: {reason}")
+        QThread.msleep(150)  # USB-Serial 드라이버가 정리할 시간
 
     # ---------------- 공정 시작 ----------------
     @Slot(float)
@@ -307,6 +335,9 @@ class DCPowerController(QObject):
     # ---------------- 초기화/종료 ----------------
     def _initialize_power_supply(self, voltage: float, current: float) -> bool:
         if not self._send("*RST"): return False
+
+        QThread.msleep(600)  # ✅ 리셋 후 안정화 대기
+        
         if not self._send("*CLS"): return False
         # 전압·전류 동시에 설정(APPLy v,i), 메뉴얼 7-3절
         if not self._send(f"APPLy {voltage:.2f},{current:.4f}"): return False
@@ -370,21 +401,27 @@ class DCPowerController(QObject):
 
     # ---------------- 전송/수신 (QtSerialPort 동기 래핑) ----------------
     def _send(self, command: str, timeout_ms: int = DC_TIMEOUT_MS) -> bool:
-        """응답 없는 일반 명령 (간단 확인 위해, 에러시 재시도)"""
         for attempt in range(DC_MAX_ERROR_COUNT):
             try:
                 if attempt > 0:
                     self.status_message.emit("DCpower", f"'{command}' 재시도...({attempt+1}/{DC_MAX_ERROR_COUNT})")
                 else:
                     self.status_message.emit("DCpower > 전송", command)
-                if not self._write_line(command):
+
+                ok = self._write_line(command, bytes_written_timeout_ms=max(1000, int(timeout_ms)))
+                if not ok:
+                    # ✅ 리셋된 상태면 즉시 재오픈 시도 (타이머 의존 X)
+                    if self._want_connected:
+                        self.connect_dcpower_device()
                     raise IOError("write failed")
-                # 약간의 여유
+
                 QThread.msleep(120)
                 return True
+
             except Exception as e:
                 self.status_message.emit("DCpower(경고)", f"전송 예외: {e} (시도 {attempt+1})")
-                QThread.msleep(150)
+                QThread.msleep(200)
+
         return False
 
     def _send_noresp(self, command: str) -> None:
@@ -413,30 +450,30 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower < 응답", line)
         return line
 
-    def _write_line(self, s: str) -> bool:
+    def _write_line(self, s: str, *, bytes_written_timeout_ms: int = 1000) -> bool:
         if not (self.serial and self.serial.isOpen()):
-            # ✅ 공정 중이면 1회 연결 시도 + 누적/재연결 예약
             if self._want_connected:
                 self.connect_dcpower_device()
             if not (self.serial and self.serial.isOpen()):
                 self._note_link_lost_and_maybe_fail("write while disconnected")
-                if self._want_connected:
-                    self._schedule_reconnect("write: 포트 닫힘")
                 return False
 
-        data = (s.rstrip("\n") + "\n").encode("ascii")
+        # ✅ CRLF 권장 (장비 호환성↑)
+        data = (s.rstrip("\r\n") + "\r\n").encode("ascii")
+
         n = int(self.serial.write(data))
         if n <= 0:
             self._note_link_lost_and_maybe_fail("write returned <=0")
-            if self._want_connected:
-                self._schedule_reconnect("write 실패")
+            # 즉시 리셋(예약 재연결 말고)
+            self._hard_reset_serial("write returned <=0")
             return False
 
         self.serial.flush()
-        if not self.serial.waitForBytesWritten(200):
+
+        if not self.serial.waitForBytesWritten(bytes_written_timeout_ms):
             self._note_link_lost_and_maybe_fail("waitForBytesWritten timeout")
-            if self._want_connected:
-                self._schedule_reconnect("bytesWritten timeout")
+            # ✅ 여기서 즉시 리셋해야, _send 재시도에서 재오픈이 됨
+            self._hard_reset_serial("bytesWritten timeout")
             return False
 
         return True

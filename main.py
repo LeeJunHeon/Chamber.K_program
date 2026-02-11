@@ -1198,42 +1198,15 @@ class MainDialog(QDialog):
         if reply == QMessageBox.StandardButton.Yes:
             log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
 
-            # 1. 진행 중인 공정/CSV가 있다면 먼저 중지/취소 처리
-            if self.process_running or self.csv_mode or getattr(self, "_csv_delay_active", False):
-                # 종료도 사용자 STOP으로 취급(카드에 stopped=True로 남게)
-                self._chk_process_ok = False
-                self._chat_user_stopped = True
-                self._chat_add_error("프로그램 종료")
-
-            # ✅ CSV Delay(대기) 중이거나, CSV 스텝 사이면: finished를 기다리지 말고 즉시 리스트 취소
-            if getattr(self, "_csv_delay_active", False) or (self.csv_mode and (not self.process_running)):
-                if self.csv_mode:
-                    self.csv_cancelled = True
-                self._cancel_csv_list_now("프로그램 종료로 CSV 공정 취소", reason="프로그램 종료")
-            else:
-                # ✅ 실제 공정이 돌고 있는 경우에만 stop 요청 + 타임아웃 대기
-                if self.process_running and self.process_controller:
-                    loop = QEventLoop()
-
-                    def _quit_loop():
-                        if loop.isRunning():
-                            loop.quit()
-
-                    self.process_controller.finished.connect(_quit_loop)
-
-                    # ✅ 무한대기 방지(예: 장비가 죽어서 finished가 안 올라오는 경우)
-                    QTimer.singleShot(8000, _quit_loop)  # 8초 타임아웃(원하는 값으로)
-
-                    # ✅ stop_process를 직접 호출하지 말고 시그널로(프로세스 스레드에서 실행)
-                    self.request_process_stop.emit()
-                    loop.exec()
-
-                    try:
-                        self.process_controller.finished.disconnect(_quit_loop)
-                    except Exception:
-                        pass
-
-                    log_message_to_monitor("정보", "진행 중인 공정 중지 처리 완료(또는 타임아웃).")
+            # 1. 진행 중인 공정이 있다면 먼저 중지 요청
+            if self.process_running:
+                # process_controller의 stop_process가 동기적으로 완료될 때까지 대기
+                loop = QEventLoop()
+                self.process_controller.finished.connect(loop.quit)
+                self.process_controller.stop_process()
+                loop.exec() # stop_process가 끝나고 finished 신호를 보낼 때까지 대기
+                self.process_controller.finished.disconnect(loop.quit)
+                log_message_to_monitor("정보", "진행 중인 공정이 중지되었습니다.")
 
             # 2. 모든 백그라운드 스레드에 리소스 정리 및 종료 요청 (교착 상태 방지)
             self.shutdown_requested.emit()
@@ -1630,7 +1603,7 @@ class MainDialog(QDialog):
         self.ui.Sputter_Stop_Button.setEnabled(True)
 
         self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
-        self.process_controller.start_requested.emit(params)  # ✅ 반드시 시그널로 (ProcessThread에서 실행)
+        self.process_controller.start_process_flow(params)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -1639,8 +1612,8 @@ if __name__ == "__main__":
         try:
             dlg = getattr(app, "_main_dlg", None)
             if dlg and getattr(dlg, "chat_chk", None):
-                dlg.chat_chk._post_text(msg, urgent=True)
-                dlg.chat_chk.shutdown()
+                dlg.chat_chk.notify_text(msg)
+                dlg.chat_chk.flush()
         except Exception:
             pass
 
