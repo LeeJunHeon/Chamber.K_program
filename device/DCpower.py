@@ -50,6 +50,15 @@ class DCPowerController(QObject):
         self.step_down_fast        = 0.005 # "빠른 하강"시 1초당 -40mA (공격적)
 
         self._fail_no_output_ticks = 0
+        # '재시작' 알림을 1회만 내보내기 위한 래치
+        self._fatal_sent: bool = False
+
+    def _emit_restart_fatal(self, reason: str) -> None:
+        """메인(main.py)이 전체 공정 STOP을 걸 수 있도록 '재시작'을 1회만 emit."""
+        if self._fatal_sent:
+            return
+        self._fatal_sent = True
+        self.status_message.emit("재시작", reason)
 
     # ---------------- 연결 ----------------
     @Slot()
@@ -88,9 +97,14 @@ class DCPowerController(QObject):
         if self._is_running:
             self.status_message.emit("DCpower", "경고: DC 파워가 이미 동작 중입니다.")
             return
+        
+        # 새 공정 시작 시 '재시작' 1회 알림 래치 리셋
+        self._fatal_sent = False
 
         if self.serial is None or not self.serial.isOpen():
             if not self.connect_dcpower_device():
+                # ✅ DC 연결 실패는 메인에서 전체 공정 STOP이 걸리도록 '재시작'으로 올림
+                self._emit_restart_fatal(f"DC 연결 실패({DC_PORT}). 공정을 중단합니다.")
                 return
 
         self.target_power = max(0.0, min(DC_MAX_POWER, float(target_power)))
@@ -102,7 +116,10 @@ class DCPowerController(QObject):
         # 초기화: 전압·전류 동시 설정(APPLy) + 출력 ON
         #  - APPLy는 전압·전류를 동시에 설정할 때만 사용
         if not self._initialize_power_supply(self._clamp_v(DC_MAX_VOLTAGE), self._clamp_i(DC_INITIAL_CURRENT)):
-            self.status_message.emit("DCpower(에러)", "초기화 실패")
+            # ✅ 초기화 실패도 전체 공정 STOP 트리거
+            self._emit_restart_fatal("DC 초기화 실패로 공정을 중단합니다.")
+            # 혹시라도 OUTP ON이 된 상태일 수 있으므로 best-effort OFF
+            self._send_noresp("OUTP OFF")
             return
 
         self._is_running = True
@@ -138,12 +155,12 @@ class DCPowerController(QObject):
             if diff > 0 and self.current_current >= DC_FAIL_ISET_THRESHOLD and now_power <= DC_FAIL_POWER_THRESHOLD:
                 self._fail_no_output_ticks += 1
                 if self._fail_no_output_ticks >= DC_FAIL_MAX_TICKS:
-                    self.status_message.emit(
-                        "재시작",
-                        (f"DC 램프업 실패: Iset≥{DC_FAIL_ISET_THRESHOLD}A인데 P≤{DC_FAIL_POWER_THRESHOLD}W가 "
+                    reason = (
+                        f"DC 램프업 실패: Iset≥{DC_FAIL_ISET_THRESHOLD}A인데 P≤{DC_FAIL_POWER_THRESHOLD}W가 "
                         f"{DC_FAIL_MAX_TICKS}s 지속. 장비 OFF/인터락/부하/케이블 확인 필요. "
-                        f"(P={now_power:.2f}W, V={now_v:.2f}V, I={now_i:.4f}A, Iset={self.current_current:.4f}A)")
+                        f"(P={now_power:.2f}W, V={now_v:.2f}V, I={now_i:.4f}A, Iset={self.current_current:.4f}A)"
                     )
+                    self._emit_restart_fatal(reason)
                     self.stop_process()
                     return
             else:
@@ -173,10 +190,8 @@ class DCPowerController(QObject):
         elif self.state == "MAINTAINING":
             # ★ 유지 구간에서 전류(I)가 너무 낮으면 공정 중단
             if now_i <= DC_MIN_CURRENT_ABORT:
-                self.status_message.emit(
-                    "재시작",
-                    f"DC 전류(I={now_i:.4f}A)가 최소 허용값 "
-                    f"{DC_MIN_CURRENT_ABORT:.3f}A 이하입니다. 공정을 중단합니다."
+                self._emit_restart_fatal(
+                    f"DC 전류(I={now_i:.4f}A)가 최소 허용값 {DC_MIN_CURRENT_ABORT:.3f}A 이하입니다. 공정을 중단합니다."
                 )
                 self.stop_process()
                 return
@@ -438,7 +453,8 @@ class DCPowerController(QObject):
             self.error_count += 1
             self.status_message.emit("DCpower", f"측정값 오류({self.error_count}/{DC_MAX_ERROR_COUNT})")
             if self.error_count >= DC_MAX_ERROR_COUNT:
-                self.status_message.emit("DCpower(에러)", "연속 측정 실패로 공정을 중단합니다.")
+                # ✅ 메인이 전체 공정 STOP을 걸 수 있도록 '재시작'으로 올림
+                self._emit_restart_fatal("DC 연속 측정 실패로 공정을 중단합니다.")
                 self.stop_process()
             return False
         self.error_count = 0
