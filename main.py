@@ -30,6 +30,7 @@ class MainDialog(QDialog):
     shutdown_requested = Signal()
     request_process_stop = Signal()
     clear_plc_fault = Signal()  # 새 공정 시작 시 PLC 통신 실패 래치 해제
+    plc_write_requested = Signal(str, bool)
 
     """메인 UI 및 전체 공정/장치 연결 클래스"""
     def __init__(self):
@@ -162,12 +163,17 @@ class MainDialog(QDialog):
         for btn_name in PLC_COIL_MAP.keys():
             button = getattr(self.ui, btn_name, None)
             if button:
-                button.toggled.connect(partial(self.plc_controller.update_port_state, btn_name))
-        self.ui.Door_Button.toggled.connect(self._on_ui_door_toggled)
+                button.toggled.connect(lambda checked, n=btn_name: self.plc_write_requested.emit(n, checked))
+
+        # Door는 PLC.py가 Door_Button을 직접 처리하므로, 그대로 1번만 보내면 됨
+        self.ui.Door_Button.toggled.connect(lambda checked: self.plc_write_requested.emit("Door_Button", checked))
 
         # --- 3. 컨트롤러 간 상호작용 연결 ---
         # ProcessController가 시작 신호를 스스로 받도록 연결
-        self.process_controller.start_requested.connect(self.process_controller.start_process_flow)
+        self.process_controller.start_requested.connect(
+            self.process_controller.start_process_flow,
+            type=Qt.ConnectionType.QueuedConnection
+        )
 
         # ProcessController -> 각 장치 컨트롤러로 명령 전달
         self.process_controller.update_plc_port.connect(self.plc_controller.update_port_state)
@@ -187,7 +193,10 @@ class MainDialog(QDialog):
         
         # 새로 만든 신호를 Process Controller의 stop_process 슬롯에 연결
         # 이렇게 하면 stop_process는 Process 스레드에서 안전하게 실행됩니다.
-        self.request_process_stop.connect(self.process_controller.stop_process) # <<< ▼ 이 줄을 추가하세요 ▼
+        self.request_process_stop.connect(
+            self.process_controller.stop_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
         self.clear_plc_fault.connect(self.plc_controller.clear_fault_latch)
 
         # --- 4. 컨트롤러 -> UI 상태 업데이트 연결 ---
@@ -213,6 +222,12 @@ class MainDialog(QDialog):
         self.process_controller.status_message.connect(self.on_status_message)
         
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
+
+        # --- 6. PLC 쓰기 요청 신호 연결 ---
+        self.plc_write_requested.connect(
+            self.plc_controller.update_port_state,
+            type=Qt.ConnectionType.QueuedConnection
+        )
 
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
     def _chat_reset_run_state(self):
@@ -442,8 +457,6 @@ class MainDialog(QDialog):
                 "process_time": float(self.ui.process_time_edit.toPlainText().strip()),
                 "rf_offset": float(offset_text or 6.79),
                 "rf_param": float(param_text or 1.0395),
-                "use_g1": self.ui.G1_checkbox.isChecked(),
-                "use_g2": self.ui.G2_checkbox.isChecked(),
 
                 # ▼ G1/G2 사용 여부 + 타겟 이름
                 "use_g1": use_g1_flag,
@@ -454,8 +467,8 @@ class MainDialog(QDialog):
 
             if not (params['dc_power'] > 0 or params['rf_power'] > 0):
                 raise ValueError("RF 또는 DC 파워 중 하나 이상을 입력해야 합니다.")
-            if params['shutter_delay'] <= 0:
-                raise ValueError("Shutter Delay는 0보다 커야 합니다.")
+            if params['shutter_delay'] < 0:
+                raise ValueError("Shutter Delay는 0 이상이어야 합니다.")
 
         except (ValueError, TypeError) as e:
             QMessageBox.warning(self, "입력 오류", f"공정 파라미터가 잘못되었습니다:\n{e}")
@@ -1173,20 +1186,6 @@ class MainDialog(QDialog):
             self._sum_rf_for += forward_power
             self._sum_rf_ref += reflected_power
             self._cnt_rf += 1
-
-    @Slot(bool)
-    def _on_ui_door_toggled(self, checked: bool):
-        """
-        UI의 Door_Button 한 개 토글을 PLC의 Up/Down 두 코일로 분리 전달.
-        - True  -> Doorup_button (문 열기)
-        - False -> Doordn_button (문 닫기)
-        """
-        if checked:
-            self.plc_controller.update_port_state('Doordn_button', False)
-            self.plc_controller.update_port_state('Doorup_button', True)
-        else:
-            self.plc_controller.update_port_state('Doorup_button', False)
-            self.plc_controller.update_port_state('Doordn_button', True)
             
     def closeEvent(self, event):
         """[수정됨] 안전한 스레드 종료 로직"""
@@ -1200,13 +1199,35 @@ class MainDialog(QDialog):
 
             # 1. 진행 중인 공정이 있다면 먼저 중지 요청
             if self.process_running:
+            
                 # process_controller의 stop_process가 동기적으로 완료될 때까지 대기
                 loop = QEventLoop()
+
+                timer = QTimer()
+                timer.setSingleShot(True)
+                timer.timeout.connect(loop.quit)
+
+                # finished 오면 종료
                 self.process_controller.finished.connect(loop.quit)
-                self.process_controller.stop_process()
-                loop.exec() # stop_process가 끝나고 finished 신호를 보낼 때까지 대기
-                self.process_controller.finished.disconnect(loop.quit)
-                log_message_to_monitor("정보", "진행 중인 공정이 중지되었습니다.")
+
+                # ✅ 8초 타임아웃(필요하면 10~15초로 늘려도 됨)
+                timer.start(8000)
+
+                # ✅ stop은 반드시 신호로(Queued) 보내서 ProcessThread에서 실행되게
+                self.request_process_stop.emit()
+
+                loop.exec()
+
+                try:
+                    timer.stop()
+                except Exception:
+                    pass
+                try:
+                    self.process_controller.finished.disconnect(loop.quit)
+                except Exception:
+                    pass
+
+                log_message_to_monitor("정보", "진행 중인 공정 중지 대기 종료(완료 또는 타임아웃)")
 
             # 2. 모든 백그라운드 스레드에 리소스 정리 및 종료 요청 (교착 상태 방지)
             self.shutdown_requested.emit()
@@ -1603,7 +1624,7 @@ class MainDialog(QDialog):
         self.ui.Sputter_Stop_Button.setEnabled(True)
 
         self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
-        self.process_controller.start_process_flow(params)
+        self.process_controller.start_requested.emit(params)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
