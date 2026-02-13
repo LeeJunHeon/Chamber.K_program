@@ -802,30 +802,79 @@ class SputterProcessController(QObject):
             if not channels:
                 channels = [self._process_channel]
 
-            loop = QEventLoop()
-            def _quit(*_):
-                try:
-                    loop.quit()
-                except:
-                    pass
+            def _wait_mfc_cmd(cmd: str, params: dict, timeout_ms: int) -> bool:
+                """
+                STOP 시퀀스용: MFC 명령을 보내고 timeout_ms 까지만 confirmed/failed를 기다린다.
+                - confirmed(cmd) => True
+                - failed(cmd, reason) 또는 timeout => False (하지만 STOP 시퀀스는 계속 진행 = PASS)
+                """
+                # ✅ MFC가 끊긴 상태면 애초에 기다리지 말고 PASS
+                if not self._is_connected(self.mfc):
+                    self.status_message.emit("경고", f"[STOP] MFC 미연결 → {cmd} 생략(PASS)")
+                    return False
 
-            self.mfc.command_confirmed.connect(_quit)
-            self.mfc.command_failed.connect(_quit)
+                loop = QEventLoop()
+                state = {"done": False, "ok": False, "why": ""}
 
-            # 선택된 모든 채널 Flow OFF
-            for ch in channels:
-                self.command_requested.emit("FLOW_OFF", {'channel': ch})
+                def _on_ok(c, *args):
+                    if c == cmd:
+                        state["done"] = True
+                        state["ok"] = True
+                        try: loop.quit()
+                        except: pass
+
+                def _on_fail(c, reason="", *args):
+                    if c == cmd:
+                        state["done"] = True
+                        state["ok"] = False
+                        state["why"] = str(reason or "")
+                        try: loop.quit()
+                        except: pass
+
+                t = QTimer()
+                t.setSingleShot(True)
+
+                def _on_timeout():
+                    state["done"] = True
+                    state["ok"] = False
+                    state["why"] = f"timeout {timeout_ms}ms"
+                    try: loop.quit()
+                    except: pass
+
+                # connect
+                self.mfc.command_confirmed.connect(_on_ok)
+                self.mfc.command_failed.connect(_on_fail)
+                t.timeout.connect(_on_timeout)
+
+                # send + wait
+                t.start(int(timeout_ms))
+                self.command_requested.emit(cmd, dict(params))
                 loop.exec()
 
-            # 공용 밸브는 한 번만 VALVE_OPEN (안전하게 잔압 해소)
-            self.command_requested.emit("VALVE_OPEN", {})
-            loop.exec()
+                # cleanup(disconnect)
+                try: t.stop()
+                except Exception: pass
+                try: self.mfc.command_confirmed.disconnect(_on_ok)
+                except Exception: pass
+                try: self.mfc.command_failed.disconnect(_on_fail)
+                except Exception: pass
+                try: t.timeout.disconnect(_on_timeout)
+                except Exception: pass
 
-            try:
-                self.mfc.command_confirmed.disconnect(_quit)
-                self.mfc.command_failed.disconnect(_quit)
-            except:
-                pass
+                # log + PASS
+                if not state["ok"]:
+                    why = state["why"] or "unknown"
+                    self.status_message.emit("경고", f"[STOP] MFC {cmd} 실패/미응답({why}) → PASS")
+                    return False
+
+                return True
+
+            # ✅ 선택된 모든 채널 FLOW_OFF: 채널당 7초만 기다리고 PASS
+            for ch in channels:
+                _wait_mfc_cmd("FLOW_OFF", {"channel": ch}, timeout_ms=7_000)
+
+            # ✅ VALVE_OPEN: 15초만 기다리고 PASS
+            _wait_mfc_cmd("VALVE_OPEN", {}, timeout_ms=15_000)
 
             # 건 셔터/가스 닫기
             self.update_plc_port.emit('S1_button', False)
