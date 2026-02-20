@@ -17,7 +17,17 @@ PLC_PORT = "COM4"
 PLC_BAUD = 115200
 PLC_SLAVE_ID = 1
 PLC_TIMEOUT = 0.5   # 초
-RF_ADC_MAX_COUNT = 4000  # 주소맵 사양에 맞춤(ADC/DAC 모두 0~4000 카운트)
+
+# === PLC 재연결/명령 재시도 정책 ===
+# - PLC 통신이 끊겨도 즉시 공정을 종료하지 않고, 아래 정책으로 재연결을 시도합니다.
+# - (추후 PLC.py/ProcessController에서 사용)
+PLC_POLLING_INTERVAL_MS          = 1000    # PLC 폴링 주기(ms) (현재 코드 기본값)
+PLC_RECONNECT_BACKOFF_START_MS   = 500     # 재연결 첫 대기(ms)
+PLC_RECONNECT_BACKOFF_MAX_MS     = 8000    # 지수 백오프 최대(ms)
+PLC_RECONNECT_MAX_TOTAL_SEC      = 90      # 총 재연결 허용 시간(초). 초과 시 공정 종료 트리거
+PLC_CMD_QUEUE_MAX                = 200     # 끊김 동안 적재 가능한 PLC 명령 최대 개수(보호용)
+PLC_CMD_DEFAULT_RETRIES          = 3       # 명령 단위 재시도 횟수(재연결 후 재전송 포함)
+PLC_CMD_ACK_TIMEOUT_SEC          = 2.0     # (선택) PLC 명령 확인/ACK 대기 기본 시간(초)
 
 # 인터락 기준값/공정 파라미터 등
 INTERLOCK_CHECK_INTERVAL = 0.2  # sec
@@ -82,6 +92,16 @@ DC_MIN_CURRENT_ABORT = 0.05
 DC_FAIL_ISET_THRESHOLD = 0.20   # 설정 전류가 이 이상인데도
 DC_FAIL_POWER_THRESHOLD = 1.0   # 측정 파워가 이 값보다 계속 낮으면(=거의 0으로 간주)
 DC_FAIL_MAX_TICKS = 20          # 1초 tick 기준, 20초 연속이면 실패로 판단
+
+# === DC Power 재연결/명령 재시도 정책 ===
+# - DC Power 시리얼이 끊겼을 때 즉시 종료하지 않고, 아래 정책으로 재연결을 시도합니다.
+# - (추후 DCpower.py/ProcessController에서 사용)
+DC_RECONNECT_BACKOFF_START_MS    = 500     # 재연결 첫 대기(ms)
+DC_RECONNECT_BACKOFF_MAX_MS      = 8000    # 지수 백오프 최대(ms)
+DC_RECONNECT_MAX_TOTAL_SEC       = 90      # 총 재연결 허용 시간(초). 초과 시 공정 종료 트리거
+DC_CMD_QUEUE_MAX                 = 100     # 끊김 동안 적재 가능한 DC 명령 최대 개수(보호용)
+DC_CMD_DEFAULT_RETRIES           = 3       # 명령 단위 재시도 횟수(재연결 후 재전송 포함)
+DC_RESUME_LAST_SETPOINT_ON_RECONNECT = True  # 재연결 성공 시 마지막 목표값(전압/전류/출력)을 재적용
 
 # --- RFpower ---
 RF_FORWARD_SCALING_MAX_WATT  = 594.5  # for.p 센서 교정 상수
