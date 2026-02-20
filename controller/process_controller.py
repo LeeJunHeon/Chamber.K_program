@@ -11,6 +11,8 @@ from PyQt6.QtCore import (
     pyqtSignal as Signal, pyqtSlot as Slot, Qt, QElapsedTimer
 )
 
+from lib.config import PLC_RECONNECT_MAX_TOTAL_SEC
+
 # ===================== 액션 / 스텝 정의 =====================
 
 if TYPE_CHECKING:
@@ -120,6 +122,30 @@ class SputterProcessController(QObject):
         # 램프다운 대기 루프 핸들
         self._rfdown_wait: Optional[QEventLoop] = None
 
+        # --- PLC 상태 캐시(버튼 출력 코일 상태) ---
+        self._plc_button_states: Dict[str, bool] = {}
+
+        # --- PLC_CMD 대기용 핸들 ---
+        self._plc_wait_loop: Optional[QEventLoop] = None
+        self._plc_wait_target: Optional[Tuple[str, bool]] = None
+
+        # --- PLC 시그널 연결 (상태 변화/치명 오류 감지) ---
+        try:
+            self.plc.update_button_display.connect(
+                self._on_plc_button_update,
+                type=Qt.ConnectionType.QueuedConnection
+            )
+        except TypeError:
+            self.plc.update_button_display.connect(self._on_plc_button_update)
+
+        try:
+            self.plc.status_message.connect(
+                self._on_plc_status_message,
+                type=Qt.ConnectionType.QueuedConnection
+            )
+        except TypeError:
+            self.plc.status_message.connect(self._on_plc_status_message)
+
     # ---------- 타이머 준비 ----------
     @Slot()
     def _setup_timers(self):
@@ -137,6 +163,91 @@ class SputterProcessController(QObject):
         else:
             QMetaObject.invokeMethod(self, name, Qt.ConnectionType.BlockingQueuedConnection)
 
+    # ==================== PLC 상태/재연결 대응 ====================
+
+    @Slot(str, bool)
+    def _on_plc_button_update(self, btn_name: str, state: bool):
+        """PLC가 관측한 버튼(출력 코일) 상태 캐시."""
+        btn = str(btn_name)
+        st = bool(state)
+        self._plc_button_states[btn] = st
+
+        # PLC_CMD 대기 중이면 목표 달성 시 즉시 깨움
+        if self._plc_wait_target and self._plc_wait_loop:
+            t_btn, t_state = self._plc_wait_target
+            if btn == t_btn and st == t_state:
+                try:
+                    self._plc_wait_loop.quit()
+                except Exception:
+                    pass
+
+    @Slot(str, str)
+    def _on_plc_status_message(self, level: str, text: str):
+        """PLC 쪽 치명 이벤트를 공정 중단으로 연결."""
+        lvl = str(level or "").strip()
+        msg = str(text or "").strip()
+
+        if lvl == "재시작":
+            self.status_message.emit("오류", f"PLC 치명: {msg}")
+            self._abort_with_error(f"PLC 재연결 실패로 공정 중단: {msg}")
+
+    def _wait_plc_state(self, btn: str, desired: bool, timeout_ms: int) -> bool:
+        """
+        PLC 버튼(출력 코일) 상태가 desired가 될 때까지 대기.
+        - PLC가 끊겨 있으면(큐잉/재연결 중) 상태 업데이트가 올 때까지 기다림
+        - timeout_ms 초과 시 False
+        """
+        btn = str(btn)
+        desired = bool(desired)
+
+        if self._plc_button_states.get(btn) == desired:
+            return True
+
+        if not self._running or self._stop_pending:
+            return False
+
+        loop = QEventLoop()
+        self._plc_wait_loop = loop
+        self._plc_wait_target = (btn, desired)
+
+        t = QTimer()
+        t.setSingleShot(True)
+
+        state = {"timeout": False}
+
+        def _on_timeout():
+            state["timeout"] = True
+            try:
+                loop.quit()
+            except Exception:
+                pass
+
+        t.timeout.connect(_on_timeout)
+        t.start(int(timeout_ms))
+
+        loop.exec()
+
+        # cleanup
+        try:
+            t.stop()
+        except Exception:
+            pass
+        try:
+            t.timeout.disconnect(_on_timeout)
+        except Exception:
+            pass
+
+        self._plc_wait_loop = None
+        self._plc_wait_target = None
+
+        if not self._running or self._stop_pending:
+            return False
+
+        if state["timeout"]:
+            return False
+
+        return self._plc_button_states.get(btn) == desired
+
     # ==================== 공정 시작 ====================
 
     @Slot(dict)
@@ -147,6 +258,10 @@ class SputterProcessController(QObject):
 
             # 타이머는 자신의 스레드에서 생성
             self._invoke_self("_setup_timers")
+
+            # ✅ PLC: 이전 런의 래치/큐 정리 + 폴링/재연결 루프 시작
+            _invoke_connect(self.plc, "clear_fault_latch")
+            _invoke_connect(self.plc, "start_polling")
 
             # 장치 연결 확인
             # 시작 전 Power OFF를 위해 DC는 가능하면 미리 연결 시도 (DC 미사용 공정이면 실패해도 진행)
@@ -195,7 +310,6 @@ class SputterProcessController(QObject):
             self._gas_valve_button = gas_buttons[0]
 
             # 🔹 MFC 쪽에도 이번 공정에서 실제 사용하는 채널 정보 전달
-            #    예: [1] 또는 [1, 2]
             try:
                 self.command_requested.emit("set_active_channels", {"channels": active_channels})
             except Exception:
@@ -222,14 +336,11 @@ class SputterProcessController(QObject):
         - 여러 가스 밸브 Open/Close
         를 처리한다.
         """
-        # --- 1) 사용할 채널 목록 결정 (start_process_flow에서 세팅한 값 우선) ---
         channels = getattr(self, "_active_channels", None)
         if not channels:
-            # 백워드 호환: selected_gas / mfc_flow 기반 단일 채널
             ch = 1 if p.get('selected_gas', 'Ar') == 'Ar' else 2
             channels = [ch]
 
-        # --- 2) 채널별 유량 설정 ---
         flows: Dict[int, float] = {}
         default_flow = float(p.get('mfc_flow', 0.0))
 
@@ -238,17 +349,14 @@ class SputterProcessController(QObject):
         if 2 in channels:
             flows[2] = float(p.get('o2_flow', default_flow))
 
-        # (중요) SP1_SET 값은 UI 그대로 보냄 — MFC가 1/10 스케일 변환
         sp1_ui = float(p.get('sp1_set', 0.0))
 
         steps: List[ProcessStep] = []
 
-        # --- 2.5) 시작 전 안전 정리: Power OFF 먼저 (이전 공정 잔류 방지) ---
         steps.append(ProcessStep(ActionType.DC_POWER_STOP, "PRE: DC Power OFF"))
         steps.append(ProcessStep(ActionType.RF_POWER_STOP, "PRE: RF Power OFF"))
         steps.append(ProcessStep(ActionType.DELAY, "PRE: Power OFF settle", duration_sec=1))
 
-        # --- 3) 초기화: 각 채널 Flow OFF ---
         for ch in channels:
             steps.append(
                 ProcessStep(
@@ -258,7 +366,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # MFC 메인 밸브 Open (공용 1회)
         steps.append(
             ProcessStep(
                 ActionType.MFC_CMD,
@@ -267,7 +374,6 @@ class SputterProcessController(QObject):
             )
         )
 
-        # 각 채널 Zeroing
         for ch in channels:
             steps.append(
                 ProcessStep(
@@ -277,7 +383,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # Power Supply Zeroing
         steps.append(
             ProcessStep(
                 ActionType.MFC_CMD,
@@ -286,7 +391,6 @@ class SputterProcessController(QObject):
             )
         )
 
-        # --- 4) 가스 밸브(PLC) Open: 선택된 모든 가스에 대해 ---
         gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
         for btn in gas_buttons:
             gas_name = "Ar" if "Ar" in btn else "O2"
@@ -298,7 +402,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # --- 5) 채널별 유량 설정 & Flow ON ---
         for ch in channels:
             flow = float(flows.get(ch, 0.0))
             if flow > 0.0:
@@ -317,7 +420,6 @@ class SputterProcessController(QObject):
                     )
                 )
 
-        # --- 6) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
         steps.append(
             ProcessStep(
                 ActionType.MFC_CMD,
@@ -334,7 +436,6 @@ class SputterProcessController(QObject):
             )
         )
 
-        # --- 7) 건 셔터 선택적 Open (기존 로직 그대로) ---
         if p.get('use_g1', False):
             steps.append(
                 ProcessStep(
@@ -352,7 +453,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # 파워 안정화
         steps.append(
             ProcessStep(
                 ActionType.POWER_WAIT,
@@ -369,7 +469,6 @@ class SputterProcessController(QObject):
         )
 
         if sp1_ui < 5.0:
-            # SP2 = 5.00 설정
             steps.append(
                 ProcessStep(
                     ActionType.MFC_CMD,
@@ -377,7 +476,6 @@ class SputterProcessController(QObject):
                     params=('SP2_SET', {'value': 5.0}),
                 )
             )
-            # SP2 ON
             steps.append(
                 ProcessStep(
                     ActionType.MFC_CMD,
@@ -385,8 +483,6 @@ class SputterProcessController(QObject):
                     params=('SP2_ON', {}),
                 )
             )
-
-            # SP2 상태에서 60초 대기
             steps.append(
                 ProcessStep(
                     ActionType.DELAY,
@@ -395,7 +491,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # 압력 제어 시작
         steps.append(
             ProcessStep(
                 ActionType.MFC_CMD,
@@ -404,7 +499,6 @@ class SputterProcessController(QObject):
             )
         )
 
-        # --- 8) Shutter Delay ---
         sd_sec = max(0, int(math.ceil(float(p.get('shutter_delay', 0.0)) * 60)))
         if sd_sec > 0:
             steps.append(
@@ -417,7 +511,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # Main Shutter
         if float(p.get('process_time', 0.0)) > 0:
             steps.append(
                 ProcessStep(
@@ -427,7 +520,6 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # 메인 공정(이 구간만 폴링 ON)
         pt_sec = max(0, int(math.ceil(float(p.get('process_time', 0.0)) * 60)))
         if pt_sec > 0:
             steps.append(
@@ -441,7 +533,7 @@ class SputterProcessController(QObject):
             )
 
         return steps
-    
+
     # ==================== google chat 관련 추가 ====================
     def _step_tag(self, step: Optional[ProcessStep] = None) -> str:
         total = len(self._steps) if self._steps else 0
@@ -465,7 +557,6 @@ class SputterProcessController(QObject):
         try:
             self.request_stop()
         except Exception:
-            # request_stop이 죽어도 UI가 안 멈추게 finished는 보장
             try:
                 self._running = False
                 self.finished.emit()
@@ -490,18 +581,26 @@ class SputterProcessController(QObject):
             self.stage_monitor.emit(f"[{self._idx+1}/{len(self._steps)}] {step.message}")
             self.status_message.emit("공정", step.message)
 
-            # 스텝 진입 시 폴링 설정
             self.command_requested.emit("set_polling", {'enable': bool(step.polling)})
 
-            # 액션 분기
             if step.action == ActionType.MFC_CMD:
                 cmd, args = step.params
                 self.command_requested.emit(cmd, dict(args))
 
             elif step.action == ActionType.PLC_CMD:
                 btn, st = step.params
-                self.update_plc_port.emit(str(btn), bool(st))
-                QTimer.singleShot(800, self._next_step)  # 릴레이/실린더 여유
+                btn = str(btn)
+                st = bool(st)
+
+                self.update_plc_port.emit(btn, st)
+
+                timeout_ms = int((float(PLC_RECONNECT_MAX_TOTAL_SEC) + 5.0) * 1000)
+                ok = self._wait_plc_state(btn, st, timeout_ms=timeout_ms)
+                if not ok:
+                    self._abort_with_error(f"{self._step_tag(step)} | PLC_CMD 적용 타임아웃: {btn}={st}")
+                    return
+
+                QTimer.singleShot(800, self._next_step)
 
             elif step.action == ActionType.DC_POWER_SET:
                 self.start_dc_power.emit(float(step.value or 0.0))
@@ -548,14 +647,12 @@ class SputterProcessController(QObject):
                 self._next_step()
             else:
                 self.status_message.emit("경고", f"MFC 확인 무시: '{cmd}', 기대 '{expected}'")
-        # 다른 액션 중일 때 들어온 확인은 무시
 
     @Slot(str, str)
     def _on_mfc_failed(self, cmd: str, why: str):
         if not self._running:
             return
-        
-        # 1) 유량 모니터링 실패(가스 부족/불안정 등)
+
         step = self._steps[self._idx] if 0 <= self._idx < len(self._steps) else None
         tag = self._step_tag(step)
 
@@ -594,16 +691,14 @@ class SputterProcessController(QObject):
             self._next_step()
             return
 
-        self._active_loops = loops  # ★ STOP에서 끊어낼 수 있도록 보관
+        self._active_loops = loops
         self.status_message.emit("정보", "파워 목표치 도달 대기중...")
 
         for _name, lp in loops:
-            # STOP 눌렀으면 더 기다리지 않음
             if not self._running or self._stop_pending:
                 break
             lp.exec()
 
-        # disconnect
         for name, lp in loops:
             try:
                 if name == "dc": self.dc.target_reached.disconnect(lp.quit)
@@ -612,7 +707,7 @@ class SputterProcessController(QObject):
                 pass
         self._active_loops = []
 
-        if not self._running:   # STOP 중이면 여기서 종료
+        if not self._running:
             return
 
         self.status_message.emit("정보", "파워 안정화 완료.")
@@ -621,7 +716,6 @@ class SputterProcessController(QObject):
     # ==================== 딜레이/타이머 ====================
 
     def _emit_delay_ui(self, remaining_sec: int):
-        """남은 초가 바뀌었을 때만 해당 UI 시그널을 보낸다."""
         if remaining_sec == self._last_emitted_sec:
             return
         self._last_emitted_sec = remaining_sec
@@ -638,16 +732,13 @@ class SputterProcessController(QObject):
         self._delay_total_sec = int(seconds)
         self._timer_purpose = purpose
 
-        # 모노토닉 시계 시작
         self._delay_clock = QElapsedTimer()
         self._delay_clock.start()
 
-        # 시작 시점에 남은 시간(=총 시간) 1회 즉시 반영
         self._last_emitted_sec = -1
         self._emit_delay_ui(self._delay_total_sec)
 
         if self._timer:
-            # 타이머는 단순 하트비트 역할만 수행
             self._timer.start()
         else:
             self.status_message.emit("오류", "타이머 초기화 누락")
@@ -655,39 +746,31 @@ class SputterProcessController(QObject):
 
     def _on_tick(self):
         try:
-            # 프로세스 중이 아니면 타이머 정지 및 폴링 OFF
             if not self._running:
                 if self._timer and self._timer.isActive():
                     self._timer.stop()
                 self.command_requested.emit("set_polling", {'enable': False})
                 return
 
-            # 딜레이 구간이 아닐 수 있음
             if not self._delay_clock:
                 return
 
-            # QElapsedTimer 기반으로 경과/잔여 시간 계산
-            elapsed_ms = self._delay_clock.elapsed()  # ms
+            elapsed_ms = self._delay_clock.elapsed()
             elapsed_sec = int(elapsed_ms // 1000)
             remaining = max(0, self._delay_total_sec - elapsed_sec)
 
-            # 초 단위로 값이 변했을 때만 UI 갱신
             self._emit_delay_ui(remaining)
 
-            # 종료 처리
             if remaining <= 0:
-                # 하트비트 정지 및 폴링 OFF
                 if self._timer and self._timer.isActive():
                     self._timer.stop()
                 self.command_requested.emit("set_polling", {'enable': False})
 
-                # 상태 초기화
                 self._delay_clock = None
                 self._delay_total_sec = 0
                 self._timer_purpose = None
                 self._last_emitted_sec = -1
 
-                # 다음 스텝으로
                 self._next_step()
         except Exception as e:
             self._abort_with_error(f"{self._step_tag()} | timer(_on_tick) 예외: {e}")
@@ -704,7 +787,6 @@ class SputterProcessController(QObject):
     def teardown(self):
         if self._timer and self._timer.isActive():
             self._timer.stop()
-        # 타이머/딜레이 상태 초기화
         self._delay_clock = None
         self._delay_total_sec = 0
         self._timer_purpose = None
@@ -712,7 +794,6 @@ class SputterProcessController(QObject):
 
     @Slot()
     def request_stop(self):
-        """UI/다른 스레드에서 눌러도 항상 '내 스레드'에서 안전 종료."""
         if self._stop_pending:
             return
         self._stop_pending = True
@@ -728,9 +809,7 @@ class SputterProcessController(QObject):
 
     @Slot()
     def _stop_impl(self):
-        """실제 안전 종료(컨트롤러 스레드 안에서만 실행)."""
         try:
-            # 진행 중인 딜레이 즉시 중단
             if self._timer and self._timer.isActive():
                 self._timer.stop()
             self._delay_clock = None
@@ -738,14 +817,21 @@ class SputterProcessController(QObject):
             self._timer_purpose = None
             self._last_emitted_sec = -1
 
-            # 파워 대기 루프가 돌고 있으면 즉시 깨움
+            # ✅ PLC_CMD 대기 중이면 즉시 깨움
+            if self._plc_wait_loop is not None:
+                try:
+                    self._plc_wait_loop.quit()
+                except Exception:
+                    pass
+                self._plc_wait_loop = None
+                self._plc_wait_target = None
+
             if self._active_loops:
                 for _name, lp in self._active_loops:
                     try: lp.quit()
                     except: pass
                 self._active_loops.clear()
 
-            # 여기서부터는 기존 stop_process 본문 그대로
             if not self._running:
                 self.finished.emit()
                 self._stop_pending = False
@@ -754,61 +840,43 @@ class SputterProcessController(QObject):
             self.status_message.emit("정보", "종료 시퀀스를 실행합니다.")
             self._running = False
 
-            # 폴링 OFF
             self.command_requested.emit("set_polling", {'enable': False})
 
-            # Main Shutter 닫기
             self.stage_monitor.emit("M.S. close...")
             self.update_plc_port.emit('MS_button', False)
 
-            # 파워 끄기
             if self.is_dc_on:
                 self.status_message.emit("DCpower", "DC 파워 OFF")
                 self.stop_dc_power.emit()
             if self.is_rf_on:
                 self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
 
-                # 이벤트 루프 준비
                 self._rfdown_wait = QEventLoop()
 
-                # ★ RF → Process 스레드로 안전하게 큐드 연결
                 try:
                     self.rf.ramp_down_finished.connect(
                         self._on_rf_rampdown_finished,
                         type=Qt.ConnectionType.QueuedConnection
                     )
                 except TypeError:
-                    # 일부 환경에서 type= 키워드가 안 먹으면 기본 Auto로도 무방
                     self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
 
-                # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
                 QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
 
-                # 램프다운 시작
                 self.stop_rf_power.emit()
-
-                # 완료까지 대기
                 self._rfdown_wait.exec()
 
-                # 뒷정리
                 try:
                     self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
                 except Exception:
                     pass
                 self._rfdown_wait = None
 
-            # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리
             channels = getattr(self, "_active_channels", None)
             if not channels:
                 channels = [self._process_channel]
 
             def _wait_mfc_cmd(cmd: str, params: dict, timeout_ms: int) -> bool:
-                """
-                STOP 시퀀스용: MFC 명령을 보내고 timeout_ms 까지만 confirmed/failed를 기다린다.
-                - confirmed(cmd) => True
-                - failed(cmd, reason) 또는 timeout => False (하지만 STOP 시퀀스는 계속 진행 = PASS)
-                """
-                # ✅ MFC가 끊긴 상태면 애초에 기다리지 말고 PASS
                 if not self._is_connected(self.mfc):
                     self.status_message.emit("경고", f"[STOP] MFC 미연결 → {cmd} 생략(PASS)")
                     return False
@@ -841,17 +909,14 @@ class SputterProcessController(QObject):
                     try: loop.quit()
                     except: pass
 
-                # connect
                 self.mfc.command_confirmed.connect(_on_ok)
                 self.mfc.command_failed.connect(_on_fail)
                 t.timeout.connect(_on_timeout)
 
-                # send + wait
                 t.start(int(timeout_ms))
                 self.command_requested.emit(cmd, dict(params))
                 loop.exec()
 
-                # cleanup(disconnect)
                 try: t.stop()
                 except Exception: pass
                 try: self.mfc.command_confirmed.disconnect(_on_ok)
@@ -861,7 +926,6 @@ class SputterProcessController(QObject):
                 try: t.timeout.disconnect(_on_timeout)
                 except Exception: pass
 
-                # log + PASS
                 if not state["ok"]:
                     why = state["why"] or "unknown"
                     self.status_message.emit("경고", f"[STOP] MFC {cmd} 실패/미응답({why}) → PASS")
@@ -869,14 +933,11 @@ class SputterProcessController(QObject):
 
                 return True
 
-            # ✅ 선택된 모든 채널 FLOW_OFF: 채널당 7초만 기다리고 PASS
             for ch in channels:
                 _wait_mfc_cmd("FLOW_OFF", {"channel": ch}, timeout_ms=7_000)
 
-            # ✅ VALVE_OPEN: 15초만 기다리고 PASS
             _wait_mfc_cmd("VALVE_OPEN", {}, timeout_ms=15_000)
 
-            # 건 셔터/가스 닫기
             self.update_plc_port.emit('S1_button', False)
             self.update_plc_port.emit('S2_button', False)
 
@@ -889,7 +950,6 @@ class SputterProcessController(QObject):
             QTimer.singleShot(800, self._finish_stop)
             self._stop_pending = False
         except Exception as e:
-            # 종료 시퀀스 중 예외도 잡아서 UI가 안 멈추게
             try:
                 self.critical_error.emit(f"종료 시퀀스 예외: {e}")
             except Exception:
@@ -903,7 +963,7 @@ class SputterProcessController(QObject):
             except Exception:
                 pass
         finally:
-            self._stop_pending = False    
+            self._stop_pending = False
 
     @Slot()
     def _finish_stop(self):
@@ -912,14 +972,13 @@ class SputterProcessController(QObject):
 
     def _is_connected(self, obj) -> bool:
         """컨트롤러의 연결상태를 최대한 보수적으로 판정."""
-        # 1) 우선 is_connected()가 있으면 그것을 신뢰
         try:
             fn = getattr(obj, "is_connected", None)
             if callable(fn):
                 return bool(fn())
         except Exception:
             pass
-        # 2) 공통 속성으로 대체 판정
+
         for name in ("serial", "serial_mfc", "serial_dcpower"):
             s = getattr(obj, name, None)
             if s is not None and hasattr(s, "isOpen"):
@@ -928,4 +987,18 @@ class SputterProcessController(QObject):
                         return True
                 except Exception:
                     pass
+
+        # 3) minimalmodbus Instrument 판정(PLC)
+        try:
+            inst = getattr(obj, "instrument", None)
+            if inst is not None:
+                ser = getattr(inst, "serial", None)
+                if ser is not None:
+                    if hasattr(ser, "is_open"):
+                        return bool(getattr(ser, "is_open"))
+                    if hasattr(ser, "isOpen"):
+                        return bool(ser.isOpen())
+        except Exception:
+            pass
+
         return False
