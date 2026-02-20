@@ -1,11 +1,13 @@
 # DCPowerController_qtserial.py — PyQt6 QSerialPort 동기형(이벤트루프 대기) 구현
 from __future__ import annotations
+
 import re
+from collections import deque
 from typing import Optional, Tuple
 
-from PyQt6.QtCore import QObject, QTimer, QThread, QEventLoop, pyqtSignal as Signal, pyqtSlot as Slot, Qt
+from PyQt6.QtCore import QObject, QTimer, QThread, QEventLoop, pyqtSignal as Signal, pyqtSlot as Slot, Qt, QIODeviceBase
 from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo, QSerialPort as QS
-from PyQt6.QtCore import QIODeviceBase
+from PyQt6.QtCore import QElapsedTimer
 
 from lib.config import (
     DC_PORT, DC_BAUDRATE,
@@ -13,7 +15,16 @@ from lib.config import (
     DC_MAX_CURRENT, DC_MAX_POWER, DC_TOLERANCE_WATT, DC_MAX_ERROR_COUNT,
     DC_MIN_CURRENT_ABORT, DC_FAIL_ISET_THRESHOLD, DC_FAIL_POWER_THRESHOLD,
     DC_FAIL_MAX_TICKS,
+
+    # ✅ DC 재연결 정책
+    DC_RECONNECT_BACKOFF_START_MS,
+    DC_RECONNECT_BACKOFF_MAX_MS,
+    DC_RECONNECT_MAX_TOTAL_SEC,
+    DC_CMD_QUEUE_MAX,
+    DC_CMD_DEFAULT_RETRIES,
+    DC_RESUME_LAST_SETPOINT_ON_RECONNECT,
 )
+
 
 class DCPowerController(QObject):
     update_dc_status_display = Signal(float, float, float)  # (P, V, I)
@@ -53,6 +64,23 @@ class DCPowerController(QObject):
         # '재시작' 알림을 1회만 내보내기 위한 래치
         self._fatal_sent: bool = False
 
+        # --- 재연결 상태 ---
+        self._reconnecting: bool = False
+        self._reconnect_fatal: bool = True   # 공정 중에는 True, stop 중에는 False로 사용
+        self._reconnect_clock = QElapsedTimer()
+        self._reconnect_backoff_ms: int = int(DC_RECONNECT_BACKOFF_START_MS)
+
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setSingleShot(True)
+        self._reconnect_timer.timeout.connect(self._attempt_reconnect)
+
+        # --- 명령 큐(끊김 동안 보관) ---
+        self._cmd_queue = deque()  # max는 수동으로 관리(드랍 로그를 남기기 위함)
+
+        # --- 재연결 후 재적용용 상태 ---
+        self._output_on: bool = False
+        self._last_apply: tuple[float, float] | None = None  # (V, I)
+
     def _emit_restart_fatal(self, reason: str) -> None:
         """메인(main.py)이 전체 공정 STOP을 걸 수 있도록 '재시작'을 1회만 emit."""
         if self._fatal_sent:
@@ -90,6 +118,120 @@ class DCPowerController(QObject):
 
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort, LF 종단)")
         return True
+    
+    # ---------------- 재시작, 재연결 로직 ----------------
+    def _enqueue_cmd(self, cmd: str, *, front: bool = False) -> None:
+        """끊김 동안 보낼 명령을 보관(보호용 max)."""
+        cmd = (cmd or "").strip()
+        if not cmd:
+            return
+
+        # CURR/APPLy는 너무 많이 쌓이면 의미가 없으니 최신만 남기기(선택 최적화)
+        if cmd.startswith("CURR "):
+            self._cmd_queue = deque([c for c in self._cmd_queue if not str(c).startswith("CURR ")])
+        if cmd.startswith("APPLy "):
+            self._cmd_queue = deque([c for c in self._cmd_queue if not str(c).startswith("APPLy ")])
+
+        while len(self._cmd_queue) >= int(DC_CMD_QUEUE_MAX):
+            dropped = self._cmd_queue.popleft()
+            self.status_message.emit("DCpower(경고)", f"DC 명령 큐 초과 → drop: {dropped}")
+
+        if front:
+            self._cmd_queue.appendleft(cmd)
+        else:
+            self._cmd_queue.append(cmd)
+
+    def _begin_reconnect(self, reason: str, *, fatal_on_timeout: bool) -> None:
+        """DC 포트 오류/끊김 시 백오프 재연결 시작."""
+        if self._reconnecting:
+            return
+
+        self._reconnecting = True
+        self._reconnect_fatal = bool(fatal_on_timeout)
+        self._reconnect_backoff_ms = int(DC_RECONNECT_BACKOFF_START_MS)
+
+        self.control_timer.stop()
+
+        # 포트 닫기(best-effort)
+        try:
+            if self.serial and self.serial.isOpen():
+                self.serial.close()
+        except Exception:
+            pass
+
+        self._reconnect_clock.restart()
+        self.status_message.emit("DCpower(경고)", f"{reason} → 재연결 시작 ({self._reconnect_backoff_ms}ms 후)")
+        self._reconnect_timer.start(self._reconnect_backoff_ms)
+
+    def _attempt_reconnect(self) -> None:
+        """백오프 재연결 1회 시도."""
+        if not self._reconnecting:
+            return
+
+        elapsed_sec = (self._reconnect_clock.elapsed() / 1000.0) if self._reconnect_clock.isValid() else 9999.0
+        if elapsed_sec >= float(DC_RECONNECT_MAX_TOTAL_SEC):
+            # ✅ 총시간 초과
+            self._reconnecting = False
+            if self._reconnect_fatal:
+                self._emit_restart_fatal(f"DC 재연결 실패(총 {elapsed_sec:.1f}s 초과). 공정을 중단합니다.")
+                self.stop_process()
+            else:
+                self.status_message.emit("DCpower(경고)", f"DC 재연결 실패(정지 중, 총 {elapsed_sec:.1f}s 초과)")
+            return
+
+        ok = self.connect_dcpower_device()
+        if ok:
+            self.status_message.emit("DCpower", "DC 재연결 성공")
+            self._reconnecting = False
+            self._reconnect_fatal = True
+            self._reconnect_backoff_ms = int(DC_RECONNECT_BACKOFF_START_MS)
+
+            # ✅ 재연결 후 마지막 setpoint/출력 복구(선택)
+            if self._is_running and bool(DC_RESUME_LAST_SETPOINT_ON_RECONNECT):
+                self._resume_after_reconnect()
+
+            # ✅ 큐 flush
+            self._flush_cmd_queue()
+
+            # ✅ 공정 중이면 제어루프 재개
+            if self._is_running:
+                self.control_timer.start()
+            return
+
+        # 실패 → 백오프 증가 후 재시도
+        self._reconnect_backoff_ms = min(int(self._reconnect_backoff_ms * 2), int(DC_RECONNECT_BACKOFF_MAX_MS))
+        self.status_message.emit("DCpower(경고)", f"DC 재연결 실패 → {self._reconnect_backoff_ms}ms 후 재시도")
+        self._reconnect_timer.start(self._reconnect_backoff_ms)
+
+    def _resume_after_reconnect(self) -> None:
+        """재연결 성공 시 마지막 설정값을 장비에 재적용."""
+        try:
+            if self._last_apply is not None:
+                v, i = self._last_apply
+                self._send_noresp(f"APPLy {float(v):.2f},{float(i):.4f}")
+            # current_current 최신값도 한번 더 보정
+            self._send_noresp(f"CURR {self.current_current:.4f}")
+            if self._output_on:
+                self._send_noresp("OUTP ON")
+        except Exception as e:
+            self.status_message.emit("DCpower(경고)", f"재연결 후 복구 실패: {e}")
+
+    def _flush_cmd_queue(self) -> None:
+        """재연결 성공 후 큐에 쌓인 명령을 순서대로 재전송."""
+        if not self.serial or not self.serial.isOpen():
+            return
+        retries = int(DC_CMD_DEFAULT_RETRIES)
+        while self._cmd_queue:
+            cmd = self._cmd_queue[0]
+            ok = self._send(str(cmd))
+            if ok:
+                self._cmd_queue.popleft()
+                continue
+            retries -= 1
+            if retries <= 0:
+                self.status_message.emit("DCpower(경고)", f"큐 명령 재전송 실패 → 남은 {len(self._cmd_queue)}개 폐기")
+                self._cmd_queue.clear()
+                break
 
     # ---------------- 공정 시작 ----------------
     @Slot(float)
@@ -129,6 +271,9 @@ class DCPowerController(QObject):
     # ---------------- 제어 루프 ----------------
     @Slot()
     def _on_timer_tick(self):
+        if self._reconnecting:
+            return
+
         if not self._is_running:
             self.control_timer.stop()
             return
@@ -136,6 +281,9 @@ class DCPowerController(QObject):
         now_power, now_v, now_i = self.read_dc_power()  # MEAS:ALL?
         if not self._check_measurement(now_v, now_i):
             return
+        
+        if now_power is None:
+            now_power = float(now_v) * float(now_i)
 
         diff = self.target_power - now_power         # +: 더 올려야 함,  -: 과다(오버슈트)
         # 오버슈트(과다) 판정 기준: 'W 기준' 또는 '% 기준' 중 큰 쪽
@@ -271,13 +419,24 @@ class DCPowerController(QObject):
 
     # ---------------- 초기화/종료 ----------------
     def _initialize_power_supply(self, voltage: float, current: float) -> bool:
-        if not self._send("*RST"): return False
-        if not self._send("*CLS"): return False
+        if not self._send("*RST"): 
+            return False
+        
+        if not self._send("*CLS"): 
+            return False
+        
         # 전압·전류 동시에 설정(APPLy v,i), 메뉴얼 7-3절
-        if not self._send(f"APPLy {voltage:.2f},{current:.4f}"): return False
-        if not self._send("OUTP ON"): return False
+        if not self._send(f"APPLy {voltage:.2f},{current:.4f}"): 
+            return False
+        
+        if not self._send("OUTP ON"): 
+            return False
+        
         self.current_voltage = voltage
         self.current_current = current
+        self._last_apply = (voltage, current)
+        self._output_on = True
+
         return True
 
     @Slot()
@@ -287,9 +446,14 @@ class DCPowerController(QObject):
         self._is_running = False
         self.state = "IDLE"
         self.control_timer.stop()
-        self.power_error_count = 0 # ★ 편차 카운터도 초기화
-        self._send_noresp("OUTP OFF")
-        self.status_message.emit("DCpower", "출력 OFF, 대기 상태로 전환")
+        self.power_error_count = 0
+
+        # ✅ 안전 STOP: OFF를 큐에 넣고 재연결(정지 중이므로 fatal=False)
+        self._enqueue_cmd("OUTP OFF", front=True)
+        self._output_on = False
+        self._begin_reconnect("STOP 중 OUTP OFF 보장", fatal_on_timeout=False)
+
+        self.status_message.emit("DCpower", "출력 OFF 요청, 대기 상태로 전환")
 
     @Slot()
     def close_connection(self):
@@ -313,7 +477,7 @@ class DCPowerController(QObject):
 
         p = (v * i) if (v is not None and i is not None) else None
         self.update_dc_status_display.emit(p or 0.0, v or 0.0, i or 0.0)
-        return (p or 0.0, v or 0.0, i or 0.0)
+        return (p, v, i)   # ✅ None을 유지해서 상위에서 "끊김"을 감지 가능
 
     # ---------------- 전송/수신 (QtSerialPort 동기 래핑) ----------------
     def _send(self, command: str, timeout_ms: int = 500) -> bool:
@@ -335,14 +499,24 @@ class DCPowerController(QObject):
         return False
 
     def _send_noresp(self, command: str) -> None:
-        """응답 불필요한 빠른 명령(전류 미세조정 등)"""
         try:
             self.status_message.emit("DCpower > 전송", command)
-            self._write_line(command)
+            ok = self._write_line(command)
+            if not ok:
+                # ✅ 추가
+                self._enqueue_cmd(command, front=True)
+                self._begin_reconnect(f"DC 전송 실패(NO-RESP): {command}", fatal_on_timeout=self._is_running)
         except Exception as e:
             self.status_message.emit("DCpower(경고)", f"전송 오류(무응답): {e}")
+            # ✅ 추가(예외도 동일 처리)
+            self._enqueue_cmd(command, front=True)
+            self._begin_reconnect(f"DC 전송 예외(NO-RESP): {command}", fatal_on_timeout=self._is_running)
 
     def _query(self, command: str, timeout_ms: int = 500) -> Optional[str]:
+        if not (self.serial and self.serial.isOpen()):
+            self._begin_reconnect(f"DC 포트 닫힘(QUERY: {command})", fatal_on_timeout=self._is_running)
+            return None
+
         # 잔여 입력을 readAll()로 비움 (clear(Input) 대신)
         if self.serial and self.serial.bytesAvailable() > 0:
             try: self.serial.readAll()
@@ -356,9 +530,13 @@ class DCPowerController(QObject):
         line = self._readline_blocking(timeout_ms)
         if line is None:
             self.status_message.emit("DCpower", "수신 타임아웃")
+            # ✅ 여기 추가
+            self._enqueue_cmd(command, front=True)
+            self._begin_reconnect(f"DC 수신 타임아웃(QUERY: {command})", fatal_on_timeout=self._is_running)
+            return None
         else:
             self.status_message.emit("DCpower < 응답", line)
-        return line
+            return line
 
     def _write_line(self, s: str) -> bool:
         if not (self.serial and self.serial.isOpen()):
@@ -450,13 +628,19 @@ class DCPowerController(QObject):
 
     def _check_measurement(self, v: Optional[float], i: Optional[float]) -> bool:
         if v is None or i is None:
+            # ✅ 포트 끊김/재연결 케이스는 '연속 측정 실패'로 카운트하지 않음
+            if self._reconnecting or not (self.serial and self.serial.isOpen()):
+                self._begin_reconnect("DC 측정 실패(끊김/재연결 필요)", fatal_on_timeout=self._is_running)
+                return False
+
+            # ✅ 연결은 살아있는데 파싱/이상응답이면 기존 카운트 정책 유지
             self.error_count += 1
             self.status_message.emit("DCpower", f"측정값 오류({self.error_count}/{DC_MAX_ERROR_COUNT})")
             if self.error_count >= DC_MAX_ERROR_COUNT:
-                # ✅ 메인이 전체 공정 STOP을 걸 수 있도록 '재시작'으로 올림
-                self._emit_restart_fatal("DC 연속 측정 실패로 공정을 중단합니다.")
+                self._emit_restart_fatal("DC 연속 측정 실패(연결은 있으나 응답 이상)로 공정을 중단합니다.")
                 self.stop_process()
             return False
+
         self.error_count = 0
         return True
 
