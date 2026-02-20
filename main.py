@@ -176,16 +176,36 @@ class MainDialog(QDialog):
         )
 
         # ProcessController -> 각 장치 컨트롤러로 명령 전달
-        self.process_controller.update_plc_port.connect(self.plc_controller.update_port_state)
-        self.process_controller.start_dc_power.connect(self.dcpower_controller.start_process)
-        self.process_controller.stop_dc_power.connect(self.dcpower_controller.stop_process)
-        self.process_controller.start_rf_power.connect(self.rfpower_controller.start_process)
-        self.process_controller.stop_rf_power.connect(self.rfpower_controller.stop_process)
+        self.process_controller.update_plc_port.connect(
+            self.plc_controller.update_port_state,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.start_dc_power.connect(
+            self.dcpower_controller.start_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.stop_dc_power.connect(
+            self.dcpower_controller.stop_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.start_rf_power.connect(
+            self.rfpower_controller.start_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.process_controller.stop_rf_power.connect(
+            self.rfpower_controller.stop_process,
+            type=Qt.ConnectionType.QueuedConnection
+        )
         
-        # ProcessController -> MFC (명령 라우팅)
-        self.process_controller.command_requested.connect(self.mfc_controller.handle_command)
-        # MFC -> Process (결과 보고)
-        self.mfc_controller.command_confirmed.connect(self.process_controller._on_mfc_confirmed)
+        self.process_controller.command_requested.connect(
+            self.mfc_controller.handle_command,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.mfc_controller.command_confirmed.connect(
+            self.process_controller._on_mfc_confirmed,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+
         self.mfc_controller.command_failed.connect(
             self.process_controller._on_mfc_failed,
             type=Qt.ConnectionType.QueuedConnection
@@ -197,7 +217,10 @@ class MainDialog(QDialog):
             self.process_controller.stop_process,
             type=Qt.ConnectionType.QueuedConnection
         )
-        self.clear_plc_fault.connect(self.plc_controller.clear_fault_latch)
+        self.clear_plc_fault.connect(
+            self.plc_controller.clear_fault_latch,
+            type=Qt.ConnectionType.QueuedConnection
+        )
 
         # --- 4. 컨트롤러 -> UI 상태 업데이트 연결 ---
         self.process_controller.finished.connect(self._handle_process_finished)
@@ -215,7 +238,11 @@ class MainDialog(QDialog):
         self.rfpower_controller.update_rf_status_display.connect(self.update_rf_status_display)
 
         # --- 5. 모든 로그 메시지를 UI 모니터에 연결 ---
-        self.plc_controller.status_message.connect(self.on_status_message)
+        self.plc_controller.status_message.connect(
+            self._on_plc_status_message,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+
         self.mfc_controller.status_message.connect(self.on_status_message)
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
@@ -587,23 +614,24 @@ class MainDialog(QDialog):
     def on_status_message(self, level, message):
         log_message_to_monitor(level, message)
 
+    @Slot(str, str)
+    def _on_plc_status_message(self, level, message):
+        # ✅ 로그는 동일하게 남김
+        log_message_to_monitor(level, message)
+
         if level == "재시작":
             self._chk_process_ok = False
 
-            # ✅ 실제 원인(message)을 그대로 남김 (CH1/CH2처럼)
             reason = (message or "").strip() or "PLC 통신 이상(재시작)"
-            self._chat_notify_failed_now(reason, send_text=False)   # 저장만(카드+일반챗은 finished에서)
+            self._chat_notify_failed_now(reason, send_text=False)
 
-            # ✅ CSV 리스트가 진행중이면, 다음 스텝이 이어지지 않도록 취소 플래그부터 세팅
             if getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None):
                 self.csv_cancelled = True
 
-                # (1) 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
                 if getattr(self, "_csv_delay_active", False) or (not self.process_running):
                     self._cancel_csv_list_now("CSV 공정 취소", reason=reason)
                     return
 
-            # (2) 실제 공정 스텝이 돌고 있으면: stop_process로 안전 종료
             if self.process_controller and self.process_running:
                 self.request_process_stop.emit()
 
