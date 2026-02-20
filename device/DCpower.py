@@ -229,9 +229,9 @@ class DCPowerController(QObject):
                 continue
             retries -= 1
             if retries <= 0:
-                self.status_message.emit("DCpower(경고)", f"큐 명령 재전송 실패 → 남은 {len(self._cmd_queue)}개 폐기")
-                self._cmd_queue.clear()
-                break
+                self.status_message.emit("DCpower(경고)", f"큐 flush 실패 → 재연결 재시도(남은 {len(self._cmd_queue)}개 유지)")
+                self._begin_reconnect(f"DC 큐 flush 실패(cmd={cmd})", fatal_on_timeout=self._is_running)
+                return
 
     # ---------------- 공정 시작 ----------------
     @Slot(float)
@@ -245,8 +245,8 @@ class DCPowerController(QObject):
 
         if self.serial is None or not self.serial.isOpen():
             if not self.connect_dcpower_device():
-                # ✅ DC 연결 실패는 메인에서 전체 공정 STOP이 걸리도록 '재시작'으로 올림
-                self._emit_restart_fatal(f"DC 연결 실패({DC_PORT}). 공정을 중단합니다.")
+                # ✅ start도 재연결 루프를 태우고, 총시간 초과 시에만 재시작
+                self._begin_reconnect(f"START 중 DC 연결 실패({DC_PORT})", fatal_on_timeout=True)
                 return
 
         self.target_power = max(0.0, min(DC_MAX_POWER, float(target_power)))
@@ -440,7 +440,7 @@ class DCPowerController(QObject):
         return True
 
     @Slot()
-    def stop_process(self):
+    def stop_process(self, *, allow_reconnect: bool = True):
         if not self._is_running:
             return
         self._is_running = False
@@ -448,29 +448,47 @@ class DCPowerController(QObject):
         self.control_timer.stop()
         self.power_error_count = 0
 
-        # ✅ 안전 STOP: OFF를 큐에 넣고 재연결(정지 중이므로 fatal=False)
-        self._enqueue_cmd("OUTP OFF", front=True)
+        # ✅ 안전 STOP: OFF 보장
         self._output_on = False
-        self._begin_reconnect("STOP 중 OUTP OFF 보장", fatal_on_timeout=False)
 
-        self.status_message.emit("DCpower", "출력 OFF 요청, 대기 상태로 전환")
+        if allow_reconnect:
+            self._enqueue_cmd("OUTP OFF", front=True)
+            self._begin_reconnect("STOP 중 OUTP OFF 보장", fatal_on_timeout=False)
+        else:
+            # 종료/닫기에서는 재연결 금지: 가능한 경우 즉시 OFF만 시도
+            try:
+                if self.serial and self.serial.isOpen():
+                    self._send_noresp("OUTP OFF")
+            finally:
+                self._reconnecting = False
+                try:
+                    self._reconnect_timer.stop()
+                except Exception:
+                    pass
+                self._cmd_queue.clear()
 
     @Slot()
     def close_connection(self):
-        self.stop_process()
+        self.stop_process(allow_reconnect=False)
+
         QThread.msleep(150)
         if self.serial and self.serial.isOpen():
             self.serial.close()
-            self.serial = None
-            self.status_message.emit("DCpower", "시리얼 연결 종료")
+        self.serial = None
+        self.status_message.emit("DCpower", "시리얼 연결 종료")
 
     # ---------------- 측정 (MEAS:ALL?) ----------------
     def read_dc_power(self):
-        # ① 한번에 읽기 (타임아웃 여유)
         resp = self._query("MEAS:ALL?", timeout_ms=1500)
+
+        # ✅ 끊김/재연결 상황이면 여기서 끝 (폴백 쿼리 금지)
+        if resp is None or self._reconnecting:
+            self.update_dc_status_display.emit(0.0, 0.0, 0.0)
+            return (None, None, None)
+
         v, i = self._parse_meas_all(resp)
 
-        # ② 실패 시 개별 쿼리 폴백
+        # ✅ 연결은 살아있는데 ALL? 포맷만 이상한 경우에만 폴백
         if v is None or i is None:
             v = self._to_float(self._query("MEAS:VOLT?", timeout_ms=1200))
             i = self._to_float(self._query("MEAS:CURR?", timeout_ms=1200))
@@ -524,16 +542,26 @@ class DCPowerController(QObject):
 
         self.status_message.emit("DCpower > 전송", command)
         if not self._write_line(command):
-            self.status_message.emit("DCpower", "전송 실패")
+            self.status_message.emit("DCpower(경고)", "전송 실패")
+
+            # ✅ MEAS:* 같은 측정 쿼리는 큐에 쌓지 않음
+            if not command.upper().startswith("MEAS:"):
+                self._enqueue_cmd(command, front=True)
+
+            self._begin_reconnect(f"DC 전송 실패(QUERY: {command})", fatal_on_timeout=self._is_running)
             return None
 
         line = self._readline_blocking(timeout_ms)
         if line is None:
             self.status_message.emit("DCpower", "수신 타임아웃")
-            # ✅ 여기 추가
-            self._enqueue_cmd(command, front=True)
+
+            # ✅ MEAS:* 같은 측정 쿼리는 큐에 쌓지 않음
+            if not command.upper().startswith("MEAS:"):
+                self._enqueue_cmd(command, front=True)
+
             self._begin_reconnect(f"DC 수신 타임아웃(QUERY: {command})", fatal_on_timeout=self._is_running)
             return None
+
         else:
             self.status_message.emit("DCpower < 응답", line)
             return line
