@@ -441,23 +441,31 @@ class DCPowerController(QObject):
 
     @Slot()
     def stop_process(self, *, allow_reconnect: bool = True):
-        if not self._is_running:
-            return
+        """
+        DC 출력/전류를 '0 + OFF'로 강제.
+        - 공정 시작 PRE 단계에서도 호출될 수 있으므로, _is_running이 False여도 동작해야 함.
+        - allow_reconnect=True: 포트가 닫혀 있으면 큐잉 + 재연결로 OFF(0) 보장 시도
+        - allow_reconnect=False: 프로그램 종료/닫기에서 사용(재연결 금지)
+        """
+        # ✅ running 여부와 무관하게 "0 + OFF"는 항상 시도 (PRE 단계 0 보장)
         self._is_running = False
         self.state = "IDLE"
-        self.control_timer.stop()
+        try:
+            self.control_timer.stop()
+        except Exception:
+            pass
         self.power_error_count = 0
 
-        # ✅ 안전 STOP: OFF 보장
+        # ✅ 내부 상태도 즉시 0/OFF로 정리
+        self.current_current = 0.0
         self._output_on = False
 
-        if allow_reconnect:
-            self._enqueue_cmd("OUTP OFF", front=True)
-            self._begin_reconnect("STOP 중 OUTP OFF 보장", fatal_on_timeout=False)
-        else:
-            # 종료/닫기에서는 재연결 금지: 가능한 경우 즉시 OFF만 시도
+        # ---------- 재연결을 허용하지 않는 종료/닫기 경로 ----------
+        if not allow_reconnect:
             try:
                 if self.serial and self.serial.isOpen():
+                    # best-effort로만 즉시 OFF/0
+                    self._send_noresp("CURR 0.0000")
                     self._send_noresp("OUTP OFF")
             finally:
                 self._reconnecting = False
@@ -465,7 +473,25 @@ class DCPowerController(QObject):
                     self._reconnect_timer.stop()
                 except Exception:
                     pass
-                self._cmd_queue.clear()
+                try:
+                    self._cmd_queue.clear()
+                except Exception:
+                    pass
+            return
+
+        # ---------- 일반 STOP/PRE 경로(재연결 허용) ----------
+        if self.serial and self.serial.isOpen():
+            # 포트가 살아있으면 즉시 전송(best-effort)
+            self._send_noresp("CURR 0.0000")
+            self._send_noresp("OUTP OFF")
+            self.status_message.emit("DCpower", "출력 OFF(0A) 요청 완료")
+            return
+
+        # 포트가 닫혀 있으면: 큐잉 + 재연결(정지 중이므로 fatal=False)
+        self._enqueue_cmd("CURR 0.0000", front=True)
+        self._enqueue_cmd("OUTP OFF", front=True)
+        self._begin_reconnect("STOP/Zero: DC 미연결 → 재연결 후 OFF(0A) 보장", fatal_on_timeout=False)
+        self.status_message.emit("DCpower", "출력 OFF(0A) 요청(큐잉) 완료")
 
     @Slot()
     def close_connection(self):

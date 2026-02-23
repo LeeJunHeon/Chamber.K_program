@@ -244,8 +244,17 @@ class MainDialog(QDialog):
         )
 
         self.mfc_controller.status_message.connect(self.on_status_message)
-        self.dcpower_controller.status_message.connect(self.on_status_message)
-        self.rfpower_controller.status_message.connect(self.on_status_message)
+
+        # ✅ DC/RF도 '재시작'이면 PLC와 동일하게 공정 STOP 처리
+        self.dcpower_controller.status_message.connect(
+            self._on_plc_status_message,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+        self.rfpower_controller.status_message.connect(
+            self._on_plc_status_message,
+            type=Qt.ConnectionType.QueuedConnection
+        )
+
         self.process_controller.status_message.connect(self.on_status_message)
         
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)

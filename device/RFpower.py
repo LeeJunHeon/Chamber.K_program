@@ -193,14 +193,15 @@ class RFPowerController(QObject):
         if self._is_ramping_down:
             return
 
-        # 🔵 아직 RF가 한 번도 켜진 적 없는 상태에서 stop이 들어온 경우
         if not self._is_running:
-            # ProcessController 쪽에서는 ramp_down_finished를 기다리고 있기 때문에
-            # 여기서 바로 "아무것도 할 것 없음"을 알려주고 종료 신호를 보낸다.
-            self.status_message.emit("RFpower", "이미 정지 상태 → 램프다운 없이 종료")
-            # UI도 안전하게 0으로 정리
+            self.status_message.emit("RFpower", "이미 정지 상태 → DAC=0 강제 후 종료")
+            self.current_pwm_value = 0
+            # ✅ 실제 PLC DAC도 0으로 맞춤(PLC가 끊겨있으면 PLC.py 큐/재연결이 처리)
+            try:
+                self._send_pwm_via_plc(0)
+            except Exception:
+                pass
             self.update_rf_status_display.emit(0.0, 0.0)
-            # ★ 중요: ramp_down_finished를 emit 해서 wait 루프를 깨운다
             self.ramp_down_finished.emit()
             return
 

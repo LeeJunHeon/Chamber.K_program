@@ -637,7 +637,29 @@ class SputterProcessController(QObject):
                 self.start_rf_power.emit(payload)
 
             elif step.action == ActionType.RF_POWER_STOP:
+                # ✅ RF는 PLC DAC 기반이라 "연결" 개념보다 "0으로 내려갔는지"가 중요
+                loop = QEventLoop()
+
+                def _done():
+                    if loop.isRunning():
+                        loop.quit()
+
+                try:
+                    self.rf.ramp_down_finished.connect(_done, type=Qt.ConnectionType.QueuedConnection)
+                except TypeError:
+                    self.rf.ramp_down_finished.connect(_done)
+
+                # 안전 타임아웃 (기존 stop_impl과 동일 철학)
+                QTimer.singleShot(120_000, _done)
+
                 self.stop_rf_power.emit()
+                loop.exec()
+
+                try:
+                    self.rf.ramp_down_finished.disconnect(_done)
+                except Exception:
+                    pass
+
                 QTimer.singleShot(100, self._next_step)
 
             elif step.action == ActionType.POWER_WAIT:
