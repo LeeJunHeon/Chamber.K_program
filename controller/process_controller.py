@@ -146,6 +146,27 @@ class SputterProcessController(QObject):
         except TypeError:
             self.plc.status_message.connect(self._on_plc_status_message)
 
+        # --- DC/RF 시그널 연결 (치명 오류 감지) ---
+        try:
+            self.dc.status_message.connect(self._on_power_status_message,
+                                        type=Qt.ConnectionType.QueuedConnection)
+        except TypeError:
+            self.dc.status_message.connect(self._on_power_status_message)
+
+        try:
+            self.rf.status_message.connect(self._on_power_status_message,
+                                        type=Qt.ConnectionType.QueuedConnection)
+        except TypeError:
+            self.rf.status_message.connect(self._on_power_status_message)
+
+    @Slot(str, str)
+    def _on_power_status_message(self, level: str, text: str):
+        lvl = str(level or "").strip()
+        msg = str(text or "").strip()
+        if lvl == "재시작":
+            self.status_message.emit("오류", f"Power 치명: {msg}")
+            self._abort_with_error(f"Power 재연결 실패/치명 오류로 공정 중단: {msg}")
+
     # ---------- 타이머 준비 ----------
     @Slot()
     def _setup_timers(self):
@@ -264,14 +285,12 @@ class SputterProcessController(QObject):
             _invoke_connect(self.plc, "start_polling")
 
             # 장치 연결 확인
-            # 시작 전 Power OFF를 위해 DC는 가능하면 미리 연결 시도 (DC 미사용 공정이면 실패해도 진행)
             _invoke_connect(self.dc, "connect_dcpower_device")
 
             if float(params.get('dc_power', 0) or 0) > 0:
                 if not self._is_connected(self.dc):
-                    self.connection_failed.emit("DC Power 장치에 연결할 수 없습니다.")
-                    self._running = False
-                    return
+                    # ✅ 즉시 종료하지 말고, 이후 POWER_WAIT/재시작 시그널/타임아웃에서 정리
+                    self.status_message.emit("경고", "DC Power 미연결 상태로 시작(재연결 시도/큐 처리로 복구 기대)")
 
             _invoke_connect(self.mfc, "connect_mfc_device")
             if not self._is_connected(self.mfc):
@@ -673,41 +692,80 @@ class SputterProcessController(QObject):
         rf_offset = float(self.params.get('rf_offset', 0.0) or 0.0)
         rf_param  = float(self.params.get('rf_param', 1.0) or 1.0)
 
-        loops: List[Tuple[str, QEventLoop]] = []
+        need_dc = dc_power > 0.0
+        need_rf = rf_power > 0.0
 
-        if dc_power > 0.0:
-            dc_loop = QEventLoop()
-            self.dc.target_reached.connect(dc_loop.quit)
-            loops.append(("dc", dc_loop))
-            self.start_dc_power.emit(dc_power)
-
-        if rf_power > 0.0:
-            rf_loop = QEventLoop()
-            self.rf.target_reached.connect(rf_loop.quit)
-            loops.append(("rf", rf_loop))
-            self.start_rf_power.emit({'target': rf_power, 'offset': rf_offset, 'param': rf_param})
-
-        if not loops:
+        if not (need_dc or need_rf):
             self._next_step()
             return
 
-        self._active_loops = loops
+        reached = {"dc": (not need_dc), "rf": (not need_rf)}
+        state = {"timeout": False}
+
+        loop = QEventLoop()
+        self._active_loops = [("power", loop)]
         self.status_message.emit("정보", "파워 목표치 도달 대기중...")
 
-        for _name, lp in loops:
-            if not self._running or self._stop_pending:
-                break
-            lp.exec()
+        def _try_quit():
+            if reached["dc"] and reached["rf"]:
+                try: loop.quit()
+                except Exception: pass
 
-        for name, lp in loops:
-            try:
-                if name == "dc": self.dc.target_reached.disconnect(lp.quit)
-                else:            self.rf.target_reached.disconnect(lp.quit)
-            except:
-                pass
+        def _on_dc():
+            reached["dc"] = True
+            _try_quit()
+
+        def _on_rf():
+            reached["rf"] = True
+            _try_quit()
+
+        if need_dc:
+            self.dc.target_reached.connect(_on_dc)
+            self.start_dc_power.emit(dc_power)
+
+        if need_rf:
+            self.rf.target_reached.connect(_on_rf)
+            self.start_rf_power.emit({'target': rf_power, 'offset': rf_offset, 'param': rf_param})
+
+        # ✅ 타임아웃: PLC 재연결 최대시간 + 여유(예: +10s) 기반
+        timeout_ms = int((float(PLC_RECONNECT_MAX_TOTAL_SEC) + 10.0) * 1000)
+        t = QTimer()
+        t.setSingleShot(True)
+
+        def _on_timeout():
+            state["timeout"] = True
+            try: loop.quit()
+            except Exception: pass
+
+        t.timeout.connect(_on_timeout)
+        t.start(timeout_ms)
+
+        loop.exec()
+
+        # cleanup
+        try:
+            t.stop()
+            t.timeout.disconnect(_on_timeout)
+        except Exception:
+            pass
+
+        if need_dc:
+            try: self.dc.target_reached.disconnect(_on_dc)
+            except Exception: pass
+        if need_rf:
+            try: self.rf.target_reached.disconnect(_on_rf)
+            except Exception: pass
+
         self._active_loops = []
 
-        if not self._running:
+        if not self._running or self._stop_pending:
+            return
+
+        if state["timeout"]:
+            missing = []
+            if need_dc and not reached["dc"]: missing.append("DC")
+            if need_rf and not reached["rf"]: missing.append("RF")
+            self._abort_with_error(f"{self._step_tag()} | POWER_WAIT 타임아웃({timeout_ms}ms): 미도달={','.join(missing)}")
             return
 
         self.status_message.emit("정보", "파워 안정화 완료.")
