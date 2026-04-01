@@ -264,26 +264,75 @@ class DCPowerController(QObject):
         self.current_voltage = voltage
         self.current_current = current
         return True
+    
+    def _stop_control_timer(self):
+        try:
+            if self.control_timer.isActive():
+                self.control_timer.stop()
+        except Exception:
+            pass
 
     @Slot()
     def stop_process(self):
-        if not self._is_running:
-            return
+        was_running = self._is_running
+
         self._is_running = False
         self.state = "IDLE"
-        self.control_timer.stop()
-        self.power_error_count = 0 # ★ 편차 카운터도 초기화
-        self._send_noresp("OUTP OFF")
-        self.status_message.emit("DCpower", "출력 OFF, 대기 상태로 전환")
+        self.error_count = 0
+        self.power_error_count = 0
+        self._fail_no_output_ticks = 0
+
+        self._stop_control_timer()
+
+        try:
+            if self.serial and self.serial.isOpen():
+                self._send_noresp("OUTP OFF")
+                self.serial.waitForBytesWritten(200)
+        except Exception:
+            pass
+
+        self.update_dc_status_display.emit(0.0, 0.0, 0.0)
+
+        if was_running:
+            self.status_message.emit("DCpower", "출력 OFF, 대기 상태로 전환")
+
+    @Slot()
+    def cleanup(self):
+        """
+        프로그램 종료용 즉시 정리.
+        제어 타이머를 멈추고 출력 OFF 후 시리얼 포트를 닫는다.
+        """
+        self._is_running = False
+        self.state = "IDLE"
+        self.error_count = 0
+        self.power_error_count = 0
+        self._fail_no_output_ticks = 0
+
+        self._stop_control_timer()
+
+        try:
+            if self.serial and self.serial.isOpen():
+                self._send_noresp("OUTP OFF")
+                self.serial.waitForBytesWritten(200)
+        except Exception:
+            pass
+
+        try:
+            if self.serial and self.serial.isOpen():
+                self.serial.clear(QS.Direction.AllDirections)
+                self.serial.close()
+        except Exception:
+            pass
+        finally:
+            self.serial = None
+            self._rx.clear()
+
+        self.update_dc_status_display.emit(0.0, 0.0, 0.0)
+        self.status_message.emit("DCpower", "시리얼 연결 종료")
 
     @Slot()
     def close_connection(self):
-        self.stop_process()
-        QThread.msleep(150)
-        if self.serial and self.serial.isOpen():
-            self.serial.close()
-            self.serial = None
-            self.status_message.emit("DCpower", "시리얼 연결 종료")
+        self.cleanup()
 
     # ---------------- 측정 (MEAS:ALL?) ----------------
     def read_dc_power(self):
@@ -412,7 +461,14 @@ class DCPowerController(QObject):
             self.serial.readyRead.disconnect(on_ready)
         except Exception:
             pass
-        timer.stop()
+
+        try:
+            if timer.isActive():
+                timer.stop()
+        except Exception:
+            pass
+
+        timer.deleteLater()
         return line_value
 
     # ---------------- 파싱/검증 ----------------
