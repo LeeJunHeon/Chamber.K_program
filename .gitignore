@@ -6,6 +6,11 @@ lib/config_local.py
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
+*.pyo
+*.pyd
+*.log
+log.txt
 
 # C extensions
 *.so
@@ -216,3 +221,4 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+

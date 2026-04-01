@@ -2,7 +2,10 @@ import sys
 import threading
 import traceback
 from functools import partial
-from PyQt6.QtCore import QThread, pyqtSlot as Slot, pyqtSignal as Signal, QEventLoop, QTimer, Qt, QElapsedTimer
+from PyQt6.QtCore import (
+    QThread, pyqtSlot as Slot, pyqtSignal as Signal,
+    QEventLoop, QTimer, Qt, QElapsedTimer, QMetaObject
+)
 from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
 from pathlib import Path
 
@@ -12,7 +15,13 @@ import datetime
 
 from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
-from lib.logger import set_monitor_widget, log_message_to_monitor, set_process_log_file, append_chk_csv_row
+from lib.logger import (
+    set_monitor_widget, 
+    log_message_to_monitor, 
+    set_process_log_file,
+    log_message_to_file, 
+    append_chk_csv_row,
+)
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
 from device.PLC import PLCController
@@ -23,6 +32,9 @@ from device.RFpower import RFPowerController
 class MainDialog(QDialog):
     shutdown_requested = Signal()
     request_process_stop = Signal()
+    request_process_start = Signal(dict)
+    request_plc_port_update = Signal(str, bool)
+    request_plc_emergency_stop = Signal()
     clear_plc_fault = Signal()  # 새 공정 시작 시 PLC 통신 실패 래치 해제
 
     """메인 UI 및 전체 공정/장치 연결 클래스"""
@@ -123,6 +135,10 @@ class MainDialog(QDialog):
         # CSV 상태 아래에 추가
         self._last_params: dict | None = None
 
+        # 종료/파일선택 다이얼로그 상태
+        self._is_closing: bool = False
+        self._csv_dialog_open: bool = False
+
         # --- 모든 스레드 시작 ---
         self.plc_thread.start()
         self.mfc_thread.start()
@@ -132,6 +148,26 @@ class MainDialog(QDialog):
 
         self.process_running = False
         self.ui.Sputter_Stop_Button.setEnabled(False)
+
+    def _invoke_worker_blocking(self, worker, method_name: str) -> None:
+        """
+        worker가 속한 스레드에서 method_name 슬롯을 동기 실행한다.
+        main.py에서 worker QObject를 직접 건드리지 않기 위한 헬퍼.
+        """
+        try:
+            if worker.thread() is QThread.currentThread():
+                getattr(worker, method_name)()
+                return
+
+            ok = QMetaObject.invokeMethod(
+                worker,
+                method_name,
+                Qt.ConnectionType.BlockingQueuedConnection
+            )
+            if not ok:
+                raise RuntimeError(f"invokeMethod 실패: {method_name}")
+        except Exception as e:
+            log_message_to_monitor("경고", f"{type(worker).__name__}.{method_name} 실행 실패: {e}")
 
     def _connect_signals(self):
         """[최종 수정] 모든 시그널-슬롯 연결을 논리적으로 정리하고 중복을 제거합니다."""
@@ -148,7 +184,7 @@ class MainDialog(QDialog):
         # --- 2. UI 이벤트 -> 컨트롤러 동작 연결 ---
         self.ui.Sputter_Start_Button.clicked.connect(self._handle_start_process)
         #self.ui.Sputter_Stop_Button.clicked.connect(self._handle_sputter_stop)
-        self.ui.ALL_STOP_button.clicked.connect(self.plc_controller.on_emergency_stop)
+        self.ui.ALL_STOP_button.clicked.connect(self.request_plc_emergency_stop.emit)
         # ✅ STOP 버튼 전용 핸들러에서 CSV 전체 취소 여부를 먼저 표시
         self.ui.Sputter_Stop_Button.clicked.connect(self._on_sputter_stop_clicked)
 
@@ -156,12 +192,12 @@ class MainDialog(QDialog):
         for btn_name in PLC_COIL_MAP.keys():
             button = getattr(self.ui, btn_name, None)
             if button:
-                button.toggled.connect(partial(self.plc_controller.update_port_state, btn_name))
+                button.toggled.connect(partial(self.request_plc_port_update.emit, btn_name))
         self.ui.Door_Button.toggled.connect(self._on_ui_door_toggled)
 
         # --- 3. 컨트롤러 간 상호작용 연결 ---
-        # ProcessController가 시작 신호를 스스로 받도록 연결
-        self.process_controller.start_requested.connect(self.process_controller.start_process_flow)
+        # MainDialog -> ProcessController 시작 요청
+        self.request_process_start.connect(self.process_controller.start_process_flow)
 
         # ProcessController -> 각 장치 컨트롤러로 명령 전달
         self.process_controller.update_plc_port.connect(self.plc_controller.update_port_state)
@@ -181,7 +217,9 @@ class MainDialog(QDialog):
         
         # 새로 만든 신호를 Process Controller의 stop_process 슬롯에 연결
         # 이렇게 하면 stop_process는 Process 스레드에서 안전하게 실행됩니다.
-        self.request_process_stop.connect(self.process_controller.stop_process) # <<< ▼ 이 줄을 추가하세요 ▼
+        self.request_process_stop.connect(self.process_controller.stop_process)
+        self.request_plc_port_update.connect(self.plc_controller.update_port_state)
+        self.request_plc_emergency_stop.connect(self.plc_controller.on_emergency_stop)
         self.clear_plc_fault.connect(self.plc_controller.clear_fault_latch)
 
         # --- 4. 컨트롤러 -> UI 상태 업데이트 연결 ---
@@ -471,21 +509,44 @@ class MainDialog(QDialog):
         self._chat_reset_run_state()
         self._chat_notify_started(params, self.current_process_name)
 
-        self.process_controller.start_requested.emit(params)
+        self.request_process_start.emit(params)
 
         self.process_running = True
         self.ui.Sputter_Start_Button.setEnabled(False)
         self.ui.Sputter_Stop_Button.setEnabled(True)
+        self.ui.select_csv_button.setEnabled(False)
 
     @Slot()
     def _on_select_csv_clicked(self):
         """Process List용 CSV 파일 선택."""
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "공정 리스트 CSV 선택",
-            "",
-            "CSV Files (*.csv);;All Files (*)"
-        )
+        if self._is_closing:
+            return
+
+        if self.process_running or self.csv_mode or self._csv_delay_active:
+            QMessageBox.warning(
+                self,
+                "변경 불가",
+                "공정 진행 중에는 CSV 파일을 변경할 수 없습니다."
+            )
+            return
+
+        if self._csv_dialog_open:
+            return
+
+        self._csv_dialog_open = True
+        try:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "공정 리스트 CSV 선택",
+                "",
+                "CSV Files (*.csv);;All Files (*)"
+            )
+        finally:
+            self._csv_dialog_open = False
+
+        if self._is_closing:
+            return
+
         if not path:
             return
 
@@ -495,28 +556,35 @@ class MainDialog(QDialog):
             return
 
         self.csv_file_path = str(p)
-        # 라벨에 파일명 표시 (원하면 이 줄은 빼도 됨)
-        # self.ui.process_list_label.setText(f"Process List: {p.name}")
         log_message_to_monitor("정보", f"CSV 공정 리스트 파일 선택: {p}")
 
-        # 🔹 CSV를 미리 읽어서 1번째 스텝을 UI에 반영
-        if self._load_csv_process_list() and self.csv_rows:
-            first_row = self.csv_rows[0]
-            first_name = (first_row.get("Process_name") or "").strip()
-            delay_sec = self._parse_csv_delay_seconds(first_name)
+        if not self._load_csv_process_list():
+            return
 
-            if delay_sec is not None:
-                self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {first_name} (대기 스텝)")
-            else:
-                try:
-                    params = self._build_params_from_csv_row(first_row)
-                except Exception as e:
-                    QMessageBox.warning(self, "CSV 레시피 오류", f"첫 번째 공정 파라미터가 잘못되었습니다:\n{e}")
-                    self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - (오류)")
-                    return
-                self._apply_params_to_ui(params)
-                name = params.get("process_name") or "STEP 1"
-                self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {name}")
+        if self._is_closing or not self.csv_rows:
+            return
+
+        first_row = self.csv_rows[0]
+        first_name = (first_row.get("Process_name") or "").strip()
+        delay_sec = self._parse_csv_delay_seconds(first_name)
+
+        if delay_sec is not None:
+            self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {first_name} (대기 스텝)")
+            return
+
+        try:
+            params = self._build_params_from_csv_row(first_row)
+        except Exception as e:
+            QMessageBox.warning(self, "CSV 레시피 오류", f"첫 번째 공정 파라미터가 잘못되었습니다:\n{e}")
+            self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - (오류)")
+            return
+
+        if self._is_closing:
+            return
+
+        self._apply_params_to_ui(params)
+        name = params.get("process_name") or "STEP 1"
+        self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {name}")
 
     def _load_csv_process_list(self) -> bool:
         """
@@ -581,7 +649,7 @@ class MainDialog(QDialog):
 
                 # (1) 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
                 if getattr(self, "_csv_delay_active", False) or (not self.process_running):
-                    self._cancel_csv_list_now(f"{reason} → CSV 공정 취소")
+                    self._cancel_csv_list_now("CSV 공정 취소", reason=reason)
                     return
 
             # (2) 실제 공정 스텝이 돌고 있으면: stop_process로 안전 종료
@@ -634,6 +702,12 @@ class MainDialog(QDialog):
         # ✅ CSV Delay(대기) 중이면 즉시 타이머 끊고 리스트 정리
         if getattr(self, "_csv_delay_active", False):
             log_message_to_monitor("정보", "CSV Delay 중 STOP → 딜레이 즉시 중단 및 리스트 공정 취소")
+            self._cancel_csv_list_now("CSV 공정 취소됨")   # ✅ 여기서 구글챗도 같이 보내게 됨(아래 _cancel_csv_list_now 수정)
+            return
+
+        # ✅ [추가] CSV 리스트인데 '스텝 사이'(process_running=False)라면 즉시 리스트 취소
+        if self.csv_mode and (not self.process_running):
+            log_message_to_monitor("정보", "CSV STEP 사이 STOP → 리스트 공정 즉시 취소")
             self._cancel_csv_list_now("CSV 공정 취소됨")
             return
 
@@ -819,14 +893,42 @@ class MainDialog(QDialog):
         self._csv_delay_timer = None
         self._csv_delay_clock = None   # ✅ 추가
 
-    def _cancel_csv_list_now(self, stage_text: str = "CSV 공정 취소됨") -> None:
-        """CSV 리스트 공정을 즉시 정리(딜레이/공정 중 어디서 STOP을 눌러도 공통으로 사용)."""
+    def _cancel_csv_list_now(
+        self,
+        stage_text: str = "CSV 공정 취소됨",
+        *,
+        notify_chat: bool = True,
+        reason: str | None = None,
+    ) -> None:
+        """CSV 리스트 공정을 즉시 정리(딜레이/스텝 사이/즉시 취소 등에서 공통 사용)."""
+
+        # ✅ (추가) finished 시그널을 안 거치는 케이스에서도 구글챗 종료/실패 알림 보장
+        if notify_chat and getattr(self, "chat_chk", None):
+            try:
+                # reason이 있으면 그걸 '실패 원인'으로 저장
+                if reason:
+                    self._chat_notify_failed_now(reason, send_text=False)
+                else:
+                    # STOP이면 stage_text를 굳이 error로 넣지 않게(카드가 깔끔)
+                    if not getattr(self, "_chat_user_stopped", False):
+                        self._chat_add_error(stage_text)
+
+                # 카드에 찍힐 공정명 보정
+                if not (getattr(self, "current_process_name", "") or "").strip():
+                    self.current_process_name = stage_text
+
+                # 종료 카드 + (실패면) 일반챗 1줄(단, STOP이면 일반챗 추가 전송 안 함)
+                self._chat_notify_finished(False)
+            except Exception:
+                pass
+
+        # === 기존 정리 로직 그대로 ===
         self._stop_csv_delay_timer()
         self._csv_delay_active = False
         self._csv_delay_total_sec = 0
         self._csv_delay_remaining_sec = 0
         self._csv_delay_name = ""
-        self._csv_delay_clock = None   # ✅ (중복이지만 안전)
+        self._csv_delay_clock = None
 
         self.csv_cancelled = False
         self.csv_mode = False
@@ -839,6 +941,7 @@ class MainDialog(QDialog):
         self.process_running = False
         self.ui.Sputter_Start_Button.setEnabled(True)
         self.ui.Sputter_Stop_Button.setEnabled(False)
+        self.ui.select_csv_button.setEnabled(True)
         self.update_stage_monitor(stage_text)
         self._reset_process_ui_fields()
 
@@ -977,6 +1080,7 @@ class MainDialog(QDialog):
                 # ▶ 공정 상태 및 UI 초기화
                 self.ui.Sputter_Start_Button.setEnabled(True)
                 self.ui.Sputter_Stop_Button.setEnabled(False)
+                self.ui.select_csv_button.setEnabled(True)
                 self.update_stage_monitor("CSV 공정 취소됨")
                 self._reset_process_ui_fields()
                 return
@@ -1005,6 +1109,7 @@ class MainDialog(QDialog):
                 self.process_running = False
                 self.ui.Sputter_Start_Button.setEnabled(True)
                 self.ui.Sputter_Stop_Button.setEnabled(False)
+                self.ui.select_csv_button.setEnabled(True)
                 self.update_stage_monitor("CSV 공정 실패로 중단됨")
                 self._reset_process_ui_fields()
                 return
@@ -1013,6 +1118,7 @@ class MainDialog(QDialog):
         self.process_running = False
         self.ui.Sputter_Start_Button.setEnabled(True)
         self.ui.Sputter_Stop_Button.setEnabled(False)
+        self.ui.select_csv_button.setEnabled(True)
         self.update_stage_monitor("공정 종료")
         
         # ▶ 공통 UI 초기화
@@ -1102,6 +1208,12 @@ class MainDialog(QDialog):
         # 파워는 장비에서 계산된 값 사용
         self.ui.Power_edit.setPlainText(f"{power:.2f}")
 
+        # ✅ (추가) 읽을 때마다 1초 1줄 로그 저장
+        try:
+            log_message_to_file("DC", f"MEAS P={power:.2f}W, V={voltage:.2f}V, I={current:.3f}A")
+        except Exception:
+            pass
+
         # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
         if getattr(self, "_chk_sampling_enabled", False):
             self._sum_dc_p += power
@@ -1115,6 +1227,12 @@ class MainDialog(QDialog):
 
         self.ui.for_p_edit.setPlainText(f"{forward_power:.2f}")
         self.ui.ref_p_edit.setPlainText(f"{reflected_power:.2f}")
+
+        # ✅ (추가) 읽을 때마다 1초 1줄 로그 저장
+        try:
+            log_message_to_file("RF", f"MEAS For={forward_power:.2f}W, Ref={reflected_power:.2f}W")
+        except Exception:
+            pass
 
         # --- ChK CSV 평균 계산: 샘플링 구간에서만 누적 ---
         if getattr(self, "_chk_sampling_enabled", False):
@@ -1130,57 +1248,80 @@ class MainDialog(QDialog):
         - False -> Doordn_button (문 닫기)
         """
         if checked:
-            self.plc_controller.update_port_state('Doordn_button', False)
-            self.plc_controller.update_port_state('Doorup_button', True)
+            self.request_plc_port_update.emit('Doordn_button', False)
+            self.request_plc_port_update.emit('Doorup_button', True)
         else:
-            self.plc_controller.update_port_state('Doorup_button', False)
-            self.plc_controller.update_port_state('Doordn_button', True)
+            self.request_plc_port_update.emit('Doorup_button', False)
+            self.request_plc_port_update.emit('Doordn_button', True)
             
     def closeEvent(self, event):
-        """[수정됨] 안전한 스레드 종료 로직"""
+        if self._csv_dialog_open:
+            QMessageBox.warning(
+                self,
+                "종료 불가",
+                "파일 선택 창이 열려 있는 동안에는 프로그램을 종료할 수 없습니다.\n먼저 파일 선택 창을 닫아주세요."
+            )
+            event.ignore()
+            return
+
+        if self.process_running or self.csv_mode or self._csv_delay_active:
+            QMessageBox.warning(
+                self,
+                "종료 불가",
+                "공정 진행 중에는 프로그램을 종료할 수 없습니다.\n먼저 STOP으로 공정을 종료한 뒤 다시 닫아주세요."
+            )
+            event.ignore()
+            return
+
         reply = QMessageBox.question(
-            self, '종료 확인', '정말로 프로그램을 종료하시겠습니까?', 
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+            self,
+            '종료 확인',
+            '정말로 프로그램을 종료하시겠습니까?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )
-        if reply == QMessageBox.StandardButton.Yes:
-            log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
-
-            # 1. 진행 중인 공정이 있다면 먼저 중지 요청
-            if self.process_running:
-                # process_controller의 stop_process가 동기적으로 완료될 때까지 대기
-                loop = QEventLoop()
-                self.process_controller.finished.connect(loop.quit)
-                self.process_controller.stop_process()
-                loop.exec() # stop_process가 끝나고 finished 신호를 보낼 때까지 대기
-                self.process_controller.finished.disconnect(loop.quit)
-                log_message_to_monitor("정보", "진행 중인 공정이 중지되었습니다.")
-
-            # 2. 모든 백그라운드 스레드에 리소스 정리 및 종료 요청 (교착 상태 방지)
-            self.shutdown_requested.emit()
-
-            # 3. 모든 스레드의 이벤트 루프에 공식적인 종료 신호 전송
-            threads = [self.process_thread, self.plc_thread, self.mfc_thread, self.dcpower_thread, self.rfpower_thread]
-            for thread in threads:
-                thread.quit()
-
-            # 4. 모든 스레드가 실제로 종료될 때까지 대기
-            for thread in threads:
-                thread_name = thread.objectName()
-                log_message_to_monitor("정보", f"{thread_name} 스레드 종료 대기 중...")
-                if not thread.wait(3000): # 3초 타임아웃
-                     log_message_to_monitor("경고", f"{thread_name} 스레드가 시간 내에 종료되지 않았습니다.")
-
-            try:
-                if self.chat_chk:
-                    self.chat_chk.shutdown()
-            except Exception:
-                pass
-
-            log_message_to_monitor("정보", "모든 스레드가 종료되었습니다. 프로그램을 닫습니다.")
-            event.accept()
-        else:
+        if reply != QMessageBox.StandardButton.Yes:
             event.ignore()
+            return
+
+        self._is_closing = True
+        self.ui.select_csv_button.setEnabled(False)
+        self._stop_csv_delay_timer()
+
+        log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
+
+        # worker 정리를 각 worker 자신의 스레드에서 먼저 수행
+        self._invoke_worker_blocking(self.process_controller, "teardown")
+        self._invoke_worker_blocking(self.plc_controller, "cleanup")
+        self._invoke_worker_blocking(self.mfc_controller, "cleanup")
+        self._invoke_worker_blocking(self.dcpower_controller, "close_connection")
+        self._invoke_worker_blocking(self.rfpower_controller, "close_connection")
+
+        threads = [
+            self.process_thread,
+            self.plc_thread,
+            self.mfc_thread,
+            self.dcpower_thread,
+            self.rfpower_thread,
+        ]
+
+        for thread in threads:
+            thread.quit()
+
+        for thread in threads:
+            thread_name = thread.objectName()
+            log_message_to_monitor("정보", f"{thread_name} 스레드 종료 대기 중...")
+            if not thread.wait(3000):
+                log_message_to_monitor("경고", f"{thread_name} 스레드가 시간 내에 종료되지 않았습니다.")
+
+        try:
+            if self.chat_chk:
+                self.chat_chk.shutdown()
+        except Exception:
+            pass
+
+        log_message_to_monitor("정보", "모든 스레드가 종료되었습니다. 프로그램을 닫습니다.")
+        event.accept()
 
     # ============= csv 공정 =============
     def _build_params_from_csv_row(self, row: dict) -> dict:
@@ -1439,6 +1580,7 @@ class MainDialog(QDialog):
             # ✅ UI도 대기 상태로 정리
             self.ui.Sputter_Start_Button.setEnabled(True)
             self.ui.Sputter_Stop_Button.setEnabled(False)
+            self.ui.select_csv_button.setEnabled(True)
             self.update_stage_monitor("CSV 공정 완료")
 
             # ▶ 공통 UI 초기화
@@ -1484,10 +1626,28 @@ class MainDialog(QDialog):
         try:
             params = self._build_params_from_csv_row(row)
         except Exception as e:
-            QMessageBox.critical(self, "CSV 레시피 오류",
-                                f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}")
+            QMessageBox.critical(
+                self, "CSV 레시피 오류",
+                f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}"
+            )
             log_message_to_monitor("ERROR", f"CSV 레시피 오류로 리스트 공정을 중단합니다: {e}")
-            self._cancel_csv_list_now("CSV 레시피 오류로 중단")
+
+            # ✅ 구글챗에도 실패 알림(종료 카드 + 일반챗 1줄) 보장
+            self._chk_process_ok = False
+            try:
+                # 이 케이스는 '공정 started'를 안 보냈을 수도 있으니, 상태를 새로 잡아줌
+                self._chat_reset_run_state()
+
+                # 위에서 step_no/total을 이미 만든 상태(네 코드 기준)라서 그대로 사용
+                reason = f"CSV 레시피 오류: {e}"
+                self.current_process_name = f"CSV {step_no}/{total} - (레시피 오류)"
+                self._chat_notify_failed_now(reason, send_text=False)
+                self._chat_notify_finished(False)
+            except Exception:
+                pass
+
+            # ✅ 여기서는 중복 전송 방지 위해 notify_chat=False
+            self._cancel_csv_list_now("CSV 레시피 오류로 중단", notify_chat=False)
             return
 
         # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해
@@ -1531,9 +1691,10 @@ class MainDialog(QDialog):
         self.process_running = True
         self.ui.Sputter_Start_Button.setEnabled(False)
         self.ui.Sputter_Stop_Button.setEnabled(True)
+        self.ui.select_csv_button.setEnabled(False)
 
         self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
-        self.process_controller.start_process_flow(params)
+        self.request_process_start.emit(params)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

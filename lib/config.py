@@ -7,13 +7,13 @@ from typing import Dict, List, Tuple
 """
 
 # 시리얼 포트 설정 (포트 이름은 실제 환경에 맞게 수정)
-MFC_PORT = "COM11"
+MFC_PORT = "COM10"
 MFC_BAUD = 9600
 
-DC_PORT = "COM5"
+DC_PORT = "COM11"
 DC_BAUDRATE = 9600
 
-PLC_PORT = "COM4"
+PLC_PORT = "COM9"
 PLC_BAUD = 115200
 PLC_SLAVE_ID = 1
 PLC_TIMEOUT = 0.5   # 초

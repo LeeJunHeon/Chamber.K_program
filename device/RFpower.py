@@ -1,6 +1,6 @@
 # RFpower.py
 import time
-from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal as Signal, pyqtSlot as Slot, QTimer
 from lib.config import (
     RF_MAX_POWER, RF_RAMP_STEP, RF_FAIL_DAC_THRESHOLD, 
     RF_TOLERANCE_POWER, RF_FAIL_FORP_THRESHOLD, RF_FAIL_MAX_TICKS,
@@ -21,40 +21,49 @@ class RFPowerController(QObject):
         self.plc: 'PLCController' = plc
         if self.plc is None:
             raise ValueError("RFPowerController: PLCController(호환) 인스턴스가 필요합니다.")
+
         self.target_power = 0
         self._is_running = False
         self._is_ramping_down = False
         self.current_pwm_value = 0
         self.pwm_offset_cal = 0.0
         self.pwm_param_cal = 1.0
-        
         self.current_power_step = 0.0
 
         self.state = "IDLE"
-        self.power_error_count = 0 # ★ RF 파워 편차(±5%) 모니터링용 카운터
-        self.previous_state = "IDLE" # [추가] 반사파 대기 상태 관리를 위한 변수
+        self.power_error_count = 0
+        self.previous_state = "IDLE"
         self.ref_p_wait_start_time = None
+        self._fail_no_output_ticks = 0
+
+        # 정상 제어용 타이머
         self.control_timer = QTimer(self)
-        self.control_timer.setInterval(1000) # 1초마다 tick
+        self.control_timer.setInterval(1000)
         self.control_timer.timeout.connect(self._on_timer_tick)
 
-        self._fail_no_output_ticks = 0
+        # 종료/STOP 시 ramp-down용 타이머는 하나만 멤버로 유지
+        self.ramp_down_timer = QTimer(self)
+        self.ramp_down_timer.setInterval(500)
+        self.ramp_down_timer.timeout.connect(self._on_ramp_down_tick)
 
     @Slot(dict)
     def start_process(self, power_params):
         if self._is_running:
             self.status_message.emit("RFpower", "경고: RF 파워가 이미 동작 중입니다.")
             return
-        
-        requested_target  = power_params.get('target', 0)
+
+        # 이전 STOP/종료 과정의 잔여 상태 정리
+        self._stop_ramp_down_timer()
+        self._is_ramping_down = False
+
+        requested_target = power_params.get('target', 0)
         self.target_power = min(requested_target, RF_MAX_POWER)
         self.pwm_offset_cal = power_params.get('offset', 0)
         self.pwm_param_cal = power_params.get('param', 1.0)
-        
+
         self.current_power_step = 0.0
         self.current_pwm_value = 0
 
-        # ★ 새 공정 시작 시 편차 카운터/반사파 대기 상태 초기화
         self.power_error_count = 0
         self.ref_p_wait_start_time = None
         self._fail_no_output_ticks = 0
@@ -187,53 +196,122 @@ class RFPowerController(QObject):
         dac = max(0, min(int(dac_0_4000), RF_DAC_FULL_SCALE))
         self.plc.send_rfpower_command(dac)
 
+    def _stop_ramp_down_timer(self):
+        try:
+            if self.ramp_down_timer.isActive():
+                self.ramp_down_timer.stop()
+        except Exception:
+            pass
+
+    def _finish_ramp_down(self):
+        self._stop_ramp_down_timer()
+        self.current_pwm_value = 0
+
+        try:
+            self._send_pwm_via_plc(0)
+        except Exception:
+            pass
+
+        self.update_rf_status_display.emit(0.0, 0.0)
+        self.status_message.emit("RFpower", "RF 파워 ramp-down 완료")
+        self._is_ramping_down = False
+        self.ramp_down_finished.emit()
+
+    @Slot()
+    def _on_ramp_down_tick(self):
+        if self.current_pwm_value > 0:
+            self.current_pwm_value = max(0, self.current_pwm_value - RF_RAMP_DOWN_STEP)
+            self._send_pwm_via_plc(self.current_pwm_value)
+            return
+
+        self._finish_ramp_down()
+
     @Slot()
     def stop_process(self):
-        # 이미 램프다운 중이면 두 번 하지 않음
+        # 이미 램프다운 중이면 중복 실행 안 함
         if self._is_ramping_down:
             return
 
-        # 🔵 아직 RF가 한 번도 켜진 적 없는 상태에서 stop이 들어온 경우
+        # 이미 정지 상태라면, 남아 있을 수 있는 타이머/출력만 안전하게 정리
         if not self._is_running:
-            # ProcessController 쪽에서는 ramp_down_finished를 기다리고 있기 때문에
-            # 여기서 바로 "아무것도 할 것 없음"을 알려주고 종료 신호를 보낸다.
-            self.status_message.emit("RFpower", "이미 정지 상태 → 램프다운 없이 종료")
-            # UI도 안전하게 0으로 정리
+            self._stop_ramp_down_timer()
+            self._is_ramping_down = False
+
+            try:
+                self.current_pwm_value = 0
+                self._send_pwm_via_plc(0)
+            except Exception:
+                pass
+
             self.update_rf_status_display.emit(0.0, 0.0)
-            # ★ 중요: ramp_down_finished를 emit 해서 wait 루프를 깨운다
+            self.status_message.emit("RFpower", "이미 정지 상태 → 램프다운 없이 종료")
             self.ramp_down_finished.emit()
             return
 
-        # 🔵 실제로 동작 중일 때는 기존 로직대로 램프다운
-        # ★ 여기서부터는 실제 동작 중이므로 편차 카운터/반사파 대기 상태 초기화
+        # 실제 동작 중이면 정상 STOP: control_timer 중지 후 ramp-down 진입
         self.power_error_count = 0
         self.ref_p_wait_start_time = None
+        self._fail_no_output_ticks = 0
+
         self.status_message.emit("RFpower", "정지 신호 수신됨.")
         self._is_running = False
         self.state = "IDLE"
-        self.control_timer.stop()
+
+        try:
+            if self.control_timer.isActive():
+                self.control_timer.stop()
+        except Exception:
+            pass
+
         self.ramp_down()
 
     def ramp_down(self):
-        if self._is_ramping_down: return
+        if self._is_ramping_down:
+            return
+
         self._is_ramping_down = True
         self.status_message.emit("RFpower", "RF 파워 ramp-down 시작")
-        
-        self.ramp_down_timer = QTimer(self)
-        def ramp_down_step():
-            if self.current_pwm_value > 0:
-                self.current_pwm_value = max(0, self.current_pwm_value - RF_RAMP_DOWN_STEP)
-                self._send_pwm_via_plc(self.current_pwm_value)
-            else:
-                self.ramp_down_timer.stop()
-                self._send_pwm_via_plc(0)
-                self.update_rf_status_display.emit(0.0, 0.0)
-                self.status_message.emit("RFpower", "RF 파워 ramp-down 완료")
-                self.ramp_down_finished.emit()
-                self._is_ramping_down = False
 
-        self.ramp_down_timer.timeout.connect(ramp_down_step)
-        self.ramp_down_timer.start(500)
+        # 이미 0이면 타이머 돌릴 필요 없이 즉시 종료
+        if self.current_pwm_value <= 0:
+            self._finish_ramp_down()
+            return
+
+        if not self.ramp_down_timer.isActive():
+            self.ramp_down_timer.start()
+
+    @Slot()
+    def cleanup(self):
+        """
+        프로그램 종료용 즉시 정리.
+        STOP처럼 ramp-down 타이머를 새로 시작하지 않고,
+        현재 살아 있는 타이머를 모두 멈춘 뒤 출력만 0으로 내린다.
+        """
+        self._is_running = False
+        self._is_ramping_down = False
+        self.state = "IDLE"
+        self.previous_state = "IDLE"
+        self.target_power = 0
+        self.current_power_step = 0.0
+        self.power_error_count = 0
+        self.ref_p_wait_start_time = None
+        self._fail_no_output_ticks = 0
+
+        try:
+            if self.control_timer.isActive():
+                self.control_timer.stop()
+        except Exception:
+            pass
+
+        self._stop_ramp_down_timer()
+
+        try:
+            self.current_pwm_value = 0
+            self._send_pwm_via_plc(0)
+        except Exception:
+            pass
+
+        self.update_rf_status_display.emit(0.0, 0.0)
 
     def read_rf_power(self):
         """PLC로부터 (forward_watt, reflected_watt) 튜플을 받는다."""
@@ -252,4 +330,4 @@ class RFPowerController(QObject):
     
     @Slot()
     def close_connection(self):
-        self.stop_process()
+        self.cleanup()
