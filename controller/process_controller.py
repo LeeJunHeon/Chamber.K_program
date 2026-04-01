@@ -119,6 +119,7 @@ class SputterProcessController(QObject):
 
         # 램프다운 대기 루프 핸들
         self._rfdown_wait: Optional[QEventLoop] = None
+        self._rfdown_timeout_timer: Optional[QTimer] = None
 
     # ---------- 타이머 준비 ----------
     @Slot()
@@ -129,6 +130,13 @@ class SputterProcessController(QObject):
             self._timer.setInterval(250)
             self._timer.setTimerType(Qt.TimerType.PreciseTimer)
             self._timer.timeout.connect(self._on_tick)
+
+        if self._rfdown_timeout_timer is None:
+            self._rfdown_timeout_timer = QTimer(self)
+            self._rfdown_timeout_timer.setSingleShot(True)
+            self._rfdown_timeout_timer.setInterval(120_000)
+            self._rfdown_timeout_timer.timeout.connect(self._on_rf_rampdown_timeout)
+
         self.status_message.emit("정보", "ProcessController 타이머 준비 완료")
 
     def _invoke_self(self, name: str):
@@ -606,9 +614,11 @@ class SputterProcessController(QObject):
         # disconnect
         for name, lp in loops:
             try:
-                if name == "dc": self.dc.target_reached.disconnect(lp.quit)
-                else:            self.rf.target_reached.disconnect(lp.quit)
-            except:
+                if name == "dc":
+                    self.dc.target_reached.disconnect(lp.quit)
+                else:
+                    self.rf.target_reached.disconnect(lp.quit)
+            except Exception:
                 pass
         self._active_loops = []
 
@@ -617,6 +627,46 @@ class SputterProcessController(QObject):
 
         self.status_message.emit("정보", "파워 안정화 완료.")
         self._next_step()
+
+    def _exec_loop_with_timeout(
+        self,
+        loop: QEventLoop,
+        timeout_ms: int,
+        timeout_message: Optional[str] = None,
+    ) -> bool:
+        """
+        QEventLoop를 timeout_ms 동안만 대기한다.
+        - 응답을 받아 loop가 끝나면 True
+        - timeout이면 False
+        """
+        timed_out = False
+        wait_timer = QTimer()
+        wait_timer.setSingleShot(True)
+
+        def _on_timeout():
+            nonlocal timed_out
+            timed_out = True
+            if timeout_message:
+                self.status_message.emit("경고", timeout_message)
+            if loop.isRunning():
+                loop.quit()
+
+        wait_timer.timeout.connect(_on_timeout)
+        wait_timer.start(timeout_ms)
+        loop.exec()
+
+        try:
+            if wait_timer.isActive():
+                wait_timer.stop()
+        except Exception:
+            pass
+
+        try:
+            wait_timer.timeout.disconnect(_on_timeout)
+        except Exception:
+            pass
+
+        return not timed_out
 
     # ==================== 딜레이/타이머 ====================
 
@@ -696,7 +746,21 @@ class SputterProcessController(QObject):
 
     @Slot()
     def _on_rf_rampdown_finished(self):
+        self._stop_rfdown_timeout_timer()
         self.status_message.emit("RFpower", "램프다운 완료 신호 수신")
+        if self._rfdown_wait is not None and self._rfdown_wait.isRunning():
+            self._rfdown_wait.quit()
+
+    def _stop_rfdown_timeout_timer(self):
+        try:
+            if self._rfdown_timeout_timer and self._rfdown_timeout_timer.isActive():
+                self._rfdown_timeout_timer.stop()
+        except Exception:
+            pass
+
+    @Slot()
+    def _on_rf_rampdown_timeout(self):
+        self.status_message.emit("RFpower(경고)", "램프다운 완료 신호 타임아웃(120초)")
         if self._rfdown_wait is not None and self._rfdown_wait.isRunning():
             self._rfdown_wait.quit()
 
@@ -704,11 +768,30 @@ class SputterProcessController(QObject):
     def teardown(self):
         if self._timer and self._timer.isActive():
             self._timer.stop()
+
+        self._stop_rfdown_timeout_timer()
+
+        if self._rfdown_wait is not None and self._rfdown_wait.isRunning():
+            try:
+                self._rfdown_wait.quit()
+            except Exception:
+                pass
+        self._rfdown_wait = None
+
+        if self._active_loops:
+            for _name, lp in self._active_loops:
+                try:
+                    lp.quit()
+                except Exception:
+                    pass
+            self._active_loops.clear()
+
         # 타이머/딜레이 상태 초기화
         self._delay_clock = None
         self._delay_total_sec = 0
         self._timer_purpose = None
         self._last_emitted_sec = -1
+        self._stop_pending = False
 
     @Slot()
     def request_stop(self):
@@ -741,12 +824,15 @@ class SputterProcessController(QObject):
             # 파워 대기 루프가 돌고 있으면 즉시 깨움
             if self._active_loops:
                 for _name, lp in self._active_loops:
-                    try: lp.quit()
-                    except: pass
+                    try:
+                        lp.quit()
+                    except Exception:
+                        pass
                 self._active_loops.clear()
 
-            # 여기서부터는 기존 stop_process 본문 그대로
+            # 이미 정지 상태면 바로 마감
             if not self._running:
+                self._stop_rfdown_timeout_timer()
                 self.finished.emit()
                 self._stop_pending = False
                 return
@@ -765,32 +851,29 @@ class SputterProcessController(QObject):
             if self.is_dc_on:
                 self.status_message.emit("DCpower", "DC 파워 OFF")
                 self.stop_dc_power.emit()
+
             if self.is_rf_on:
                 self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
 
-                # 이벤트 루프 준비
                 self._rfdown_wait = QEventLoop()
 
-                # ★ RF → Process 스레드로 안전하게 큐드 연결
                 try:
                     self.rf.ramp_down_finished.connect(
                         self._on_rf_rampdown_finished,
                         type=Qt.ConnectionType.QueuedConnection
                     )
                 except TypeError:
-                    # 일부 환경에서 type= 키워드가 안 먹으면 기본 Auto로도 무방
                     self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
 
-                # 타임아웃(예: 120초) — 신호 미수신 시 빠져나오기
-                QTimer.singleShot(120_000, self._on_rf_rampdown_finished)
+                self._stop_rfdown_timeout_timer()
+                if self._rfdown_timeout_timer:
+                    self._rfdown_timeout_timer.start()
 
-                # 램프다운 시작
                 self.stop_rf_power.emit()
-
-                # 완료까지 대기
                 self._rfdown_wait.exec()
 
-                # 뒷정리
+                self._stop_rfdown_timeout_timer()
+
                 try:
                     self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
                 except Exception:
@@ -803,28 +886,35 @@ class SputterProcessController(QObject):
                 channels = [self._process_channel]
 
             loop = QEventLoop()
+
             def _quit(*_):
                 try:
                     loop.quit()
-                except:
+                except Exception:
                     pass
 
             self.mfc.command_confirmed.connect(_quit)
             self.mfc.command_failed.connect(_quit)
 
-            # 선택된 모든 채널 Flow OFF
             for ch in channels:
                 self.command_requested.emit("FLOW_OFF", {'channel': ch})
-                loop.exec()
+                self._exec_loop_with_timeout(
+                    loop,
+                    3000,
+                    f"STOP 시퀀스: Ch{ch} FLOW_OFF 응답 타임아웃"
+                )
 
-            # 공용 밸브는 한 번만 VALVE_OPEN (안전하게 잔압 해소)
             self.command_requested.emit("VALVE_OPEN", {})
-            loop.exec()
+            self._exec_loop_with_timeout(
+                loop,
+                3000,
+                "STOP 시퀀스: VALVE_OPEN 응답 타임아웃"
+            )
 
             try:
                 self.mfc.command_confirmed.disconnect(_quit)
                 self.mfc.command_failed.disconnect(_quit)
-            except:
+            except Exception:
                 pass
 
             # 건 셔터/가스 닫기
@@ -837,10 +927,10 @@ class SputterProcessController(QObject):
                 self.status_message.emit("PLC", f"{gas_name} Valve Close")
                 self.update_plc_port.emit(btn, False)
 
+            # 종료 마감은 비동기 후처리로 넘기고, _stop_pending은 여기서 내리지 않는다.
             QTimer.singleShot(800, self._finish_stop)
-            self._stop_pending = False
+
         except Exception as e:
-            # 종료 시퀀스 중 예외도 잡아서 UI가 안 멈추게
             try:
                 self.critical_error.emit(f"종료 시퀀스 예외: {e}")
             except Exception:
@@ -849,15 +939,19 @@ class SputterProcessController(QObject):
                 self._running = False
             except Exception:
                 pass
+            self._stop_rfdown_timeout_timer()
+            self._rfdown_wait = None
+            self._stop_pending = False
             try:
                 self.finished.emit()
             except Exception:
                 pass
-        finally:
-            self._stop_pending = False    
 
     @Slot()
     def _finish_stop(self):
+        self._stop_rfdown_timeout_timer()
+        self._rfdown_wait = None
+        self._stop_pending = False
         self.status_message.emit("정보", "종료 완료")
         self.finished.emit()
 
