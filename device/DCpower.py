@@ -12,7 +12,8 @@ from lib.config import (
     DC_INITIAL_VOLTAGE, DC_INITIAL_CURRENT, DC_MAX_VOLTAGE,
     DC_MAX_CURRENT, DC_MAX_POWER, DC_TOLERANCE_WATT, DC_MAX_ERROR_COUNT,
     DC_MIN_CURRENT_ABORT, DC_FAIL_ISET_THRESHOLD, DC_FAIL_POWER_THRESHOLD,
-    DC_FAIL_MAX_TICKS,
+    DC_FAIL_MAX_TICKS, DC_POWER_ERROR_RATIO, DC_POWER_ERROR_MAX_COUNT,  
+    DC_MIN_CURRENT_ABORT_COUNT,      
 )
 
 class DCPowerController(QObject):
@@ -26,7 +27,7 @@ class DCPowerController(QObject):
         self._is_running: bool = False
         self.state: str = "IDLE"
         self.error_count: int = 0
-        self.power_error_count: int = 0 # ★ DC 파워 편차(±5%) 모니터링용 카운터
+        self.power_error_count: int = 0 # DC 파워 편차(±10%) 모니터링용 카운터
 
         self.current_voltage: float = DC_INITIAL_VOLTAGE
         self.current_current: float = DC_INITIAL_CURRENT
@@ -50,6 +51,7 @@ class DCPowerController(QObject):
         self.step_down_fast        = 0.005 # "빠른 하강"시 1초당 -40mA (공격적)
 
         self._fail_no_output_ticks = 0
+        self._min_current_abort_count = 0   # ← 추가: 저전류 연속 카운터
 
     # ---------------- 연결 ----------------
     @Slot()
@@ -94,10 +96,11 @@ class DCPowerController(QObject):
                 return
 
         self.target_power = max(0.0, min(DC_MAX_POWER, float(target_power)))
-        self.power_error_count = 0 # ★ 새 공정 시작 시 편차 카운터 초기화
         self.status_message.emit("DCpower", f"프로세스 시작 (목표: {self.target_power:.1f} W)")
 
+        self.power_error_count = 0 # ★ 새 공정 시작 시 편차 카운터 초기화
         self._fail_no_output_ticks = 0
+        self._min_current_abort_count = 0
 
         # 초기화: 전압·전류 동시 설정(APPLy) + 출력 ON
         #  - APPLy는 전압·전류를 동시에 설정할 때만 사용
@@ -171,15 +174,37 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower", f"Ramping({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
 
         elif self.state == "MAINTAINING":
-            # ★ 유지 구간에서 전류(I)가 너무 낮으면 공정 중단
+            # 변경 (10회 연속 카운트 후 중단)
             if now_i <= DC_MIN_CURRENT_ABORT:
-                self.status_message.emit(
-                    "재시작",
-                    f"DC 전류(I={now_i:.4f}A)가 최소 허용값 "
-                    f"{DC_MIN_CURRENT_ABORT:.3f}A 이하입니다. 공정을 중단합니다."
-                )
-                self.stop_process()
-                return
+                self._min_current_abort_count += 1
+                if self._min_current_abort_count >= DC_MIN_CURRENT_ABORT_COUNT:
+                    self.status_message.emit(
+                        "재시작",
+                        f"DC 전류(I={now_i:.4f}A)가 최소 허용값 "
+                        f"{DC_MIN_CURRENT_ABORT:.3f}A 이하가 "
+                        f"{DC_MIN_CURRENT_ABORT_COUNT}회 연속 감지되었습니다. 공정을 중단합니다."
+                    )
+                    self.stop_process()
+                    return
+            else:
+                self._min_current_abort_count = 0   # 복귀 시 리셋
+
+            # 파워 이탈 감시: 10% 초과 5회 연속 시 공정 중단
+            threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
+            if abs(diff) > threshold_w:
+                self.power_error_count += 1
+                if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
+                    self.status_message.emit(
+                        "재시작",
+                        f"DC 파워가 목표 {self.target_power:.1f}W에서 "
+                        f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
+                        f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다. "
+                        f"(현재: {now_power:.2f}W)"
+                    )
+                    self.stop_process()
+                    return
+            else:
+                self.power_error_count = 0
     
             # 유지 구간에서는 setpoint 편차로 공정을 중단하지 않고,
             # 목표 파워와의 차이가 DC_TOLERANCE_WATT 이하이면 그대로 유지.
@@ -209,51 +234,6 @@ class DCPowerController(QObject):
                 f"dI={step_i:+.4f}A, I={self.current_current:.4f}A"
             )
 
-        # ==================== setpoint를 5% 이상 이탈시 종료하는 로직 ====================
-        # elif self.state == "MAINTAINING":
-        #     # ★ 유지 구간에서 목표 파워 대비 편차 감시
-        #     #    - 기준: max(DC_TOLERANCE_WATT, target * 5%)
-        #     threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
-        #     if abs(diff) > threshold_w:
-        #         self.power_error_count += 1
-        #         if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
-        #             # 메인에서 전체 공정을 중단하도록 "재시작" 레벨로 알림
-        #             self.status_message.emit(
-        #                 "재시작",
-        #                 (
-        #                     f"DC 파워가 목표 {self.target_power:.1f}W에서 "
-        #                     f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
-        #                     f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다."
-        #                 ),
-        #             )
-        #             self.stop_process()
-        #             return
-        #     else:
-        #         # 허용 범위 안으로 돌아오면 카운터 리셋
-        #         self.power_error_count = 0
-
-        #     if abs(diff) <= DC_TOLERANCE_WATT:
-        #         return
-
-        #     if overshoot_trig:
-        #         # ★ 유지구간에서도 오버슈트면 강하게 끌어내림
-        #         drop_i = overshoot_w / max(now_v, 1.0)
-        #         step_i = -min(self.step_down_fast, max(self.step_down, drop_i))
-        #         why = "FAST"
-        #     else:
-        #         # 전압 가드 근처면 상승은 억제
-        #         if now_v >= self.voltage_guard and diff > 0:
-        #             step_i = -self.step_down
-        #             why = "V-GUARD"
-        #         else:
-        #             # 부족(+): 조금씩 올림 / 과다(-): 조금 더 내림
-        #             step_i = self.step_up if diff > 0 else -self.step_down
-        #             why = "NORM"
-
-        #     self.current_current = self._clamp_i(self.current_current + step_i)
-        #     self._send_noresp(f"CURR {self.current_current:.4f}")
-        #     self.status_message.emit("DCpower", f"Maintain({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
-
     # ---------------- 초기화/종료 ----------------
     def _initialize_power_supply(self, voltage: float, current: float) -> bool:
         if not self._send("*RST"): return False
@@ -281,6 +261,7 @@ class DCPowerController(QObject):
         self.error_count = 0
         self.power_error_count = 0
         self._fail_no_output_ticks = 0
+        self._min_current_abort_count = 0
 
         self._stop_control_timer()
 
@@ -307,6 +288,7 @@ class DCPowerController(QObject):
         self.error_count = 0
         self.power_error_count = 0
         self._fail_no_output_ticks = 0
+        self._min_current_abort_count = 0
 
         self._stop_control_timer()
 
