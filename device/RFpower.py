@@ -2,9 +2,11 @@
 import time
 from PyQt6.QtCore import QObject, pyqtSignal as Signal, pyqtSlot as Slot, QTimer
 from lib.config import (
-    RF_MAX_POWER, RF_RAMP_STEP, RF_FAIL_DAC_THRESHOLD, 
+    RF_MAX_POWER, RF_RAMP_STEP, RF_FAIL_DAC_THRESHOLD,
     RF_TOLERANCE_POWER, RF_FAIL_FORP_THRESHOLD, RF_FAIL_MAX_TICKS,
-    RF_DAC_FULL_SCALE, RF_RAMP_DOWN_STEP, 
+    RF_DAC_FULL_SCALE, RF_RAMP_DOWN_STEP,
+    RF_POWER_ERROR_RATIO, RF_POWER_ERROR_MAX_COUNT,    
+    RF_REFP_ABORT_THRESHOLD, RF_REFP_WAIT_SEC,      
 )
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -85,23 +87,23 @@ class RFPowerController(QObject):
 
         self.update_rf_status_display.emit(for_p, ref_p)
 
-                # --- [수정된 반사파 대기 로직] ---
-        if ref_p is not None and ref_p > 30.0:
+        # --- [수정된 반사파 대기 로직] ---
+        if ref_p is not None and ref_p >= RF_REFP_ABORT_THRESHOLD:
             if self.state != "REF_P_WAITING":
                 # 대기 상태가 아니었다면, 현재 상태를 저장하고 대기 시작
                 self.previous_state = self.state
                 self.state = "REF_P_WAITING"
                 self.ref_p_wait_start_time = time.time()
-                self.status_message.emit("RFpower(대기)", f"반사파({ref_p:.1f}W) 안정화 대기를 시작합니다. (최대 30초)")
+                self.status_message.emit("RFpower(대기)", f"반사파({ref_p:.1f}W)가 {RF_REFP_ABORT_THRESHOLD:.0f}W 초과. 대기 시작. (최대 {RF_REFP_WAIT_SEC}초)")
             
             # 대기 시간 초과 확인
-            if time.time() - self.ref_p_wait_start_time > 30:
-                self.status_message.emit("재시작", "반사파 안정화 시간(30초) 초과. 즉시 중단합니다.")
+            if time.time() - self.ref_p_wait_start_time > RF_REFP_WAIT_SEC:  
+                self.status_message.emit("재시작", f"반사파 안정화 시간({RF_REFP_WAIT_SEC}초) 초과. 즉시 중단합니다.")   
                 self.stop_process()
 
             return # 대기 중이므로 아래 로직은 실행하지 않고 다음 틱까지 대기
 
-        # 반사파가 30.0W 이하로 안정된 경우
+        # 반사파가 RF_REFP_ABORT_THRESHOLD(20W) 미만으로 안정된 경우
         if self.state == "REF_P_WAITING":
             self.status_message.emit("RFpower(정보)", f"반사파 안정화 완료 ({ref_p:.1f}W). 공정을 재개합니다.")
             self.state = self.previous_state # 이전 상태(RAMPING_UP 또는 MAINTAINING)로 복귀
@@ -148,9 +150,25 @@ class RFPowerController(QObject):
 
         elif self.state == "MAINTAINING":
             error = self.target_power - for_p
+            threshold_w = max(RF_TOLERANCE_POWER, self.target_power * RF_POWER_ERROR_RATIO)  # 10%
 
-            # 유지 구간에서는 setpoint 편차로 공정을 중단하지 않고,
-            # RF_TOLERANCE_POWER를 벗어나면 PWM만 미세 보정해서 따라가게 함.
+            # For.P 이탈 감시: 10% 초과 5회 연속 시 공정 중단
+            if abs(error) > threshold_w:
+                self.power_error_count += 1
+                if self.power_error_count >= RF_POWER_ERROR_MAX_COUNT:
+                    self.status_message.emit(
+                        "재시작",
+                        f"RF Forward Power가 목표 {self.target_power:.1f}W에서 "
+                        f"±{RF_POWER_ERROR_RATIO*100:.1f}% 이상 "
+                        f"연속 {RF_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다. "
+                        f"(현재: {for_p:.1f}W)"
+                    )
+                    self.stop_process()
+                    return
+            else:
+                self.power_error_count = 0  # 범위 내로 복귀 시 카운터 리셋
+
+            # PWM 미세 보정 (기존 로직 유지)
             if abs(error) > RF_TOLERANCE_POWER:
                 adjustment = 1 if error > 0 else -1
                 self.current_pwm_value = max(
@@ -162,35 +180,6 @@ class RFPowerController(QObject):
                     "RFpower",
                     f"파워 유지 보정... (PWM:{self.current_pwm_value})"
                 )
-
-        # ==================== setpoint를 5% 이상 이탈시 종료하는 로직 ====================
-        # elif self.state == "MAINTAINING":
-        #     error = self.target_power - for_p
-
-        #     # ★ Forward Power가 목표 대비 ±5% 이상 연속 3회 벗어나면 공정 중단
-        #     threshold_w = max(RF_TOLERANCE_POWER, self.target_power * RF_POWER_ERROR_RATIO)
-        #     if abs(error) > threshold_w:
-        #         self.power_error_count += 1
-        #         if self.power_error_count >= RF_POWER_ERROR_MAX_COUNT:
-        #             self.status_message.emit(
-        #                 "재시작",
-        #                 (
-        #                     f"RF Forward Power가 목표 {self.target_power:.1f}W에서 "
-        #                     f"±{RF_POWER_ERROR_RATIO*100:.1f}% 이상 "
-        #                     f"연속 {RF_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다."
-        #                 ),
-        #             )
-        #             self.stop_process()
-        #             return
-        #     else:
-        #         # 허용 범위 안으로 돌아오면 카운터 리셋
-        #         self.power_error_count = 0
-
-        #     if abs(error) > RF_TOLERANCE_POWER:
-        #         adjustment = 1 if error > 0 else -1
-        #         self.current_pwm_value = max(0, min(RF_DAC_FULL_SCALE, self.current_pwm_value + adjustment))
-        #         self._send_pwm_via_plc(self.current_pwm_value)
-        #         self.status_message.emit("RFpower", f"파워 유지 보정... (PWM:{self.current_pwm_value})")
 
     def _send_pwm_via_plc(self, dac_0_4000: int):
         dac = max(0, min(int(dac_0_4000), RF_DAC_FULL_SCALE))
