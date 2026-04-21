@@ -477,10 +477,6 @@ class MFCController(QObject):
         if not self.polling_timer:
             return
 
-        # 🔸 Shutter Delay / Process Time 구간에서만 모니터링 켜기
-        self._flow_monitoring_enabled = bool(should_poll)
-        self._pressure_monitoring_enabled = bool(should_poll)
-
         if should_poll:
             if not self.polling_timer.isActive():
                 self.status_message.emit("MFC", "주기적 읽기(Polling) 시작")
@@ -490,6 +486,9 @@ class MFCController(QObject):
                 self.polling_timer.stop()
                 self.status_message.emit("MFC", "주기적 읽기(Polling) 중지")
             self._purge_poll_reads_only(cancel_inflight=True, reason="polling off/shutter closed")
+
+            self._flow_monitoring_enabled = False
+            self._pressure_monitoring_enabled = False
 
             # 🔸 모니터링 구간이 끝날 때는 에러 카운터도 리셋
             self.flow_error_counters = {1: 0, 2: 0}
@@ -558,8 +557,13 @@ class MFCController(QObject):
         if cmd == "set_polling":
             enable = bool(params.get("enable", False))
             self.set_process_status(enable)
+            return
+        
+        if cmd == "set_monitoring":
+            enable = bool(params.get("enable", False))
+            self._flow_monitoring_enabled = enable
+            self._pressure_monitoring_enabled = enable
             if not enable:
-                # 공정 딜레이(셔터/메인 공정) 종료 시 카운터 초기화
                 self.flow_error_counters = {1: 0, 2: 0}
                 self.pressure_error_count = 0
             return

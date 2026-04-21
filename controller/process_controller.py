@@ -499,7 +499,8 @@ class SputterProcessController(QObject):
             self.status_message.emit("공정", step.message)
 
             # 스텝 진입 시 폴링 설정
-            self.command_requested.emit("set_polling", {'enable': bool(step.polling)})
+            self.command_requested.emit("set_polling",    {'enable': bool(step.polling)})
+            self.command_requested.emit("set_monitoring", {'enable': step.timer_purpose == 'process'})
 
             # 액션 분기
             if step.action == ActionType.MFC_CMD:
@@ -710,6 +711,7 @@ class SputterProcessController(QObject):
                 if self._timer and self._timer.isActive():
                     self._timer.stop()
                 self.command_requested.emit("set_polling", {'enable': False})
+                self.command_requested.emit("set_monitoring", {'enable': False})
                 return
 
             # 딜레이 구간이 아닐 수 있음
@@ -842,6 +844,7 @@ class SputterProcessController(QObject):
 
             # 폴링 OFF
             self.command_requested.emit("set_polling", {'enable': False})
+            self.command_requested.emit("set_monitoring", {'enable': False})
 
             # Main Shutter 닫기
             self.stage_monitor.emit("M.S. close...")
