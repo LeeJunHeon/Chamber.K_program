@@ -12,12 +12,24 @@ _JSON_PATH = os.path.join(os.path.dirname(__file__), '..', 'config_user.json')
 
 
 def _strip_comments(text: str) -> str:
-    """// 주석을 제거합니다. 문자열 내부의 // 는 건드리지 않습니다."""
+    """JSON 문자열 바깥의 // 주석만 제거합니다."""
     result = []
     for line in text.splitlines():
-        # 문자열 밖의 // 만 제거 (간단 처리: 줄 단위)
-        stripped = re.sub(r'(?<!["\'])//.*', '', line)
-        result.append(stripped)
+        in_string = False
+        i = 0
+        out = []
+        while i < len(line):
+            c = line[i]
+            # 이스케이프되지 않은 " 만 문자열 토글
+            if c == '"' and (i == 0 or line[i-1] != '\\'):
+                in_string = not in_string
+                out.append(c)
+            elif not in_string and line[i:i+2] == '//':
+                break  # 문자열 밖의 // → 여기서 잘라냄
+            else:
+                out.append(c)
+            i += 1
+        result.append(''.join(out))
     return '\n'.join(result)
 
 
