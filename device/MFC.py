@@ -37,7 +37,8 @@ from lib.config import (
     MFC_WATCHDOG_INTERVAL_MS, MFC_RECONNECT_BACKOFF_START_MS,
     MFC_RECONNECT_BACKOFF_MAX_MS, MFC_TIMEOUT,
     MFC_GAP_MS, MFC_DELAY_MS, MFC_DELAY_MS_VALVE,
-    MFC_PRESSURE_SCALE, MFC_PRESSURE_DECIMALS, MFC_SP1_VERIFY_TOL
+    MFC_PRESSURE_SCALE, MFC_PRESSURE_DECIMALS, MFC_SP1_VERIFY_TOL,
+    MFC_PRESSURE_WARN_RATIO, MFC_PRESSURE_WARN_COUNT,
 )
 
 class MFCController(QObject):
@@ -50,6 +51,8 @@ class MFCController(QObject):
 
     # (호환성) 혹시 메인에서 self-loop 연결을 했다면 깨지지 않게 유지
     command_requested  = Signal(str, dict)
+    flow_alert     = Signal(str)   # ← 추가: 유량 이탈 경고 (공정 유지, 채팅 알림용)
+    pressure_alert = Signal(str)   # ← 추가: 압력 이탈 경고 (공정 유지, 채팅 알림용)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,7 +85,6 @@ class MFCController(QObject):
         self.gas_map = {1: "Ar", 2: "O2"}       # ← 2채널만
         self.last_setpoints = {1: 0.0, 2: 0.0}  # 장비 단위(=UI 단위와 동일)
         self.flow_error_counters = {1: 0, 2: 0}
-        self._flow_oob_latched = False
 
         # 압력 모니터링용 (SP1 기준, UI 단위)
         self.last_pressure_setpoint: float = 0.0
@@ -492,9 +494,6 @@ class MFCController(QObject):
             # 🔸 모니터링 구간이 끝날 때는 에러 카운터도 리셋
             self.flow_error_counters = {1: 0, 2: 0}
             self.pressure_error_count = 0
-            
-            # FLOW_MON 트리거 후 Stop 완료 전까지 중복 실패 발화 방지
-            self._flow_oob_latched = False
 
     def _enqueue_poll_cycle(self):
         # ✅ 포트가 열려있지 않으면 폴링이 큐에 쌓이기만 하므로 enqueue 하지 않음
@@ -1024,11 +1023,7 @@ class MFCController(QObject):
             # 가스 ON/안정화 구간에서 쌓인 카운터는 의미 없으니 리셋
             if channel in self.flow_error_counters:
                 self.flow_error_counters[channel] = 0
-            self._flow_oob_latched = False  # ✅ 모니터링 구간 밖이면 latch 해제
             return
-        
-        if getattr(self, "_flow_oob_latched", False):
-            return  # ✅ 이미 FLOW_MON으로 STOP 들어갔으면 추가 발화 방지
 
         # 0) 이번 공정에서 사용하지 않는 채널이면 모니터링하지 않음
         actives = getattr(self, "_active_channels", None)
@@ -1049,15 +1044,15 @@ class MFCController(QObject):
             # 허용 범위 밖 → 연속 카운트 증가
             self.flow_error_counters[channel] += 1
             if self.flow_error_counters[channel] >= FLOW_ERROR_MAX_COUNT:
-                self._flow_oob_latched = True  # ✅ FLOW_MON 트리거 후 중복 발화 방지
                 msg = (
-                    f"Ch{channel} 유량이 설정값에서 5% 이상 벗어났습니다. "
+                    f"Ch{channel} 유량이 설정값에서 {FLOW_ERROR_TOLERANCE*100:.0f}% 이상 벗어났습니다. "
                     f"(목표: {target_flow:.2f}, 현재: {actual_flow:.2f})"
                 )
-                # UI 로그 + 프로세스 중단 신호
-                self.status_message.emit("MFC(오류)", msg)
-                self.command_failed.emit("FLOW_MON", msg)
-                # 다시 처음부터 연속 카운트
+                # UI 로그 + 채팅 알림 (공정은 계속 진행)
+                self.status_message.emit("MFC(경고)", msg)
+                self.flow_alert.emit(msg)         # ← 채팅 알림 시그널
+                # command_failed 제거 → 공정 중단하지 않음
+                # latch도 불필요 (중단이 없으므로)
                 self.flow_error_counters[channel] = 0
         else:
             # 허용 범위 안으로 돌아오면 연속 카운트 리셋
@@ -1065,27 +1060,31 @@ class MFCController(QObject):
                 self.flow_error_counters[channel] = 0
 
     def _monitor_pressure(self, actual_pressure_ui: float) -> None:
-            """
-            공정 중 압력 모니터링:
-            - 압력값은 계속 읽어서 내부에 유지
-            - setpoint와 비교는 하더라도, 공정 중단/에러로는 사용하지 않음
-            - 알림창(QMessageBox)을 띄우는 critical_error 도 트리거하지 않음
-            """
-            # 폴링이 꺼져 있으면 카운터만 리셋하고 리턴
-            if not getattr(self, "_pressure_monitoring_enabled", False):
-                self.pressure_error_count = 0
-                return
+        """압력 이탈 감시: 10% 초과 5회 연속 시 채팅 알림 (공정 유지)"""
+        if not getattr(self, "_pressure_monitoring_enabled", False):
+            self.pressure_error_count = 0
+            return
 
-            # 마지막 실제 압력값을 내부에만 저장(필요하면 다른 데서 참고 가능)
-            self.last_pressure_value = actual_pressure_ui
+        self.last_pressure_value = actual_pressure_ui
 
-            # 더 이상 압력으로 에러/중단을 걸지 않기 때문에
-            # 에러 카운터는 항상 0 으로 유지
-            if self.pressure_error_count:
-                self.pressure_error_count = 0
+        target = getattr(self, "last_pressure_setpoint", 0.0)
+        if target <= 0:
+            self.pressure_error_count = 0
+            return
 
-            # ※ 여기서 setpoint(target) 계산, 오차(tol) 비교, status_message.emit,
-            #    command_failed.emit("PRESS_MON", ...) 등은 모두 제거
+        tol = target * MFC_PRESSURE_WARN_RATIO   # 10%
+        if abs(actual_pressure_ui - target) > tol:
+            self.pressure_error_count += 1
+            if self.pressure_error_count >= MFC_PRESSURE_WARN_COUNT:
+                msg = (
+                    f"압력이 설정값에서 {MFC_PRESSURE_WARN_RATIO*100:.0f}% 이상 벗어났습니다. "
+                    f"(목표: {target:.2f}, 현재: {actual_pressure_ui:.2f})"
+                )
+                self.status_message.emit("MFC(경고)", msg)
+                self.pressure_alert.emit(msg)   # ← 채팅 알림 시그널
+                self.pressure_error_count = 0   # 리셋 후 계속 감시
+        else:
+            self.pressure_error_count = 0
 
     # ---------- 보조 ----------
     def _parse_r69_bits(self, resp: str) -> str:
