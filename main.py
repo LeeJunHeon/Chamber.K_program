@@ -236,6 +236,8 @@ class MainDialog(QDialog):
         self.mfc_controller.update_pressure.connect(self.update_mfc_pressure_display)
         self.dcpower_controller.update_dc_status_display.connect(self.update_dc_status_display)
         self.rfpower_controller.update_rf_status_display.connect(self.update_rf_status_display)
+        self.mfc_controller.flow_alert.connect(self._on_mfc_flow_alert)        
+        self.mfc_controller.pressure_alert.connect(self._on_mfc_pressure_alert) 
 
         # --- 5. 모든 로그 메시지를 UI 모니터에 연결 ---
         self.plc_controller.status_message.connect(self.on_status_message)
@@ -1196,6 +1198,22 @@ class MainDialog(QDialog):
                 return
             self._sum_wp += v
             self._cnt_wp += 1
+
+    @Slot(str)
+    def _on_mfc_flow_alert(self, msg: str):
+        log_message_to_monitor("MFC(경고)", msg)
+        if self.chat_chk and self.process_running:
+            name = self.current_process_name or "CHK"
+            self.chat_chk.notify_text(f"⚠️ CHK 가스 유량 이상: {name} | {msg}")
+            self.chat_chk.flush()
+
+    @Slot(str)
+    def _on_mfc_pressure_alert(self, msg: str):
+        log_message_to_monitor("MFC(경고)", msg)
+        if self.chat_chk and self.process_running:
+            name = self.current_process_name or "CHK"
+            self.chat_chk.notify_text(f"⚠️ CHK 압력 이상: {name} | {msg}")
+            self.chat_chk.flush()
 
     def update_dc_status_display(self, power, voltage, current):
         """DC 파워 측정값 (P, V, I)을 UI에 표시"""
