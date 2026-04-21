@@ -711,7 +711,6 @@ class SputterProcessController(QObject):
                 if self._timer and self._timer.isActive():
                     self._timer.stop()
                 self.command_requested.emit("set_polling", {'enable': False})
-                self.command_requested.emit("set_monitoring", {'enable': False})
                 return
 
             # 딜레이 구간이 아닐 수 있음
