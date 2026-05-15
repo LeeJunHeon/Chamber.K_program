@@ -742,6 +742,7 @@ class MFCController(QObject):
         stable_count: int = 3,
         timeout_sec: float = 180.0,
         poll_interval_ms: int = 1000,
+        fail_on_timeout: bool = False,  # ← 추가
     ):
         """
         실제 압력이 target_ui ± (target_ui * tol_ratio) 안에 stable_count 회 연속 들어오면
@@ -770,7 +771,7 @@ class MFCController(QObject):
             if val_hw is None:
                 # 응답 실패 → 다음 폴로 진행
                 self._schedule_next_wait_poll(state, target_ui, tol_abs, stable_count,
-                                              deadline_ms, poll_interval_ms)
+                                              deadline_ms, poll_interval_ms, _on_p)
                 return
 
             ui_val = self._to_ui_pressure(val_hw)
@@ -827,11 +828,12 @@ class MFCController(QObject):
         # Timeout 처리
         if state["elapsed_ms"] >= deadline_ms:
             state["done"] = True
-            self.status_message.emit(
-                "MFC(경고)",
-                f"WAIT_PRESSURE 타임아웃: target={target_ui:.2f} 도달 실패, 다음 단계 진행"
-            )
-            self.command_confirmed.emit("WAIT_PRESSURE")
+            if state.get("fail_on_timeout", False):
+                self.command_failed.emit("WAIT_PRESSURE", 
+                    f"target={target_ui:.2f} 도달 실패")
+            else:
+                self.status_message.emit("MFC(경고)", f"WAIT_PRESSURE 타임아웃...")
+                self.command_confirmed.emit("WAIT_PRESSURE")
             return
 
         # poll_interval_ms 후 다음 폴
