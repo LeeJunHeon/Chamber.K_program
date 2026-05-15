@@ -383,8 +383,18 @@ class SputterProcessController(QObject):
         WAIT_STABLE_COUNT = 3       # 3회 연속
         WAIT_TIMEOUT_SEC = 180.0    # 최대 3분
 
-        def _append_pressure_stage(sp_index: int, sp_value: float, label: str):
-            """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝 추가"""
+        def _append_pressure_stage(
+            sp_index: int,
+            sp_value: float,
+            label: str,
+            timeout_sec: float = WAIT_TIMEOUT_SEC,
+            fail_on_timeout: bool = False,
+        ):
+            """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝 추가
+            
+            fail_on_timeout=True 이면 timeout 시 공정 중단 + Google Chat 알림.
+            False 이면 경고 로그만 남기고 다음 단계 진행.
+            """
             set_cmd = f"SP{sp_index}_SET"
             on_cmd = f"SP{sp_index}_ON"
 
@@ -411,26 +421,32 @@ class SputterProcessController(QObject):
                 ProcessStep(
                     ActionType.MFC_CMD,
                     f"{label}: 압력 도달 대기 (target={sp_value:.2f}, ±{WAIT_TOL_RATIO*100:.0f}%, "
-                    f"timeout={int(WAIT_TIMEOUT_SEC)}s)",
+                    f"timeout={int(timeout_sec)}s"
+                    + (", FAIL ON TIMEOUT" if fail_on_timeout else "") + ")",
                     params=("WAIT_PRESSURE", {
                         "target": sp_value,
                         "tolerance_ratio": WAIT_TOL_RATIO,
                         "stable_count": WAIT_STABLE_COUNT,
-                        "timeout_sec": WAIT_TIMEOUT_SEC,
+                        "timeout_sec": timeout_sec,
+                        "fail_on_timeout": fail_on_timeout,
                     }),
                 )
             )
 
-        # --- SP3 (15.0) : WP < 15 일 때만 ---
+        # --- SP3 (15.0) : WP < 15 일 때만 (timeout 180s, 도달 못해도 진행) ---
         if sp1_ui < 15.0:
             _append_pressure_stage(3, 15.0, "Stage1(SP3)")
 
-        # --- SP2 (5.0)  : WP < 5  일 때만 ---
+        # --- SP2 (5.0)  : WP < 5  일 때만 (timeout 180s, 도달 못해도 진행) ---
         if sp1_ui < 5.0:
             _append_pressure_stage(2, 5.0, "Stage2(SP2)")
 
-        # --- SP1 (WP)   : 항상 실행 (최종 working pressure) ---
-        _append_pressure_stage(1, sp1_ui, f"Stage3(SP1={sp1_ui:.2f})")
+        # --- SP1 (WP)   : 최종 단계 (timeout 300s, 도달 못하면 공정 중단 + Chat 알림) ---
+        _append_pressure_stage(
+            1, sp1_ui, f"Stage3(SP1={sp1_ui:.2f})",
+            timeout_sec=300.0,
+            fail_on_timeout=True,
+        )
 
         # --- 8) Shutter Delay ---
         sd_sec = max(0, int(math.ceil(float(p.get('shutter_delay', 0.0)) * 60)))

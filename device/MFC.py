@@ -97,6 +97,9 @@ class MFCController(QObject):
         # 🔹 ProcessController에서 알려주는 "이번 공정 활성 채널"
         #    기본값은 두 채널 모두 활성
         self._active_channels: list[int] = [1, 2]
+        
+        # ★ WAIT_PRESSURE 상태 저장 (STOP 시 취소용)
+        self._wait_pressure_state: Optional[dict] = None
 
         self._stabilizing_channel: Optional[int] = None
         self._stabilizing_target: float = 0.0
@@ -204,6 +207,12 @@ class MFCController(QObject):
     @Slot()
     def cleanup(self):
         self._want_connected = False
+
+        # ★ WAIT_PRESSURE 진행 중이면 먼저 취소
+        try:
+            self._cancel_wait_pressure(reason="cleanup")
+        except Exception:
+            pass
 
         # 진행/대기 콜백 정리
         if self._inflight is not None:
@@ -487,6 +496,9 @@ class MFCController(QObject):
                 self.status_message.emit("MFC", "주기적 읽기(Polling) 중지")
             self._purge_poll_reads_only(cancel_inflight=True, reason="polling off/shutter closed")
 
+            # ★ WAIT_PRESSURE 진행 중이면 같이 취소 (STOP 등)
+            self._cancel_wait_pressure(reason="polling off")
+
             self._flow_monitoring_enabled = False
             self._pressure_monitoring_enabled = False
 
@@ -723,6 +735,7 @@ class MFCController(QObject):
             stable_count = int(params.get("stable_count", 3))       # 연속 N회
             timeout_sec = float(params.get("timeout_sec", 180.0))
             poll_interval_ms = int(params.get("poll_interval_ms", 1000))
+            fail_on_timeout = bool(params.get("fail_on_timeout", False))  # ★ 추가
 
             self._start_wait_pressure(
                 target_ui=target_ui,
@@ -730,6 +743,7 @@ class MFCController(QObject):
                 stable_count=stable_count,
                 timeout_sec=timeout_sec,
                 poll_interval_ms=poll_interval_ms,
+                fail_on_timeout=fail_on_timeout,  # ★ 추가
             )
             return
 
@@ -747,7 +761,9 @@ class MFCController(QObject):
         """
         실제 압력이 target_ui ± (target_ui * tol_ratio) 안에 stable_count 회 연속 들어오면
         command_confirmed.emit("WAIT_PRESSURE") 를 emit.
-        timeout 초과 시에도 command_confirmed.emit (경고 로그만 남기고 다음 단계 진행).
+        timeout 초과 시:
+          - fail_on_timeout=True  → command_failed.emit("WAIT_PRESSURE", ...) 로 공정 중단
+          - fail_on_timeout=False → command_confirmed.emit (경고 로그만, 다음 단계 진행)
         """
         if target_ui <= 0:
             self.status_message.emit("MFC", f"WAIT_PRESSURE: target={target_ui} 비정상, 즉시 통과")
@@ -756,7 +772,14 @@ class MFCController(QObject):
 
         tol_abs = target_ui * tol_ratio
         deadline_ms = int(timeout_sec * 1000)
-        state = {"hits": 0, "elapsed_ms": 0, "done": False}
+        state = {
+            "hits": 0,
+            "elapsed_ms": 0,
+            "done": False,
+            "fail_on_timeout": fail_on_timeout,  # ★ 추가
+        }
+        # ★ STOP 시 취소 가능하도록 인스턴스에 저장
+        self._wait_pressure_state = state
 
         self.status_message.emit(
             "MFC",
@@ -828,11 +851,22 @@ class MFCController(QObject):
         # Timeout 처리
         if state["elapsed_ms"] >= deadline_ms:
             state["done"] = True
+            timeout_sec_display = deadline_ms / 1000.0
+            
             if state.get("fail_on_timeout", False):
-                self.command_failed.emit("WAIT_PRESSURE", 
-                    f"target={target_ui:.2f} 도달 실패")
+                # SP1 단계 등 — 공정 중단 + Google Chat 알림
+                reason = (
+                    f"압력 도달 실패: target={target_ui:.2f} mTorr, "
+                    f"{timeout_sec_display:.0f}초 내 ±{int(tol_abs/target_ui*100)}% 범위 도달 못함"
+                )
+                self.status_message.emit("MFC(실패)", f"WAIT_PRESSURE 타임아웃: {reason}")
+                self.command_failed.emit("WAIT_PRESSURE", reason)
             else:
-                self.status_message.emit("MFC(경고)", f"WAIT_PRESSURE 타임아웃...")
+                # SP3, SP2 단계 등 — 경고만 남기고 다음 단계 진행
+                self.status_message.emit(
+                    "MFC(경고)",
+                    f"WAIT_PRESSURE 타임아웃: target={target_ui:.2f} 도달 실패, 다음 단계 진행"
+                )
                 self.command_confirmed.emit("WAIT_PRESSURE")
             return
 
@@ -849,6 +883,47 @@ class MFCController(QObject):
             )
 
         QTimer.singleShot(poll_interval_ms, _next_poll)
+
+    def _cancel_wait_pressure(self, reason: str = ""):
+        """
+        진행 중인 WAIT_PRESSURE를 즉시 종료시키고 큐에서 [WAIT_P 태그 명령을 제거.
+        STOP / cleanup / set_polling=False 등에서 호출.
+        """
+        cancelled = False
+        s = getattr(self, "_wait_pressure_state", None)
+        if s is not None:
+            if not s.get("done", False):
+                s["done"] = True
+                cancelled = True
+            self._wait_pressure_state = None
+
+        # 큐의 [WAIT_P 태그 명령 제거 (in-flight 포함)
+        purged = 0
+        if self._inflight and (self._inflight.tag or "").startswith("[WAIT_P"):
+            if self._cmd_timer:
+                self._cmd_timer.stop()
+            cmd = self._inflight
+            self._inflight = None
+            purged += 1
+            self._safe_callback(cmd.callback, None)
+
+        if self._cmd_q:
+            kept = deque()
+            while self._cmd_q:
+                c = self._cmd_q.popleft()
+                if (c.tag or "").startswith("[WAIT_P"):
+                    purged += 1
+                    continue
+                kept.append(c)
+            self._cmd_q = kept
+
+        if cancelled or purged:
+            msg = "[QUIESCE] WAIT_PRESSURE 취소"
+            if purged:
+                msg += f" (큐에서 {purged}건 제거)"
+            if reason:
+                msg += f" ({reason})"
+            self.status_message.emit("MFC", msg)
 
     def _verify_simple_async(self, cmd: str, params: dict,
                             attempt: int = 1, max_attempts: int = 5, delay_ms: int = MFC_DELAY_MS):
