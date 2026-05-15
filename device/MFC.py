@@ -642,8 +642,30 @@ class MFCController(QObject):
                 allow_no_reply=True,
             )
             return
+        
+        if cmd == "SP3_SET":
+            ui_val = float(params.get("value", 0.0))
+            hw_val = self._to_hw_pressure(ui_val)
 
-        if cmd in ("SP1_ON", "SP2_ON","SP4_ON"):
+            dec = int(MFC_PRESSURE_DECIMALS)
+            val_str = f"{hw_val:.{dec}f}"
+
+            def after_sent(_line, ui_val=ui_val):
+                if _line:
+                    self.status_message.emit("MFC < 확인", f"SP3 <- {ui_val:.2f}")
+                self.command_confirmed.emit("SP3_SET")
+
+            self.enqueue(
+                MFC_COMMANDS["SP3_SET"](value=val_str),
+                after_sent,
+                timeout_ms=MFC_TIMEOUT,
+                gap_ms=MFC_GAP_MS,
+                tag=f"[SP3_SET {ui_val:.2f}]",
+                allow_no_reply=True,
+            )
+            return
+
+        if cmd in ("SP1_ON", "SP2_ON", "SP3_ON", "SP4_ON"):
             scmd = MFC_COMMANDS[cmd]
             def after_simple(_line, _cmd=cmd):
                 self._verify_simple_async(_cmd, {})
@@ -693,8 +715,138 @@ class MFCController(QObject):
                 on_p, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS, tag='[READ_PRESSURE]'
             )
             return
+        
+        # ===== WAIT_PRESSURE: 실제 압력이 setpoint 근처에 도달할 때까지 대기 =====
+        if cmd == "WAIT_PRESSURE":
+            target_ui = float(params.get("target", 0.0))
+            tol_ratio = float(params.get("tolerance_ratio", 0.10))  # ±10%
+            stable_count = int(params.get("stable_count", 3))       # 연속 N회
+            timeout_sec = float(params.get("timeout_sec", 180.0))
+            poll_interval_ms = int(params.get("poll_interval_ms", 1000))
+
+            self._start_wait_pressure(
+                target_ui=target_ui,
+                tol_ratio=tol_ratio,
+                stable_count=stable_count,
+                timeout_sec=timeout_sec,
+                poll_interval_ms=poll_interval_ms,
+            )
+            return
 
         self.command_failed.emit(cmd, "알 수 없는 명령")
+
+    def _start_wait_pressure(
+        self,
+        target_ui: float,
+        tol_ratio: float = 0.10,
+        stable_count: int = 3,
+        timeout_sec: float = 180.0,
+        poll_interval_ms: int = 1000,
+    ):
+        """
+        실제 압력이 target_ui ± (target_ui * tol_ratio) 안에 stable_count 회 연속 들어오면
+        command_confirmed.emit("WAIT_PRESSURE") 를 emit.
+        timeout 초과 시에도 command_confirmed.emit (경고 로그만 남기고 다음 단계 진행).
+        """
+        if target_ui <= 0:
+            self.status_message.emit("MFC", f"WAIT_PRESSURE: target={target_ui} 비정상, 즉시 통과")
+            self.command_confirmed.emit("WAIT_PRESSURE")
+            return
+
+        tol_abs = target_ui * tol_ratio
+        deadline_ms = int(timeout_sec * 1000)
+        state = {"hits": 0, "elapsed_ms": 0, "done": False}
+
+        self.status_message.emit(
+            "MFC",
+            f"WAIT_PRESSURE 시작: target={target_ui:.2f}, tol=±{tol_abs:.2f} ({tol_ratio*100:.0f}%), "
+            f"stable={stable_count}회, timeout={timeout_sec:.0f}s"
+        )
+
+        def _on_p(line: Optional[str]):
+            if state["done"]:
+                return
+            val_hw = self._parse_pressure_value(line)
+            if val_hw is None:
+                # 응답 실패 → 다음 폴로 진행
+                self._schedule_next_wait_poll(state, target_ui, tol_abs, stable_count,
+                                              deadline_ms, poll_interval_ms)
+                return
+
+            ui_val = self._to_ui_pressure(val_hw)
+            # UI 표시도 업데이트
+            fmt = "{:." + str(int(MFC_PRESSURE_DECIMALS)) + "f}"
+            self.update_pressure.emit(fmt.format(ui_val))
+
+            if abs(ui_val - target_ui) <= tol_abs:
+                state["hits"] += 1
+                self.status_message.emit(
+                    "MFC",
+                    f"WAIT_PRESSURE: 현재={ui_val:.2f} OK ({state['hits']}/{stable_count})"
+                )
+                if state["hits"] >= stable_count:
+                    state["done"] = True
+                    self.status_message.emit(
+                        "MFC < 확인",
+                        f"WAIT_PRESSURE 완료: 압력 안정 (target={target_ui:.2f}, 현재={ui_val:.2f})"
+                    )
+                    self.command_confirmed.emit("WAIT_PRESSURE")
+                    return
+            else:
+                if state["hits"] > 0:
+                    self.status_message.emit(
+                        "MFC",
+                        f"WAIT_PRESSURE: 현재={ui_val:.2f} 이탈 → 카운트 리셋"
+                    )
+                state["hits"] = 0
+
+            # 다음 폴 스케줄
+            self._schedule_next_wait_poll(state, target_ui, tol_abs, stable_count,
+                                          deadline_ms, poll_interval_ms, _on_p)
+
+        # 첫 폴 즉시 enqueue
+        self.enqueue(
+            MFC_COMMANDS['READ_PRESSURE'],
+            _on_p,
+            timeout_ms=MFC_TIMEOUT,
+            gap_ms=MFC_GAP_MS,
+            tag=f"[WAIT_P {target_ui:.2f}]"
+        )
+
+    def _schedule_next_wait_poll(
+        self, state: dict, target_ui: float, tol_abs: float,
+        stable_count: int, deadline_ms: int, poll_interval_ms: int,
+        on_p_callback=None,
+    ):
+        """WAIT_PRESSURE 다음 폴을 poll_interval_ms 후에 enqueue."""
+        if state["done"]:
+            return
+
+        state["elapsed_ms"] += poll_interval_ms
+
+        # Timeout 처리
+        if state["elapsed_ms"] >= deadline_ms:
+            state["done"] = True
+            self.status_message.emit(
+                "MFC(경고)",
+                f"WAIT_PRESSURE 타임아웃: target={target_ui:.2f} 도달 실패, 다음 단계 진행"
+            )
+            self.command_confirmed.emit("WAIT_PRESSURE")
+            return
+
+        # poll_interval_ms 후 다음 폴
+        def _next_poll():
+            if state["done"]:
+                return
+            self.enqueue(
+                MFC_COMMANDS['READ_PRESSURE'],
+                on_p_callback,
+                timeout_ms=MFC_TIMEOUT,
+                gap_ms=MFC_GAP_MS,
+                tag=f"[WAIT_P {target_ui:.2f}]"
+            )
+
+        QTimer.singleShot(poll_interval_ms, _next_poll)
 
     def _verify_simple_async(self, cmd: str, params: dict,
                             attempt: int = 1, max_attempts: int = 5, delay_ms: int = MFC_DELAY_MS):
@@ -734,12 +886,13 @@ class MFCController(QObject):
             self.enqueue(rd, on_reply, timeout_ms=MFC_TIMEOUT, gap_ms=MFC_GAP_MS, tag='[VERIFY SP1_SET]')
             return
 
-        if cmd in ("SP1_ON", "SP2_ON", "SP4_ON"):
+        if cmd in ("SP1_ON", "SP2_ON", "SP3_ON", "SP4_ON"):
             rd = MFC_COMMANDS['READ_SYSTEM_STATUS']
             # 각 SP에 해당하는 기대 문자 매핑
             sp_map = {
                 "SP1_ON": "1",
                 "SP2_ON": "2",
+                "SP3_ON": "3",
                 "SP4_ON": "4",
             }
 
