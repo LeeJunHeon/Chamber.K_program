@@ -360,7 +360,7 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # 파워 안정화
+        # 파워 안정화 (자연압 ~30 mTorr 상태에서 안정적으로 점화/ramp up)
         steps.append(
             ProcessStep(
                 ActionType.POWER_WAIT,
@@ -368,49 +368,69 @@ class SputterProcessController(QObject):
             )
         )
 
-        steps.append(
-            ProcessStep(
-                ActionType.MFC_CMD,
-                f"SP1={sp1_ui:.2f} 설정",
-                params=('SP1_SET', {'value': sp1_ui}),
-            )
-        )
+        # ──────────────────────────────────────────────────────────
+        # 압력 step-down 시퀀스: 30(SP4) → 15(SP3) → 5(SP2) → WP(SP1)
+        # 각 단계: SET → ON → WAIT_PRESSURE (실제 압력 도달 대기)
+        #
+        # WP에 따른 단계 스킵:
+        #   WP >= 15 : SP3, SP2 모두 스킵, SP1만
+        #   WP >= 5  : SP2 스킵, SP3 → SP1
+        #   WP < 5   : SP3 → SP2 → SP1 (3단계 모두)
+        # ──────────────────────────────────────────────────────────
 
+        # 압력 도달 대기 파라미터 (공통)
+        WAIT_TOL_RATIO = 0.10      # ±10%
+        WAIT_STABLE_COUNT = 3       # 3회 연속
+        WAIT_TIMEOUT_SEC = 180.0    # 최대 3분
+
+        def _append_pressure_stage(sp_index: int, sp_value: float, label: str):
+            """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝 추가"""
+            set_cmd = f"SP{sp_index}_SET"
+            on_cmd = f"SP{sp_index}_ON"
+
+            # 1) SET
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    f"{label}: {set_cmd}={sp_value:.2f} 설정",
+                    params=(set_cmd, {'value': sp_value}),
+                )
+            )
+
+            # 2) ON
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    f"{label}: {on_cmd}",
+                    params=(on_cmd, {}),
+                )
+            )
+
+            # 3) WAIT_PRESSURE (실제 압력이 setpoint ±10% 안에 3회 연속 들어올 때까지)
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    f"{label}: 압력 도달 대기 (target={sp_value:.2f}, ±{WAIT_TOL_RATIO*100:.0f}%, "
+                    f"timeout={int(WAIT_TIMEOUT_SEC)}s)",
+                    params=("WAIT_PRESSURE", {
+                        "target": sp_value,
+                        "tolerance_ratio": WAIT_TOL_RATIO,
+                        "stable_count": WAIT_STABLE_COUNT,
+                        "timeout_sec": WAIT_TIMEOUT_SEC,
+                    }),
+                )
+            )
+
+        # --- SP3 (15.0) : WP < 15 일 때만 ---
+        if sp1_ui < 15.0:
+            _append_pressure_stage(3, 15.0, "Stage1(SP3)")
+
+        # --- SP2 (5.0)  : WP < 5  일 때만 ---
         if sp1_ui < 5.0:
-            # SP2 = 5.00 설정
-            steps.append(
-                ProcessStep(
-                    ActionType.MFC_CMD,
-                    "SP2=5.00 설정",
-                    params=('SP2_SET', {'value': 5.0}),
-                )
-            )
-            # SP2 ON
-            steps.append(
-                ProcessStep(
-                    ActionType.MFC_CMD,
-                    "SP2 ON",
-                    params=('SP2_ON', {}),
-                )
-            )
+            _append_pressure_stage(2, 5.0, "Stage2(SP2)")
 
-            # SP2 상태에서 60초 대기
-            steps.append(
-                ProcessStep(
-                    ActionType.DELAY,
-                    "압력 안정화 대기 (SP2, 60초)",
-                    duration_sec=60,
-                )
-            )
-
-        # 압력 제어 시작
-        steps.append(
-            ProcessStep(
-                ActionType.MFC_CMD,
-                "SP1 ON",
-                params=('SP1_ON', {}),
-            )
-        )
+        # --- SP1 (WP)   : 항상 실행 (최종 working pressure) ---
+        _append_pressure_stage(1, sp1_ui, f"Stage3(SP1={sp1_ui:.2f})")
 
         # --- 8) Shutter Delay ---
         sd_sec = max(0, int(math.ceil(float(p.get('shutter_delay', 0.0)) * 60)))
