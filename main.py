@@ -488,8 +488,17 @@ class MainDialog(QDialog):
 
             if not (params['dc_power'] > 0 or params['rf_power'] > 0):
                 raise ValueError("RF 또는 DC 파워 중 하나 이상을 입력해야 합니다.")
-            if params['shutter_delay'] <= 0:
-                raise ValueError("Shutter Delay는 0보다 커야 합니다.")
+            
+            # Shutter Delay / Process Time 정책:
+            #   - 둘 다 0 이상
+            #   - 둘 중 하나는 반드시 > 0
+            #   - process_time == 0 이면 Main Shutter는 열지 않고 shutter delay만 진행 후 종료
+            if params['shutter_delay'] < 0:
+                raise ValueError("Shutter Delay는 0 이상이어야 합니다.")
+            if params['process_time'] < 0:
+                raise ValueError("Process Time은 0 이상이어야 합니다.")
+            if params['shutter_delay'] <= 0 and params['process_time'] <= 0:
+                raise ValueError("Shutter Delay와 Process Time 중 하나는 0보다 커야 합니다.")
 
         except (ValueError, TypeError) as e:
             QMessageBox.warning(self, "입력 오류", f"공정 파라미터가 잘못되었습니다:\n{e}")
@@ -1146,6 +1155,18 @@ class MainDialog(QDialog):
             self._chk_sampling_started = True
             self._chk_sampling_enabled = True
 
+        # process_time == 0 인 공정에서는 main shutter / 메인 공정 DELAY 스텝이
+        # 시퀀스에 없으므로 update_process_time_timer 가 호출되지 않는다.
+        # → shutter delay 가 0초가 되는 시점에 여기서 샘플링을 종료해야
+        #   이후 셧다운 시퀀스의 RF/DC 램프다운 측정값이 평균에 섞이지 않는다.
+        if seconds_left <= 0:
+            try:
+                pt = float((self._last_params or {}).get("process_time", 0) or 0)
+            except Exception:
+                pt = 0.0
+            if pt <= 0:
+                self._chk_sampling_enabled = False
+
         m, s = divmod(seconds_left, 60)
         text = f"{m:02d}:{s:02d}"
         self.ui.Shutter_delay_edit.setPlainText(text)
@@ -1400,13 +1421,22 @@ class MainDialog(QDialog):
 
         if work_p is None or work_p <= 0:
             raise ValueError(f"[{process_name or 'STEP'}] working_pressure가 비어있거나 0 이하입니다.")
-        if proc_time is None or proc_time <= 0:
-            raise ValueError(f"[{process_name or 'STEP'}] process_time이 비어있거나 0 이하입니다.")
+
+        if proc_time is None:
+            proc_time = 0.0
         if sh_delay is None:
             sh_delay = 0.0
+
+        if proc_time < 0:
+            raise ValueError(f"[{process_name or 'STEP'}] process_time은 0 이상이어야 합니다.")
         if sh_delay < 0:
             raise ValueError(f"[{process_name or 'STEP'}] shutter_delay는 0 이상이어야 합니다.")
-
+        if proc_time <= 0 and sh_delay <= 0:
+            raise ValueError(
+                f"[{process_name or 'STEP'}] shutter_delay와 process_time 중 "
+                f"하나는 0보다 커야 합니다."
+            )
+        
         # ---- 파워(선택) : use_*가 비어있으면 OFF로 간주 ----
         use_dc = _b("use_dc_power", False)
         use_rf = _b("use_rf_power", False)
