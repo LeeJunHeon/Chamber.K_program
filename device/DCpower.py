@@ -53,6 +53,9 @@ class DCPowerController(QObject):
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0   # ← 추가: 저전류 연속 카운터
 
+        # ▼ NEW: shutter delay 시작 시점에 True로 전환 → 이때부터 ±% 이탈 abort 활성화
+        self._power_monitor_armed: bool = False
+
     # ---------------- 연결 ----------------
     @Slot()
     def connect_dcpower_device(self) -> bool:
@@ -83,6 +86,23 @@ class DCPowerController(QObject):
 
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort, LF 종단)")
         return True
+    
+    @Slot()
+    def arm_power_monitor(self):
+        """Shutter Delay 시작 시점에 호출되어 setpoint 이탈 감시(±%×N abort)를 활성화한다.
+        이전 SP step-down + DC Power Delay 구간에서는 비활성 상태이며,
+        여기서 활성화 + 카운터 리셋한다."""
+        if not self._is_running:
+            return
+        if self._power_monitor_armed:
+            return  # 이미 armed
+        self._power_monitor_armed = True
+        self.power_error_count = 0
+        self.status_message.emit(
+            "DCpower",
+            f"setpoint 이탈 감시 활성 (±{DC_POWER_ERROR_RATIO*100:.1f}%, "
+            f"{DC_POWER_ERROR_MAX_COUNT}회 연속 시 중단)"
+        )
 
     # ---------------- 공정 시작 ----------------
     @Slot(float)
@@ -101,6 +121,7 @@ class DCPowerController(QObject):
         self.power_error_count = 0 # ★ 새 공정 시작 시 편차 카운터 초기화
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0
+        self._power_monitor_armed = False   # ▼ NEW: Shutter Delay 전까지 감시 비활성
 
         # 초기화: 전압·전류 동시 설정(APPLy) + 출력 ON
         #  - APPLy는 전압·전류를 동시에 설정할 때만 사용
@@ -190,20 +211,25 @@ class DCPowerController(QObject):
                 self._min_current_abort_count = 0   # 복귀 시 리셋
 
             # 파워 이탈 감시: 10% 초과 5회 연속 시 공정 중단
+            # ▼ NEW: Shutter Delay 시작 시점(arm_power_monitor)부터만 abort 활성
             threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
-            if abs(diff) > threshold_w:
-                self.power_error_count += 1
-                if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
-                    self.status_message.emit(
-                        "재시작",
-                        f"DC 파워가 목표 {self.target_power:.1f}W에서 "
-                        f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
-                        f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다. "
-                        f"(현재: {now_power:.2f}W)"
-                    )
-                    self.stop_process()
-                    return
+            if self._power_monitor_armed:
+                if abs(diff) > threshold_w:
+                    self.power_error_count += 1
+                    if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
+                        self.status_message.emit(
+                            "재시작",
+                            f"DC 파워가 목표 {self.target_power:.1f}W에서 "
+                            f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
+                            f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다. "
+                            f"(현재: {now_power:.2f}W)"
+                        )
+                        self.stop_process()
+                        return
+                else:
+                    self.power_error_count = 0
             else:
+                # armed 전(SP step-down + DC Power Delay 구간): 카운터 누적 안 함
                 self.power_error_count = 0
     
             # 유지 구간에서는 setpoint 편차로 공정을 중단하지 않고,
@@ -262,6 +288,7 @@ class DCPowerController(QObject):
         self.power_error_count = 0
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0
+        self._power_monitor_armed = False   # ▼ NEW
 
         self._stop_control_timer()
 
@@ -289,6 +316,7 @@ class DCPowerController(QObject):
         self.power_error_count = 0
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0
+        self._power_monitor_armed = False   # ▼ NEW
 
         self._stop_control_timer()
 

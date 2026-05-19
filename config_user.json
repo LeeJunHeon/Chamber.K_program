@@ -29,6 +29,8 @@
     "DC_MIN_CURRENT_ABORT_COUNT": 10,
     "// DC 램프업 무응답 판단 시간 (초) - 이 시간 이상 출력 없으면 공정 중단": "",
     "DC_FAIL_MAX_TICKS": 15,
+    "// DC Power Delay: SP1 도달 후 Shutter Delay 직전 안정화 대기 시간(초). 이 구간 동안 ±% 이탈 abort 비활성.": "",
+    "DC_POWER_DELAY_SEC": 300,
 
     "// ------- RF 파워 감시 설정 -------": "",
     "// RF For.P 이탈 허용 비율 (0.10 = ±10%) - MAINTAINING 중만 감시": "",
