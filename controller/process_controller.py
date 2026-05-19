@@ -10,6 +10,7 @@ from PyQt6.QtCore import (
     QObject, QTimer, QEventLoop, QMetaObject, QThread,
     pyqtSignal as Signal, pyqtSlot as Slot, Qt, QElapsedTimer
 )
+from lib.config import DC_POWER_DELAY_SEC
 
 # ===================== 액션 / 스텝 정의 =====================
 
@@ -448,6 +449,19 @@ class SputterProcessController(QObject):
             fail_on_timeout=True,
         )
 
+        # --- DC Power Delay (SP1 도달 후 파워 안정화 대기 / ±% abort OFF 구간) ---
+        dc_power = float(p.get('dc_power', 0.0) or 0.0)
+        if dc_power > 0.0 and DC_POWER_DELAY_SEC > 0:
+            steps.append(
+                ProcessStep(
+                    ActionType.DELAY,
+                    f"DC Power 안정화 대기 {DC_POWER_DELAY_SEC}s",
+                    duration_sec=int(DC_POWER_DELAY_SEC),
+                    timer_purpose=None,   # UI tick 신호 없음 (stage_monitor 메시지만)
+                    polling=False,
+                )
+            )
+
         # --- 8) Shutter Delay ---
         sd_sec = max(0, int(math.ceil(float(p.get('shutter_delay', 0.0)) * 60)))
         if sd_sec > 0:
@@ -724,6 +738,18 @@ class SputterProcessController(QObject):
 
         self._delay_total_sec = int(seconds)
         self._timer_purpose = purpose
+        
+        # ▼ NEW: Shutter Delay 시작 시점에 DC 파워 ±% abort 활성화
+        if purpose == 'shutter':
+            try:
+                params = getattr(self, 'current_params', None) or getattr(self, 'params', None) or {}
+                if float((params or {}).get('dc_power', 0.0) or 0.0) > 0.0:
+                    QMetaObject.invokeMethod(
+                        self.dc, 'arm_power_monitor',
+                        Qt.ConnectionType.QueuedConnection
+                    )
+            except Exception as e:
+                self.status_message.emit("DCpower", f"arm_power_monitor 호출 예외: {e!r}")
 
         # 모노토닉 시계 시작
         self._delay_clock = QElapsedTimer()
