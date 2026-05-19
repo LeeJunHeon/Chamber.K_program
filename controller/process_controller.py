@@ -739,7 +739,9 @@ class SputterProcessController(QObject):
         self._delay_total_sec = int(seconds)
         self._timer_purpose = purpose
         
-        # ▼ NEW: Shutter Delay 시작 시점에 DC 파워 ±% abort 활성화
+        # ▼ NEW: Shutter Delay 또는 Process Time 시작 시점에 DC 파워 ±% abort 활성화
+        #   - 일반 공정: Shutter Delay에서 arm
+        #   - shutter_delay=0 공정: Process Time에서 arm (안전망)
         if purpose in ('shutter', 'process'):
             try:
                 params = getattr(self, 'current_params', None) or getattr(self, 'params', None) or {}
