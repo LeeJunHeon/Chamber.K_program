@@ -740,7 +740,7 @@ class SputterProcessController(QObject):
         self._timer_purpose = purpose
         
         # ▼ NEW: Shutter Delay 시작 시점에 DC 파워 ±% abort 활성화
-        if purpose == 'shutter':
+        if purpose == 'shutter, process':
             try:
                 params = getattr(self, 'current_params', None) or getattr(self, 'params', None) or {}
                 if float((params or {}).get('dc_power', 0.0) or 0.0) > 0.0:
