@@ -241,6 +241,7 @@ class MainDialog(QDialog):
 
         # --- 5. 모든 로그 메시지를 UI 모니터에 연결 ---
         self.plc_controller.status_message.connect(self.on_status_message)
+        self.plc_controller.plc_disconnected.connect(self._on_plc_disconnected)
         self.mfc_controller.status_message.connect(self.on_status_message)
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
@@ -388,6 +389,50 @@ class MainDialog(QDialog):
             except Exception:
                 pass
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
+
+    # ==================== PLC 연결 끊김/복구 알림 (CH.K) ====================
+    @Slot(int)
+    def _on_plc_disconnected(self, elapsed_s: int):
+        """PLC가 60초 이상 끊겨 있을 때 1회 알림 (CH1&2와 동일 형식)."""
+        if not self.chat_chk:
+            return
+        try:
+            from lib.config import PLC_PORT
+        except Exception:
+            PLC_PORT = "PLC"
+        try:
+            self.chat_chk.set_defer(False)
+            self.chat_chk._post_card(
+                "장비 오류",
+                subtitle=f"[CHK] PLC 연결 끊김 {int(elapsed_s)}초 경과, 재연결 실패 ({PLC_PORT})",
+                status="FAIL",
+                urgent=True,
+            )
+            self.chat_chk.flush()
+        except Exception:
+            pass
+
+    @Slot()
+    def _on_plc_reconnected(self):
+        """끊김 알림 후 재연결되면 1회 알림 (CH1&2와 동일 형식)."""
+        if not self.chat_chk:
+            return
+        try:
+            from lib.config import PLC_PORT
+        except Exception:
+            PLC_PORT = "PLC"
+        try:
+            self.chat_chk.set_defer(False)
+            self.chat_chk._post_card(
+                "PLC 재연결",
+                subtitle=f"[CHK] PLC 재연결 성공 ({PLC_PORT})",
+                status="SUCCESS",
+                urgent=True,
+            )
+            self.chat_chk.flush()
+        except Exception:
+            pass
+    # ==================== PLC 연결 끊김/복구 알림 (CH.K) ====================
 
     @Slot()
     def _handle_start_process(self):

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict, List, Tuple
 from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer, QMutex
 import minimalmodbus
+import time
 
 from lib.config import (
     PLC_PORT, PLC_SLAVE_ID, PLC_BAUD,
@@ -77,6 +78,7 @@ class PLCController(QObject):
     status_message = Signal(str, str)
     update_button_display = Signal(str, bool)
     update_sensor_display = Signal(str, bool)
+    plc_disconnected = Signal()
 
     def __init__(self):
         super().__init__()
@@ -93,6 +95,11 @@ class PLCController(QObject):
         self._last_button_states: Dict[str, bool] = {}
 
         self._coil_read_fail_latched = False
+        
+        # ★ 추가: PLC 끊김 60초 감지 (알림 1회용)
+        self._disconnect_since = None      # 폴링 실패가 처음 감지된 시각(monotonic)
+        self._disconnect_notified = False  # 끊김 알림을 이미 보냈는지
+        self._DISCONNECT_GRACE_S = 60.0    # 끊김 확정까지 유예 시간(초)
 
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
@@ -186,7 +193,10 @@ class PLCController(QObject):
     # ============== 폴링 ======================
     @Slot()
     def _poll_status(self):
-        if not self._is_running or self._busy or self.instrument is None:
+        if not self._is_running or self._busy:
+            return
+        if self.instrument is None:
+            self._check_disconnect_timeout()   # ★ instrument 없을 때도 끊김 감지
             return
         self._busy = True
         self._mutex.lock()
@@ -219,11 +229,29 @@ class PLCController(QObject):
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"센서(코일) 읽기 실패: {ex}")
 
+            # ★ 추가: 여기까지 무사히 왔으면 폴링 성공 → 끊김 타이머 리셋
+            self._disconnect_since = None
+            self._disconnect_notified = False
+
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"폴링 실패: {e}")
+            # ★ 추가: 폴링 실패 → 60초 끊김 감지
+            self._check_disconnect_timeout()
         finally:
             self._busy = False
             self._mutex.unlock()
+
+    def _check_disconnect_timeout(self):
+        """폴링 실패가 60초 이상 지속되면 Google Chat 알림을 1회 방출."""
+        now = time.monotonic()
+        if self._disconnect_since is None:
+            # 실패가 처음 감지된 순간 → 시각 기록
+            self._disconnect_since = now
+            return
+        if (not self._disconnect_notified
+                and (now - self._disconnect_since) >= self._DISCONNECT_GRACE_S):
+            self._disconnect_notified = True
+            self.plc_disconnected.emit()
 
     # ============== 쓰기(버튼 클릭 반영) =========
     @Slot(str, bool)
