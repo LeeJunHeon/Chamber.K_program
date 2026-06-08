@@ -242,6 +242,7 @@ class MainDialog(QDialog):
         # --- 5. 모든 로그 메시지를 UI 모니터에 연결 ---
         self.plc_controller.status_message.connect(self.on_status_message)
         self.plc_controller.plc_disconnected.connect(self._on_plc_disconnected)
+        self.plc_controller.plc_reconnected.connect(self._on_plc_reconnected)
         self.mfc_controller.status_message.connect(self.on_status_message)
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)

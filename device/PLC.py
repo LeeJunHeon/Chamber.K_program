@@ -78,7 +78,8 @@ class PLCController(QObject):
     status_message = Signal(str, str)
     update_button_display = Signal(str, bool)
     update_sensor_display = Signal(str, bool)
-    plc_disconnected = Signal()
+    plc_disconnected = Signal(int)   # ★ () → (int)로 변경: 경과 초 전달
+    plc_reconnected = Signal()       # ★ 추가
 
     def __init__(self):
         super().__init__()
@@ -205,6 +206,10 @@ class PLCController(QObject):
             coil_addr_list = list(PLC_COIL_MAP.values())
             addr_to_state = self._read_coils_grouped(coil_addr_list)
 
+            # ★ 코일 읽기가 전부 실패(빈 dict)면 통신 두절로 간주
+            if coil_addr_list and not addr_to_state:
+                raise RuntimeError("PLC 코일 읽기 전부 실패")
+
             for btn_name, addr in PLC_COIL_MAP.items():
                 val = bool(addr_to_state.get(addr, False))
                 if self._last_button_states.get(btn_name) != val:
@@ -229,7 +234,9 @@ class PLCController(QObject):
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"센서(코일) 읽기 실패: {ex}")
 
-            # ★ 추가: 여기까지 무사히 왔으면 폴링 성공 → 끊김 타이머 리셋
+            # ★ 폴링 성공 → 끊김 알림을 보낸 적 있으면 재연결 알림 1회
+            if self._disconnect_notified:
+                self.plc_reconnected.emit()
             self._disconnect_since = None
             self._disconnect_notified = False
 
@@ -251,7 +258,7 @@ class PLCController(QObject):
         if (not self._disconnect_notified
                 and (now - self._disconnect_since) >= self._DISCONNECT_GRACE_S):
             self._disconnect_notified = True
-            self.plc_disconnected.emit()
+            self.plc_disconnected.emit(int(now - self._disconnect_since))
 
     # ============== 쓰기(버튼 클릭 반영) =========
     @Slot(str, bool)

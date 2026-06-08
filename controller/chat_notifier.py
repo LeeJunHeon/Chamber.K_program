@@ -45,6 +45,12 @@ class ChatNotifier(QObject):
             cfg_url = (getattr(_cfg, "CHAT_WEBHOOK_URL", "") or "").strip()
         self.webhook_default = (webhook_url or cfg_url).strip()
 
+        # ★ PLC 끊김/재연결 전용 채널
+        plc_url = ""
+        if _cfg is not None:
+            plc_url = (getattr(_cfg, "CHAT_WEBHOOK_PLC_DISCONNECT_URL", "") or "").strip()
+        self.webhook_plc_disconnect = plc_url
+
         # 지연 전송 & 버퍼 (payload, webhook_url) 튜플로 저장
         self._defer: bool = True
         self._buffer: List[Tuple[dict, Optional[str]]] = []
@@ -449,6 +455,30 @@ class ChatNotifier(QObject):
     @Slot(str)
     def notify_text(self, text: str):
         self._post_text(text, route_params=self._last_started_params)
+
+    def notify_plc_link(self, *, ok: bool, detail: str):
+        """PLC 끊김(ok=False)/재연결(ok=True)을 전용 채널로 즉시 전송."""
+        url = self.webhook_plc_disconnect or self.webhook_default
+        if not url:
+            return
+        title = "PLC 재연결" if ok else "장비 오류"
+        icon = "✅" if ok else "❌"
+        widgets = [
+            {"textParagraph": {"text": f"<b>{icon} {title}</b>"}},
+            {"textParagraph": {"text": detail}},
+        ]
+        payload = {
+            "cardsV2": [
+                {
+                    "cardId": "plc-link",
+                    "card": {
+                        "header": {"title": "Sputter Controller", "subtitle": "Status Notification"},
+                        "sections": [{"widgets": widgets}],
+                    },
+                }
+            ]
+        }
+        self._schedule_post(payload, url)
 
     @Slot(str)
     def notify_error(self, reason: str):
