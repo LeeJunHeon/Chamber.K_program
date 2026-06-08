@@ -402,14 +402,10 @@ class MainDialog(QDialog):
         except Exception:
             PLC_PORT = "PLC"
         try:
-            self.chat_chk.set_defer(False)
-            self.chat_chk._post_card(
-                "장비 오류",
-                subtitle=f"[CHK] PLC 연결 끊김 {int(elapsed_s)}초 경과, 재연결 실패 ({PLC_PORT})",
-                status="FAIL",
-                urgent=True,
+            self.chat_chk.notify_plc_link(
+                ok=False,
+                detail=f"[CHK] PLC 연결 끊김 {int(elapsed_s)}초 경과, 재연결 실패 ({PLC_PORT})",
             )
-            self.chat_chk.flush()
         except Exception:
             pass
 
@@ -423,14 +419,10 @@ class MainDialog(QDialog):
         except Exception:
             PLC_PORT = "PLC"
         try:
-            self.chat_chk.set_defer(False)
-            self.chat_chk._post_card(
-                "PLC 재연결",
-                subtitle=f"[CHK] PLC 재연결 성공 ({PLC_PORT})",
-                status="SUCCESS",
-                urgent=True,
+            self.chat_chk.notify_plc_link(
+                ok=True,
+                detail=f"[CHK] PLC 재연결 성공 ({PLC_PORT})",
             )
-            self.chat_chk.flush()
         except Exception:
             pass
     # ==================== PLC 연결 끊김/복구 알림 (CH.K) ====================
