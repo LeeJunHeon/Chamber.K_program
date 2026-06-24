@@ -13,7 +13,8 @@ from lib.config import (
     RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
     RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0,
     RF_FORWARD_SCALING_MAX_WATT,
-    RF_REFLECTED_SCALING_MAX_WATT
+    RF_REFLECTED_SCALING_MAX_WATT,
+    PLC_MV_COIL, PLC_MV_INTERLOCK_COIL
 )
 
 # 주의: 아래 표에서 대괄호 […]가 실제 Modbus 주소(0-based, HEX 표시)입니다.
@@ -376,6 +377,26 @@ class PLCController(QObject):
             return forward_watt, reflected_watt
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"RF 피드백 읽기 실패: {e}")
+            return None, None
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    # ============== 메인밸브 상태(공정 시작 인터록) ==============
+    def read_main_valve_state(self) -> tuple[bool, bool] | tuple[None, None]:
+        """메인밸브 상태를 동기 읽기로 반환: (MV, MV_INTERLOCK).
+        둘 다 True여야 메인밸브가 실제로 열린 상태(공정 시작 허용).
+        포트 미연결/읽기 실패 시 (None, None)."""
+        if self.instrument is None:
+            return None, None
+        self._busy = True
+        self._mutex.lock()
+        try:
+            mv  = bool(self.instrument.read_bit(PLC_MV_COIL,          functioncode=1))
+            itl = bool(self.instrument.read_bit(PLC_MV_INTERLOCK_COIL, functioncode=1))
+            return mv, itl
+        except Exception as e:
+            self.status_message.emit("PLC(경고)", f"메인밸브 상태 읽기 실패: {e}")
             return None, None
         finally:
             self._busy = False

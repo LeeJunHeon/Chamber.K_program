@@ -63,6 +63,11 @@ PLC_SENSOR_BITS: Dict[str, int] = {
     "Water": 164,  # M00104
 }
 
+# 공정 시작 인터록: 메인밸브(MV)가 실제 열린 상태(MV & MV_INTERLOCK 모두 ON)일 때만 시작 허용
+# M영역 → Modbus 코일 = (워드 4자리) × 16 + (비트 1자리)
+PLC_MV_COIL           = 3    # M00003 (Main Valve open 명령 비트)
+PLC_MV_INTERLOCK_COIL = 50   # M00032 (Main Valve interlock,  3×16+2)
+
 # ================================================================
 # DC Power 설정
 # ================================================================

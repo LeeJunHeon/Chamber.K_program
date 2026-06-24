@@ -427,10 +427,35 @@ class MainDialog(QDialog):
             pass
     # ==================== PLC 연결 끊김/복구 알림 (CH.K) ====================
 
+    def _check_main_valve_open(self) -> bool:
+        """메인밸브(MV)와 MV_INTERLOCK을 읽어 둘 다 ON인지 확인.
+        둘 다 ON(메인밸브 실제 개방)일 때만 True. 그 외에는 경고 후 False."""
+        mv, itl = self.plc_controller.read_main_valve_state()
+        if mv is None or itl is None:
+            QMessageBox.warning(
+                self, "공정 시작 불가",
+                "메인밸브 상태를 읽을 수 없습니다.\nPLC 연결을 확인하세요."
+            )
+            return False
+        if not (mv and itl):
+            QMessageBox.warning(
+                self, "공정 시작 불가",
+                "메인밸브가 열려 있지 않아 공정을 시작할 수 없습니다.\n"
+                f"(MV={'ON' if mv else 'OFF'}, "
+                f"MV_INTERLOCK={'ON' if itl else 'OFF'})\n"
+                "메인밸브를 먼저 개방한 뒤 다시 시작하세요."
+            )
+            return False
+        return True
+
     @Slot()
     def _handle_start_process(self):
         if self.process_running:
             QMessageBox.warning(self, "경고", "이미 공정이 진행 중입니다.")
+            return
+        
+        # ★ 메인밸브 개방 확인: MV & MV_INTERLOCK 둘 다 ON일 때만 공정 시작 허용
+        if not self._check_main_valve_open():
             return
         
         self.clear_plc_fault.emit()
