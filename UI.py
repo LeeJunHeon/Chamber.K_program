@@ -362,6 +362,12 @@ class Ui_Dialog(object):
         self.DC_power_edit.setGeometry(QRect(900, 265, 131, 31))
         self.DC_power_edit.setPlainText("200")
 
+        # --- DC Power 안정화 대기 사용 여부 (기본 OFF) ---
+        self.dc_delay_checkbox = QCheckBox(Dialog)
+        self.dc_delay_checkbox.setObjectName(u"dc_delay_checkbox")
+        self.dc_delay_checkbox.setGeometry(QRect(901, 298, 130, 22))
+        self.dc_delay_checkbox.setChecked(False)
+
         # --- Shutter Delay ---
         self.shutter_delay_label = QLabel(Dialog)
         self.shutter_delay_label.setObjectName(u"shutter_delay_label")
@@ -569,6 +575,9 @@ class Ui_Dialog(object):
             QCoreApplication.translate("Dialog", u"DC power", None)
         )
 
+        self.dc_delay_checkbox.setText(
+            QCoreApplication.translate("Dialog", u"DC stabilize", None)
+        )
         self.shutter_delay_label.setText(QCoreApplication.translate("Dialog", u"Shutter delay [min]", None))
         self.process_time_label.setText(QCoreApplication.translate("Dialog", u"process time [min]", None))
         self.for_p_label.setText(QCoreApplication.translate("Dialog", u"for.P", None))

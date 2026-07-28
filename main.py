@@ -28,6 +28,7 @@ from device.PLC import PLCController
 from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
+from lib.config import PLC_COIL_MAP, DC_POWER_DELAY_SEC
 
 class MainDialog(QDialog):
     shutdown_requested = Signal()
@@ -43,6 +44,14 @@ class MainDialog(QDialog):
         self.ui = Ui_Dialog()
         self.ui.setupUi(self)
         set_monitor_widget(self.ui.error_monitor)
+
+        # DC Power 안정화 대기(선택): 기본 OFF
+        self.ui.dc_delay_checkbox.setChecked(False)
+        self.ui.dc_delay_checkbox.setToolTip(
+            f"체크 시 SP1 도달 후 Shutter Delay 시작 전에 "
+            f"DC Power 안정화 대기 {int(DC_POWER_DELAY_SEC)}초를 진행합니다.\n"
+            f"(대기 시간은 config_user.json의 DC_POWER_DELAY_SEC로 조정)"
+        )
 
         # === Google Chat Notifier (CH.K) ===
         try:
@@ -545,6 +554,10 @@ class MainDialog(QDialog):
                 # ▼ G1/G2 사용 여부 + 타겟 이름
                 "use_g1": use_g1_flag,
                 "use_g2": use_g2_flag,
+
+                # ▼ DC Power 안정화 대기 사용 여부 (기본 OFF)
+                "use_dc_delay": self.ui.dc_delay_checkbox.isChecked(),
+
                 "g1_target_name": g1_target_name,
                 "g2_target_name": g2_target_name,
             }
@@ -902,6 +915,7 @@ class MainDialog(QDialog):
         # --- Power setpoint + 체크박스 (UI.py 기본값) ---
         self.ui.rf_power_checkbox.setChecked(False)
         self.ui.dc_power_checkbox.setChecked(False)
+        self.ui.dc_delay_checkbox.setChecked(False)
         self.ui.RF_power_edit.setPlainText("200")
         self.ui.DC_power_edit.setPlainText("200")
 
@@ -1504,6 +1518,9 @@ class MainDialog(QDialog):
         use_dc = _b("use_dc_power", False)
         use_rf = _b("use_rf_power", False)
 
+        # DC Power 안정화 대기(선택) : 컬럼이 없거나 비어 있으면 OFF
+        use_dc_delay = _b("use_dc_delay", False)
+
         dc_power = 0.0
         rf_power = 0.0
 
@@ -1575,6 +1592,8 @@ class MainDialog(QDialog):
             "use_g1": bool(use_g1),
             "use_g2": bool(use_g2),
 
+            "use_dc_delay": bool(use_dc_delay and use_dc),
+
             "g1_target_name": g1_target_name,
             "g2_target_name": g2_target_name,
 
@@ -1620,6 +1639,13 @@ class MainDialog(QDialog):
         finally:
             self.ui.dc_power_checkbox.blockSignals(False)
         self.ui.DC_power_edit.setPlainText(f"{dc_power:.1f}" if dc_power > 0 else "0")
+
+        # DC Power 안정화 대기 사용 여부
+        try:
+            self.ui.dc_delay_checkbox.blockSignals(True)
+            self.ui.dc_delay_checkbox.setChecked(bool(params.get("use_dc_delay", False)))
+        finally:
+            self.ui.dc_delay_checkbox.blockSignals(False)
 
         # RF 파워
         rf_power = float(params.get("rf_power") or 0.0)

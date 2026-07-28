@@ -451,6 +451,7 @@ class SputterProcessController(QObject):
 
         # --- DC Power Delay (SP1 도달 후 파워 안정화 대기 / ±% abort OFF 구간) ---
         dc_power = float(p.get('dc_power', 0.0) or 0.0)
+        use_dc_delay = bool(p.get('use_dc_delay', False))   # ▼ NEW: UI 체크박스 (기본 OFF)
         if dc_power > 0.0 and DC_POWER_DELAY_SEC > 0:
             steps.append(
                 ProcessStep(
