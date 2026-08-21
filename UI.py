@@ -450,82 +450,94 @@ class Ui_Dialog(object):
         self.Sputter_Stop_Button.setCheckable(False)
 
         # ===================== 히터 (수동 제어 패널) =====================
-        # 배치 근거: Rotary_button(y=380~)과 pushButton_12(x=220~) 사이의
-        #           비어 있는 영역 x=16~218, y=244~366 을 사용한다.
-        # 구조    : QFrame(heater_group) 을 부모로 두고 내부 위젯은
-        #           프레임 기준 상대 좌표로 배치한다.
-        #           → 나중에 패널 전체를 옮길 때 heater_group 좌표만 바꾸면 된다.
+        # [배치] Rotary_button(y=380~)과 pushButton_12(x=220~) 사이의 빈 영역.
+        #        박스 크기를 202x122 → 186x104 로 줄여 배관도와의 여백을 확보.
+        # [구조] QFrame(heater_group)이 부모. 내부 위젯은 프레임 기준 상대 좌표.
+        #        → 패널을 통째로 옮길 때 heater_group의 좌표만 바꾸면 된다.
+        # [스타일] 우측 입력 패널(working_pressure 등)과 동일하게 Qt 기본 폰트를
+        #        쓰고, ON 버튼만 장비 버튼(Ar/RV 등)의 체크 색(#32FF32)을 따른다.
 
         self.heater_group = QFrame(Dialog)
         self.heater_group.setObjectName(u"heater_group")
-        self.heater_group.setGeometry(QRect(16, 244, 202, 122))
+        self.heater_group.setGeometry(QRect(18, 250, 186, 104))
         self.heater_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.heater_group.setStyleSheet(
-            u"QFrame#heater_group {"
-            u"  background-color: #fafafa;"
-            u"  border: 1px solid #9e9e9e;"
-            u"  border-radius: 6px;"
-            u"}"
+            u"QFrame#heater_group {background: #ffffff; "
+            u"border: 2px solid #cccccc; border-radius: 8px;}"
         )
 
-        # --- 제목 ---
+        # --- 제목: 이 박스가 히터 제어부임을 명시 ---
         self.heater_title_label = QLabel(self.heater_group)
         self.heater_title_label.setObjectName(u"heater_title_label")
-        self.heater_title_label.setGeometry(QRect(10, 6, 182, 20))
-        font_h = QFont()
-        font_h.setPointSize(10)
-        font_h.setBold(True)
-        self.heater_title_label.setFont(font_h)
-        self.heater_title_label.setStyleSheet(u"border: none; color: #37474f;")
+        self.heater_title_label.setGeometry(QRect(10, 5, 166, 18))
+        self.heater_title_label.setStyleSheet(
+            u"QLabel {border: none; color: #333333; font-weight: bold;}"
+        )
 
-        # --- 1행: 현재 온도(읽기 전용) + 상태 표시 ---
+        # --- 1행: 현재 온도(PLC 열전대 실측값, 읽기 전용) ---
         self.heater_pv_title = QLabel(self.heater_group)
         self.heater_pv_title.setObjectName(u"heater_pv_title")
-        self.heater_pv_title.setGeometry(QRect(10, 32, 34, 24))
-        self.heater_pv_title.setStyleSheet(u"border: none;")
+        self.heater_pv_title.setGeometry(QRect(10, 28, 30, 22))
+        self.heater_pv_title.setStyleSheet(u"QLabel {border: none;}")
 
         self.heater_pv_edit = QPlainTextEdit(self.heater_group)
         self.heater_pv_edit.setObjectName(u"heater_pv_edit")
-        self.heater_pv_edit.setGeometry(QRect(46, 32, 58, 24))
-        self.heater_pv_edit.setReadOnly(True)   # PLC가 주는 값만 표시
-        self.heater_pv_edit.setStyleSheet(u"background-color: #eeeeee;")
+        self.heater_pv_edit.setGeometry(QRect(42, 28, 52, 22))
+        self.heater_pv_edit.setReadOnly(True)          # PLC 값만 표시
+        self.heater_pv_edit.setStyleSheet(
+            u"QPlainTextEdit {background: #f0f0f0; border: 1px solid #cccccc;}"
+        )
 
+        # 상태 문구: 정지 / 운전 중 / 인터락 / 과온 트립 ...
+        # 색상은 main.py의 update_heater_display()가 상황에 맞게 덮어쓴다.
         self.heater_status_label = QLabel(self.heater_group)
         self.heater_status_label.setObjectName(u"heater_status_label")
-        self.heater_status_label.setGeometry(QRect(110, 32, 84, 24))
-        self.heater_status_label.setStyleSheet(u"border: none;")
+        self.heater_status_label.setGeometry(QRect(100, 28, 76, 22))
+        self.heater_status_label.setStyleSheet(u"QLabel {border: none;}")
 
         # --- 2행: 목표 온도 입력 + 적용 + ON/OFF ---
         self.heater_sv_title = QLabel(self.heater_group)
         self.heater_sv_title.setObjectName(u"heater_sv_title")
-        self.heater_sv_title.setGeometry(QRect(10, 62, 34, 24))
-        self.heater_sv_title.setStyleSheet(u"border: none;")
+        self.heater_sv_title.setGeometry(QRect(10, 54, 30, 22))
+        self.heater_sv_title.setStyleSheet(u"QLabel {border: none;}")
 
         self.heater_sv_edit = QPlainTextEdit(self.heater_group)
         self.heater_sv_edit.setObjectName(u"heater_sv_edit")
-        self.heater_sv_edit.setGeometry(QRect(46, 62, 58, 24))
-
-        # 적용: 목표 온도만 다시 쓴다 (운전 중에도 목표 변경 가능)
-        self.heater_apply_button = QPushButton(self.heater_group)
-        self.heater_apply_button.setObjectName(u"heater_apply_button")
-        self.heater_apply_button.setGeometry(QRect(110, 62, 40, 24))
-
-        # ON/OFF: 체크 시 목표 온도 전송 + 운전 요구(HEATER_RUN) ON
-        self.heater_onoff_button = QPushButton(self.heater_group)
-        self.heater_onoff_button.setObjectName(u"heater_onoff_button")
-        self.heater_onoff_button.setGeometry(QRect(154, 62, 40, 24))
-        self.heater_onoff_button.setCheckable(True)
-        self.heater_onoff_button.setStyleSheet(
-            u"QPushButton { background-color: #e0e0e0; border: 1px solid #9e9e9e;"
-            u"              border-radius: 3px; }"
-            u"QPushButton:checked { background-color: #ef9a9a; font-weight: bold; }"
+        self.heater_sv_edit.setGeometry(QRect(42, 54, 52, 22))
+        self.heater_sv_edit.setStyleSheet(
+            u"QPlainTextEdit {border: 1px solid #cccccc;}"
         )
 
-        # --- 3행: 출력 % / 램프 목표 (PLC PID의 실제 동작 상태) ---
+        # [적용] 목표 온도만 다시 전송. 운전 중에도 목표 변경 가능.
+        self.heater_apply_button = QPushButton(self.heater_group)
+        self.heater_apply_button.setObjectName(u"heater_apply_button")
+        self.heater_apply_button.setGeometry(QRect(100, 54, 36, 22))
+        self.heater_apply_button.setStyleSheet(
+            u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
+            u"border-radius: 4px; border: 1px solid #cccccc;}"
+            u"QPushButton:hover {background: #dcdcda;}"
+        )
+
+        # [ON] 체크 시 목표 온도 전송 + HEATER_RUN ON.
+        #      체크 색(#32FF32)은 Ar/RV 등 장비 버튼과 동일 규칙.
+        self.heater_onoff_button = QPushButton(self.heater_group)
+        self.heater_onoff_button.setObjectName(u"heater_onoff_button")
+        self.heater_onoff_button.setGeometry(QRect(140, 54, 36, 22))
+        self.heater_onoff_button.setCheckable(True)
+        self.heater_onoff_button.setStyleSheet(
+            u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; "
+            u"border-radius: 4px; border: 1px solid #555555;}"
+            u"QPushButton:checked {background: #32FF32; color: black; "
+            u"font-weight: bold; border-radius: 4px; border: 1px solid #229b12;}"
+        )
+
+        # --- 3행: PLC 내장 PID의 실제 동작 상태 (출력% / 램프 목표) ---
         self.heater_mv_label = QLabel(self.heater_group)
         self.heater_mv_label.setObjectName(u"heater_mv_label")
-        self.heater_mv_label.setGeometry(QRect(10, 92, 184, 20))
-        self.heater_mv_label.setStyleSheet(u"border: none; color: #616161;")
+        self.heater_mv_label.setGeometry(QRect(10, 80, 166, 18))
+        self.heater_mv_label.setStyleSheet(
+            u"QLabel {border: none; color: #666666;}"
+        )
         # ===================== 히터 =====================
 
         # =================================================================== #
@@ -607,9 +619,10 @@ class Ui_Dialog(object):
         self.BuzzStop_Button.setText(QCoreApplication.translate("Dialog", u"Buzz Stop(1)", None))
         self.ALL_STOP_button.setText(QCoreApplication.translate("Dialog", u"ALL STOP", None))
         self.Door_Button.setText(QCoreApplication.translate("Dialog", u"Door", None))
-        
+
         # --- 히터 패널 ---
-        self.heater_title_label.setText(QCoreApplication.translate("Dialog", u"\ud788\ud130 (Heater)", None))
+        # 단위를 제목에 명시 → 각 입력창에서 단위 표기를 생략할 수 있음
+        self.heater_title_label.setText(QCoreApplication.translate("Dialog", u"Heater [\u00b0C]", None))
         self.heater_pv_title.setText(QCoreApplication.translate("Dialog", u"\ud604\uc7ac", None))
         self.heater_sv_title.setText(QCoreApplication.translate("Dialog", u"\ubaa9\ud45c", None))
         self.heater_status_label.setText(QCoreApplication.translate("Dialog", u"\u2014", None))
