@@ -265,14 +265,29 @@ class MainDialog(QDialog):
 
         # --- 6. 히터 ---
         if HEATER_ENABLED:
+            # (1) UI -> PLC : 사용자가 직접 조작하는 경로 (수동 제어)
+            #     PLC 내장 PID가 실제 온도 제어를 담당하므로
+            #     파이썬은 '목표 온도'와 '운전 요구'만 전달한다.
             self.request_heater_target.connect(self.plc_controller.set_heater_target)
             self.request_heater_run.connect(self.plc_controller.set_heater_run)
             self.request_heater_reset.connect(self.plc_controller.reset_heater_fault)
+
+            # (2) PLC -> UI : 200ms 폴링으로 올라오는 히터 상태를 화면에 반영
             self.plc_controller.update_heater_status.connect(self.update_heater_display)
             self.plc_controller.heater_fault.connect(self._on_heater_fault)
+
+            # (3) UI 위젯 -> 핸들러
             self.ui.heater_apply_button.clicked.connect(self._on_heater_apply_clicked)
             self.ui.heater_onoff_button.toggled.connect(self._on_heater_onoff_toggled)
+
+            # (4) ★ ProcessController -> PLC : 레시피(CSV/단일 공정)에서
+            #     HEATER_SET 스텝이 실행될 때 목표 온도와 운전을 PLC로 보낸다.
+            #     이 연결이 없으면 레시피의 히터 스텝이 아무 동작도 하지 않는다.
+            self.process_controller.set_heater_target.connect(self.plc_controller.set_heater_target)
+            self.process_controller.set_heater_run.connect(self.plc_controller.set_heater_run)
         else:
+            # 히터 비활성(config_user.json의 HEATER_ENABLED=false) 시
+            # 조작 위젯을 잠가 오조작을 막는다. 표시용 위젯은 그대로 둔다.
             for w in ("heater_apply_button", "heater_onoff_button", "heater_sv_edit"):
                 getattr(self.ui, w).setEnabled(False)
 
@@ -1518,6 +1533,17 @@ class MainDialog(QDialog):
         self._is_closing = True
         self.ui.select_csv_button.setEnabled(False)
         self._stop_csv_delay_timer()
+
+        # ★ 히터 정지 (포트를 닫기 전에 정상 경로로 먼저 끈다)
+        #   - PLC.cleanup()에도 동일한 안전장치가 있지만,
+        #     그쪽은 포트를 닫는 중이라 실패할 수 있어 여기서 한 번 더 끈다.
+        #   - HEATER_RUN이 꺼지면 PLC 래더 H9가 DAC 출력을 0으로 강제한다.
+        if HEATER_ENABLED:
+            try:
+                self.request_heater_run.emit(False)
+                self.ui.heater_onoff_button.setChecked(False)
+            except Exception:
+                pass
 
         log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
 
