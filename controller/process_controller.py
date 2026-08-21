@@ -10,7 +10,9 @@ from PyQt6.QtCore import (
     QObject, QTimer, QEventLoop, QMetaObject, QThread,
     pyqtSignal as Signal, pyqtSlot as Slot, Qt, QElapsedTimer
 )
-from lib.config import DC_POWER_DELAY_SEC
+from lib.config import (DC_POWER_DELAY_SEC,
+                        HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
+                        HEATER_WAIT_TIMEOUT_SEC)
 
 # ===================== 액션 / 스텝 정의 =====================
 
@@ -30,6 +32,8 @@ class ActionType(str, Enum):
     DC_POWER_STOP = "DC_POWER_STOP"
     RF_POWER_SET  = "RF_POWER_SET"   # value: float (offset/param은 start에서 params로 받음)
     RF_POWER_STOP = "RF_POWER_STOP"
+    HEATER_SET    = "HEATER_SET"     # value: 목표 온도(°C)
+    HEATER_WAIT   = "HEATER_WAIT"    # value: 목표 온도(°C)
 
 @dataclass
 class ProcessStep:
@@ -76,6 +80,8 @@ class SputterProcessController(QObject):
     stop_dc_power         = Signal()
     start_rf_power        = Signal(dict)       # {'target':W, 'offset':x, 'param':y}
     stop_rf_power         = Signal()
+    set_heater_target     = Signal(float)    # ★
+    set_heater_run        = Signal(bool)     # ★
 
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
@@ -343,6 +349,19 @@ class SputterProcessController(QObject):
             )
         )
 
+        # --- 6.5) 히터 승온 (선택) ---
+        #  압력 안정화와 병행하여 승온 → 아웃가싱이 step-down 전에 빠지도록 배치
+        heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
+        if bool(p.get('use_heater', False)) and heater_temp > 0.0:
+            steps.append(ProcessStep(
+                ActionType.HEATER_SET, f"히터 목표 {heater_temp:.1f}°C 설정",
+                value=heater_temp))
+            steps.append(ProcessStep(
+                ActionType.HEATER_WAIT,
+                f"히터 온도 도달 대기 (±{HEATER_SOAK_TOLERANCE:.1f}°C, "
+                f"{HEATER_SOAK_TIME_SEC}s 유지, timeout {HEATER_WAIT_TIMEOUT_SEC}s)",
+                value=heater_temp))
+
         # --- 7) 건 셔터 선택적 Open (기존 로직 그대로) ---
         if p.get('use_g1', False):
             steps.append(
@@ -582,6 +601,14 @@ class SputterProcessController(QObject):
                 self.stop_rf_power.emit()
                 QTimer.singleShot(100, self._next_step)
 
+            elif step.action == ActionType.HEATER_SET:
+                self.set_heater_target.emit(float(step.value or 0.0))
+                self.set_heater_run.emit(True)
+                QTimer.singleShot(500, self._next_step)
+
+            elif step.action == ActionType.HEATER_WAIT:
+                self._heater_wait(float(step.value or 0.0))
+
             elif step.action == ActionType.POWER_WAIT:
                 self._power_wait()
 
@@ -678,6 +705,67 @@ class SputterProcessController(QObject):
             return
 
         self.status_message.emit("정보", "파워 안정화 완료.")
+        self._next_step()
+
+    # ==================== 히터 온도 도달 대기 ====================
+    def _heater_wait(self, target_c: float):
+        """PLC 히터 상태 폴링을 구독해 목표 ±tol 이 N초 연속 유지되면 통과."""
+        tol        = float(HEATER_SOAK_TOLERANCE)
+        need_sec   = int(HEATER_SOAK_TIME_SEC)
+        timeout_ms = int(HEATER_WAIT_TIMEOUT_SEC * 1000)
+
+        loop = QEventLoop()
+        state = {'in_band_since': None, 'aborted': False, 'reason': ''}
+        clock = QElapsedTimer()
+
+        def _on_status(st: dict):
+            if not self._running or self._stop_pending:
+                loop.quit(); return
+
+            if st.get('fault'):
+                state['aborted'] = True
+                state['reason'] = "히터 이상 발생"
+                loop.quit(); return
+
+            pv = st.get('pv')
+            if pv is None:          # TC 이상
+                state['in_band_since'] = None
+                return
+
+            if abs(float(pv) - target_c) <= tol:
+                if state['in_band_since'] is None:
+                    clock.start()
+                    state['in_band_since'] = True
+                    self.status_message.emit("공정", f"히터 목표 도달 — {need_sec}s 유지 확인 중")
+                elif clock.elapsed() >= need_sec * 1000:
+                    loop.quit()
+            else:
+                state['in_band_since'] = None
+
+        self.plc.update_heater_status.connect(_on_status)
+        self._active_loops = [("heater", loop)]
+        self.status_message.emit("정보", f"히터 승온 대기중... (목표 {target_c:.1f}°C)")
+
+        ok = self._exec_loop_with_timeout(
+            loop, timeout_ms,
+            timeout_message=f"히터 승온 timeout({HEATER_WAIT_TIMEOUT_SEC}s) — 목표 미도달")
+
+        try:
+            self.plc.update_heater_status.disconnect(_on_status)
+        except Exception:
+            pass
+        self._active_loops = []
+
+        if not self._running or self._stop_pending:
+            return
+        if state['aborted']:
+            self._abort_with_error(f"{self._step_tag()} | {state['reason']}")
+            return
+        if not ok:
+            self._abort_with_error(f"{self._step_tag()} | 히터 승온 timeout — 공정 중단")
+            return
+
+        self.status_message.emit("정보", "히터 온도 도달 완료.")
         self._next_step()
 
     def _exec_loop_with_timeout(

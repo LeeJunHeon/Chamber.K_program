@@ -36,6 +36,47 @@ RF_ADC_MAX_COUNT    = 4000   # 모듈 사양
 RF_DAC_ADDR_CH0     = 40    # D00040 -> Holding Register 64
 COIL_ENABLE_DAC_CH0 = 320   # U02.02.0 -> Coil 320
 
+# ================================================================
+# 히터 (PLC 내장 PID — HEATER 스캔 프로그램)
+# ================================================================
+# --- 홀딩 레지스터 (D영역) ---
+HEATER_REG_BLOCK_START = 10   # D00010~D00017 연속 8개 배치 읽기
+HEATER_REG_BLOCK_COUNT = 8
+HEATER_REG_PV       = 10      # D00010 TEMP_READ_1 (signed, -1=이상)
+HEATER_REG_SV       = 12      # D00012 목표 온도        [W]
+HEATER_REG_SV_LIMIT = 13      # D00013 목표 상한        [R]
+HEATER_REG_WD       = 14      # D00014 워치독 카운터    [W]
+HEATER_REG_CUR_SV   = 16      # D00016 램프 적용 목표   [R]
+HEATER_REG_PID_ERR  = 17      # D00017 PID 에러 코드    [R]
+HEATER_REG_MV       = 41      # D00041 DAC 출력 카운트  [R]
+
+# --- 코일 (M영역, 워드×16+비트) ---
+HEATER_COIL_BASE    = 64      # M00040~M00049 연속 10개
+HEATER_COIL_COUNT   = 10
+HEATER_COIL_RUN     = 64      # M00040 운전 요구        [W]
+HEATER_COIL_ITL     = 65      # M00041 인터락 정상      [R]
+HEATER_COIL_FAULT   = 66      # M00042 이상 종합        [R]
+HEATER_COIL_RST     = 67      # M00043 이상 리셋        [W]
+HEATER_COIL_OT      = 68      # M00044 과온 트립
+HEATER_COIL_TC_ERR  = 69      # M00045 온도센서 이상
+HEATER_COIL_WD_ERR  = 70      # M00046 워치독 타임아웃
+HEATER_COIL_AT_REQ  = 71      # M00047 오토튜닝 요구    [W]
+HEATER_COIL_AT_DONE = 72      # M00048 오토튜닝 완료
+HEATER_COIL_PID_RUN = 73      # M00049 PID 동작 중
+
+# --- DAC 출력 범위 (PLC 내장 PID 파라미터와 반드시 일치) ---
+HEATER_MV_MIN = 320           # 0.8V
+HEATER_MV_MAX = 1600          # 4.0V
+
+# --- config_user.json에서 변경 가능 ---
+HEATER_ENABLED          = get('HEATER_ENABLED',          True)
+HEATER_TEMP_SCALE       = get('HEATER_TEMP_SCALE',       0.1)   # ★ 실측 후 확정
+HEATER_WD_PERIOD_MS     = get('HEATER_WD_PERIOD_MS',     3000)  # PLC 10초의 1/3
+HEATER_MAX_TEMP         = get('HEATER_MAX_TEMP',         180.0) # UI 입력 상한
+HEATER_SOAK_TOLERANCE   = get('HEATER_SOAK_TOLERANCE',   3.0)   # °C
+HEATER_SOAK_TIME_SEC    = get('HEATER_SOAK_TIME_SEC',    60)    # 도달 유지 시간
+HEATER_WAIT_TIMEOUT_SEC = get('HEATER_WAIT_TIMEOUT_SEC', 3600)  # 승온 대기 최대
+
 # PLC 주소 맵핑 (고정 — 배선표 기준)
 PLC_COIL_MAP: Dict[str, int] = {
     "Rotary_button":  0,   # M00000
@@ -187,6 +228,7 @@ CHK_CSV_COLUMNS = [
     "O2 flow",
     "Working Pressure",
     "Process Time",
+    "Heater Temp",
     "RF: For.P",
     "RF: Ref. P",
     "DC: V",

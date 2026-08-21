@@ -16,10 +16,10 @@ import datetime
 from UI import Ui_Dialog
 from lib.config import PLC_COIL_MAP
 from lib.logger import (
-    set_monitor_widget, 
-    log_message_to_monitor, 
+    set_monitor_widget,
+    log_message_to_monitor,
     set_process_log_file,
-    log_message_to_file, 
+    log_message_to_file,
     append_chk_csv_row,
 )
 from controller.process_controller import SputterProcessController
@@ -28,7 +28,8 @@ from device.PLC import PLCController
 from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
-from lib.config import PLC_COIL_MAP, DC_POWER_DELAY_SEC
+from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
+                        HEATER_ENABLED, HEATER_MAX_TEMP)
 
 class MainDialog(QDialog):
     shutdown_requested = Signal()
@@ -36,6 +37,9 @@ class MainDialog(QDialog):
     request_process_start = Signal(dict)
     request_plc_port_update = Signal(str, bool)
     request_plc_emergency_stop = Signal()
+    request_heater_target = Signal(float)   # ★
+    request_heater_run    = Signal(bool)    # ★
+    request_heater_reset  = Signal()        # ★
     clear_plc_fault = Signal()  # 새 공정 시작 시 PLC 통신 실패 래치 해제
 
     """메인 UI 및 전체 공정/장치 연결 클래스"""
@@ -259,6 +263,19 @@ class MainDialog(QDialog):
         
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
 
+        # --- 6. 히터 ---
+        if HEATER_ENABLED:
+            self.request_heater_target.connect(self.plc_controller.set_heater_target)
+            self.request_heater_run.connect(self.plc_controller.set_heater_run)
+            self.request_heater_reset.connect(self.plc_controller.reset_heater_fault)
+            self.plc_controller.update_heater_status.connect(self.update_heater_display)
+            self.plc_controller.heater_fault.connect(self._on_heater_fault)
+            self.ui.heater_apply_button.clicked.connect(self._on_heater_apply_clicked)
+            self.ui.heater_onoff_button.toggled.connect(self._on_heater_onoff_toggled)
+        else:
+            for w in ("heater_apply_button", "heater_onoff_button", "heater_sv_edit"):
+                getattr(self.ui, w).setEnabled(False)
+
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
     def _chat_reset_run_state(self):
         self._chat_user_stopped = False
@@ -436,6 +453,95 @@ class MainDialog(QDialog):
             pass
     # ==================== PLC 연결 끊김/복구 알림 (CH.K) ====================
 
+    # ==================== 히터 ====================
+    def _read_heater_sv_input(self) -> float | None:
+        txt = self.ui.heater_sv_edit.toPlainText().strip()
+        if not txt:
+            QMessageBox.warning(self, "입력 오류", "히터 목표 온도를 입력하세요.")
+            return None
+        try:
+            v = float(txt)
+        except ValueError:
+            QMessageBox.warning(self, "입력 오류", f"숫자가 아닙니다: {txt}")
+            return None
+        if v < 0 or v > HEATER_MAX_TEMP:
+            QMessageBox.warning(self, "입력 오류",
+                                f"목표 온도는 0 ~ {HEATER_MAX_TEMP:.0f}°C 범위여야 합니다.")
+            return None
+        return v
+
+    @Slot()
+    def _on_heater_apply_clicked(self):
+        v = self._read_heater_sv_input()
+        if v is None:
+            return
+        self.request_heater_target.emit(v)
+
+    @Slot(bool)
+    def _on_heater_onoff_toggled(self, checked: bool):
+        if checked:
+            v = self._read_heater_sv_input()
+            if v is None:
+                self.ui.heater_onoff_button.setChecked(False)   # 되돌림
+                return
+            self.request_heater_target.emit(v)
+            self.request_heater_run.emit(True)
+            self.ui.heater_onoff_button.setText("OFF")
+        else:
+            self.request_heater_run.emit(False)
+            self.ui.heater_onoff_button.setText("ON")
+
+    @Slot(dict)
+    def update_heater_display(self, st: dict):
+        # 현재 온도
+        if st.get('ok') and st.get('pv') is not None:
+            self.ui.heater_pv_edit.setPlainText(f"{st['pv']:.1f}")
+        else:
+            self.ui.heater_pv_edit.setPlainText("--")
+
+        # 상태 문구
+        if st.get('fault'):
+            if   st.get('ot'):     s, c = "과온 트립", "#c62828"
+            elif st.get('tc_err'): s, c = "센서 이상", "#c62828"
+            elif st.get('wd_err'): s, c = "통신 두절", "#c62828"
+            else:                  s, c = "이상",      "#c62828"
+        elif not st.get('itl'):
+            s, c = "인터락", "#ef6c00"
+        elif st.get('run'):
+            s, c = "운전 중", "#2e7d32"
+        else:
+            s, c = "정지", "#616161"
+        self.ui.heater_status_label.setText(s)
+        self.ui.heater_status_label.setStyleSheet(f"color:{c}; font-weight:bold;")
+
+        # 출력 % + 램프 목표
+        if st.get('run'):
+            self.ui.heater_mv_label.setText(
+                f"출력 {st.get('mv_pct', 0):.0f}%  ·  램프 {st.get('cur_sv', 0):.0f}°C")
+        else:
+            self.ui.heater_mv_label.setText("출력 —")
+
+        # 이상 시 ON 버튼 자동 해제 (래더는 HEATER_RUN을 건드리지 않음)
+        if st.get('fault') and self.ui.heater_onoff_button.isChecked():
+            self.ui.heater_onoff_button.setChecked(False)
+
+        # 통계 누적 (NAS CSV용)
+        if st.get('ok') and st.get('pv') is not None and st.get('run'):
+            self._chk_heater_sum += float(st['pv'])
+            self._chk_heater_cnt += 1
+
+    @Slot(str)
+    def _on_heater_fault(self, reason: str):
+        log_message_to_monitor("경고", f"[히터] {reason}")
+        if self.chat_chk:
+            try:
+                self.chat_chk.notify_error_with_src("HEATER", reason)
+            except Exception:
+                pass
+        if self.process_running:
+            self._chat_add_error(f"HEATER: {reason}")
+    # ==================== 히터 ====================
+
     def _check_main_valve_open(self) -> bool:
         """메인밸브(MV)와 MV_INTERLOCK을 읽어 둘 다 ON인지 확인.
         둘 다 ON(메인밸브 실제 개방)일 때만 True. 그 외에는 경고 후 False."""
@@ -557,6 +663,10 @@ class MainDialog(QDialog):
 
                 # ▼ DC Power 안정화 대기 사용 여부 (기본 OFF)
                 "use_dc_delay": self.ui.dc_delay_checkbox.isChecked(),
+
+                # ▼ 히터: 수동 UI 값 그대로. 0이면 히터 대기 스텝 생략
+                "use_heater": HEATER_ENABLED and bool(self.ui.heater_onoff_button.isChecked()),
+                "heater_temp": float(self.ui.heater_sv_edit.toPlainText().strip() or 0),
 
                 "g1_target_name": g1_target_name,
                 "g2_target_name": g2_target_name,
@@ -863,6 +973,8 @@ class MainDialog(QDialog):
             "O2 flow":          o2_flow,           # ← 전체 공정 평균
             "Working Pressure": work_p,            # ← 전체 공정 평균
             "Process Time":     process_time,      # ← 입력 분 값
+            "Heater Temp": (f"{self._chk_heater_sum / self._chk_heater_cnt:.1f}"
+                if self._chk_heater_cnt else ""),     # ★
             "RF: For.P":        rf_for_p,          # ← 전체 공정 평균
             "RF: Ref. P":       rf_ref_p,          # ← 전체 공정 평균
             "DC: V":            dc_v,              # ← 전체 공정 평균
@@ -874,6 +986,9 @@ class MainDialog(QDialog):
     
     def _reset_chk_stats(self):
         """ChK CSV 평균 계산용 누적값 + 샘플링 상태 초기화."""
+        self._chk_heater_sum = 0.0      # ★
+        self._chk_heater_cnt = 0        # ★
+
         # 가스 유량(Ar/O2)
         self._sum_ar = 0.0
         self._sum_o2 = 0.0
@@ -1518,6 +1633,14 @@ class MainDialog(QDialog):
         use_dc = _b("use_dc_power", False)
         use_rf = _b("use_rf_power", False)
 
+        # ---- 히터(선택) : 컬럼이 없으면 자동 OFF → 기존 CSV 하위 호환 ----
+        use_heater  = _b("use_heater", False)
+        heater_temp = _f("heater_temp", required=False, default=0.0) or 0.0
+        if use_heater and heater_temp <= 0:
+            raise ValueError(f"[{process_name or 'STEP'}] use_heater=ON 인데 heater_temp가 0 이하입니다.")
+        if use_heater and heater_temp > HEATER_MAX_TEMP:
+            raise ValueError(f"[{process_name or 'STEP'}] heater_temp가 상한({HEATER_MAX_TEMP:.0f}°C)을 넘습니다.")
+
         # DC Power 안정화 대기(선택) : 컬럼이 없거나 비어 있으면 OFF
         use_dc_delay = _b("use_dc_delay", False)
 
@@ -1593,6 +1716,8 @@ class MainDialog(QDialog):
             "use_g2": bool(use_g2),
 
             "use_dc_delay": bool(use_dc_delay and use_dc),
+            "use_heater":   bool(use_heater and HEATER_ENABLED),   # ★
+            "heater_temp":  float(heater_temp),                    # ★
 
             "g1_target_name": g1_target_name,
             "g2_target_name": g2_target_name,
@@ -1687,6 +1812,12 @@ class MainDialog(QDialog):
             self.ui.G1_edit.setPlainText(str(g1_name))
         if g2_name is not None:
             self.ui.G2_edit.setPlainText(str(g2_name))
+
+        # 히터
+        if HEATER_ENABLED:
+            ht = float(params.get("heater_temp", 0.0) or 0.0)
+            if ht > 0:
+                self.ui.heater_sv_edit.setPlainText(f"{ht:g}")
     
     def _start_next_csv_step(self):
         """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료."""

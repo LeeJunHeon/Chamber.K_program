@@ -449,6 +449,48 @@ class Ui_Dialog(object):
 "QPushButton:pressed {background: #808080; border-color: #333333;}")
         self.Sputter_Stop_Button.setCheckable(False)
 
+        # ===================== 히터 (수동 제어) =====================
+        self.heater_title_label = QLabel(Dialog)
+        self.heater_title_label.setObjectName(u"heater_title_label")
+        self.heater_title_label.setGeometry(QRect(20, 248, 195, 22))
+        font_h = QFont(); font_h.setPointSize(11); font_h.setBold(True)
+        self.heater_title_label.setFont(font_h)
+
+        self.heater_pv_title = QLabel(Dialog)
+        self.heater_pv_title.setObjectName(u"heater_pv_title")
+        self.heater_pv_title.setGeometry(QRect(20, 274, 40, 24))
+
+        self.heater_pv_edit = QPlainTextEdit(Dialog)
+        self.heater_pv_edit.setObjectName(u"heater_pv_edit")
+        self.heater_pv_edit.setGeometry(QRect(62, 274, 62, 24))
+        self.heater_pv_edit.setReadOnly(True)
+
+        self.heater_status_label = QLabel(Dialog)
+        self.heater_status_label.setObjectName(u"heater_status_label")
+        self.heater_status_label.setGeometry(QRect(130, 274, 85, 24))
+
+        self.heater_sv_title = QLabel(Dialog)
+        self.heater_sv_title.setObjectName(u"heater_sv_title")
+        self.heater_sv_title.setGeometry(QRect(20, 302, 40, 24))
+
+        self.heater_sv_edit = QPlainTextEdit(Dialog)
+        self.heater_sv_edit.setObjectName(u"heater_sv_edit")
+        self.heater_sv_edit.setGeometry(QRect(62, 302, 62, 24))
+
+        self.heater_apply_button = QPushButton(Dialog)
+        self.heater_apply_button.setObjectName(u"heater_apply_button")
+        self.heater_apply_button.setGeometry(QRect(130, 302, 40, 24))
+
+        self.heater_onoff_button = QPushButton(Dialog)
+        self.heater_onoff_button.setObjectName(u"heater_onoff_button")
+        self.heater_onoff_button.setGeometry(QRect(175, 302, 40, 24))
+        self.heater_onoff_button.setCheckable(True)
+
+        self.heater_mv_label = QLabel(Dialog)
+        self.heater_mv_label.setObjectName(u"heater_mv_label")
+        self.heater_mv_label.setGeometry(QRect(20, 332, 195, 22))
+        # ===================== 히터 =====================
+
         # =================================================================== #
         # END: Sputtering Panel UI 수정
         # =================================================================== #
@@ -528,6 +570,13 @@ class Ui_Dialog(object):
         self.BuzzStop_Button.setText(QCoreApplication.translate("Dialog", u"Buzz Stop(1)", None))
         self.ALL_STOP_button.setText(QCoreApplication.translate("Dialog", u"ALL STOP", None))
         self.Door_Button.setText(QCoreApplication.translate("Dialog", u"Door", None))
+        self.heater_title_label.setText(QCoreApplication.translate("Dialog", u"Heater [\u00b0C]", None))
+        self.heater_pv_title.setText(QCoreApplication.translate("Dialog", u"\ud604\uc7ac", None))
+        self.heater_sv_title.setText(QCoreApplication.translate("Dialog", u"\ubaa9\ud45c", None))
+        self.heater_status_label.setText(QCoreApplication.translate("Dialog", u"\u2014", None))
+        self.heater_mv_label.setText(QCoreApplication.translate("Dialog", u"\ucd9c\ub825 \u2014", None))
+        self.heater_apply_button.setText(QCoreApplication.translate("Dialog", u"\uc801\uc6a9", None))
+        self.heater_onoff_button.setText(QCoreApplication.translate("Dialog", u"ON", None))
         self.pushButton_3.setText("")
         self.pushButton_4.setText("")
         self.pushButton_5.setText("")

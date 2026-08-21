@@ -14,7 +14,16 @@ from lib.config import (
     RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0,
     RF_FORWARD_SCALING_MAX_WATT,
     RF_REFLECTED_SCALING_MAX_WATT,
-    PLC_MV_COIL, PLC_MV_INTERLOCK_COIL
+    PLC_MV_COIL, PLC_MV_INTERLOCK_COIL,
+    HEATER_ENABLED, HEATER_TEMP_SCALE, HEATER_WD_PERIOD_MS,
+    HEATER_MV_MIN, HEATER_MV_MAX,
+    HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT,
+    HEATER_REG_PV, HEATER_REG_SV, HEATER_REG_SV_LIMIT,
+    HEATER_REG_WD, HEATER_REG_CUR_SV, HEATER_REG_PID_ERR, HEATER_REG_MV,
+    HEATER_COIL_BASE, HEATER_COIL_COUNT,
+    HEATER_COIL_RUN, HEATER_COIL_ITL, HEATER_COIL_FAULT, HEATER_COIL_RST,
+    HEATER_COIL_OT, HEATER_COIL_TC_ERR, HEATER_COIL_WD_ERR,
+    HEATER_COIL_AT_REQ, HEATER_COIL_AT_DONE, HEATER_COIL_PID_RUN,
 )
 
 # 주의: 아래 표에서 대괄호 […]가 실제 Modbus 주소(0-based, HEX 표시)입니다.
@@ -81,6 +90,8 @@ class PLCController(QObject):
     update_sensor_display = Signal(str, bool)
     plc_disconnected = Signal(int)   # ★ () → (int)로 변경: 경과 초 전달
     plc_reconnected = Signal()       # ★ 추가
+    update_heater_status = Signal(dict)    # ★ 히터 상태 일괄 전달
+    heater_fault        = Signal(str)      # ★ 히터 이상 (원인 문자열)
 
     def __init__(self):
         super().__init__()
@@ -102,6 +113,16 @@ class PLCController(QObject):
         self._disconnect_since = None      # 폴링 실패가 처음 감지된 시각(monotonic)
         self._disconnect_notified = False  # 끊김 알림을 이미 보냈는지
         self._DISCONNECT_GRACE_S = 60.0    # 끊김 확정까지 유예 시간(초)
+
+        # ★ 히터: 워치독(하트비트) — 폴링과 독립 타이머
+        self._heater_wd = 0
+        self._heater_wd_timer = QTimer(self)
+        self._heater_wd_timer.setInterval(int(HEATER_WD_PERIOD_MS))
+        self._heater_wd_timer.timeout.connect(self._kick_heater_watchdog)
+
+        # ★ 히터: 상태 캐시 / 이상 중복 알림 방지
+        self._heater_last: Dict[str, object] = {}
+        self._heater_fault_notified = False
 
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
@@ -133,6 +154,9 @@ class PLCController(QObject):
 
             self._is_running = True
             self.polling_timer.start()
+            if HEATER_ENABLED:
+                self._heater_wd_timer.start()      # ★ 하트비트 시작
+
             self.status_message.emit("PLC", f"연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID}")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"연결 실패: {e}")
@@ -140,6 +164,13 @@ class PLCController(QObject):
     @Slot()
     def cleanup(self):
         self.polling_timer.stop()
+        self._heater_wd_timer.stop()               # ★
+        try:
+            if self.instrument:                    # ★ 종료 전 히터 정지
+                self.instrument.write_bit(HEATER_COIL_RUN, 0, functioncode=5)
+        except Exception:
+            pass
+        
         self._is_running = False
         QThread.msleep(200)
         try:
@@ -234,6 +265,10 @@ class PLCController(QObject):
                         self.update_sensor_display.emit(name, bool(addr_to_state.get(addr, False)))
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"센서(코일) 읽기 실패: {ex}")
+
+            # 3) ★ 히터 상태 읽기
+            if HEATER_ENABLED:
+                self._poll_heater()
 
             # ★ 폴링 성공 → 끊김 알림을 보낸 적 있으면 재연결 알림 1회
             if self._disconnect_notified:
@@ -341,6 +376,140 @@ class PLCController(QObject):
             self._busy = False
             self._mutex.unlock()
 
+    # ============== 히터 (PLC 내장 PID) ==============
+    def _poll_heater(self):
+        """D00010~D00017 + D00041 + 코일 64~73 을 읽어 update_heater_status로 발행.
+        주의: 호출자(_poll_status)가 이미 _mutex를 잡고 있으므로 여기서 잠그지 않는다."""
+        try:
+            blk  = self.instrument.read_registers(
+                HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT, functioncode=3)
+            mv   = self.instrument.read_register(HEATER_REG_MV, 0, functioncode=3, signed=False)
+            bits = self.instrument.read_bits(HEATER_COIL_BASE, HEATER_COIL_COUNT, functioncode=1)
+        except Exception as ex:
+            self.status_message.emit("PLC(경고)", f"히터 읽기 실패: {ex}")
+            return
+
+        def _reg(addr: int) -> int:
+            return blk[addr - HEATER_REG_BLOCK_START]
+
+        def _signed(v: int) -> int:
+            return v - 65536 if v >= 32768 else v
+
+        raw_pv = _signed(_reg(HEATER_REG_PV))
+        tc_bad = (raw_pv == -1)                       # hFFFF = 단선/모듈이상
+
+        def _bit(coil: int) -> bool:
+            return bool(bits[coil - HEATER_COIL_BASE])
+
+        st = {
+            'ok':        not tc_bad,
+            'pv':        None if tc_bad else raw_pv * HEATER_TEMP_SCALE,
+            'sv':        _reg(HEATER_REG_SV)       * HEATER_TEMP_SCALE,
+            'sv_limit':  _reg(HEATER_REG_SV_LIMIT) * HEATER_TEMP_SCALE,
+            'cur_sv':    _reg(HEATER_REG_CUR_SV)   * HEATER_TEMP_SCALE,
+            'pid_err':   _reg(HEATER_REG_PID_ERR),
+            'mv':        mv,
+            'mv_pct':    max(0.0, min(100.0,
+                          (mv - HEATER_MV_MIN) / (HEATER_MV_MAX - HEATER_MV_MIN) * 100.0))
+                          if mv >= HEATER_MV_MIN else 0.0,
+            'run':       _bit(HEATER_COIL_RUN),
+            'itl':       _bit(HEATER_COIL_ITL),
+            'fault':     _bit(HEATER_COIL_FAULT),
+            'ot':        _bit(HEATER_COIL_OT),
+            'tc_err':    _bit(HEATER_COIL_TC_ERR),
+            'wd_err':    _bit(HEATER_COIL_WD_ERR),
+            'at_done':   _bit(HEATER_COIL_AT_DONE),
+            'pid_run':   _bit(HEATER_COIL_PID_RUN),
+        }
+        self._heater_last = st
+        self.update_heater_status.emit(st)
+
+        # 이상 발생 시 1회만 알림 (원인 우선순위: 과온 > 센서 > 워치독)
+        if st['fault']:
+            if not self._heater_fault_notified:
+                self._heater_fault_notified = True
+                if st['ot']:
+                    why = "히터 과온 트립"
+                elif st['tc_err']:
+                    why = "히터 온도센서 이상(단선/모듈)"
+                elif st['wd_err']:
+                    why = "히터 통신 워치독 타임아웃"
+                else:
+                    why = f"히터 이상 (PID err={st['pid_err']})"
+                self.heater_fault.emit(why)
+        else:
+            self._heater_fault_notified = False
+
+    @Slot()
+    def _kick_heater_watchdog(self):
+        """PLC에 '파이썬 살아있음'을 알리는 하트비트. 값이 바뀌기만 하면 됨."""
+        if self.instrument is None or self._busy:
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            self._heater_wd = (self._heater_wd + 1) & 0x7FFF
+            self.instrument.write_register(HEATER_REG_WD, self._heater_wd, functioncode=6)
+        except Exception:
+            pass          # 실패해도 조용히 — 다음 주기에 재시도, PLC가 알아서 트립
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    @Slot(float)
+    def set_heater_target(self, temp_c: float):
+        """목표 온도 쓰기 (PLC가 HEATER_SV_LIMIT으로 한 번 더 클램프함)."""
+        if self.instrument is None:
+            self.status_message.emit("PLC(오류)", "포트가 열려 있지 않습니다.")
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            raw = int(round(float(temp_c) / HEATER_TEMP_SCALE))
+            raw = max(0, min(32767, raw))
+            self.instrument.write_register(HEATER_REG_SV, raw, functioncode=6)
+            self.status_message.emit("히터", f"목표 온도 {temp_c:.1f}°C 설정 (raw={raw})")
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"히터 목표 온도 쓰기 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    @Slot(bool)
+    def set_heater_run(self, on: bool):
+        if self.instrument is None:
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            self.instrument.write_bit(HEATER_COIL_RUN, int(bool(on)), functioncode=5)
+            self.status_message.emit("히터", f"운전 {'ON' if on else 'OFF'}")
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"히터 운전 쓰기 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    @Slot()
+    def reset_heater_fault(self):
+        """이상 리셋. PLC 래더가 자기 리셋하므로 0으로 되돌릴 필요 없음."""
+        if self.instrument is None:
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            self.instrument.write_bit(HEATER_COIL_RST, 1, functioncode=5)
+            self.status_message.emit("히터", "이상 리셋 요청")
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"히터 리셋 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    def get_heater_status(self) -> Dict[str, object]:
+        """마지막 폴링 결과 캐시 (동기 조회용)."""
+        return dict(self._heater_last)
+
     # ============== RF (옵션) ==================
     def send_rfpower_command(self, pwm_value: int):
         if self.instrument is None:
@@ -445,6 +614,13 @@ class PLCController(QObject):
 
             self.update_button_display.emit("Door_Button", False)
             self._last_button_states["Door_Button"] = False
+
+            # ★ 히터 정지
+            if HEATER_ENABLED:
+                try:
+                    self.instrument.write_bit(HEATER_COIL_RUN, 0, functioncode=5)
+                except Exception:
+                    pass
 
             # DAC OFF
             if COIL_ENABLE_DAC_CH0 is not None:
