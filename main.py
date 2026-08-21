@@ -470,7 +470,8 @@ class MainDialog(QDialog):
 
     # ==================== 히터 ====================
     def _read_heater_sv_input(self) -> float | None:
-        txt = self.ui.heater_sv_edit.toPlainText().strip()
+        # QLineEdit → toPlainText()가 아니라 text()
+        txt = self.ui.heater_sv_edit.text().strip()
         if not txt:
             QMessageBox.warning(self, "입력 오류", "히터 목표 온도를 입력하세요.")
             return None
@@ -508,33 +509,62 @@ class MainDialog(QDialog):
 
     @Slot(dict)
     def update_heater_display(self, st: dict):
-        # 현재 온도
-        if st.get('ok') and st.get('pv') is not None:
-            self.ui.heater_pv_edit.setPlainText(f"{st['pv']:.1f}")
-        else:
-            self.ui.heater_pv_edit.setPlainText("--")
+        """PLC 폴링(200ms)으로 올라온 히터 상태를 화면에 반영한다.
 
-        # 상태 문구
+        st 딕셔너리는 device/PLC.py 의 _poll_heater() 가 만든다.
+          ok      : 온도값 유효 여부 (False = 열전대 단선 / TC 모듈 이상)
+          pv      : 현재 온도 [°C]
+          cur_sv  : SV Ramp가 적용된 '현재 중간 목표' [°C]
+          mv      : DAC 카운트 원본 (320~1600)
+          mv_pct  : 출력 백분율 (320=0%, 1600=100%)
+          run/itl/fault/ot/tc_err/wd_err : 상태 비트
+        """
+        # --- 현재 온도 (QLineEdit이므로 setText 사용) ---
+        if st.get('ok') and st.get('pv') is not None:
+            self.ui.heater_pv_edit.setText(f"{st['pv']:.1f}")
+        else:
+            # 단선/모듈이상 시 PLC가 hFFFF를 쓰고 파이썬은 -1로 읽는다
+            self.ui.heater_pv_edit.setText("")      # 빈 칸 → placeholder "--.-" 노출
+
+        # --- 상태 문구 (우선순위: 이상 > 인터락 > 운전 > 정지) ---
+        #     빨간색 3종은 PLC 래더에서 SET 코일로 래치되므로
+        #     원인이 사라져도 [적용]/재시작만으로는 안 풀린다.
         if st.get('fault'):
             if   st.get('ot'):     s, c = "과온 트립", "#c62828"
             elif st.get('tc_err'): s, c = "센서 이상", "#c62828"
             elif st.get('wd_err'): s, c = "통신 두절", "#c62828"
-            else:                  s, c = "이상",      "#c62828"
+            else:                  s, c = "이상 발생", "#c62828"
         elif not st.get('itl'):
-            s, c = "인터락", "#ef6c00"
+            s, c = "인터락", "#ef6c00"          # 하드웨어 조건 미충족
         elif st.get('run'):
             s, c = "운전 중", "#2e7d32"
         else:
             s, c = "정지", "#616161"
         self.ui.heater_status_label.setText(s)
-        self.ui.heater_status_label.setStyleSheet(f"color:{c}; font-weight:bold;")
+        self.ui.heater_status_label.setStyleSheet(
+            f"border: none; color:{c}; font-weight:bold;")
 
-        # 출력 % + 램프 목표
+        # --- 출력 표시 : DAC 원본값 + 백분율 + 램프 목표 ---
+        #     DAC 원본을 함께 보여야 PLC 모니터(D00041)와 대조할 수 있다.
+        #     320 = 0.8V(최소), 1600 = 4.0V(최대)
         if st.get('run'):
             self.ui.heater_mv_label.setText(
-                f"출력 {st.get('mv_pct', 0):.0f}%  ·  램프 {st.get('cur_sv', 0):.0f}°C")
+                f"DAC {int(st.get('mv', 0))} ({st.get('mv_pct', 0):.0f}%)"
+                f"  ·  목표 {st.get('cur_sv', 0):.0f}\u00b0C"
+            )
         else:
-            self.ui.heater_mv_label.setText("출력 —")
+            self.ui.heater_mv_label.setText(f"출력 : 정지 (DAC {int(st.get('mv', 0))})")
+
+        # --- 이상 발생 시 ON 버튼 자동 해제 ---
+        #     PLC 래더는 HEATER_RUN을 절대 건드리지 않으므로,
+        #     이 처리가 없으면 '화면은 ON인데 히터는 정지' 상태가 된다.
+        if st.get('fault') and self.ui.heater_onoff_button.isChecked():
+            self.ui.heater_onoff_button.setChecked(False)
+
+        # --- NAS CSV 로그용 평균 누적 (운전 중 + 온도 유효할 때만) ---
+        if st.get('ok') and st.get('pv') is not None and st.get('run'):
+            self._chk_heater_sum += float(st['pv'])
+            self._chk_heater_cnt += 1
 
         # 이상 시 ON 버튼 자동 해제 (래더는 HEATER_RUN을 건드리지 않음)
         if st.get('fault') and self.ui.heater_onoff_button.isChecked():
@@ -681,7 +711,8 @@ class MainDialog(QDialog):
 
                 # ▼ 히터: 수동 UI 값 그대로. 0이면 히터 대기 스텝 생략
                 "use_heater": HEATER_ENABLED and bool(self.ui.heater_onoff_button.isChecked()),
-                "heater_temp": float(self.ui.heater_sv_edit.toPlainText().strip() or 0),
+                # QLineEdit → text(). 비어 있으면 0 (= 히터 미사용)
+                "heater_temp": float(self.ui.heater_sv_edit.text().strip() or 0),
 
                 "g1_target_name": g1_target_name,
                 "g2_target_name": g2_target_name,
@@ -1839,11 +1870,11 @@ class MainDialog(QDialog):
         if g2_name is not None:
             self.ui.G2_edit.setPlainText(str(g2_name))
 
-        # 히터
+        # 히터: CSV 레시피의 목표 온도를 화면에도 반영
         if HEATER_ENABLED:
             ht = float(params.get("heater_temp", 0.0) or 0.0)
             if ht > 0:
-                self.ui.heater_sv_edit.setPlainText(f"{ht:g}")
+                self.ui.heater_sv_edit.setText(f"{ht:g}")   # QLineEdit
     
     def _start_next_csv_step(self):
         """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료."""
