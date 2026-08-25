@@ -496,9 +496,15 @@ class MainDialog(QDialog):
     @Slot(bool)
     def _on_heater_onoff_toggled(self, checked: bool):
         if checked:
+            st = self.plc_controller._heater_last or {}
+            if not st.get('itl'):
+                QMessageBox.warning(self, "히터 시작 불가",
+                    "히터 인터락이 미충족 상태입니다.\nTC/DAC 모듈 상태를 확인하세요.")
+                self.ui.heater_onoff_button.setChecked(False)
+                return
             v = self._read_heater_sv_input()
             if v is None:
-                self.ui.heater_onoff_button.setChecked(False)   # 되돌림
+                self.ui.heater_onoff_button.setChecked(False)
                 return
             self.request_heater_target.emit(v)
             self.request_heater_run.emit(True)
