@@ -180,6 +180,62 @@ class MainDialog(QDialog):
         self.process_running = False
         self.ui.Sputter_Stop_Button.setEnabled(False)
 
+        # === ERP 원격 명령 실행 (메인 스레드 전용) ===
+        # 안전: 아래 화이트리스트에 없는 명령은 실행하지 않는다.
+        #       PLC 버튼은 setChecked로 처리해 로컬 UI 상태와 항상 일치시킨다.
+        _PLC_BTNS = {
+            "Rotary_button", "RV_button", "FV_button", "MV_button", "Vent_button",
+            "Turbo_button", "Doorup_button", "Doordn_button", "Ar_Button",
+            "O2_Button", "MS_button", "S1_button", "S2_button", "BuzzStop_Button",
+        }
+
+        def _erp_exec_one(c: dict):
+            name = str(c.get("command", ""))
+            args = c.get("args") or {}
+            if name in _PLC_BTNS:
+                btn = getattr(self.ui, name, None)
+                if btn is None:
+                    raise RuntimeError(f"버튼 없음: {name}")
+                btn.setChecked(bool(args.get("on")))
+            elif name == "PROCESS_START":
+                self._handle_start_process()
+            elif name == "PROCESS_STOP":
+                self._on_sputter_stop_clicked()
+            elif name == "ALL_STOP":
+                self.request_plc_emergency_stop.emit()
+            elif name == "HEATER_SV":
+                val = args.get("value")
+                if val is None:
+                    raise RuntimeError("목표 온도 없음")
+                self.ui.heater_sv_edit.setPlainText(str(val)) \
+                    if hasattr(self.ui.heater_sv_edit, "setPlainText") \
+                    else self.ui.heater_sv_edit.setText(str(val))
+                self._on_heater_apply_clicked()
+            elif name == "HEATER_ONOFF":
+                self.ui.heater_onoff_button.setChecked(bool(args.get("on")))
+            else:
+                raise RuntimeError(f"허용되지 않은 명령: {name}")
+
+        def _erp_drain_commands():
+            try:
+                for c in self.erp.pop_commands():
+                    cid = c.get("id")
+                    try:
+                        _erp_exec_one(c)
+                        log_message_to_monitor(
+                            "정보", f"[원격] {c.get('command')} 실행")
+                        self.erp.cmd_result(cid, True)
+                    except Exception as ex:
+                        log_message_to_monitor(
+                            "ERROR", f"[원격] {c.get('command')} 실패: {ex}")
+                        self.erp.cmd_result(cid, False, str(ex))
+            except Exception:
+                pass
+
+        self._erp_cmd_timer = QTimer(self)
+        self._erp_cmd_timer.timeout.connect(_erp_drain_commands)
+        self._erp_cmd_timer.start(500)
+
         # === ERP 상태 스냅샷 (1초) ===
         def _erp_snapshot():
             try:

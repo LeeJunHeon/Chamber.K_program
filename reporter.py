@@ -28,6 +28,8 @@ class ErpReporter:
         self._state_lock = threading.Lock()
         self._dirty = False
         self._last_state_ts = 0.0
+        self._cmd_q: "queue.Queue[dict]" = queue.Queue(maxsize=100)
+        self._seen_cmds: set[int] = set()
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, name="ErpReporter", daemon=True
@@ -70,6 +72,24 @@ class ErpReporter:
         self._enqueue({"type": "run_end", "result": result,
                        "errorMsg": str(error_msg or "")[:500]})
         self.update_state({"status": "idle", "stage": ""})
+
+    def pop_commands(self) -> list[dict]:
+        """메인 스레드에서 호출한다. 수신된 명령을 모두 꺼낸다."""
+        out: list[dict] = []
+        try:
+            while True:
+                out.append(self._cmd_q.get_nowait())
+        except queue.Empty:
+            pass
+        except Exception:
+            pass
+        return out
+
+    def cmd_result(self, cmd_id: int, ok: bool, error: str = ""):
+        self._enqueue({
+            "type": "cmd_result", "cmdId": int(cmd_id),
+            "ok": bool(ok), "errorMsg": str(error or "")[:300],
+        })
 
     # ── 내부 ──
 
@@ -142,7 +162,19 @@ class ErpReporter:
                 },
             )
             with urllib.request.urlopen(req, timeout=15) as res:
-                return 200 <= res.status < 300
+                ok = 200 <= res.status < 300
+                if ok:
+                    try:
+                        payload = json.loads(res.read().decode("utf-8") or "{}")
+                        for c in payload.get("commands", []) or []:
+                            cid = c.get("id")
+                            # 같은 명령을 두 번 실행하지 않는다
+                            if isinstance(cid, int) and cid not in self._seen_cmds:
+                                self._seen_cmds.add(cid)
+                                self._cmd_q.put_nowait(c)
+                    except Exception:
+                        pass
+                return ok
         except Exception:
             return False
 
