@@ -4,6 +4,7 @@
 # 본 프로그램 동작에는 영향이 없다.
 import json
 import queue
+import uuid
 import threading
 import time
 import urllib.request
@@ -76,6 +77,7 @@ class ErpReporter:
         if not self.enabled:
             return
         msg.setdefault("ts", _now_iso())
+        msg.setdefault("id", uuid.uuid4().hex)  # 재전송 시 서버가 중복을 걸러낼 키
         try:
             self._q.put_nowait(msg)
         except queue.Full:
@@ -139,7 +141,7 @@ class ErpReporter:
                     "Authorization": f"Bearer {self._token}",
                 },
             )
-            with urllib.request.urlopen(req, timeout=4) as res:
+            with urllib.request.urlopen(req, timeout=15) as res:
                 return 200 <= res.status < 300
         except Exception:
             return False
@@ -148,10 +150,21 @@ class ErpReporter:
         if not messages:
             return
         try:
+            # 장기 단절 시 스풀이 무한히 커지지 않도록 상한(약 5MB)을 둔다.
+            if self._spool.exists() and self._spool.stat().st_size > 5_000_000:
+                lines = self._spool.read_text(encoding="utf-8").splitlines()
+                self._spool.write_text(
+                    "\n".join(lines[len(lines) // 2:]) + "\n", encoding="utf-8"
+                )
+        except Exception:
+            pass
+        try:
             with self._spool.open("a", encoding="utf-8") as f:
                 for m in messages:
-                    if m.get("type") == "state":
-                        continue  # 스냅샷은 최신만 의미 있으므로 스풀 제외
+                    # 스냅샷(state)은 최신만 의미 있고, hello는 세션 시작 표시일 뿐이므로
+                    # 둘 다 재전송 대상에서 제외한다.
+                    if m.get("type") in ("state", "hello"):
+                        continue
                     f.write(json.dumps(m, ensure_ascii=False) + "\n")
         except Exception:
             pass
