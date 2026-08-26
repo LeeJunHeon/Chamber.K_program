@@ -8,6 +8,14 @@ from lib.config import CHK_CSV_PATH, CHK_CSV_COLUMNS  # ★ 추가
 
 _monitor_widget = None  # 전역 변수(로그 모니터)
 
+# ERP 리포터 훅 (없으면 None, 있어도 로깅 동작에는 영향 없음)
+_reporter = None
+
+def set_reporter(r):
+    global _reporter
+    _reporter = r
+
+
 # 이번 공정에서 사용할 로그 파일 경로 (공정 시작 시 설정)
 _current_log_file: Optional[Path] = None
 
@@ -53,6 +61,15 @@ def log_message_to_monitor(level, message):
         sb.setValue(sb.maximum())
     # --- 파일에도 로그 추가 ---
     log_message_to_file(level, message)
+
+    # --- ERP 리포터로 전달 (실패해도 무시) ---
+    if _reporter is not None:
+        try:
+            low = str(message)
+            lv = "error" if ("ERROR" in low or "FAIL" in low or "실패" in low)                  else ("warn" if ("WARN" in low or "경고" in low) else "info")
+            _reporter.event(lv, low)
+        except Exception:
+            pass
 
 def log_message_to_file(level, message):
     """

@@ -222,3 +222,6 @@ $RECYCLE.BIN/
 # Windows shortcuts
 *.lnk
 
+
+### ERP Reporter ###
+reporter_spool.jsonl

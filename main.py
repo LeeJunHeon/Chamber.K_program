@@ -22,6 +22,7 @@ from lib.logger import (
     log_message_to_file,
     append_chk_csv_row,
 )
+from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
 from device.PLC import PLCController
@@ -77,6 +78,23 @@ class MainDialog(QDialog):
         self._chat_errors: list[str] = []
         self._chat_fail_notified: bool = False   # ✅ 실패 원인 일반채팅 중복 방지
         self._chat_fail_reason: str = ""         # ✅ 이번 공정에서 “가장 먼저 잡힌” 실패 원인 1개
+
+        # === ERP Reporter (CH.K) ===
+        try:
+            from lib import config_local as _cfgl
+            _erp_url = (getattr(_cfgl, "ERP_INGEST_URL", "") or "").strip()
+            _erp_token = (getattr(_cfgl, "ERP_INGEST_TOKEN", "") or "").strip()
+        except Exception:
+            _erp_url, _erp_token = "", ""
+        self.erp = ErpReporter(_erp_url, _erp_token, equipment="CHK")
+        self.erp.start()
+        self._erp_run_ended: bool = True   # 아직 시작된 공정 없음
+        try:
+            from lib.logger import set_reporter
+            set_reporter(self.erp)
+        except Exception:
+            pass
+        # === ERP Reporter (CH.K) ===
 
         # === Google Chat Notifier (CH.K) ===
 
@@ -161,6 +179,41 @@ class MainDialog(QDialog):
 
         self.process_running = False
         self.ui.Sputter_Stop_Button.setEnabled(False)
+
+        # === ERP 상태 스냅샷 (1초) ===
+        def _erp_snapshot():
+            try:
+                def _txt(w):
+                    try:
+                        return w.toPlainText().strip()
+                    except Exception:
+                        try:
+                            return w.text().strip()
+                        except Exception:
+                            return ""
+                _stage = _txt(self.ui.stage_monitor)
+                self.erp.update_state({
+                    "stage": _stage.splitlines()[-1] if _stage else "",
+                    "metrics": {
+                        "dc_p": _txt(self.ui.Power_edit),
+                        "dc_v": _txt(self.ui.Voltage_edit),
+                        "dc_i": _txt(self.ui.Current_edit),
+                        "rf_for": _txt(self.ui.for_p_edit),
+                        "rf_ref": _txt(self.ui.ref_p_edit),
+                        "ar_flow": _txt(self.ui.Ar_flow_edit),
+                        "o2_flow": _txt(self.ui.O2_flow_edit),
+                    },
+                    "heater": {
+                        "pv": _txt(self.ui.heater_pv_edit),
+                        "sv": _txt(self.ui.heater_sv_edit),
+                    },
+                })
+            except Exception:
+                pass
+
+        self._erp_snap_timer = QTimer(self)
+        self._erp_snap_timer.timeout.connect(_erp_snapshot)
+        self._erp_snap_timer.start(1000)
 
     def _invoke_worker_blocking(self, worker, method_name: str) -> None:
         """
@@ -297,6 +350,7 @@ class MainDialog(QDialog):
         self._chat_errors = []
         self._chat_fail_notified = False
         self._chat_fail_reason = ""
+        self._erp_run_ended = False   # ERP: 이번 공정 run_end 미전송 상태로 초기화
 
     def _chat_build_params(self, params: dict, process_name: str) -> dict:
         """
@@ -389,6 +443,22 @@ class MainDialog(QDialog):
         self.chat_chk.flush()
 
     def _chat_notify_finished(self, ok: bool):
+        # === ERP: 공정 종료 1회 보고 (chat_chk 유무와 무관하게 수행) ===
+        try:
+            if not getattr(self, "_erp_run_ended", True):
+                self._erp_run_ended = True
+                if bool(self._chat_user_stopped):
+                    self.erp.run_end("aborted", "사용자 정지")
+                elif ok:
+                    self.erp.run_end("done")
+                else:
+                    _reason = (self._chat_fail_reason or "").strip()
+                    if not _reason and self._chat_errors:
+                        _reason = str(self._chat_errors[0])
+                    self.erp.run_end("error", _reason)
+        except Exception:
+            pass
+
         if not self.chat_chk:
             return
 
@@ -757,6 +827,14 @@ class MainDialog(QDialog):
 
         self._chat_reset_run_state()
         self._chat_notify_started(params, self.current_process_name)
+
+        try:
+            self.erp.run_start(
+                self.current_process_name or params.get("process_note", "") or "CHK 공정",
+                params,
+            )
+        except Exception:
+            pass
 
         self.request_process_start.emit(params)
 
@@ -2025,6 +2103,15 @@ class MainDialog(QDialog):
         self.ui.select_csv_button.setEnabled(False)
 
         self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
+
+        try:
+            self.erp.run_start(
+                self.current_process_name or params.get("process_note", "") or "CHK 공정",
+                params,
+            )
+        except Exception:
+            pass
+
         self.request_process_start.emit(params)
 
 if __name__ == "__main__":
