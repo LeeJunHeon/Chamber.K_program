@@ -183,60 +183,67 @@ class MainDialog(QDialog):
         # === ERP 상태 스냅샷 (1초) ===
         def _erp_snapshot():
             try:
-                def _txt(w):
-                    try:
-                        return w.toPlainText().strip()
-                    except Exception:
-                        try:
-                            return w.text().strip()
-                        except Exception:
-                            return ""
+                def _w(name: str) -> str:
+                    """UI 위젯 텍스트를 이름으로 안전하게 읽는다.
+                    위젯이 없거나(주석 처리 등) 타입이 달라도 예외를 내지 않는다."""
+                    w = getattr(self.ui, name, None)
+                    if w is None:
+                        return ""
+                    for meth in ("toPlainText", "text"):
+                        f = getattr(w, meth, None)
+                        if callable(f):
+                            try:
+                                return str(f()).strip()
+                            except Exception:
+                                pass
+                    return ""
 
-                u = self.ui
+                def _checked(name: str) -> bool:
+                    w = getattr(self.ui, name, None)
+                    try:
+                        return bool(w.isChecked()) if w is not None else False
+                    except Exception:
+                        return False
+
                 running = bool(getattr(self, "process_running", False))
 
-                _stage_all = _txt(u.stage_monitor)
+                _stage_all = _w("stage_monitor")
                 stage = _stage_all.splitlines()[-1] if _stage_all else ""
 
                 # 계측 그룹 — value=계측값(PV), setpoint=설정값(SV)
                 groups = [
                     {"label": "전원", "items": [
-                        {"label": "DC Power", "value": _txt(u.Power_edit),
-                         "setpoint": _txt(u.DC_power_edit), "unit": "W"},
-                        {"label": "Voltage", "value": _txt(u.Voltage_edit), "unit": "V"},
-                        {"label": "Current", "value": _txt(u.Current_edit), "unit": "A"},
+                        {"label": "DC Power", "value": _w("Power_edit"),
+                         "setpoint": _w("DC_power_edit"), "unit": "W"},
+                        {"label": "Voltage", "value": _w("Voltage_edit"), "unit": "V"},
+                        {"label": "Current", "value": _w("Current_edit"), "unit": "A"},
                     ]},
                     {"label": "RF", "items": [
-                        {"label": "for.P", "value": _txt(u.for_p_edit),
-                         "setpoint": _txt(u.RF_power_edit), "unit": "W"},
-                        {"label": "ref.P", "value": _txt(u.ref_p_edit), "unit": "W"},
+                        {"label": "for.P", "value": _w("for_p_edit"),
+                         "setpoint": _w("RF_power_edit"), "unit": "W"},
+                        {"label": "ref.P", "value": _w("ref_p_edit"), "unit": "W"},
                         {"label": "offset / param",
-                         "value": f"{_txt(u.offset_edit)} / {_txt(u.param_edit)}"},
+                         "value": f'{_w("offset_edit")} / {_w("param_edit")}'},
                     ]},
                     {"label": "가스", "items": [
-                        {"label": "Ar", "setpoint": _txt(u.Ar_flow_edit), "unit": "sccm"},
-                        {"label": "O₂", "setpoint": _txt(u.O2_flow_edit), "unit": "sccm"},
+                        {"label": "Ar", "setpoint": _w("Ar_flow_edit"), "unit": "sccm"},
+                        {"label": "O₂", "setpoint": _w("O2_flow_edit"), "unit": "sccm"},
                     ]},
                     {"label": "압력 · 시간", "items": [
-                        {"label": "Working P", "setpoint": _txt(u.working_pressure_edit),
+                        {"label": "Working P", "setpoint": _w("working_pressure_edit"),
                          "unit": "mTorr"},
-                        {"label": "Target P", "setpoint": _txt(u.Target_pressure_edit),
-                         "unit": "Torr"},
-                        {"label": "공정 시간", "setpoint": _txt(u.process_time_edit), "unit": "분"},
-                        {"label": "셔터 딜레이", "setpoint": _txt(u.Shutter_delay_edit),
+                        {"label": "공정 시간", "setpoint": _w("process_time_edit"), "unit": "분"},
+                        {"label": "셔터 딜레이", "setpoint": _w("Shutter_delay_edit"),
                          "unit": "분"},
                     ]},
                 ]
 
                 # 타겟(체크된 건만)
                 tg = []
-                try:
-                    if u.G1_checkbox.isChecked():
-                        tg.append({"label": "G1", "value": _txt(u.G1_edit) or "미입력"})
-                    if u.G2_checkbox.isChecked():
-                        tg.append({"label": "G2", "value": _txt(u.G2_edit) or "미입력"})
-                except Exception:
-                    pass
+                if _checked("G1_checkbox"):
+                    tg.append({"label": "G1", "value": _w("G1_edit") or "미입력"})
+                if _checked("G2_checkbox"):
+                    tg.append({"label": "G2", "value": _w("G2_edit") or "미입력"})
                 if tg:
                     groups.append({"label": "타겟", "items": tg})
 
@@ -245,10 +252,10 @@ class MainDialog(QDialog):
                     "stage": stage,
                     "groups": groups,
                     "heater": {
-                        "pv": _txt(u.heater_pv_edit),
-                        "sv": _txt(u.heater_sv_edit),
-                        "status": _txt(u.heater_status_label),
-                        "output": _txt(u.heater_mv_label),
+                        "pv": _w("heater_pv_edit"),
+                        "sv": _w("heater_sv_edit"),
+                        "status": _w("heater_status_label"),
+                        "output": _w("heater_mv_label"),
                     },
                     "indicators": dict(getattr(self, "_erp_indicators", {})),
                     "valves": dict(getattr(self, "_erp_valves", {})),
@@ -257,7 +264,7 @@ class MainDialog(QDialog):
                 # 진행률 계산용 총 공정 시간(초)
                 if running:
                     try:
-                        total_min = float(_txt(u.process_time_edit) or 0)
+                        total_min = float(_w("process_time_edit") or 0)
                         state["process"] = {
                             "name": getattr(self, "current_process_name", "") or "",
                             "totalSec": int(total_min * 60),
@@ -266,8 +273,14 @@ class MainDialog(QDialog):
                         pass
 
                 self.erp.update_state(state)
-            except Exception:
-                pass
+            except Exception as e:
+                # 조용한 실패 방지: 원인을 웹 이벤트로 1회만 보고한다.
+                try:
+                    if not getattr(self, "_erp_snap_err", False):
+                        self._erp_snap_err = True
+                        self.erp.event("error", f"스냅샷 수집 실패: {type(e).__name__}: {e}")
+                except Exception:
+                    pass
 
 
         self._erp_snap_timer = QTimer(self)
