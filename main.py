@@ -191,25 +191,84 @@ class MainDialog(QDialog):
                             return w.text().strip()
                         except Exception:
                             return ""
-                _stage = _txt(self.ui.stage_monitor)
-                self.erp.update_state({
-                    "stage": _stage.splitlines()[-1] if _stage else "",
-                    "metrics": {
-                        "dc_p": _txt(self.ui.Power_edit),
-                        "dc_v": _txt(self.ui.Voltage_edit),
-                        "dc_i": _txt(self.ui.Current_edit),
-                        "rf_for": _txt(self.ui.for_p_edit),
-                        "rf_ref": _txt(self.ui.ref_p_edit),
-                        "ar_flow": _txt(self.ui.Ar_flow_edit),
-                        "o2_flow": _txt(self.ui.O2_flow_edit),
-                    },
+
+                u = self.ui
+                running = bool(getattr(self, "process_running", False))
+
+                _stage_all = _txt(u.stage_monitor)
+                stage = _stage_all.splitlines()[-1] if _stage_all else ""
+
+                # 계측 그룹 — value=계측값(PV), setpoint=설정값(SV)
+                groups = [
+                    {"label": "전원", "items": [
+                        {"label": "DC Power", "value": _txt(u.Power_edit),
+                         "setpoint": _txt(u.DC_power_edit), "unit": "W"},
+                        {"label": "Voltage", "value": _txt(u.Voltage_edit), "unit": "V"},
+                        {"label": "Current", "value": _txt(u.Current_edit), "unit": "A"},
+                    ]},
+                    {"label": "RF", "items": [
+                        {"label": "for.P", "value": _txt(u.for_p_edit),
+                         "setpoint": _txt(u.RF_power_edit), "unit": "W"},
+                        {"label": "ref.P", "value": _txt(u.ref_p_edit), "unit": "W"},
+                        {"label": "offset / param",
+                         "value": f"{_txt(u.offset_edit)} / {_txt(u.param_edit)}"},
+                    ]},
+                    {"label": "가스", "items": [
+                        {"label": "Ar", "setpoint": _txt(u.Ar_flow_edit), "unit": "sccm"},
+                        {"label": "O₂", "setpoint": _txt(u.O2_flow_edit), "unit": "sccm"},
+                    ]},
+                    {"label": "압력 · 시간", "items": [
+                        {"label": "Working P", "setpoint": _txt(u.working_pressure_edit),
+                         "unit": "mTorr"},
+                        {"label": "Target P", "setpoint": _txt(u.Target_pressure_edit),
+                         "unit": "Torr"},
+                        {"label": "공정 시간", "setpoint": _txt(u.process_time_edit), "unit": "분"},
+                        {"label": "셔터 딜레이", "setpoint": _txt(u.Shutter_delay_edit),
+                         "unit": "분"},
+                    ]},
+                ]
+
+                # 타겟(체크된 건만)
+                tg = []
+                try:
+                    if u.G1_checkbox.isChecked():
+                        tg.append({"label": "G1", "value": _txt(u.G1_edit) or "미입력"})
+                    if u.G2_checkbox.isChecked():
+                        tg.append({"label": "G2", "value": _txt(u.G2_edit) or "미입력"})
+                except Exception:
+                    pass
+                if tg:
+                    groups.append({"label": "타겟", "items": tg})
+
+                state = {
+                    "status": "running" if running else "idle",
+                    "stage": stage,
+                    "groups": groups,
                     "heater": {
-                        "pv": _txt(self.ui.heater_pv_edit),
-                        "sv": _txt(self.ui.heater_sv_edit),
+                        "pv": _txt(u.heater_pv_edit),
+                        "sv": _txt(u.heater_sv_edit),
+                        "status": _txt(u.heater_status_label),
+                        "output": _txt(u.heater_mv_label),
                     },
-                })
+                    "indicators": dict(getattr(self, "_erp_indicators", {})),
+                    "valves": dict(getattr(self, "_erp_valves", {})),
+                }
+
+                # 진행률 계산용 총 공정 시간(초)
+                if running:
+                    try:
+                        total_min = float(_txt(u.process_time_edit) or 0)
+                        state["process"] = {
+                            "name": getattr(self, "current_process_name", "") or "",
+                            "totalSec": int(total_min * 60),
+                        }
+                    except Exception:
+                        pass
+
+                self.erp.update_state(state)
             except Exception:
                 pass
+
 
         self._erp_snap_timer = QTimer(self)
         self._erp_snap_timer.timeout.connect(_erp_snapshot)
@@ -985,6 +1044,14 @@ class MainDialog(QDialog):
 
     @Slot(str, bool)
     def set_indicator(self, name, state: bool):
+        # ERP 리포터용 상태 기록 (표시 로직에는 영향 없음)
+        try:
+            if not hasattr(self, "_erp_indicators"):
+                self._erp_indicators = {}
+            self._erp_indicators[str(name)] = bool(state)
+        except Exception:
+            pass
+
         frame_name = f"{name}_Indicator"
         frame = getattr(self.ui, frame_name, None)
         if frame is not None:
@@ -995,6 +1062,15 @@ class MainDialog(QDialog):
 
     @Slot(str, bool)
     def update_ui_button_display(self, button_name, state):
+        # ERP 리포터용 상태 기록 (표시 로직에는 영향 없음)
+        try:
+            if not hasattr(self, "_erp_valves"):
+                self._erp_valves = {}
+            label = str(button_name).replace("_button", "").replace("_Button", "")
+            self._erp_valves[label] = bool(state)
+        except Exception:
+            pass
+
         # Doorup/Doordn은 UI의 Door_Button으로 합쳐서 표시
         if button_name in ("Doorup_button", "Doordn_button"):
             door_btn = getattr(self.ui, "Door_Button", None)
