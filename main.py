@@ -185,8 +185,9 @@ class MainDialog(QDialog):
         #       PLC 버튼은 setChecked로 처리해 로컬 UI 상태와 항상 일치시킨다.
         _PLC_BTNS = {
             "Rotary_button", "RV_button", "FV_button", "MV_button", "Vent_button",
-            "Turbo_button", "Doorup_button", "Doordn_button", "Ar_Button",
-            "O2_Button", "MS_button", "S1_button", "S2_button", "BuzzStop_Button",
+            "Turbo_button", "Ar_Button", "O2_Button", "MS_button",
+            "S1_button", "S2_button", "BuzzStop_Button",
+            "Door_Button",  # 도어는 상승/하강이 이 버튼 하나로 통합되어 있다
         }
 
         def _erp_exec_one(c: dict):
@@ -198,6 +199,41 @@ class MainDialog(QDialog):
                     raise RuntimeError(f"버튼 없음: {name}")
                 btn.setChecked(bool(args.get("on")))
             elif name == "PROCESS_START":
+                def _set_text(widget_name: str, value):
+                    w = getattr(self.ui, widget_name, None)
+                    if w is None or value is None:
+                        return
+                    s = str(value)
+                    if hasattr(w, "setPlainText"):
+                        w.setPlainText(s)
+                    elif hasattr(w, "setText"):
+                        w.setText(s)
+
+                def _set_check(widget_name: str, value):
+                    w = getattr(self.ui, widget_name, None)
+                    if w is not None and value is not None:
+                        w.setChecked(bool(value))
+
+                if args:
+                    _set_check("G1_checkbox", args.get("useG1"))
+                    _set_text("G1_edit", args.get("g1"))
+                    _set_check("G2_checkbox", args.get("useG2"))
+                    _set_text("G2_edit", args.get("g2"))
+                    _set_check("Ar_gas_radio", args.get("useAr"))
+                    _set_text("Ar_flow_edit", args.get("arFlow"))
+                    _set_check("O2_gas_radio", args.get("useO2"))
+                    _set_text("O2_flow_edit", args.get("o2Flow"))
+                    _set_text("working_pressure_edit", args.get("workingPressure"))
+                    _set_check("rf_power_checkbox", args.get("useRf"))
+                    _set_text("RF_power_edit", args.get("rfPower"))
+                    _set_check("dc_power_checkbox", args.get("useDc"))
+                    _set_text("DC_power_edit", args.get("dcPower"))
+                    _set_check("dc_delay_checkbox", args.get("dcDelay"))
+                    _set_text("Shutter_delay_edit", args.get("shutterDelay"))
+                    _set_text("process_time_edit", args.get("processTime"))
+                    _set_text("offset_edit", args.get("offset"))
+                    _set_text("param_edit", args.get("param"))
+
                 self._handle_start_process()
             elif name == "PROCESS_STOP":
                 self._on_sputter_stop_clicked()
