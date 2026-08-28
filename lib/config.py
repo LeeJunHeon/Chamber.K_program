@@ -66,7 +66,7 @@ HEATER_COIL_PID_RUN = 73      # M00049 PID 동작 중
 
 # --- DAC 출력 범위 (PLC 내장 PID 파라미터와 반드시 일치) ---
 HEATER_MV_MIN = 320           # 0.8V
-HEATER_MV_MAX = 1600          # 4.0V
+HEATER_MV_MAX = 800           # 2.0V
 
 # --- config_user.json에서 변경 가능 ---
 HEATER_ENABLED          = get('HEATER_ENABLED',          True)
