@@ -28,7 +28,7 @@ def set_monitor_widget(widget):
     _monitor_widget = widget
 
 def set_process_log_file(prefix: str = "CHK") -> Path:
-    """
+    r"""
     공정 시작 시 호출해서, 이번 공정 로그를 기록할 파일을 생성/지정한다.
     - 기본 파일 이름: {prefix}_YYYYmmdd_HHMMSS.txt
     - 기본 경로: \\VanaM_NAS\VanaM_toShare\JH_Lee\Logs
