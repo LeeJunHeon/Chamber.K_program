@@ -817,7 +817,29 @@ class MainDialog(QDialog):
 
     @Slot(str)
     def _on_heater_fault(self, reason: str):
-        log_message_to_monitor("경고", f"[히터] {reason}")
+        # 이상 발생 시점의 상태값을 함께 남긴다.
+        #  - log_message_to_monitor 는 내부에서 파일 로그(NAS)까지 수행하므로
+        #    프로그램을 재시작해도 기록이 남는다. (화면 모니터는 재시작 시 지워짐)
+        #  - 나중에 재발했을 때 과온/센서/워치독 중 무엇이었는지 구분하려면
+        #    비트 상태가 반드시 필요하다.
+        st = {}
+        try:
+            st = self.plc_controller.get_heater_status()   # 마지막 폴링 캐시(추가 통신 없음)
+        except Exception:
+            pass
+
+        detail = (
+            f"[히터] {reason} | "
+            f"PV={st.get('pv')} "
+            f"ITL={int(bool(st.get('itl')))} "
+            f"OT={int(bool(st.get('ot')))} "
+            f"TC={int(bool(st.get('tc_err')))} "
+            f"WD={int(bool(st.get('wd_err')))} "
+            f"MV={st.get('mv')} "
+            f"PIDerr={st.get('pid_err')}"
+        )
+        log_message_to_monitor("경고", detail)
+
         if self.chat_chk:
             try:
                 self.chat_chk.notify_error_with_src("HEATER", reason)

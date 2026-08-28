@@ -123,6 +123,11 @@ class PLCController(QObject):
         # ★ 히터: 상태 캐시 / 이상 중복 알림 방지
         self._heater_last: Dict[str, object] = {}
         self._heater_fault_notified = False
+        # 첫 폴링 여부.
+        #  PLC의 이상 비트는 SET 코일(래치)이라 프로그램을 껐다 켜도 남아 있다.
+        #  시작 직후 읽은 이상은 '지금 발생'이 아니라 '이전부터 있던 것'이므로
+        #  문구를 구분해야 "재시작했더니 알림이 왔다"는 혼선을 막을 수 있다.
+        self._heater_first_poll = True
 
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
@@ -436,9 +441,21 @@ class PLCController(QObject):
                     why = "히터 통신 워치독 타임아웃"
                 else:
                     why = f"히터 이상 (PID err={st['pid_err']})"
+
+                # 첫 폴링에서 잡힌 이상은 PLC에 이미 래치되어 있던 것이다.
+                if self._heater_first_poll:
+                    why = f"{why} — 기존 래치 상태 (프로그램 시작 시 확인됨)"
+
                 self.heater_fault.emit(why)
         else:
+            # 해제 시각도 남겨야 지속 시간을 알 수 있다.
+            # 순간적 접촉 불량인지 지속 고장인지 구분하는 근거가 된다.
+            if self._heater_fault_notified:
+                self.status_message.emit("히터", "이상 해제됨 (정상 복귀)")
             self._heater_fault_notified = False
+
+        # 이상 유무와 무관하게 첫 폴링은 한 번뿐이므로 여기서 해제한다.
+        self._heater_first_poll = False
 
     @Slot()
     def _kick_heater_watchdog(self):

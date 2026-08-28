@@ -64,9 +64,20 @@ HEATER_COIL_AT_REQ  = 71      # M00047 오토튜닝 요구    [W]
 HEATER_COIL_AT_DONE = 72      # M00048 오토튜닝 완료
 HEATER_COIL_PID_RUN = 73      # M00049 PID 동작 중
 
-# --- DAC 출력 범위 (PLC 내장 PID 파라미터와 반드시 일치) ---
-HEATER_MV_MIN = 320           # 0.8V
-HEATER_MV_MAX = 800           # 2.0V
+# --- DAC 출력 범위 ---
+#   DAC(XBF-DV04A): 0~10V 를 0~4000 카운트로 출력  →  1 카운트 = 2.5mV
+#   VSCD-30 입력 사양: 0.8~4V  (0.8V = 출력 0%, 4V = 100%)
+#
+#   ※ 상한은 아래 세 곳이 항상 같아야 한다. 하나만 바꾸면 화면 %가 틀어지거나
+#      PID 적분 와인드업이 발생한다.
+#        (1) PLC 내장 파라미터 '01: PID'  최대 조작값
+#        (2) PLC Ch.K 229스텝 하드 리밋 비교 상수 2곳
+#        (3) 여기 HEATER_MV_MAX  (화면 출력% 계산용)
+#      자동동조('02: 자동동조' 최대 조작값)는 (1)보다 낮게 유지할 것.
+#
+#   현재: 히터 보호를 위해 4.0V(1600) → 2.0V(800) 로 제한
+HEATER_MV_MIN = 320                          # 0.8V (VSCD-30 최소 지령)
+HEATER_MV_MAX = get('HEATER_MV_MAX', 800)    # 2.0V (정특성 측정 후 조정)
 
 # --- config_user.json에서 변경 가능 ---
 HEATER_ENABLED          = get('HEATER_ENABLED',          True)
