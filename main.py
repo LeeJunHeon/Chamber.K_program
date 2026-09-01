@@ -33,7 +33,10 @@ from device.RFpower import RFPowerController
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
                         HEATER_MV_LIMIT, HEATER_LOG_ENABLED,
-                        HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR)
+                        HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
+                        HEATER_RAMP_RATE_C_PER_MIN,
+                        HEATER_CURRENT_SLOPE, HEATER_CURRENT_ZERO)
+from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from lib.heater_logger import HeaterCsvLogger
 
@@ -519,6 +522,10 @@ class MainDialog(QDialog):
             self.heater_recipe.request_target.connect(self.plc_controller.set_heater_target)
             self.heater_recipe.request_run.connect(self.plc_controller.set_heater_run)
             self.heater_recipe.request_ramp.connect(self.plc_controller.set_heater_ramp_rate)
+
+            # 공정 레시피(HEATER_RAMP 액션) → PLC 램프 속도
+            self.process_controller.set_heater_ramp.connect(
+                self.plc_controller.set_heater_ramp_rate)
             self.heater_recipe.step_changed.connect(self._on_heater_recipe_step)
             self.heater_recipe.finished.connect(self._on_heater_recipe_finished)
             self.ui.heater_recipe_button.clicked.connect(self._on_heater_recipe_clicked)
@@ -781,6 +788,35 @@ class MainDialog(QDialog):
             self.ui.heater_onoff_button.setText("ON")
 
     # ==================== 히터 CSV 로깅 / 레시피 ====================
+    def _log_heater_header(self, params: dict):
+        """공정 로그 머리말에 히터 설정 한 줄. 히터를 안 쓰면 '미사용'."""
+        try:
+            if not (HEATER_ENABLED and bool(params.get("use_heater", False))):
+                log_message_to_monitor("정보", "[히터] 미사용")
+                return
+            t = float(params.get("heater_temp", 0.0) or 0.0)
+            r = float(params.get("heater_ramp", 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
+            amp = max(0.0, HEATER_CURRENT_SLOPE * (HEATER_MV_LIMIT - HEATER_CURRENT_ZERO))
+            log_message_to_monitor(
+                "정보",
+                f"[히터] 목표 {t:.1f}°C · 램프 {r:.0f}°C/min · "
+                f"DAC 상한 {int(HEATER_MV_LIMIT)} (예상 {amp:.1f}A)")
+        except Exception:
+            pass
+
+    def _heater_log_prefix(self) -> str:
+        """히터 CSV 파일명 접두사. 공정 중이면 공정명을 붙인다."""
+        try:
+            if self.process_running or self.csv_mode:
+                name = (self.current_process_name or "").strip()
+                if name:
+                    safe = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", name).strip("_")
+                    if safe:
+                        return f"HEATER_{safe}"
+        except Exception:
+            pass
+        return "HEATER"
+
     def _heater_log_tick(self, st: dict):
         """히터 운전 구간 동안만 CSV를 남긴다. 화면 갱신 로직과는 독립."""
         if not HEATER_LOG_ENABLED:
@@ -790,7 +826,7 @@ class MainDialog(QDialog):
             now = time.monotonic() * 1000.0
 
             if run and not self._heater_run_prev:
-                path = self._heater_logger.start()
+                path = self._heater_logger.start(self._heater_log_prefix())
                 if path is not None:
                     log_message_to_monitor("정보", f"히터 로그 시작: {path}")
                 self._heater_log_last_ms = 0.0
@@ -810,11 +846,16 @@ class MainDialog(QDialog):
             self._heater_run_prev = run
 
     def _heater_log_note(self) -> str:
-        """레시피 실행 중이면 'step k/N' 을 로그 note 컬럼에 남긴다."""
+        """공정 중이면 현재 스텝 설명, 히터 레시피 중이면 'step k/N'."""
         try:
             if self.heater_recipe.is_running():
                 return (f"step {self.heater_recipe.current_step_no()}"
                         f"/{self.heater_recipe.total_steps()}")
+        except Exception:
+            pass
+        try:
+            if self.process_running or self.csv_mode:
+                return (self.ui.stage_monitor.toPlainText() or "").strip().replace("\n", " ")
         except Exception:
             pass
         return ""
@@ -840,7 +881,9 @@ class MainDialog(QDialog):
 
         start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
         path, _ = QFileDialog.getOpenFileName(
-            self, "히터 레시피 CSV 선택", start_dir, "CSV Files (*.csv);;All Files (*)")
+            self, "히터 레시피 파일 선택", start_dir,
+            "레시피 파일 (*.xlsx *.xlsm *.csv);;엑셀 (*.xlsx *.xlsm);;"
+            "CSV (*.csv);;모든 파일 (*)")
         if not path:
             return
         if not self.heater_recipe.load(path):
@@ -1157,6 +1200,8 @@ class MainDialog(QDialog):
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
         set_process_log_file(prefix="CHK")
         log_message_to_monitor("정보", "=== CHK 공정 시작 ===")
+        # 이번 공정의 히터 설정을 로그 머리말에 남긴다
+        self._log_heater_header(params)
 
         self._chat_reset_run_state()
         self._chat_notify_started(params, self.current_process_name)
@@ -1195,11 +1240,13 @@ class MainDialog(QDialog):
 
         self._csv_dialog_open = True
         try:
+            # 이름은 CSV지만 엑셀(.xlsx/.xlsm) 레시피도 같은 경로로 받는다.
             path, _ = QFileDialog.getOpenFileName(
                 self,
-                "공정 리스트 CSV 선택",
+                "공정 리스트 파일 선택",
                 "",
-                "CSV Files (*.csv);;All Files (*)"
+                "레시피 파일 (*.xlsx *.xlsm *.csv);;엑셀 (*.xlsx *.xlsm);;"
+                "CSV (*.csv);;모든 파일 (*)"
             )
         finally:
             self._csv_dialog_open = False
@@ -1257,19 +1304,22 @@ class MainDialog(QDialog):
             return False
 
         try:
-            with open(self.csv_file_path, "r", encoding="utf-8-sig") as f:
-                reader = csv.DictReader(f)
-                def _has_content(row: dict) -> bool:
-                    for k, v in (row or {}).items():
-                        if (k or "").strip() == "#":
-                            continue
-                        if v is None:
-                            continue
-                        if str(v).strip() != "":
-                            return True
-                    return False
+            # 입력 소스만 바뀐다 — CSV/TSV/XLSX 를 같은 list[dict] 로 받는다.
+            reader = load_table(
+                self.csv_file_path,
+                preferred_sheets=("Recipe", "recipe", "공정", "Sheet1"))
 
-                rows = [row for row in reader if _has_content(row)]
+            def _has_content(row: dict) -> bool:
+                for k, v in (row or {}).items():
+                    if (k or "").strip() == "#":
+                        continue
+                    if v is None:
+                        continue
+                    if str(v).strip() != "":
+                        return True
+                return False
+
+            rows = [row for row in reader if _has_content(row)]
 
         except Exception as ex:
             QMessageBox.critical(self, "CSV 읽기 오류", f"CSV 파일을 읽는 중 오류가 발생했습니다.\n\n{ex}")
@@ -2141,6 +2191,21 @@ class MainDialog(QDialog):
         if use_heater and heater_temp > HEATER_MAX_TEMP:
             raise ValueError(f"[{process_name or 'STEP'}] heater_temp가 상한({HEATER_MAX_TEMP:.0f}°C)을 넘습니다.")
 
+        # 승온 속도(°C/min). 컬럼이 없거나 0이면 config 기본값을 쓴다.
+        heater_ramp = _f("heater_ramp", required=False, default=0.0) or 0.0
+        if use_heater:
+            if heater_ramp <= 0:
+                heater_ramp = float(HEATER_RAMP_RATE_C_PER_MIN)
+            elif heater_ramp < 6.0:
+                # PLC 램프는 1카운트/초 = 6°C/min 단위라 그 아래는 표현되지 않는다
+                self.on_status_message(
+                    "히터(경고)",
+                    f"[{process_name or 'STEP'}] heater_ramp {heater_ramp:g} → 6 °C/min 으로 보정")
+                heater_ramp = 6.0
+            elif heater_ramp > 60.0:
+                raise ValueError(
+                    f"[{process_name or 'STEP'}] heater_ramp가 상한(60°C/min)을 넘습니다.")
+
         # DC Power 안정화 대기(선택) : 컬럼이 없거나 비어 있으면 OFF
         use_dc_delay = _b("use_dc_delay", False)
 
@@ -2218,6 +2283,7 @@ class MainDialog(QDialog):
             "use_dc_delay": bool(use_dc_delay and use_dc),
             "use_heater":   bool(use_heater and HEATER_ENABLED),   # ★
             "heater_temp":  float(heater_temp),                    # ★
+            "heater_ramp":  float(heater_ramp),                    # ★ °C/min
 
             "g1_target_name": g1_target_name,
             "g2_target_name": g2_target_name,
@@ -2429,6 +2495,8 @@ class MainDialog(QDialog):
 
         # ★★★ 이 CSV STEP 전용 로그 파일 생성 ★★★
         set_process_log_file(prefix="CHK")
+        # 이번 공정의 히터 설정을 로그 머리말에 남긴다
+        self._log_heater_header(params)
 
         # ✅ (위에서 step_no/total을 이미 만들었다면 여기 재정의 필요 없음)
         # step_no = self.csv_index + 1

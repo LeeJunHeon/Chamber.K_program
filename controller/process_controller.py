@@ -11,7 +11,7 @@ from PyQt6.QtCore import (
     pyqtSignal as Signal, pyqtSlot as Slot, Qt, QElapsedTimer
 )
 from lib.config import (DC_POWER_DELAY_SEC,
-                        HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
+                        HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
                         HEATER_WAIT_TIMEOUT_SEC)
 
 # ===================== 액션 / 스텝 정의 =====================
@@ -34,6 +34,7 @@ class ActionType(str, Enum):
     RF_POWER_STOP = "RF_POWER_STOP"
     HEATER_SET    = "HEATER_SET"     # value: 목표 온도(°C)
     HEATER_WAIT   = "HEATER_WAIT"    # value: 목표 온도(°C)
+    HEATER_RAMP   = "HEATER_RAMP"    # value: 램프 속도(°C/min)
 
 @dataclass
 class ProcessStep:
@@ -82,6 +83,7 @@ class SputterProcessController(QObject):
     stop_rf_power         = Signal()
     set_heater_target     = Signal(float)    # ★
     set_heater_run        = Signal(bool)     # ★
+    set_heater_ramp       = Signal(int)      # ★ 램프 속도(counts/s, 1=6°C/min)
 
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
@@ -119,6 +121,7 @@ class SputterProcessController(QObject):
 
         # 사용 여부
         self.is_dc_on = False
+        self._heater_used = False   # 이번 공정이 히터를 쓰는가 (종료 시 OFF 판단용)
         self.is_rf_on = False
 
         self._stop_pending = False
@@ -332,7 +335,23 @@ class SputterProcessController(QObject):
                     )
                 )
 
-        # --- 6) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
+        # --- 6) 히터 승온 시작 (선택) ---
+        #  히터는 진공 인터락(M02000) 때문에 배기 전에는 켜지지 않는다.
+        #  유량 ON 직후가 켤 수 있는 가장 빠른 시점이며, 여기서 승온을 시작해
+        #  압력 안정화와 병행시킨다. 도달 확인은 파워를 켜기 전에 한다.
+        heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
+        heater_ramp = float(p.get('heater_ramp', 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
+        self._heater_used = bool(p.get('use_heater', False)) and heater_temp > 0.0
+
+        if self._heater_used:
+            steps.append(ProcessStep(
+                ActionType.HEATER_RAMP, f"히터 램프 속도 {heater_ramp:.0f}°C/min 설정",
+                value=heater_ramp))
+            steps.append(ProcessStep(
+                ActionType.HEATER_SET, f"히터 목표 {heater_temp:.1f}°C 설정 — 승온 시작",
+                value=heater_temp))
+
+        # --- 6.1) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
         steps.append(
             ProcessStep(
                 ActionType.MFC_CMD,
@@ -349,13 +368,10 @@ class SputterProcessController(QObject):
             )
         )
 
-        # --- 6.5) 히터 승온 (선택) ---
-        #  압력 안정화와 병행하여 승온 → 아웃가싱이 step-down 전에 빠지도록 배치
-        heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
-        if bool(p.get('use_heater', False)) and heater_temp > 0.0:
-            steps.append(ProcessStep(
-                ActionType.HEATER_SET, f"히터 목표 {heater_temp:.1f}°C 설정",
-                value=heater_temp))
+        # --- 6.5) 히터 도달 확인 (선택) ---
+        #  승온은 위 6)에서 이미 시작했다. 여기서는 파워를 켜기 전에
+        #  목표 온도에 도달했는지만 확인한다.
+        if self._heater_used:
             steps.append(ProcessStep(
                 ActionType.HEATER_WAIT,
                 f"히터 온도 도달 대기 (±{HEATER_SOAK_TOLERANCE:.1f}°C, "
@@ -601,9 +617,18 @@ class SputterProcessController(QObject):
                 self.stop_rf_power.emit()
                 QTimer.singleShot(100, self._next_step)
 
+            elif step.action == ActionType.HEATER_RAMP:
+                rate = float(step.value or HEATER_RAMP_RATE_C_PER_MIN)
+                self.set_heater_ramp.emit(max(1, round(rate / 6.0)))
+                self.status_message.emit("히터", f"히터 램프 속도 {rate:.0f}°C/min 설정")
+                QTimer.singleShot(200, self._next_step)
+
             elif step.action == ActionType.HEATER_SET:
-                self.set_heater_target.emit(float(step.value or 0.0))
+                target = float(step.value or 0.0)
+                self.set_heater_target.emit(target)
                 self.set_heater_run.emit(True)
+                self.status_message.emit(
+                    "히터", f"히터 목표 {target:.1f}°C 설정 — 승온 시작 (압력 안정화와 병행)")
                 QTimer.singleShot(500, self._next_step)
 
             elif step.action == ActionType.HEATER_WAIT:
@@ -715,8 +740,11 @@ class SputterProcessController(QObject):
         timeout_ms = int(HEATER_WAIT_TIMEOUT_SEC * 1000)
 
         loop = QEventLoop()
-        state = {'in_band_since': None, 'aborted': False, 'reason': ''}
+        state = {'in_band_since': None, 'aborted': False, 'reason': '',
+                 'last_report': 0, 'first_pv': None, 'last_pv': None}
         clock = QElapsedTimer()
+        total_clock = QElapsedTimer()      # 승온 소요 시간 측정용
+        total_clock.start()
 
         def _on_status(st: dict):
             if not self._running or self._stop_pending:
@@ -731,6 +759,16 @@ class SputterProcessController(QObject):
             if pv is None:          # TC 이상
                 state['in_band_since'] = None
                 return
+            state['last_pv'] = float(pv)
+
+            # 진행 상황을 60초에 한 줄만 남긴다 (폴링은 200ms)
+            elapsed_ms = total_clock.elapsed()
+            if elapsed_ms - state['last_report'] >= 60000:
+                state['last_report'] = elapsed_ms
+                self.status_message.emit(
+                    "히터",
+                    f"히터 승온 중 — {float(pv):.1f}°C / {target_c:.1f}°C, "
+                    f"{int(elapsed_ms // 60000)}분 경과")
 
             if abs(float(pv) - target_c) <= tol:
                 if state['in_band_since'] is None:
@@ -742,9 +780,19 @@ class SputterProcessController(QObject):
             else:
                 state['in_band_since'] = None
 
+        try:
+            _cur = (self.plc.get_heater_status() or {}).get('pv')
+        except Exception:
+            _cur = None
+        state['first_pv'] = _cur
+
         self.plc.update_heater_status.connect(_on_status)
         self._active_loops = [("heater", loop)]
         self.status_message.emit("정보", f"히터 승온 대기중... (목표 {target_c:.1f}°C)")
+        self.status_message.emit(
+            "히터",
+            f"히터 승온 대기 시작 — 현재 "
+            f"{('%.1f' % _cur) if _cur is not None else '--.-'}°C, 목표 {target_c:.1f}°C")
 
         ok = self._exec_loop_with_timeout(
             loop, timeout_ms,
@@ -766,6 +814,12 @@ class SputterProcessController(QObject):
             return
 
         self.status_message.emit("정보", "히터 온도 도달 완료.")
+        _took = int(total_clock.elapsed() // 1000)
+        _pv = state.get('last_pv')
+        self.status_message.emit(
+            "히터",
+            f"히터 도달 — {('%.1f' % _pv) if _pv is not None else '--.-'}°C, "
+            f"승온 소요 {_took // 60}분 {_took % 60}초")
         self._next_step()
 
     def _exec_loop_with_timeout(
@@ -1002,6 +1056,10 @@ class SputterProcessController(QObject):
             self.stage_monitor.emit("M.S. close...")
             self.update_plc_port.emit('MS_button', False)
 
+            # 히터 끄기 — 열관성이 크므로 파워 램프다운을 기다리지 않고 먼저 끈다.
+            # 여기서 예외가 나도 나머지 종료 시퀀스는 계속되어야 한다.
+            self._heater_off("공정 종료")
+
             # 파워 끄기
             if self.is_dc_on:
                 self.status_message.emit("DCpower", "DC 파워 OFF")
@@ -1086,6 +1144,8 @@ class SputterProcessController(QObject):
             QTimer.singleShot(800, self._finish_stop)
 
         except Exception as e:
+            # 종료 시퀀스가 중간에 터져도 히터는 반드시 꺼야 한다
+            self._heater_off("종료 시퀀스 예외")
             try:
                 self.critical_error.emit(f"종료 시퀀스 예외: {e}")
             except Exception:
@@ -1102,8 +1162,34 @@ class SputterProcessController(QObject):
             except Exception:
                 pass
 
+    def _heater_off(self, reason: str = "공정 종료"):
+        """히터 정지 + 램프 속도 원복. 어떤 예외도 밖으로 내보내지 않는다."""
+        if not self._heater_used:
+            return
+        try:
+            pv = (self.plc.get_heater_status() or {}).get('pv')
+        except Exception:
+            pv = None
+        try:
+            self.status_message.emit(
+                "히터",
+                f"{reason} — 히터 OFF (마지막 온도 "
+                f"{('%.1f' % pv) if pv is not None else '--.-'}°C)")
+        except Exception:
+            pass
+        try:
+            self.set_heater_run.emit(False)
+        except Exception:
+            pass
+        try:
+            # 공정에서 램프 속도를 바꿨으므로 config 기본값으로 되돌린다
+            self.set_heater_ramp.emit(max(1, round(float(HEATER_RAMP_RATE_C_PER_MIN) / 6.0)))
+        except Exception:
+            pass
+
     @Slot()
     def _finish_stop(self):
+        self._heater_used = False
         self._stop_rfdown_timeout_timer()
         self._rfdown_wait = None
         self._stop_pending = False

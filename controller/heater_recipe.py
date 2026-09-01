@@ -24,6 +24,8 @@ from typing import List, Dict, Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal as Signal
 
+from lib.recipe_io import load_table
+
 from lib.config import (
     HEATER_MAX_TEMP,
     HEATER_RAMP_RATE_C_PER_MIN,
@@ -123,8 +125,8 @@ class HeaterRecipeRunner(QObject):
         """레시피 CSV를 읽는다. 실패하면 사유를 emit하고 False."""
         p = Path(path)
         try:
-            with open(p, encoding='utf-8-sig', newline='') as f:
-                rows = list(csv.DictReader(f))
+            # CSV/TSV/XLSX 를 같은 list[dict] 로 받는다 (lib/recipe_io.py)
+            rows = load_table(p, preferred_sheets=("HeaterRecipe", "heater", "히터"))
         except Exception as e:
             self.status_message.emit("히터(오류)", f"레시피 파일을 읽을 수 없습니다: {e}")
             return False
