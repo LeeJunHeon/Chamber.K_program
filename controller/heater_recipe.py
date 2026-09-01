@@ -43,6 +43,9 @@ COOLDOWN_TARGET_C = 30.0
 # TC 이상(pv=None)이 이 시간 이상 계속되면 중단한다.
 TC_BAD_LIMIT_SEC = 60.0
 
+# 운전 중인데 DAC 출력이 0인 상태(PID 정지)가 이 시간 이상 계속되면 중단한다.
+OUT_DEAD_LIMIT_SEC = 10.0
+
 # 상태
 IDLE, RAMPING, SOAKING, DONE, ABORTED = "IDLE", "RAMPING", "SOAKING", "DONE", "ABORTED"
 
@@ -92,6 +95,7 @@ class HeaterRecipeRunner(QObject):
         self._step_started = 0.0     # RAMPING 시작 시각 (monotonic)
         self._in_band_since = 0.0    # 허용 편차 안에 들어온 시각. 0이면 밖
         self._tc_bad_since = 0.0
+        self._out_dead_since = 0.0   # 출력 0 지속 시작 시각. 0이면 정상
         self._soak_deadline = 0.0
         self._soak_last_report = 0.0
 
@@ -270,6 +274,7 @@ class HeaterRecipeRunner(QObject):
         """어떤 경로로 들어와도 히터를 끄고 램프 속도를 원복한다."""
         was_running = self.is_running()
         self._state = ABORTED
+        self._out_dead_since = 0.0
         self._tick.stop()
         self._safe_shutdown()
         if was_running:
@@ -291,6 +296,7 @@ class HeaterRecipeRunner(QObject):
 
     def _abort(self, reason: str):
         self._state = ABORTED
+        self._out_dead_since = 0.0
         self._tick.stop()
         self._safe_shutdown()
         self.status_message.emit("히터(오류)", f"레시피 중단: {reason}")
@@ -307,6 +313,7 @@ class HeaterRecipeRunner(QObject):
         self._step_started = time.monotonic()
         self._in_band_since = 0.0
         self._tc_bad_since = 0.0
+        self._out_dead_since = 0.0
 
         self.request_ramp.emit(_ramp_raw(s.ramp_c_per_min))
         self.request_target.emit(float(s.target_c))
@@ -335,6 +342,7 @@ class HeaterRecipeRunner(QObject):
 
     def _complete(self):
         self._state = DONE
+        self._out_dead_since = 0.0
         self._tick.stop()
         last = self._steps[-1] if self._steps else None
         hold = bool(HEATER_RECIPE_HOLD_AT_END) and (last is not None and not last.is_cooldown)
@@ -356,6 +364,16 @@ class HeaterRecipeRunner(QObject):
             else:                  cause = "이상 발생"
             self._abort(f"히터 이상: {cause}")
             return
+
+        # 래더는 정상인데 PID가 멈춰 출력이 0으로 죽은 경우.
+        # 도달할 수 없는 온도를 타임아웃까지 기다리지 않고 중단한다.
+        if st.get('output_dead'):
+            if self._out_dead_since == 0.0:
+                self._out_dead_since = time.monotonic()
+            elif time.monotonic() - self._out_dead_since >= OUT_DEAD_LIMIT_SEC:
+                self._abort("히터 출력이 정지했습니다 (PID 이상)")
+            return
+        self._out_dead_since = 0.0
 
         if self._state != RAMPING:
             return

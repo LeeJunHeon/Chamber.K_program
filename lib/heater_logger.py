@@ -21,7 +21,7 @@ from lib.logger import NAS_LOG_DIR
 COLUMNS = [
     "timestamp", "elapsed_sec",
     "pv_c", "sv_c", "ramp_sv_c",
-    "mv", "mv_limit", "mv_pct", "est_current_a",
+    "mv", "mv_limit", "mv_pct", "pid_err", "cur_sv_c", "est_current_a",
     "ramp_rate_c_per_min", "holdback_c",
     "run", "itl", "fault", "ot", "tc_err", "wd_err",
     "note",
@@ -100,6 +100,8 @@ class HeaterCsvLogger:
                 int(_f('mv', 0)),
                 int(_f('mv_limit', 0)),
                 f"{float(_f('mv_pct')):.1f}",
+                int(_f('pid_err', 0)),
+                f"{float(_f('cur_sv')):.1f}",
                 f"{float(_f('est_current')):.2f}",
                 f"{float(_f('ramp_rate')):.0f}",
                 f"{float(_f('holdback')):.1f}",

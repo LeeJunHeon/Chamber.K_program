@@ -130,6 +130,8 @@ class PLCController(QObject):
         # ★ 히터: 상태 캐시 / 이상 중복 알림 방지
         self._heater_last: Dict[str, object] = {}
         self._heater_fault_notified = False
+        self._heater_out_dead_cnt = 0        # '운전 중인데 출력 0' 연속 폴링 횟수
+        self._heater_out_dead_notified = False
         # 첫 폴링 여부.
         #  PLC의 이상 비트는 SET 코일(래치)이라 프로그램을 껐다 켜도 남아 있다.
         #  시작 직후 읽은 이상은 '지금 발생'이 아니라 '이전부터 있던 것'이므로
@@ -540,8 +542,28 @@ class PLCController(QObject):
             'at_done':   _bit(HEATER_COIL_AT_DONE),
             'pid_run':   _bit(HEATER_COIL_PID_RUN),
         }
+
+        # 래더는 전부 정상(RUN=On, ITL=On, FAULT=Off)인데 PID 블록만 멈춰
+        # DAC 출력이 0으로 죽는 경우가 있다. MV_MIN 미만은 정상 연산에서
+        # 나올 수 없는 값이므로 이것으로 판별한다.
+        st['output_dead'] = bool(st.get('run') and not st.get('fault')
+                                 and st.get('mv') is not None
+                                 and st['mv'] < HEATER_MV_MIN)
         self._heater_last = st
         self.update_heater_status.emit(st)
+
+        # 출력이 죽은 상태가 연속 3회(약 0.6초) 이어지면 한 번만 알린다.
+        if st['output_dead']:
+            self._heater_out_dead_cnt += 1
+            if self._heater_out_dead_cnt >= 3 and not self._heater_out_dead_notified:
+                self._heater_out_dead_notified = True
+                self.status_message.emit(
+                    "히터(경고)",
+                    f"운전 중인데 DAC 출력이 0입니다 "
+                    f"(PID 에러 코드 D00017={st['pid_err']} 확인)")
+        else:
+            self._heater_out_dead_cnt = 0
+            self._heater_out_dead_notified = False
 
         # 이상 발생 시 1회만 알림 (원인 우선순위: 과온 > 센서 > 워치독)
         if st['fault']:
