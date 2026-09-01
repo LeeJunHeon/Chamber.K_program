@@ -263,7 +263,41 @@ class MainDialog(QDialog):
                     else self.ui.heater_sv_edit.setText(str(val))
                 self._on_heater_apply_clicked()
             elif name == "HEATER_ONOFF":
-                self.ui.heater_onoff_button.setChecked(bool(args.get("on")))
+                want = bool(args.get("on"))
+                btn = self.ui.heater_onoff_button
+                if want:
+                    # 목표 온도가 함께 왔으면 먼저 반영한다(빈 SV로 인한 팝업 방지)
+                    val = args.get("value")
+                    if val is not None and str(val).strip() != "":
+                        w = self.ui.heater_sv_edit
+                        if hasattr(w, "setPlainText"):
+                            w.setPlainText(str(val))
+                        else:
+                            w.setText(str(val))
+                    # 사전 검증 — 실패하면 팝업 대신 예외로 웹에 사유를 보고한다
+                    sv_txt = ""
+                    try:
+                        sv_w = self.ui.heater_sv_edit
+                        sv_txt = (sv_w.toPlainText() if hasattr(sv_w, "toPlainText")
+                                  else sv_w.text()).strip()
+                    except Exception:
+                        pass
+                    if sv_txt == "":
+                        raise RuntimeError("히터 목표 온도가 설정되지 않았습니다")
+                    try:
+                        float(sv_txt)
+                    except ValueError:
+                        raise RuntimeError(f"히터 목표 온도가 숫자가 아닙니다: {sv_txt}")
+                    st = getattr(self.plc_controller, "_heater_last", None) or {}
+                    if not st.get("itl"):
+                        raise RuntimeError("히터 인터락 미충족 (TC/DAC 모듈 상태 확인 필요)")
+
+                if btn.isChecked() == want:
+                    # 이미 원하는 상태 — setChecked 가 무시되므로 명시적으로 알린다
+                    raise RuntimeError(f"히터가 이미 {'ON' if want else 'OFF'} 상태입니다")
+                btn.setChecked(want)
+                if btn.isChecked() != want:
+                    raise RuntimeError("히터 상태 변경이 장비에서 거부되었습니다")
 
             elif name == "RECIPE_PROCESS_RUN":
                 # 웹에서 만든 공정 레시피를 CSV로 저장하고 기존 CSV 실행 경로를 그대로 사용한다
@@ -318,7 +352,19 @@ class MainDialog(QDialog):
 
         def _erp_drain_commands():
             try:
-                for c in self.erp.pop_commands():
+                cmds = self.erp.pop_commands()
+                if not cmds:
+                    return
+                # 장비에 모달 대화상자가 떠 있으면 조작이 막히므로 원인을 보고하고 중단한다
+                if QApplication.activeModalWidget() is not None:
+                    for c in cmds:
+                        self.erp.cmd_result(
+                            c.get("id"), False,
+                            "장비에 확인 대화상자가 열려 있습니다. 현장에서 닫아주세요.")
+                    log_message_to_monitor(
+                        "WARN", "[원격] 대화상자가 열려 있어 명령을 거부했습니다")
+                    return
+                for c in cmds:
                     cid = c.get("id")
                     try:
                         _erp_exec_one(c)
