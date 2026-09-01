@@ -498,15 +498,21 @@ class PLCController(QObject):
         def _bit(coil: int) -> bool:
             return bool(bits[coil - HEATER_COIL_BASE])
 
-        # 출력%는 '살아있는 상한'(D00018)을 기준으로 계산한다.
-        # 래더/모니터가 D00018을 바꾸면 화면도 따라가야 하기 때문.
+        # 출력%는 설정 파일의 절대 최대치(HEATER_MV_ABS_MAX)를 100%로 계산한다.
+        # 운전 상한(D00018)은 운전 중 바뀔 수 있어 분모로 쓰면 기준이 흔들린다.
+        # (상한을 낮췄는데 같은 출력에서 %가 올라가는 모순 방지)
         mv_limit = _reg(HEATER_REG_MV_LIMIT)
-        top = mv_limit if HEATER_MV_MIN < mv_limit <= HEATER_MV_ABS_MAX else HEATER_MV_LIMIT
-        span = top - HEATER_MV_MIN
+        span = HEATER_MV_ABS_MAX - HEATER_MV_MIN
         if mv < HEATER_MV_MIN or span <= 0:
             _mv_pct = 0.0
         else:
             _mv_pct = max(0.0, min(100.0, (mv - HEATER_MV_MIN) / span * 100.0))
+
+        # 현재 운전 상한이 절대 최대치의 몇 %인지 (같은 기준의 참고값)
+        _limit_pct = (
+            max(0.0, min(100.0, (mv_limit - HEATER_MV_MIN) / span * 100.0))
+            if span > 0 else 0.0
+        )
 
         st = {
             'ok':        not tc_bad,
@@ -518,6 +524,7 @@ class PLCController(QObject):
             'mv':        mv,
             'mv_pct':    _mv_pct,
             'mv_limit':  mv_limit,
+            'limit_pct': _limit_pct,
             'sv_ramp':   _reg(HEATER_REG_SV_RAMP)   * HEATER_TEMP_SCALE,
             'ramp_rate': _reg(HEATER_REG_RAMP_RATE) * 6,          # °C/min 환산
             'holdback':  _reg(HEATER_REG_HOLDBACK)  * HEATER_TEMP_SCALE,
