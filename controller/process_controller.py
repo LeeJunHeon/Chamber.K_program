@@ -266,25 +266,7 @@ class SputterProcessController(QObject):
         steps.append(ProcessStep(ActionType.RF_POWER_STOP, "PRE: RF Power OFF"))
         steps.append(ProcessStep(ActionType.DELAY, "PRE: Power OFF settle", duration_sec=1))
 
-        # --- 2.6) 히터 승온 시작 (선택) ---
-        #  Start 시점에 이미 진공이 잡혀 있고(_check_main_valve_open 이 메인밸브+인터락을
-        #  확인한 뒤에만 공정이 시작된다) 히터 인터락도 충족된 상태이므로,
-        #  가스/MFC 준비를 기다리지 않고 여기서 바로 승온을 시작한다.
-        #  승온은 수십 분 걸리므로 뒤따르는 준비 스텝과 최대한 병행시키는 것이 목적이다.
-        #  도달 확인(HEATER_WAIT)은 6.5) 에서 파워 투입 직전에 한다.
-        heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
-        heater_ramp = float(p.get('heater_ramp', 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
-        self._heater_used = bool(p.get('use_heater', False)) and heater_temp > 0.0
-
-        if self._heater_used:
-            steps.append(ProcessStep(
-                ActionType.HEATER_RAMP, f"히터 램프 속도 {heater_ramp:.0f}°C/min 설정",
-                value=heater_ramp))
-            steps.append(ProcessStep(
-                ActionType.HEATER_SET, f"히터 목표 {heater_temp:.1f}°C 설정 — 승온 시작",
-                value=heater_temp))
-
-        # --- 3) 초기화: 각 채널 Flow OFF ---
+        # --- 3) 배기 개방: 각 채널 Flow OFF ---
         for ch in channels:
             steps.append(
                 ProcessStep(
@@ -303,6 +285,34 @@ class SputterProcessController(QObject):
             )
         )
 
+        # --- 4) 히터 승온 시작 (선택) ---
+        #  Start 시점에 이미 진공이 잡혀 있고(_check_main_valve_open 이 메인밸브+인터락을
+        #  확인한 뒤에만 공정이 시작된다) 히터 인터락도 충족된 상태다.
+        #  가스를 넣기 전, 고진공 상태에서 승온한다 — 아웃가싱이 배기로 빠진 뒤
+        #  공정 가스를 도입하기 위해서다. 배기는 3)에서 최대로 열어 두었다.
+        heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
+        heater_ramp = float(p.get('heater_ramp', 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
+        self._heater_used = bool(p.get('use_heater', False)) and heater_temp > 0.0
+
+        if self._heater_used:
+            steps.append(ProcessStep(
+                ActionType.HEATER_RAMP, f"히터 램프 속도 {heater_ramp:.0f}°C/min 설정",
+                value=heater_ramp))
+            steps.append(ProcessStep(
+                ActionType.HEATER_SET, f"히터 목표 {heater_temp:.1f}°C 설정 — 승온 시작",
+                value=heater_temp))
+
+        # --- 5) 히터 도달 확인 (선택) ---
+        #  여기서 목표 온도 도달을 확인한 뒤에야 가스/압력/파워로 넘어간다.
+        if self._heater_used:
+            steps.append(ProcessStep(
+                ActionType.HEATER_WAIT,
+                f"히터 온도 도달 대기 (±{HEATER_SOAK_TOLERANCE:.1f}°C, "
+                f"{HEATER_SOAK_TIME_SEC}s 유지, timeout {HEATER_WAIT_TIMEOUT_SEC}s)",
+                value=heater_temp))
+
+        # --- 6) 영점 ---
+        #  승온이 끝나 아웃가싱이 잦아든 뒤에 잡아야 영점이 정확하다.
         # 각 채널 Zeroing
         for ch in channels:
             steps.append(
@@ -322,7 +332,7 @@ class SputterProcessController(QObject):
             )
         )
 
-        # --- 4) 가스 밸브(PLC) Open: 선택된 모든 가스에 대해 ---
+        # --- 7) 가스 밸브(PLC) Open: 선택된 모든 가스에 대해 ---
         gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
         for btn in gas_buttons:
             gas_name = "Ar" if "Ar" in btn else "O2"
@@ -334,7 +344,7 @@ class SputterProcessController(QObject):
                 )
             )
 
-        # --- 5) 채널별 유량 설정 & Flow ON ---
+        # --- 8) 채널별 유량 설정 & Flow ON ---
         for ch in channels:
             flow = float(flows.get(ch, 0.0))
             if flow > 0.0:
@@ -353,7 +363,9 @@ class SputterProcessController(QObject):
                     )
                 )
 
-        # --- 6) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
+        # --- 9) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
+        #  기체 밀도가 온도에 따라 달라지므로, 목표 온도에 도달한 상태에서
+        #  압력을 확정해야 공정 조건이 재현된다.
         steps.append(
             ProcessStep(
                 ActionType.MFC_CMD,
@@ -370,17 +382,7 @@ class SputterProcessController(QObject):
             )
         )
 
-        # --- 6.5) 히터 도달 확인 (선택) ---
-        #  승온은 위 6)에서 이미 시작했다. 여기서는 파워를 켜기 전에
-        #  목표 온도에 도달했는지만 확인한다.
-        if self._heater_used:
-            steps.append(ProcessStep(
-                ActionType.HEATER_WAIT,
-                f"히터 온도 도달 대기 (±{HEATER_SOAK_TOLERANCE:.1f}°C, "
-                f"{HEATER_SOAK_TIME_SEC}s 유지, timeout {HEATER_WAIT_TIMEOUT_SEC}s)",
-                value=heater_temp))
-
-        # --- 7) 건 셔터 선택적 Open (기존 로직 그대로) ---
+        # --- 10) 건 셔터 선택적 Open (기존 로직 그대로) ---
         if p.get('use_g1', False):
             steps.append(
                 ProcessStep(
