@@ -17,7 +17,7 @@ class Ui_Dialog(object):
     def setupUi(self, Dialog):
         if not Dialog.objectName():
             Dialog.setObjectName(u"Dialog")
-        Dialog.resize(1041, 609)
+        Dialog.resize(1330, 609)
         self.pushButton = QPushButton(Dialog)
         self.pushButton.setObjectName(u"pushButton")
         self.pushButton.setEnabled(False)
@@ -95,12 +95,6 @@ class Ui_Dialog(object):
         self.S2_button.setStyleSheet(u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #555555;}\n"
 "QPushButton:checked {background: #32FF32; color: black; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #229b12;}")
         self.S2_button.setCheckable(True)
-        self.ION_button = QPushButton(Dialog)
-        self.ION_button.setObjectName(u"ION_button")
-        self.ION_button.setGeometry(QRect(250, 180, 81, 51))
-        self.ION_button.setStyleSheet(u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #555555;}\n"
-"QPushButton:checked {background: #32FF32; color: black; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #229b12;}")
-        self.ION_button.setCheckable(True)
         self.Vent_button = QPushButton(Dialog)
         self.Vent_button.setObjectName(u"Vent_button")
         self.Vent_button.setGeometry(QRect(620, 190, 81, 51))
@@ -229,39 +223,6 @@ class Ui_Dialog(object):
         self.Water_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 25px; border: 2px solid #333;")
         self.Water_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
         self.Water_Indicator.setFrameShadow(QFrame.Shadow.Raised)
-        self.ION_RUN_Indicator = QFrame(Dialog)
-        self.ION_RUN_Indicator.setObjectName(u"ION_RUN_Indicator")
-        self.ION_RUN_Indicator.setGeometry(QRect(20, 110, 41, 41))
-        self.ION_RUN_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 20px; border: 2px solid #333;")
-        self.ION_RUN_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
-        self.ION_RUN_Indicator.setFrameShadow(QFrame.Shadow.Raised)
-        self.ION_RUN_label = QLabel(Dialog)
-        self.ION_RUN_label.setObjectName(u"ION_RUN_label")
-        self.ION_RUN_label.setGeometry(QRect(10, 152, 61, 18))
-        self.ION_RUN_label.setStyleSheet(u"font-weight: bold; font-size: 10pt;")
-        self.ION_RUN_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
-        self.ION_LAMP_Indicator = QFrame(Dialog)
-        self.ION_LAMP_Indicator.setObjectName(u"ION_LAMP_Indicator")
-        self.ION_LAMP_Indicator.setGeometry(QRect(105, 110, 41, 41))
-        self.ION_LAMP_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 20px; border: 2px solid #333;")
-        self.ION_LAMP_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
-        self.ION_LAMP_Indicator.setFrameShadow(QFrame.Shadow.Raised)
-        self.ION_LAMP_label = QLabel(Dialog)
-        self.ION_LAMP_label.setObjectName(u"ION_LAMP_label")
-        self.ION_LAMP_label.setGeometry(QRect(95, 152, 61, 18))
-        self.ION_LAMP_label.setStyleSheet(u"font-weight: bold; font-size: 10pt;")
-        self.ION_LAMP_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
-        self.ION_OT_Indicator = QFrame(Dialog)
-        self.ION_OT_Indicator.setObjectName(u"ION_OT_Indicator")
-        self.ION_OT_Indicator.setGeometry(QRect(185, 110, 41, 41))
-        self.ION_OT_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 20px; border: 2px solid #333;")
-        self.ION_OT_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
-        self.ION_OT_Indicator.setFrameShadow(QFrame.Shadow.Raised)
-        self.ION_OT_label = QLabel(Dialog)
-        self.ION_OT_label.setObjectName(u"ION_OT_label")
-        self.ION_OT_label.setGeometry(QRect(175, 152, 61, 18))
-        self.ION_OT_label.setStyleSheet(u"font-weight: bold; font-size: 10pt;")
-        self.ION_OT_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
         self.label_2 = QLabel(Dialog)
         self.label_2.setObjectName(u"label_2")
         self.label_2.setGeometry(QRect(20, 80, 51, 20))
@@ -502,7 +463,7 @@ class Ui_Dialog(object):
 
         self.heater_group = QFrame(Dialog)
         self.heater_group.setObjectName(u"heater_group")
-        self.heater_group.setGeometry(QRect(18, 258, 186, 104))
+        self.heater_group.setGeometry(QRect(1090, 20, 220, 130))
         self.heater_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.heater_group.setStyleSheet(
             u"QFrame#heater_group {background: #ffffff; "
@@ -512,7 +473,7 @@ class Ui_Dialog(object):
         # --- 제목 ---
         self.heater_title_label = QLabel(self.heater_group)
         self.heater_title_label.setObjectName(u"heater_title_label")
-        self.heater_title_label.setGeometry(QRect(10, 5, 166, 18))
+        self.heater_title_label.setGeometry(QRect(10, 5, 200, 18))
         self.heater_title_label.setStyleSheet(
             u"QLabel {border: none; color: #333333; font-weight: bold;}"
         )
@@ -520,12 +481,12 @@ class Ui_Dialog(object):
         # --- 1행: 현재 온도(읽기 전용) + 상태 ---
         self.heater_pv_title = QLabel(self.heater_group)
         self.heater_pv_title.setObjectName(u"heater_pv_title")
-        self.heater_pv_title.setGeometry(QRect(10, 28, 30, 22))
+        self.heater_pv_title.setGeometry(QRect(10, 30, 34, 24))
         self.heater_pv_title.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         self.heater_pv_edit = QLineEdit(self.heater_group)
         self.heater_pv_edit.setObjectName(u"heater_pv_edit")
-        self.heater_pv_edit.setGeometry(QRect(42, 28, 52, 22))
+        self.heater_pv_edit.setGeometry(QRect(48, 30, 60, 24))
         self.heater_pv_edit.setReadOnly(True)                       # PLC 값만 표시
         self.heater_pv_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heater_pv_edit.setStyleSheet(
@@ -536,18 +497,18 @@ class Ui_Dialog(object):
         # 상태 문구. 색상은 main.py의 update_heater_display()가 상황별로 덮어쓴다.
         self.heater_status_label = QLabel(self.heater_group)
         self.heater_status_label.setObjectName(u"heater_status_label")
-        self.heater_status_label.setGeometry(QRect(100, 28, 76, 22))
+        self.heater_status_label.setGeometry(QRect(114, 30, 96, 24))
         self.heater_status_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         # --- 2행: 목표 온도 입력 + 적용 + ON ---
         self.heater_sv_title = QLabel(self.heater_group)
         self.heater_sv_title.setObjectName(u"heater_sv_title")
-        self.heater_sv_title.setGeometry(QRect(10, 54, 30, 22))
+        self.heater_sv_title.setGeometry(QRect(10, 60, 34, 24))
         self.heater_sv_title.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         self.heater_sv_edit = QLineEdit(self.heater_group)
         self.heater_sv_edit.setObjectName(u"heater_sv_edit")
-        self.heater_sv_edit.setGeometry(QRect(42, 54, 52, 22))
+        self.heater_sv_edit.setGeometry(QRect(48, 60, 60, 24))
         self.heater_sv_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heater_sv_edit.setMaxLength(6)                          # "180.0" 정도면 충분
         self.heater_sv_edit.setStyleSheet(
@@ -559,7 +520,7 @@ class Ui_Dialog(object):
         # [적용] 목표 온도만 다시 전송. 운전 중에도 목표 변경 가능.
         self.heater_apply_button = QPushButton(self.heater_group)
         self.heater_apply_button.setObjectName(u"heater_apply_button")
-        self.heater_apply_button.setGeometry(QRect(100, 54, 36, 22))
+        self.heater_apply_button.setGeometry(QRect(114, 60, 44, 24))
         self.heater_apply_button.setStyleSheet(
             u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
             u"border-radius: 4px; border: 1px solid #cccccc;}"
@@ -569,7 +530,7 @@ class Ui_Dialog(object):
         # [ON] 체크 시 목표 전송 + HEATER_RUN ON. 체크색은 장비 버튼과 동일 규칙.
         self.heater_onoff_button = QPushButton(self.heater_group)
         self.heater_onoff_button.setObjectName(u"heater_onoff_button")
-        self.heater_onoff_button.setGeometry(QRect(140, 54, 36, 22))
+        self.heater_onoff_button.setGeometry(QRect(164, 60, 46, 24))
         self.heater_onoff_button.setCheckable(True)
         self.heater_onoff_button.setStyleSheet(
             u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; "
@@ -582,9 +543,72 @@ class Ui_Dialog(object):
         #     다른 라벨과 같은 #333333 을 써서 흐려 보이지 않게 한다.
         self.heater_mv_label = QLabel(self.heater_group)
         self.heater_mv_label.setObjectName(u"heater_mv_label")
-        self.heater_mv_label.setGeometry(QRect(10, 80, 166, 18))
+        self.heater_mv_label.setGeometry(QRect(10, 90, 200, 18))
         self.heater_mv_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
         # ===================== 히터 =====================
+
+        # ===================== 이오나이저 (SVC-K24) =====================
+        # [구조] QFrame(ION_group)이 부모. 내부는 프레임 기준 상대 좌표.
+        self.ION_group = QFrame(Dialog)
+        self.ION_group.setObjectName(u"ION_group")
+        self.ION_group.setGeometry(QRect(1090, 170, 220, 180))
+        self.ION_group.setFrameShape(QFrame.Shape.StyledPanel)
+        self.ION_group.setStyleSheet(
+            u"QFrame#ION_group {background: #ffffff; "
+            u"border: 2px solid #cccccc; border-radius: 8px;}"
+        )
+
+        # --- 제목 ---
+        self.ION_title_label = QLabel(self.ION_group)
+        self.ION_title_label.setObjectName(u"ION_title_label")
+        self.ION_title_label.setGeometry(QRect(10, 5, 200, 18))
+        self.ION_title_label.setStyleSheet(
+            u"QLabel {border: none; color: #333333; font-weight: bold;}"
+        )
+
+        # --- 상태 인디케이터 3종 (PLC 입력 접점) ---
+        self.ION_RUN_Indicator = QFrame(self.ION_group)
+        self.ION_RUN_Indicator.setObjectName(u"ION_RUN_Indicator")
+        self.ION_RUN_Indicator.setGeometry(QRect(16, 32, 36, 36))
+        self.ION_RUN_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 18px; border: 2px solid #333;")
+        self.ION_RUN_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
+        self.ION_RUN_Indicator.setFrameShadow(QFrame.Shadow.Raised)
+        self.ION_RUN_label = QLabel(self.ION_group)
+        self.ION_RUN_label.setObjectName(u"ION_RUN_label")
+        self.ION_RUN_label.setGeometry(QRect(8, 72, 52, 16))
+        self.ION_RUN_label.setStyleSheet(u"border: none; font-weight: bold; font-size: 9pt;")
+        self.ION_RUN_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
+        self.ION_LAMP_Indicator = QFrame(self.ION_group)
+        self.ION_LAMP_Indicator.setObjectName(u"ION_LAMP_Indicator")
+        self.ION_LAMP_Indicator.setGeometry(QRect(92, 32, 36, 36))
+        self.ION_LAMP_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 18px; border: 2px solid #333;")
+        self.ION_LAMP_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
+        self.ION_LAMP_Indicator.setFrameShadow(QFrame.Shadow.Raised)
+        self.ION_LAMP_label = QLabel(self.ION_group)
+        self.ION_LAMP_label.setObjectName(u"ION_LAMP_label")
+        self.ION_LAMP_label.setGeometry(QRect(84, 72, 52, 16))
+        self.ION_LAMP_label.setStyleSheet(u"border: none; font-weight: bold; font-size: 9pt;")
+        self.ION_LAMP_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
+        self.ION_OT_Indicator = QFrame(self.ION_group)
+        self.ION_OT_Indicator.setObjectName(u"ION_OT_Indicator")
+        self.ION_OT_Indicator.setGeometry(QRect(168, 32, 36, 36))
+        self.ION_OT_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 18px; border: 2px solid #333;")
+        self.ION_OT_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
+        self.ION_OT_Indicator.setFrameShadow(QFrame.Shadow.Raised)
+        self.ION_OT_label = QLabel(self.ION_group)
+        self.ION_OT_label.setObjectName(u"ION_OT_label")
+        self.ION_OT_label.setGeometry(QRect(160, 72, 52, 16))
+        self.ION_OT_label.setStyleSheet(u"border: none; font-weight: bold; font-size: 9pt;")
+        self.ION_OT_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
+
+        # --- 수동 ON/OFF (M00050 -> P00160 -> D-sub 14) ---
+        self.ION_button = QPushButton(self.ION_group)
+        self.ION_button.setObjectName(u"ION_button")
+        self.ION_button.setGeometry(QRect(10, 96, 200, 44))
+        self.ION_button.setStyleSheet(u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #555555;}\n"
+"QPushButton:checked {background: #32FF32; color: black; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #229b12;}")
+        self.ION_button.setCheckable(True)
+        # ===================== 이오나이저 =====================
 
         # =================================================================== #
         # END: Sputtering Panel UI 수정
@@ -603,7 +627,6 @@ class Ui_Dialog(object):
         self.MS_button.raise_()
         self.S1_button.raise_()
         self.S2_button.raise_()
-        self.ION_button.raise_()
         self.Vent_button.raise_()
         self.BuzzStop_Button.raise_()
         self.ALL_STOP_button.raise_()
@@ -615,12 +638,6 @@ class Ui_Dialog(object):
         self.G2_Indicator.raise_()
         self.ATM_Indicator.raise_()
         self.Water_Indicator.raise_()
-        self.ION_RUN_Indicator.raise_()
-        self.ION_LAMP_Indicator.raise_()
-        self.ION_OT_Indicator.raise_()
-        self.ION_RUN_label.raise_()
-        self.ION_LAMP_label.raise_()
-        self.ION_OT_label.raise_()
         self.label_2.raise_()
         self.label_3.raise_()
         self.label_4.raise_()
@@ -636,6 +653,7 @@ class Ui_Dialog(object):
         self.pushButton_11.raise_()
         self.pushButton_12.raise_()
         self.pushButton_13.raise_()
+        self.ION_group.raise_()
 
         # === 이름 없는 버튼을 항상 맨 뒤로 보내기 ===
         for btn in [
@@ -719,9 +737,10 @@ class Ui_Dialog(object):
         self.label_4.setText(QCoreApplication.translate("Dialog", u"G2", None))
         self.label_5.setText(QCoreApplication.translate("Dialog", u"ATM", None))
         self.label_6.setText(QCoreApplication.translate("Dialog", u"water", None))
-        self.ION_RUN_label.setText(QCoreApplication.translate("Dialog", u"ION RUN", None))
-        self.ION_LAMP_label.setText(QCoreApplication.translate("Dialog", u"ION LAMP", None))
-        self.ION_OT_label.setText(QCoreApplication.translate("Dialog", u"ION O/T", None))
+        self.ION_title_label.setText(QCoreApplication.translate("Dialog", u"Ionizer (SVC-K24)", None))
+        self.ION_RUN_label.setText(QCoreApplication.translate("Dialog", u"RUN", None))
+        self.ION_LAMP_label.setText(QCoreApplication.translate("Dialog", u"LAMP", None))
+        self.ION_OT_label.setText(QCoreApplication.translate("Dialog", u"O/T", None))
 
         # --- Sputtering Panel Text 수정 ---
         self.sputtering_label.setText(QCoreApplication.translate("Dialog", u"Sputtering", None))
