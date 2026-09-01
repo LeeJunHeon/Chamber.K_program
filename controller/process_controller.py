@@ -266,6 +266,24 @@ class SputterProcessController(QObject):
         steps.append(ProcessStep(ActionType.RF_POWER_STOP, "PRE: RF Power OFF"))
         steps.append(ProcessStep(ActionType.DELAY, "PRE: Power OFF settle", duration_sec=1))
 
+        # --- 2.6) 히터 승온 시작 (선택) ---
+        #  Start 시점에 이미 진공이 잡혀 있고(_check_main_valve_open 이 메인밸브+인터락을
+        #  확인한 뒤에만 공정이 시작된다) 히터 인터락도 충족된 상태이므로,
+        #  가스/MFC 준비를 기다리지 않고 여기서 바로 승온을 시작한다.
+        #  승온은 수십 분 걸리므로 뒤따르는 준비 스텝과 최대한 병행시키는 것이 목적이다.
+        #  도달 확인(HEATER_WAIT)은 6.5) 에서 파워 투입 직전에 한다.
+        heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
+        heater_ramp = float(p.get('heater_ramp', 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
+        self._heater_used = bool(p.get('use_heater', False)) and heater_temp > 0.0
+
+        if self._heater_used:
+            steps.append(ProcessStep(
+                ActionType.HEATER_RAMP, f"히터 램프 속도 {heater_ramp:.0f}°C/min 설정",
+                value=heater_ramp))
+            steps.append(ProcessStep(
+                ActionType.HEATER_SET, f"히터 목표 {heater_temp:.1f}°C 설정 — 승온 시작",
+                value=heater_temp))
+
         # --- 3) 초기화: 각 채널 Flow OFF ---
         for ch in channels:
             steps.append(
@@ -335,23 +353,7 @@ class SputterProcessController(QObject):
                     )
                 )
 
-        # --- 6) 히터 승온 시작 (선택) ---
-        #  히터는 진공 인터락(M02000) 때문에 배기 전에는 켜지지 않는다.
-        #  유량 ON 직후가 켤 수 있는 가장 빠른 시점이며, 여기서 승온을 시작해
-        #  압력 안정화와 병행시킨다. 도달 확인은 파워를 켜기 전에 한다.
-        heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
-        heater_ramp = float(p.get('heater_ramp', 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
-        self._heater_used = bool(p.get('use_heater', False)) and heater_temp > 0.0
-
-        if self._heater_used:
-            steps.append(ProcessStep(
-                ActionType.HEATER_RAMP, f"히터 램프 속도 {heater_ramp:.0f}°C/min 설정",
-                value=heater_ramp))
-            steps.append(ProcessStep(
-                ActionType.HEATER_SET, f"히터 목표 {heater_temp:.1f}°C 설정 — 승온 시작",
-                value=heater_temp))
-
-        # --- 6.1) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
+        # --- 6) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
         steps.append(
             ProcessStep(
                 ActionType.MFC_CMD,
