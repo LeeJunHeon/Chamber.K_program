@@ -104,6 +104,7 @@ PLC_COIL_MAP: Dict[str, int] = {
     "S2_button":     17,   # M00011
     "Doordn_button": 32,   # M00020 (Door Down)
     "BuzzStop_Button":33,  # M00021 (버저)
+    "ION_button":    80,   # M00050 → P00160 → D-sub 14 (이오나이저 #1 Remote On)
 }
 
 # 센서 DI (고정)
@@ -113,6 +114,10 @@ PLC_SENSOR_BITS: Dict[str, int] = {
     "G2":    162,  # M00102
     "ATM":   163,  # M00103
     "Water": 164,  # M00104
+    # --- 이오나이저 SVC-K24 (D-sub 25P 접점) ---
+    "ION_RUN":  180,  # M00114 ← P0000E ← D-sub 1 (구동 상태)
+    "ION_LAMP": 181,  # M00115 ← P0000F ← D-sub 2 (실제 점등)
+    "ION_OT":   182,  # M00116 ← P00010 ← D-sub 6 (램프 수명 초과)
 }
 
 # 공정 시작 인터록: 메인밸브(MV)가 실제 열린 상태(MV & MV_INTERLOCK 모두 ON)일 때만 시작 허용
