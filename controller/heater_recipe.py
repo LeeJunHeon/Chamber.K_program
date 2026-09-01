@@ -120,6 +120,31 @@ class HeaterRecipeRunner(QObject):
     def total_steps(self) -> int:
         return len(self._steps)
 
+    def progress(self) -> dict:
+        """외부(ERP 리포터)에 넘길 진행 상태 요약."""
+        import time as _t
+        steps = [
+            {
+                "no": i + 1,
+                "target": s.target_c,
+                "ramp": s.ramp_c_per_min,
+                "soak": s.soak_min,
+                "cooldown": bool(s.is_cooldown),
+            }
+            for i, s in enumerate(self._steps)
+        ]
+        remain = 0.0
+        if self._state == SOAKING and self._soak_deadline > 0:
+            remain = max(0.0, self._soak_deadline - _t.monotonic())
+        return {
+            "running": self.is_running(),
+            "state": self._state,          # IDLE / RAMPING / SOAKING / DONE / ABORTED
+            "stepNo": self.current_step_no(),
+            "total": self.total_steps(),
+            "soakRemainSec": int(remain),
+            "steps": steps,
+        }
+
     # ==================== 로딩 ====================
     def load(self, path) -> bool:
         """레시피 CSV를 읽는다. 실패하면 사유를 emit하고 False."""

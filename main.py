@@ -463,6 +463,24 @@ class MainDialog(QDialog):
                             getattr(getattr(self, "heater_recipe", None), "is_running", lambda: False)()
                         ),
                     },
+                    "heaterRecipe": (
+                        self.heater_recipe.progress()
+                        if hasattr(getattr(self, "heater_recipe", None), "progress")
+                        else None
+                    ),
+                    "csvRecipe": (
+                        {
+                            "stepNo": int(getattr(self, "csv_index", -1)) + 1,
+                            "total": len(getattr(self, "csv_rows", []) or []),
+                            "active": bool(getattr(self, "csv_mode", False)),
+                            "steps": [
+                                str((r or {}).get("Process_name") or f"STEP{i+1}")
+                                for i, r in enumerate(getattr(self, "csv_rows", []) or [])
+                            ],
+                        }
+                        if (getattr(self, "csv_rows", None) or None)
+                        else None
+                    ),
                     "ion": {
                         "run": bool(getattr(self, "_erp_indicators", {}).get("ION_RUN")),
                         "lamp": bool(getattr(self, "_erp_indicators", {}).get("ION_LAMP")),
