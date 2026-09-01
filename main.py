@@ -199,6 +199,7 @@ class MainDialog(QDialog):
             "Turbo_button", "Ar_Button", "O2_Button", "MS_button",
             "S1_button", "S2_button", "BuzzStop_Button",
             "Door_Button",  # 도어는 상승/하강이 이 버튼 하나로 통합되어 있다
+            "ION_button",   # 이오나이저 Remote On
         }
 
         def _erp_exec_one(c: dict):
@@ -359,6 +360,11 @@ class MainDialog(QDialog):
                         "sv": _w("heater_sv_edit"),
                         "status": _w("heater_status_label"),
                         "output": _w("heater_mv_label"),
+                    },
+                    "ion": {
+                        "run": bool(getattr(self, "_erp_indicators", {}).get("ION_RUN")),
+                        "lamp": bool(getattr(self, "_erp_indicators", {}).get("ION_LAMP")),
+                        "overtime": bool(getattr(self, "_erp_indicators", {}).get("ION_OT")),
                     },
                     "indicators": dict(getattr(self, "_erp_indicators", {})),
                     "valves": dict(getattr(self, "_erp_valves", {})),
