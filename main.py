@@ -899,7 +899,7 @@ class MainDialog(QDialog):
             log_message_to_monitor(
                 "정보",
                 f"[히터] 목표 {t:.1f}°C · 램프 {r:.0f}°C/min · "
-                f"DAC 상한 {int(HEATER_MV_LIMIT)} (예상 {amp:.1f}A)")
+                f"DAC 상한 {int(HEATER_MV_LIMIT)} (추정 ≈{amp:.1f}A)")
         except Exception:
             pass
 
@@ -1062,7 +1062,7 @@ class MainDialog(QDialog):
         if st.get('run'):
             self.ui.heater_mv_label.setText(
                 f"DAC {int(st.get('mv', 0))}/{int(st.get('mv_limit', HEATER_MV_LIMIT))}"
-                f" ({st.get('mv_pct', 0):.0f}%) · {st.get('est_current', 0.0):.1f}A"
+                f" ({st.get('mv_pct', 0):.0f}%) · ≈{st.get('est_current', 0.0):.1f}A"
             )
         else:
             self.ui.heater_mv_label.setText(f"출력 : 정지 (DAC {int(st.get('mv', 0))})")
