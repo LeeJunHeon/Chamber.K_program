@@ -2150,10 +2150,33 @@ class MainDialog(QDialog):
             event.ignore()
             return
 
+        # 히터가 살아 있으면 '무엇이 꺼지는지'를 종료 확인창에 명시한다.
+        #   종료 자체는 막지 않는다 — 파이썬이 죽으면 래더 워치독(약 10초)이
+        #   어차피 트립시키므로, 정상 경로로 끄고 나가는 편이 항상 더 안전하다.
+        heater_warn = ""
+        if HEATER_ENABLED:
+            try:
+                pv_txt = (self.ui.heater_pv_edit.text() or "").strip()
+                pv_txt = f" (현재 {pv_txt}°C)" if pv_txt else ""
+                if self.heater_recipe.is_running():
+                    heater_warn = (
+                        f"\n\n[주의] 히터 레시피 실행 중 "
+                        f"{self.heater_recipe.current_step_no()}"
+                        f"/{self.heater_recipe.total_steps()} 스텝{pv_txt}\n"
+                        "종료하면 레시피가 중단되고 히터가 꺼집니다."
+                    )
+                elif self.ui.heater_onoff_button.isChecked():
+                    heater_warn = (
+                        f"\n\n[주의] 히터 운전 중{pv_txt}\n"
+                        "종료하면 히터가 꺼집니다."
+                    )
+            except Exception:
+                heater_warn = ""
+
         reply = QMessageBox.question(
             self,
             '종료 확인',
-            '정말로 프로그램을 종료하시겠습니까?',
+            '정말로 프로그램을 종료하시겠습니까?' + heater_warn,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
         )

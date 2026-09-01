@@ -1,5 +1,0 @@
-﻿#,Process_name,working_pressure,process_time,shutter_delay,Ar,O2,Ar_flow,O2_flow,use_dc_power,dc_power,use_dc_delay,use_rf_power,rf_power,gun1,gun2,G1 Target,G2 Target,use_heater,heater_temp,heater_ramp
-0, delay 0.0001m,,,,,,,,,,,,,,,,,,,
-1,Au,5,0.5,1,T,F,20,0,T,100,F,F,200,F,T,Ti,Au,T,300,12
-2,Au_400C,5,10,1,T,F,20,0,T,100,F,F,200,F,T,Ti,Au,T,400,6
-3,Au_no_heat,5,10,1,T,F,20,0,T,100,F,F,200,F,T,Ti,Au,F,,

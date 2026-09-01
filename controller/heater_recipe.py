@@ -67,7 +67,7 @@ class HeaterRecipeStep:
         if self.is_cooldown:
             return f"{self.target_c:g}°C 냉각 · {self.soak_min:g}분 대기"
         return (f"{self.target_c:g}°C · 램프 {self.ramp_c_per_min:g}°C/min"
-                f" · 소크 {self.soak_min:g}분")
+                f" · 유지 {self.soak_min:g}분")
 
 
 class HeaterRecipeRunner(QObject):
@@ -292,7 +292,7 @@ class HeaterRecipeRunner(QObject):
             "히터", f"스텝 {self._idx + 1}/{len(self._steps)}: {s.describe()}")
 
         if s.is_cooldown:
-            # 냉각은 도달 판정 없이 소크 시간만 기다린다
+            # 냉각은 도달 판정 없이 유지 시간만 기다린다
             self._enter_soak(s)
         else:
             self._state = RAMPING
@@ -303,10 +303,10 @@ class HeaterRecipeRunner(QObject):
         self._soak_last_report = 0.0
         if s.soak_min <= 0:
             self.status_message.emit(
-                "히터", f"스텝 {self._idx + 1}: 도달 확인 (소크 없음)")
+                "히터", f"스텝 {self._idx + 1}: 도달 확인 (유지 없음)")
         else:
             self.status_message.emit(
-                "히터", f"스텝 {self._idx + 1}: 소크 {s.soak_min:g}분 시작")
+                "히터", f"스텝 {self._idx + 1}: {s.target_c:g}°C 유지 {s.soak_min:g}분 시작")
 
     def _complete(self):
         self._state = DONE
@@ -314,7 +314,7 @@ class HeaterRecipeRunner(QObject):
         last = self._steps[-1] if self._steps else None
         hold = bool(HEATER_RECIPE_HOLD_AT_END) and (last is not None and not last.is_cooldown)
         self._safe_shutdown(keep_running=hold)
-        msg = "레시피 완료" + (" (마지막 목표 유지)" if hold else "")
+        msg = "레시피 완료" + (" (히터 계속 운전)" if hold else "")
         self.status_message.emit("히터", msg)
         self.finished.emit(True, msg)
 
@@ -373,4 +373,4 @@ class HeaterRecipeRunner(QObject):
                 self._soak_last_report = now
                 self.status_message.emit(
                     "히터",
-                    f"스텝 {self._idx + 1}/{len(self._steps)} 소크 남은 시간 {int(remain)}초")
+                    f"스텝 {self._idx + 1}/{len(self._steps)} 유지 {int(remain)}초 남음")
