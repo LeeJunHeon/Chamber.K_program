@@ -17,7 +17,7 @@ class Ui_Dialog(object):
     def setupUi(self, Dialog):
         if not Dialog.objectName():
             Dialog.setObjectName(u"Dialog")
-        Dialog.resize(1330, 609)
+        Dialog.resize(1260, 609)
         self.pushButton = QPushButton(Dialog)
         self.pushButton.setObjectName(u"pushButton")
         self.pushButton.setEnabled(False)
@@ -267,7 +267,7 @@ class Ui_Dialog(object):
         # --- Title ---
         self.sputtering_label = QLabel(Dialog)
         self.sputtering_label.setObjectName(u"sputtering_label")
-        self.sputtering_label.setGeometry(QRect(760, 10, 271, 41))
+        self.sputtering_label.setGeometry(QRect(735, 10, 271, 41))
         font = QFont()
         font.setPointSize(24)
         font.setBold(True)
@@ -277,174 +277,174 @@ class Ui_Dialog(object):
         # --- Target Pressure ---
         # self.target_pressure_label = QLabel(Dialog)
         # self.target_pressure_label.setObjectName(u"target_pressure_label")
-        # self.target_pressure_label.setGeometry(QRect(760, 60, 121, 20))
+        # self.target_pressure_label.setGeometry(QRect(735, 60, 121, 20))
         # self.Target_pressure_edit = QPlainTextEdit(Dialog)
         # self.Target_pressure_edit.setObjectName(u"Target_pressure_edit")
-        # self.Target_pressure_edit.setGeometry(QRect(760, 80, 271, 31))
+        # self.Target_pressure_edit.setGeometry(QRect(735, 80, 271, 31))
 
         
         # self.Ar_gas_label = QLabel(Dialog)
         # self.Ar_gas_label.setObjectName(u"Ar_gas_label")
-        # self.Ar_gas_label.setGeometry(QRect(760, 120, 51, 20))
+        # self.Ar_gas_label.setGeometry(QRect(735, 120, 51, 20))
         # self.O2_gas_label = QLabel(Dialog)
         # self.O2_gas_label.setObjectName(u"O2_gas_label")
-        # self.O2_gas_label.setGeometry(QRect(895, 120, 51, 20))
+        # self.O2_gas_label.setGeometry(QRect(870, 120, 51, 20))
 
         # --- G1, G2 ---
         self.G1_checkbox = QCheckBox(Dialog)
         self.G1_checkbox.setObjectName(u"G1_checkbox")
-        self.G1_checkbox.setGeometry(QRect(760, 75, 100, 26))
+        self.G1_checkbox.setGeometry(QRect(735, 75, 100, 26))
         self.G1_checkbox.setText("G1 Target")
         self.G2_checkbox = QCheckBox(Dialog)
         self.G2_checkbox.setObjectName(u"G2_checkbox")
-        self.G2_checkbox.setGeometry(QRect(900, 75, 100, 26))
+        self.G2_checkbox.setGeometry(QRect(875, 75, 100, 26))
         self.G2_checkbox.setText("G2 Target")
 
         self.G1_label = QLabel(Dialog)
         self.G1_label.setObjectName(u"G1_label")
-        self.G1_label.setGeometry(QRect(790, 98, 120, 20))
+        self.G1_label.setGeometry(QRect(765, 98, 120, 20))
         self.G1_edit = QPlainTextEdit(Dialog)
         self.G1_edit.setObjectName(u"G1_edit")
-        self.G1_edit.setGeometry(QRect(760, 98, 131, 31))
+        self.G1_edit.setGeometry(QRect(735, 98, 131, 31))
         self.G2_label = QLabel(Dialog)
         self.G2_label.setObjectName(u"G2_label")
-        self.G2_label.setGeometry(QRect(925, 98, 120, 20))
+        self.G2_label.setGeometry(QRect(875, 98, 131, 20))
         self.G2_edit = QPlainTextEdit(Dialog)
         self.G2_edit.setObjectName(u"G2_edit")
-        self.G2_edit.setGeometry(QRect(900, 98, 131, 31))
+        self.G2_edit.setGeometry(QRect(875, 98, 131, 31))
 
         # --- Gas (Ar, O2) ---
         self.Ar_gas_radio = QCheckBox(Dialog)
         self.Ar_gas_radio.setObjectName(u"Ar_gas_radio")
-        self.Ar_gas_radio.setGeometry(QRect(760, 133, 171, 26))
+        self.Ar_gas_radio.setGeometry(QRect(735, 133, 131, 26))
         #self.Ar_gas_radio.setChecked(True)
 
         self.O2_gas_radio = QCheckBox(Dialog)
         self.O2_gas_radio.setObjectName(u"O2_gas_radio")
-        self.O2_gas_radio.setGeometry(QRect(900, 133, 171, 26))
+        self.O2_gas_radio.setGeometry(QRect(875, 133, 131, 26))
         #self.O2_gas_radio.setChecked(False) 
 
         # --- Flow ---
         self.Ar_flow_edit = QPlainTextEdit(Dialog)
         self.Ar_flow_edit.setObjectName(u"Ar_flow_edit")
-        self.Ar_flow_edit.setGeometry(QRect(760, 155, 131, 31))
+        self.Ar_flow_edit.setGeometry(QRect(735, 155, 131, 31))
         self.Ar_flow_edit.setPlainText("5")
 
         self.O2_flow_edit = QPlainTextEdit(Dialog)
         self.O2_flow_edit.setObjectName(u"O2_flow_edit")
-        self.O2_flow_edit.setGeometry(QRect(900, 155, 131, 31))
+        self.O2_flow_edit.setGeometry(QRect(875, 155, 131, 31))
 
         # --- Working Pressure ---
         self.working_pressure_label = QLabel(Dialog)
         self.working_pressure_label.setObjectName(u"working_pressure_label")
-        self.working_pressure_label.setGeometry(QRect(760, 190, 181, 20))
+        self.working_pressure_label.setGeometry(QRect(735, 190, 181, 20))
         self.working_pressure_edit = QPlainTextEdit(Dialog)
         self.working_pressure_edit.setObjectName(u"working_pressure_edit")
-        self.working_pressure_edit.setGeometry(QRect(760, 210, 271, 31))
+        self.working_pressure_edit.setGeometry(QRect(735, 210, 271, 31))
         self.working_pressure_edit.setPlainText("2")
 
         # --- Power (RF, DC) ---
         self.rf_power_checkbox = QCheckBox(Dialog)
         self.rf_power_checkbox.setObjectName(u"rf_power_checkbox")
-        self.rf_power_checkbox.setGeometry(QRect(760, 245, 131, 20))
+        self.rf_power_checkbox.setGeometry(QRect(735, 245, 131, 20))
 
         self.dc_power_checkbox = QCheckBox(Dialog)
         self.dc_power_checkbox.setObjectName(u"dc_power_checkbox")
-        self.dc_power_checkbox.setGeometry(QRect(900, 245, 131, 20))
+        self.dc_power_checkbox.setGeometry(QRect(875, 245, 131, 20))
 
         self.RF_power_edit = QPlainTextEdit(Dialog)
         self.RF_power_edit.setObjectName(u"RF_power_edit")
-        self.RF_power_edit.setGeometry(QRect(760, 265, 131, 31))
+        self.RF_power_edit.setGeometry(QRect(735, 265, 131, 31))
         self.RF_power_edit.setPlainText("200")
 
         self.DC_power_edit = QPlainTextEdit(Dialog)
         self.DC_power_edit.setObjectName(u"DC_power_edit")
-        self.DC_power_edit.setGeometry(QRect(900, 265, 131, 31))
+        self.DC_power_edit.setGeometry(QRect(875, 265, 131, 31))
         self.DC_power_edit.setPlainText("200")
 
         # --- DC Power 안정화 대기 사용 여부 (기본 OFF) ---
         self.dc_delay_checkbox = QCheckBox(Dialog)
         self.dc_delay_checkbox.setObjectName(u"dc_delay_checkbox")
-        self.dc_delay_checkbox.setGeometry(QRect(901, 298, 130, 22))
+        self.dc_delay_checkbox.setGeometry(QRect(876, 298, 130, 22))
         self.dc_delay_checkbox.setChecked(False)
 
         # --- Shutter Delay ---
         self.shutter_delay_label = QLabel(Dialog)
         self.shutter_delay_label.setObjectName(u"shutter_delay_label")
-        self.shutter_delay_label.setGeometry(QRect(760, 300, 141, 20))
+        self.shutter_delay_label.setGeometry(QRect(735, 300, 141, 20))
         self.Shutter_delay_edit = QPlainTextEdit(Dialog)
         self.Shutter_delay_edit.setObjectName(u"Shutter_delay_edit")
-        self.Shutter_delay_edit.setGeometry(QRect(760, 320, 271, 31))
+        self.Shutter_delay_edit.setGeometry(QRect(735, 320, 271, 31))
         self.Shutter_delay_edit.setPlainText("5")
 
         # --- Process Time ---
         self.process_time_label = QLabel(Dialog)
         self.process_time_label.setObjectName(u"process_time_label")
-        self.process_time_label.setGeometry(QRect(760, 355, 131, 20))
+        self.process_time_label.setGeometry(QRect(735, 355, 131, 20))
         self.process_time_edit = QPlainTextEdit(Dialog)
         self.process_time_edit.setObjectName(u"process_time_edit")
-        self.process_time_edit.setGeometry(QRect(760, 375, 271, 31))
+        self.process_time_edit.setGeometry(QRect(735, 375, 271, 31))
         self.process_time_edit.setPlainText("10")
 
         # --- Power Status (for.P, ref.P) ---
         self.for_p_label = QLabel(Dialog)
         self.for_p_label.setObjectName(u"for_p_label")
-        self.for_p_label.setGeometry(QRect(760, 410, 50, 20))
+        self.for_p_label.setGeometry(QRect(735, 410, 50, 20))
         self.ref_p_label = QLabel(Dialog)
         self.ref_p_label.setObjectName(u"ref_p_label")
-        self.ref_p_label.setGeometry(QRect(830, 410, 50, 20))
+        self.ref_p_label.setGeometry(QRect(805, 410, 50, 20))
         self.offset_label = QLabel(Dialog)
         self.offset_label.setObjectName(u"offset_label")
-        self.offset_label.setGeometry(QRect(900, 410, 50, 20))
+        self.offset_label.setGeometry(QRect(875, 410, 50, 20))
         self.param_label = QLabel(Dialog)
         self.param_label.setObjectName(u"param_label")
-        self.param_label.setGeometry(QRect(970, 410, 50, 20))
+        self.param_label.setGeometry(QRect(945, 410, 50, 20))
 
         self.for_p_edit = QPlainTextEdit(Dialog)
         self.for_p_edit.setObjectName(u"for_p_edit")
-        self.for_p_edit.setGeometry(QRect(760, 430, 60, 31))
+        self.for_p_edit.setGeometry(QRect(735, 430, 60, 31))
         self.ref_p_edit = QPlainTextEdit(Dialog)
         self.ref_p_edit.setObjectName(u"ref_p_edit")
-        self.ref_p_edit.setGeometry(QRect(830, 430, 60, 31))
+        self.ref_p_edit.setGeometry(QRect(805, 430, 60, 31))
         self.offset_edit = QPlainTextEdit(Dialog)
         self.offset_edit.setObjectName(u"offset_edit")
-        self.offset_edit.setGeometry(QRect(900, 430, 60, 31))
+        self.offset_edit.setGeometry(QRect(875, 430, 60, 31))
         self.offset_edit.setPlainText("6.79")
         self.param_edit = QPlainTextEdit(Dialog)
         self.param_edit.setObjectName(u"param_edit")
-        self.param_edit.setGeometry(QRect(970, 430, 60, 31))
+        self.param_edit.setGeometry(QRect(945, 430, 60, 31))
         self.param_edit.setPlainText("1.0395")
         
         # --- Power, Voltage, Current ---
         self.power_label = QLabel(Dialog)
         self.power_label.setObjectName(u"power_label")
-        self.power_label.setGeometry(QRect(760, 465, 71, 20))
+        self.power_label.setGeometry(QRect(735, 465, 71, 20))
         self.voltage_label = QLabel(Dialog)
         self.voltage_label.setObjectName(u"voltage_label")
-        self.voltage_label.setGeometry(QRect(855, 465, 71, 20))
+        self.voltage_label.setGeometry(QRect(830, 465, 71, 20))
         self.current_label = QLabel(Dialog)
         self.current_label.setObjectName(u"current_label")
-        self.current_label.setGeometry(QRect(950, 465, 71, 20))
+        self.current_label.setGeometry(QRect(925, 465, 71, 20))
         self.Power_edit = QPlainTextEdit(Dialog)
         self.Power_edit.setObjectName(u"Power_edit")
-        self.Power_edit.setGeometry(QRect(760, 485, 81, 31))
+        self.Power_edit.setGeometry(QRect(735, 485, 81, 31))
         self.Voltage_edit = QPlainTextEdit(Dialog)
         self.Voltage_edit.setObjectName(u"Voltage_edit")
-        self.Voltage_edit.setGeometry(QRect(855, 485, 81, 31))
+        self.Voltage_edit.setGeometry(QRect(830, 485, 81, 31))
         self.Current_edit = QPlainTextEdit(Dialog)
         self.Current_edit.setObjectName(u"Current_edit")
-        self.Current_edit.setGeometry(QRect(950, 485, 81, 31))
+        self.Current_edit.setGeometry(QRect(925, 485, 81, 31))
 
         # --- Start/Stop Buttons ---
         self.Sputter_Start_Button = QPushButton(Dialog)
         self.Sputter_Start_Button.setObjectName(u"Sputter_Start_Button")
-        self.Sputter_Start_Button.setGeometry(QRect(760, 540, 130, 60))
+        self.Sputter_Start_Button.setGeometry(QRect(735, 540, 130, 60))
         self.Sputter_Start_Button.setStyleSheet(u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #555555;}\n"
 "QPushButton:pressed {background: #808080; border-color: #333333;}")
         self.Sputter_Start_Button.setCheckable(False)
         self.Sputter_Stop_Button = QPushButton(Dialog)
         self.Sputter_Stop_Button.setObjectName(u"Sputter_Stop_Button")
-        self.Sputter_Stop_Button.setGeometry(QRect(900, 540, 130, 60))
+        self.Sputter_Stop_Button.setGeometry(QRect(875, 540, 130, 60))
         self.Sputter_Stop_Button.setStyleSheet(u"QPushButton {background: #A0A0A0; color: red; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #555555;}\n"
 "QPushButton:pressed {background: #808080; border-color: #333333;}")
         self.Sputter_Stop_Button.setCheckable(False)
@@ -463,7 +463,7 @@ class Ui_Dialog(object):
 
         self.heater_group = QFrame(Dialog)
         self.heater_group.setObjectName(u"heater_group")
-        self.heater_group.setGeometry(QRect(1090, 20, 220, 130))
+        self.heater_group.setGeometry(QRect(1022, 20, 220, 140))
         self.heater_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.heater_group.setStyleSheet(
             u"QFrame#heater_group {background: #ffffff; "
@@ -473,7 +473,7 @@ class Ui_Dialog(object):
         # --- 제목 ---
         self.heater_title_label = QLabel(self.heater_group)
         self.heater_title_label.setObjectName(u"heater_title_label")
-        self.heater_title_label.setGeometry(QRect(10, 5, 200, 18))
+        self.heater_title_label.setGeometry(QRect(10, 6, 200, 20))
         self.heater_title_label.setStyleSheet(
             u"QLabel {border: none; color: #333333; font-weight: bold;}"
         )
@@ -481,12 +481,12 @@ class Ui_Dialog(object):
         # --- 1행: 현재 온도(읽기 전용) + 상태 ---
         self.heater_pv_title = QLabel(self.heater_group)
         self.heater_pv_title.setObjectName(u"heater_pv_title")
-        self.heater_pv_title.setGeometry(QRect(10, 30, 34, 24))
+        self.heater_pv_title.setGeometry(QRect(10, 34, 34, 26))
         self.heater_pv_title.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         self.heater_pv_edit = QLineEdit(self.heater_group)
         self.heater_pv_edit.setObjectName(u"heater_pv_edit")
-        self.heater_pv_edit.setGeometry(QRect(48, 30, 60, 24))
+        self.heater_pv_edit.setGeometry(QRect(48, 34, 60, 26))
         self.heater_pv_edit.setReadOnly(True)                       # PLC 값만 표시
         self.heater_pv_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heater_pv_edit.setStyleSheet(
@@ -497,18 +497,18 @@ class Ui_Dialog(object):
         # 상태 문구. 색상은 main.py의 update_heater_display()가 상황별로 덮어쓴다.
         self.heater_status_label = QLabel(self.heater_group)
         self.heater_status_label.setObjectName(u"heater_status_label")
-        self.heater_status_label.setGeometry(QRect(114, 30, 96, 24))
+        self.heater_status_label.setGeometry(QRect(114, 34, 96, 26))
         self.heater_status_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         # --- 2행: 목표 온도 입력 + 적용 + ON ---
         self.heater_sv_title = QLabel(self.heater_group)
         self.heater_sv_title.setObjectName(u"heater_sv_title")
-        self.heater_sv_title.setGeometry(QRect(10, 60, 34, 24))
+        self.heater_sv_title.setGeometry(QRect(10, 68, 34, 26))
         self.heater_sv_title.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         self.heater_sv_edit = QLineEdit(self.heater_group)
         self.heater_sv_edit.setObjectName(u"heater_sv_edit")
-        self.heater_sv_edit.setGeometry(QRect(48, 60, 60, 24))
+        self.heater_sv_edit.setGeometry(QRect(48, 68, 60, 26))
         self.heater_sv_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heater_sv_edit.setMaxLength(6)                          # "180.0" 정도면 충분
         self.heater_sv_edit.setStyleSheet(
@@ -520,7 +520,7 @@ class Ui_Dialog(object):
         # [적용] 목표 온도만 다시 전송. 운전 중에도 목표 변경 가능.
         self.heater_apply_button = QPushButton(self.heater_group)
         self.heater_apply_button.setObjectName(u"heater_apply_button")
-        self.heater_apply_button.setGeometry(QRect(114, 60, 44, 24))
+        self.heater_apply_button.setGeometry(QRect(114, 68, 44, 26))
         self.heater_apply_button.setStyleSheet(
             u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
             u"border-radius: 4px; border: 1px solid #cccccc;}"
@@ -530,7 +530,7 @@ class Ui_Dialog(object):
         # [ON] 체크 시 목표 전송 + HEATER_RUN ON. 체크색은 장비 버튼과 동일 규칙.
         self.heater_onoff_button = QPushButton(self.heater_group)
         self.heater_onoff_button.setObjectName(u"heater_onoff_button")
-        self.heater_onoff_button.setGeometry(QRect(164, 60, 46, 24))
+        self.heater_onoff_button.setGeometry(QRect(164, 68, 46, 26))
         self.heater_onoff_button.setCheckable(True)
         self.heater_onoff_button.setStyleSheet(
             u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; "
@@ -543,7 +543,7 @@ class Ui_Dialog(object):
         #     다른 라벨과 같은 #333333 을 써서 흐려 보이지 않게 한다.
         self.heater_mv_label = QLabel(self.heater_group)
         self.heater_mv_label.setObjectName(u"heater_mv_label")
-        self.heater_mv_label.setGeometry(QRect(10, 90, 200, 18))
+        self.heater_mv_label.setGeometry(QRect(10, 102, 200, 20))
         self.heater_mv_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
         # ===================== 히터 =====================
 
@@ -551,7 +551,7 @@ class Ui_Dialog(object):
         # [구조] QFrame(ION_group)이 부모. 내부는 프레임 기준 상대 좌표.
         self.ION_group = QFrame(Dialog)
         self.ION_group.setObjectName(u"ION_group")
-        self.ION_group.setGeometry(QRect(1090, 170, 220, 180))
+        self.ION_group.setGeometry(QRect(1022, 175, 220, 160))
         self.ION_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.ION_group.setStyleSheet(
             u"QFrame#ION_group {background: #ffffff; "
@@ -561,7 +561,7 @@ class Ui_Dialog(object):
         # --- 제목 ---
         self.ION_title_label = QLabel(self.ION_group)
         self.ION_title_label.setObjectName(u"ION_title_label")
-        self.ION_title_label.setGeometry(QRect(10, 5, 200, 18))
+        self.ION_title_label.setGeometry(QRect(10, 6, 200, 20))
         self.ION_title_label.setStyleSheet(
             u"QLabel {border: none; color: #333333; font-weight: bold;}"
         )
@@ -569,42 +569,42 @@ class Ui_Dialog(object):
         # --- 상태 인디케이터 3종 (PLC 입력 접점) ---
         self.ION_RUN_Indicator = QFrame(self.ION_group)
         self.ION_RUN_Indicator.setObjectName(u"ION_RUN_Indicator")
-        self.ION_RUN_Indicator.setGeometry(QRect(16, 32, 36, 36))
-        self.ION_RUN_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 18px; border: 2px solid #333;")
+        self.ION_RUN_Indicator.setGeometry(QRect(20, 36, 38, 38))
+        self.ION_RUN_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 19px; border: 2px solid #333;")
         self.ION_RUN_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
         self.ION_RUN_Indicator.setFrameShadow(QFrame.Shadow.Raised)
         self.ION_RUN_label = QLabel(self.ION_group)
         self.ION_RUN_label.setObjectName(u"ION_RUN_label")
-        self.ION_RUN_label.setGeometry(QRect(8, 72, 52, 16))
+        self.ION_RUN_label.setGeometry(QRect(11, 78, 56, 16))
         self.ION_RUN_label.setStyleSheet(u"border: none; font-weight: bold; font-size: 9pt;")
         self.ION_RUN_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
         self.ION_LAMP_Indicator = QFrame(self.ION_group)
         self.ION_LAMP_Indicator.setObjectName(u"ION_LAMP_Indicator")
-        self.ION_LAMP_Indicator.setGeometry(QRect(92, 32, 36, 36))
-        self.ION_LAMP_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 18px; border: 2px solid #333;")
+        self.ION_LAMP_Indicator.setGeometry(QRect(91, 36, 38, 38))
+        self.ION_LAMP_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 19px; border: 2px solid #333;")
         self.ION_LAMP_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
         self.ION_LAMP_Indicator.setFrameShadow(QFrame.Shadow.Raised)
         self.ION_LAMP_label = QLabel(self.ION_group)
         self.ION_LAMP_label.setObjectName(u"ION_LAMP_label")
-        self.ION_LAMP_label.setGeometry(QRect(84, 72, 52, 16))
+        self.ION_LAMP_label.setGeometry(QRect(82, 78, 56, 16))
         self.ION_LAMP_label.setStyleSheet(u"border: none; font-weight: bold; font-size: 9pt;")
         self.ION_LAMP_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
         self.ION_OT_Indicator = QFrame(self.ION_group)
         self.ION_OT_Indicator.setObjectName(u"ION_OT_Indicator")
-        self.ION_OT_Indicator.setGeometry(QRect(168, 32, 36, 36))
-        self.ION_OT_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 18px; border: 2px solid #333;")
+        self.ION_OT_Indicator.setGeometry(QRect(162, 36, 38, 38))
+        self.ION_OT_Indicator.setStyleSheet(u"background: #d6252f; border-radius: 19px; border: 2px solid #333;")
         self.ION_OT_Indicator.setFrameShape(QFrame.Shape.StyledPanel)
         self.ION_OT_Indicator.setFrameShadow(QFrame.Shadow.Raised)
         self.ION_OT_label = QLabel(self.ION_group)
         self.ION_OT_label.setObjectName(u"ION_OT_label")
-        self.ION_OT_label.setGeometry(QRect(160, 72, 52, 16))
+        self.ION_OT_label.setGeometry(QRect(153, 78, 56, 16))
         self.ION_OT_label.setStyleSheet(u"border: none; font-weight: bold; font-size: 9pt;")
         self.ION_OT_label.setAlignment(Qt.AlignmentFlag.AlignHCenter|Qt.AlignmentFlag.AlignTop)
 
         # --- 수동 ON/OFF (M00050 -> P00160 -> D-sub 14) ---
         self.ION_button = QPushButton(self.ION_group)
         self.ION_button.setObjectName(u"ION_button")
-        self.ION_button.setGeometry(QRect(10, 96, 200, 44))
+        self.ION_button.setGeometry(QRect(10, 104, 200, 44))
         self.ION_button.setStyleSheet(u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #555555;}\n"
 "QPushButton:checked {background: #32FF32; color: black; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #229b12;}")
         self.ION_button.setCheckable(True)
