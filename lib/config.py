@@ -40,15 +40,24 @@ COIL_ENABLE_DAC_CH0 = 320   # U02.02.0 -> Coil 320
 # 히터 (PLC 내장 PID — HEATER 스캔 프로그램)
 # ================================================================
 # --- 홀딩 레지스터 (D영역) ---
-HEATER_REG_BLOCK_START = 10   # D00010~D00017 연속 8개 배치 읽기
-HEATER_REG_BLOCK_COUNT = 8
+HEATER_REG_BLOCK_START = 10   # D00010~D00028 연속 19개 배치 읽기
+HEATER_REG_BLOCK_COUNT = 19
 HEATER_REG_PV       = 10      # D00010 TEMP_READ_1 (signed, -1=이상)
 HEATER_REG_SV       = 12      # D00012 목표 온도        [W]
-HEATER_REG_SV_LIMIT = 13      # D00013 목표 상한        [R]
+HEATER_REG_SV_LIMIT = 13      # D00013 목표 상한        [W] 접속 시 JSON 값으로 복구
 HEATER_REG_WD       = 14      # D00014 워치독 카운터    [W]
 HEATER_REG_CUR_SV   = 16      # D00016 램프 적용 목표   [R]
 HEATER_REG_PID_ERR  = 17      # D00017 PID 에러 코드    [R]
 HEATER_REG_MV       = 41      # D00041 DAC 출력 카운트  [R]
+
+# --- 램프/한계값 (래더가 D레지스터로 노출. 접속 시 JSON 값으로 복구한다) ---
+HEATER_REG_MV_LIMIT  = 18     # D00018 DAC 하드리밋      [W]
+HEATER_REG_SV_RAMP   = 19     # D00019 램프 중간 목표    [R]
+HEATER_REG_RAMP_RATE = 20     # D00020 램프 속도(카운트/초) [W]
+HEATER_REG_HOLDBACK  = 21     # D00021 홀드백 폭(0.1°C)  [W]
+HEATER_REG_OT_LIMIT  = 26     # D00026 과온 트립(0.1°C)  [W]
+HEATER_REG_SLOW_ZONE = 27     # D00027 감속 구간 폭(0.1°C) [W]
+HEATER_REG_SLOW_RATE = 28     # D00028 감속 구간 램프 속도 [W]
 
 # --- 코일 (M영역, 워드×16+비트) ---
 HEATER_COIL_BASE    = 64      # M00040~M00049 연속 10개
@@ -68,25 +77,76 @@ HEATER_COIL_PID_RUN = 73      # M00049 PID 동작 중
 #   DAC(XBF-DV04A): 0~10V 를 0~4000 카운트로 출력  →  1 카운트 = 2.5mV
 #   VSCD-30 입력 사양: 0.8~4V  (0.8V = 출력 0%, 4V = 100%)
 #
-#   ※ 상한은 아래 세 곳이 항상 같아야 한다. 하나만 바꾸면 화면 %가 틀어지거나
-#      PID 적분 와인드업이 발생한다.
-#        (1) PLC 내장 파라미터 '01: PID'  최대 조작값
-#        (2) PLC Ch.K 229스텝 하드 리밋 비교 상수 2곳
-#        (3) 여기 HEATER_MV_MAX  (화면 출력% 계산용)
-#      자동동조('02: 자동동조' 최대 조작값)는 (1)보다 낮게 유지할 것.
+#   실측: DAC 카운트 → 전류 A ≈ 0.1 × (카운트 − 412), 예열 후 약 8% 증가
+#         400 ≈ 출력 0% / 600 ≈ 20A / 640 ≈ 24.6A(절대 상한)
 #
-#   현재: 히터 보호를 위해 4.0V(1600) → 2.0V(800) 로 제한
-HEATER_MV_MIN = 320                          # 0.8V (VSCD-30 최소 지령)
-HEATER_MV_MAX = get('HEATER_MV_MAX', 800)    # 2.0V (정특성 측정 후 조정)
+#   ※ HEATER_MV_MIN 은 PLC K1227(MV 최소값)과 반드시 같아야 한다.
+#      다르면 화면 출력%가 틀어진다.
+#   ※ 운전 상한 HEATER_MV_LIMIT 은 접속 시 D00018로 전송되며,
+#      래더가 이를 PID 최대 조작값으로 넘긴다. 코드는 절대
+#      HEATER_MV_ABS_MAX 위로는 쓰지 않는다.
+HEATER_MV_MIN     = get('HEATER_MV_MIN',     400)   # PLC K1227과 일치. 출력 0% 지점
+HEATER_MV_ABS_MAX = get('HEATER_MV_ABS_MAX', 640)   # 절대 안전 상한
+HEATER_MV_LIMIT   = get('HEATER_MV_LIMIT',   600)   # D00018에 쓸 실제 운전 상한
+
+# 하위 호환: 예전 이름으로 import 하는 코드가 있을 수 있다
+HEATER_MV_MAX = HEATER_MV_ABS_MAX
 
 # --- config_user.json에서 변경 가능 ---
 HEATER_ENABLED          = get('HEATER_ENABLED',          True)
 HEATER_TEMP_SCALE       = get('HEATER_TEMP_SCALE',       0.1)   # ★ 실측 후 확정
 HEATER_WD_PERIOD_MS     = get('HEATER_WD_PERIOD_MS',     3000)  # PLC 10초의 1/3
-HEATER_MAX_TEMP         = get('HEATER_MAX_TEMP',         180.0) # UI 입력 상한
+HEATER_MAX_TEMP         = get('HEATER_MAX_TEMP',         500.0) # UI 입력 상한
 HEATER_SOAK_TOLERANCE   = get('HEATER_SOAK_TOLERANCE',   3.0)   # °C
 HEATER_SOAK_TIME_SEC    = get('HEATER_SOAK_TIME_SEC',    60)    # 도달 유지 시간
 HEATER_WAIT_TIMEOUT_SEC = get('HEATER_WAIT_TIMEOUT_SEC', 3600)  # 승온 대기 최대
+
+# --- PLC로 밀어 넣는 한계값 (사람 단위. PLC raw 변환은 PLC.py가 한다) ---
+HEATER_SV_LIMIT_C          = get('HEATER_SV_LIMIT_C',          500.0)  # D00013 [°C]
+HEATER_RAMP_RATE_C_PER_MIN = get('HEATER_RAMP_RATE_C_PER_MIN', 12.0)   # D00020 [°C/min]
+HEATER_HOLDBACK_C          = get('HEATER_HOLDBACK_C',          2.0)    # D00021 [°C]
+HEATER_OT_LIMIT_C          = get('HEATER_OT_LIMIT_C',          550.0)  # D00026 [°C]
+HEATER_SLOW_ZONE_C         = get('HEATER_SLOW_ZONE_C',         10.0)   # D00027 [°C]
+HEATER_SLOW_RATE_C_PER_MIN = get('HEATER_SLOW_RATE_C_PER_MIN', 6.0)    # D00028 [°C/min]
+HEATER_PUSH_CONFIG         = get('HEATER_PUSH_CONFIG',         True)   # False면 PLC 쓰기 생략
+
+
+def _validate_heater_config() -> None:
+    """JSON 값이 위험하거나 앞뒤가 안 맞으면 안전한 쪽으로 클램프한다.
+    예외는 던지지 않는다 — 설정이 틀려도 프로그램은 떠야 한다."""
+    global HEATER_MV_LIMIT, HEATER_MV_MAX, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP
+    global HEATER_RAMP_RATE_C_PER_MIN, HEATER_SLOW_RATE_C_PER_MIN
+
+    # 1) DAC 운전 상한: 최소 지점 +20 ~ 절대 상한
+    lo, hi = HEATER_MV_MIN + 20, HEATER_MV_ABS_MAX
+    if not (lo <= HEATER_MV_LIMIT <= hi):
+        print(f"[Config] HEATER_MV_LIMIT {HEATER_MV_LIMIT} → "
+              f"{min(max(HEATER_MV_LIMIT, lo), hi)} 로 클램프 (허용 {lo}~{hi})")
+        HEATER_MV_LIMIT = min(max(HEATER_MV_LIMIT, lo), hi)
+
+    # 2) 과온 트립은 목표 상한보다 충분히 높아야 한다
+    if HEATER_OT_LIMIT_C < HEATER_SV_LIMIT_C + 20:
+        new = HEATER_SV_LIMIT_C + 50
+        print(f"[Config] HEATER_OT_LIMIT_C {HEATER_OT_LIMIT_C} → {new} 로 상향 "
+              f"(SV 상한 {HEATER_SV_LIMIT_C} 보다 최소 20°C 높아야 함)")
+        HEATER_OT_LIMIT_C = new
+
+    # 3) UI 입력 상한이 PLC 소프트 상한을 넘을 수 없다
+    if HEATER_MAX_TEMP > HEATER_SV_LIMIT_C:
+        print(f"[Config] HEATER_MAX_TEMP {HEATER_MAX_TEMP} → {HEATER_SV_LIMIT_C} 로 하향 "
+              f"(HEATER_SV_LIMIT_C 초과 불가)")
+        HEATER_MAX_TEMP = HEATER_SV_LIMIT_C
+
+    # 4) 램프 속도 최소 1카운트/초 = 6°C/min
+    if HEATER_RAMP_RATE_C_PER_MIN < 6.0:
+        print(f"[Config] HEATER_RAMP_RATE_C_PER_MIN {HEATER_RAMP_RATE_C_PER_MIN} → 6.0 (최소 1카운트/초)")
+        HEATER_RAMP_RATE_C_PER_MIN = 6.0
+    if HEATER_SLOW_RATE_C_PER_MIN < 6.0:
+        print(f"[Config] HEATER_SLOW_RATE_C_PER_MIN {HEATER_SLOW_RATE_C_PER_MIN} → 6.0 (최소 1카운트/초)")
+        HEATER_SLOW_RATE_C_PER_MIN = 6.0
+
+
+_validate_heater_config()
 
 # PLC 주소 맵핑 (고정 — 배선표 기준)
 PLC_COIL_MAP: Dict[str, int] = {

@@ -30,7 +30,8 @@ from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
-                        HEATER_ENABLED, HEATER_MAX_TEMP)
+                        HEATER_ENABLED, HEATER_MAX_TEMP,
+                        HEATER_MV_LIMIT)
 
 class MainDialog(QDialog):
     shutdown_requested = Signal()
@@ -714,9 +715,16 @@ class MainDialog(QDialog):
         except ValueError:
             QMessageBox.warning(self, "입력 오류", f"숫자가 아닙니다: {txt}")
             return None
-        if v < 0 or v > HEATER_MAX_TEMP:
+        # PLC가 실제로 보고한 소프트 상한(D00013)이 있으면 그쪽도 함께 본다.
+        # 래더/모니터가 상한을 낮춰 둔 경우 UI가 먼저 막아 주도록.
+        try:
+            plc_limit = float((self.plc_controller._heater_last or {}).get('sv_limit') or 0.0)
+        except Exception:
+            plc_limit = 0.0
+        limit = min(HEATER_MAX_TEMP, plc_limit) if plc_limit > 0 else HEATER_MAX_TEMP
+        if v < 0 or v > limit:
             QMessageBox.warning(self, "입력 오류",
-                                f"목표 온도는 0 ~ {HEATER_MAX_TEMP:.0f}°C 범위여야 합니다.")
+                                f"목표 온도는 0 ~ {limit:.0f}°C 범위여야 합니다.")
             return None
         return v
 
@@ -755,8 +763,10 @@ class MainDialog(QDialog):
           ok      : 온도값 유효 여부 (False = 열전대 단선 / TC 모듈 이상)
           pv      : 현재 온도 [°C]
           cur_sv  : SV Ramp가 적용된 '현재 중간 목표' [°C]
-          mv      : DAC 카운트 원본 (320~1600)
-          mv_pct  : 출력 백분율 (320=0%, 1600=100%)
+          mv      : DAC 카운트 원본
+          mv_limit: 살아있는 DAC 상한 (D00018)
+          mv_pct  : 출력 백분율 (HEATER_MV_MIN=0%, mv_limit=100%)
+          est_current : DAC 카운트로 추정한 전류 [A]
           run/itl/fault/ot/tc_err/wd_err : 상태 비트
         """
         # --- 현재 온도 (QLineEdit이므로 setText 사용) ---
@@ -786,14 +796,21 @@ class MainDialog(QDialog):
 
         # --- 출력 표시 : DAC 원본값 + 백분율 + 램프 목표 ---
         #     DAC 원본을 함께 보여야 PLC 모니터(D00041)와 대조할 수 있다.
-        #     320 = 0.8V(최소), 1600 = 4.0V(최대)
         if st.get('run'):
             self.ui.heater_mv_label.setText(
-                f"DAC {int(st.get('mv', 0))} ({st.get('mv_pct', 0):.0f}%)"
-                f"  ·  목표 {st.get('cur_sv', 0):.0f}\u00b0C"
+                f"DAC {int(st.get('mv', 0))}/{int(st.get('mv_limit', HEATER_MV_LIMIT))}"
+                f" ({st.get('mv_pct', 0):.0f}%) · {st.get('est_current', 0.0):.1f}A"
             )
         else:
             self.ui.heater_mv_label.setText(f"출력 : 정지 (DAC {int(st.get('mv', 0))})")
+
+        # 라벨 폭(200px)에 다 못 넣는 램프/한계값은 툴팁으로 뺀다.
+        self.ui.heater_mv_label.setToolTip(
+            f"램프 목표 {st.get('sv_ramp', 0.0):.1f}°C"
+            f" · 램프 {st.get('ramp_rate', 0):.0f}°C/min"
+            f" · 홀드백 {st.get('holdback', 0.0):.1f}°C"
+            f" · OT {st.get('ot_limit', 0.0):.1f}°C"
+        )
 
         # --- 이상 발생 시 ON 버튼 자동 해제 ---
         #     PLC 래더는 HEATER_RUN을 절대 건드리지 않으므로,

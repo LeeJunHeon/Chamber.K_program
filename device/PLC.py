@@ -16,10 +16,16 @@ from lib.config import (
     RF_REFLECTED_SCALING_MAX_WATT,
     PLC_MV_COIL, PLC_MV_INTERLOCK_COIL,
     HEATER_ENABLED, HEATER_TEMP_SCALE, HEATER_WD_PERIOD_MS,
-    HEATER_MV_MIN, HEATER_MV_MAX,
+    HEATER_MV_MIN, HEATER_MV_ABS_MAX, HEATER_MV_LIMIT,
     HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT,
     HEATER_REG_PV, HEATER_REG_SV, HEATER_REG_SV_LIMIT,
     HEATER_REG_WD, HEATER_REG_CUR_SV, HEATER_REG_PID_ERR, HEATER_REG_MV,
+    HEATER_REG_MV_LIMIT, HEATER_REG_SV_RAMP, HEATER_REG_RAMP_RATE,
+    HEATER_REG_HOLDBACK, HEATER_REG_OT_LIMIT, HEATER_REG_SLOW_ZONE,
+    HEATER_REG_SLOW_RATE,
+    HEATER_PUSH_CONFIG, HEATER_SV_LIMIT_C, HEATER_RAMP_RATE_C_PER_MIN,
+    HEATER_HOLDBACK_C, HEATER_OT_LIMIT_C, HEATER_SLOW_ZONE_C,
+    HEATER_SLOW_RATE_C_PER_MIN,
     HEATER_COIL_BASE, HEATER_COIL_COUNT,
     HEATER_COIL_RUN, HEATER_COIL_ITL, HEATER_COIL_FAULT, HEATER_COIL_RST,
     HEATER_COIL_OT, HEATER_COIL_TC_ERR, HEATER_COIL_WD_ERR,
@@ -161,6 +167,13 @@ class PLCController(QObject):
             self.polling_timer.start()
             if HEATER_ENABLED:
                 self._heater_wd_timer.start()      # ★ 하트비트 시작
+
+            # 접속할 때마다 JSON의 한계값을 PLC에 복구한다.
+            # 여기서 무슨 일이 나도 '연결 실패'로 떨어뜨리지 않는다.
+            try:
+                self._push_heater_config()
+            except Exception as ex:
+                self.status_message.emit("히터(경고)", f"설정 적용 중 예외: {ex}")
 
             self.status_message.emit("PLC", f"연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID}")
         except Exception as e:
@@ -382,8 +395,86 @@ class PLCController(QObject):
             self._mutex.unlock()
 
     # ============== 히터 (PLC 내장 PID) ==============
+    def _push_heater_config(self):
+        """config_user.json의 히터 한계값을 PLC D레지스터에 기록한다.
+
+        PLC를 재기동하면 D영역이 초기화되므로, 접속할 때마다 다시 써서
+        JSON을 단일 출처로 유지한다. 실패해도 연결 자체는 유지한다.
+        """
+        if not HEATER_ENABLED or not HEATER_PUSH_CONFIG:
+            return
+        if self.instrument is None:
+            return
+
+        def _clamp(v: int) -> int:
+            return max(0, min(32767, int(v)))
+
+        def _rate(c_per_min: float) -> int:
+            # 1카운트/초 = 6°C/min
+            return max(1, int(round(float(c_per_min) / 6.0)))
+
+        # (레지스터, raw, 표시이름, 표시값)
+        items = [
+            (HEATER_REG_SV_LIMIT,  _clamp(round(HEATER_SV_LIMIT_C * 10)),
+             "SV상한",   f"{HEATER_SV_LIMIT_C:.1f}°C"),
+            (HEATER_REG_MV_LIMIT,  _clamp(HEATER_MV_LIMIT),
+             "DAC상한",  f"{int(HEATER_MV_LIMIT)}"),
+            (HEATER_REG_RAMP_RATE, _clamp(_rate(HEATER_RAMP_RATE_C_PER_MIN)),
+             "램프",     f"{HEATER_RAMP_RATE_C_PER_MIN:.0f}°C/min"),
+            (HEATER_REG_HOLDBACK,  _clamp(round(HEATER_HOLDBACK_C * 10)),
+             "홀드백",   f"{HEATER_HOLDBACK_C:.1f}°C"),
+            (HEATER_REG_OT_LIMIT,  _clamp(round(HEATER_OT_LIMIT_C * 10)),
+             "OT",       f"{HEATER_OT_LIMIT_C:.1f}°C"),
+            (HEATER_REG_SLOW_ZONE, _clamp(round(HEATER_SLOW_ZONE_C * 10)),
+             "감속구간", f"{HEATER_SLOW_ZONE_C:.1f}°C"),
+            (HEATER_REG_SLOW_RATE, _clamp(_rate(HEATER_SLOW_RATE_C_PER_MIN)),
+             "감속램프", f"{HEATER_SLOW_RATE_C_PER_MIN:.0f}°C/min"),
+        ]
+
+        self._busy = True
+        self._mutex.lock()
+        try:
+            failed = []
+            for addr, raw, name, _disp in items:
+                try:
+                    self.instrument.write_register(addr, raw, functioncode=6)
+                except Exception as ex:
+                    failed.append(f"{name}(D{addr:05d}: {ex})")
+
+            if failed:
+                self.status_message.emit(
+                    "히터(경고)", "설정 쓰기 실패: " + ", ".join(failed))
+
+            # 되읽어 검증 — 래더가 값을 강제하고 있으면 여기서 드러난다
+            try:
+                lo = min(a for a, *_ in items)
+                hi = max(a for a, *_ in items)
+                back = self.instrument.read_registers(lo, hi - lo + 1, functioncode=3)
+                mismatch = [f"{name} 요청 {raw} → 실제 {back[addr - lo]}"
+                            for addr, raw, name, _d in items
+                            if back[addr - lo] != raw]
+                if mismatch:
+                    self.status_message.emit(
+                        "히터(경고)",
+                        "설정값이 되읽기와 다릅니다 (래더가 강제 중일 수 있음): "
+                        + ", ".join(mismatch))
+            except Exception as ex:
+                self.status_message.emit("히터(경고)", f"설정 되읽기 실패: {ex}")
+
+            amp = 0.1 * (HEATER_MV_LIMIT - 412) * 1.08
+            self.status_message.emit(
+                "히터",
+                f"설정 적용: DAC상한 {int(HEATER_MV_LIMIT)}(약 {amp:.1f}A)"
+                f" · 램프 {HEATER_RAMP_RATE_C_PER_MIN:.0f}°C/min"
+                f" · 홀드백 {HEATER_HOLDBACK_C:.1f}°C"
+                f" · OT {HEATER_OT_LIMIT_C:.1f}°C"
+                f" · SV상한 {HEATER_SV_LIMIT_C:.1f}°C")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
     def _poll_heater(self):
-        """D00010~D00017 + D00041 + 코일 64~73 을 읽어 update_heater_status로 발행.
+        """D00010~D00028 + D00041 + 코일 64~73 을 읽어 update_heater_status로 발행.
         주의: 호출자(_poll_status)가 이미 _mutex를 잡고 있으므로 여기서 잠그지 않는다."""
         try:
             blk  = self.instrument.read_registers(
@@ -406,6 +497,16 @@ class PLCController(QObject):
         def _bit(coil: int) -> bool:
             return bool(bits[coil - HEATER_COIL_BASE])
 
+        # 출력%는 '살아있는 상한'(D00018)을 기준으로 계산한다.
+        # 래더/모니터가 D00018을 바꾸면 화면도 따라가야 하기 때문.
+        mv_limit = _reg(HEATER_REG_MV_LIMIT)
+        top = mv_limit if HEATER_MV_MIN < mv_limit <= HEATER_MV_ABS_MAX else HEATER_MV_LIMIT
+        span = top - HEATER_MV_MIN
+        if mv < HEATER_MV_MIN or span <= 0:
+            _mv_pct = 0.0
+        else:
+            _mv_pct = max(0.0, min(100.0, (mv - HEATER_MV_MIN) / span * 100.0))
+
         st = {
             'ok':        not tc_bad,
             'pv':        None if tc_bad else raw_pv * HEATER_TEMP_SCALE,
@@ -414,9 +515,14 @@ class PLCController(QObject):
             'cur_sv':    _reg(HEATER_REG_CUR_SV)   * HEATER_TEMP_SCALE,
             'pid_err':   _reg(HEATER_REG_PID_ERR),
             'mv':        mv,
-            'mv_pct':    max(0.0, min(100.0,
-                          (mv - HEATER_MV_MIN) / (HEATER_MV_MAX - HEATER_MV_MIN) * 100.0))
-                          if mv >= HEATER_MV_MIN else 0.0,
+            'mv_pct':    _mv_pct,
+            'mv_limit':  mv_limit,
+            'sv_ramp':   _reg(HEATER_REG_SV_RAMP)   * HEATER_TEMP_SCALE,
+            'ramp_rate': _reg(HEATER_REG_RAMP_RATE) * 6,          # °C/min 환산
+            'holdback':  _reg(HEATER_REG_HOLDBACK)  * HEATER_TEMP_SCALE,
+            'ot_limit':  _reg(HEATER_REG_OT_LIMIT)  * HEATER_TEMP_SCALE,
+            'est_current': 0.0 if mv < HEATER_MV_MIN
+                           else max(0.0, 0.1 * (mv - 412) * 1.08),
             'run':       _bit(HEATER_COIL_RUN),
             'itl':       _bit(HEATER_COIL_ITL),
             'fault':     _bit(HEATER_COIL_FAULT),
