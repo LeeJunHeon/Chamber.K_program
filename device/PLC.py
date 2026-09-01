@@ -17,6 +17,7 @@ from lib.config import (
     PLC_MV_COIL, PLC_MV_INTERLOCK_COIL,
     HEATER_ENABLED, HEATER_TEMP_SCALE, HEATER_WD_PERIOD_MS,
     HEATER_MV_MIN, HEATER_MV_ABS_MAX, HEATER_MV_LIMIT,
+    HEATER_CURRENT_SLOPE, HEATER_CURRENT_ZERO,
     HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT,
     HEATER_REG_PV, HEATER_REG_SV, HEATER_REG_SV_LIMIT,
     HEATER_REG_WD, HEATER_REG_CUR_SV, HEATER_REG_PID_ERR, HEATER_REG_MV,
@@ -461,7 +462,7 @@ class PLCController(QObject):
             except Exception as ex:
                 self.status_message.emit("히터(경고)", f"설정 되읽기 실패: {ex}")
 
-            amp = 0.1 * (HEATER_MV_LIMIT - 412) * 1.08
+            amp = max(0.0, HEATER_CURRENT_SLOPE * (HEATER_MV_LIMIT - HEATER_CURRENT_ZERO))
             self.status_message.emit(
                 "히터",
                 f"설정 적용: DAC상한 {int(HEATER_MV_LIMIT)}(약 {amp:.1f}A)"
@@ -522,7 +523,7 @@ class PLCController(QObject):
             'holdback':  _reg(HEATER_REG_HOLDBACK)  * HEATER_TEMP_SCALE,
             'ot_limit':  _reg(HEATER_REG_OT_LIMIT)  * HEATER_TEMP_SCALE,
             'est_current': 0.0 if mv < HEATER_MV_MIN
-                           else max(0.0, 0.1 * (mv - 412) * 1.08),
+                           else max(0.0, HEATER_CURRENT_SLOPE * (mv - HEATER_CURRENT_ZERO)),
             'run':       _bit(HEATER_COIL_RUN),
             'itl':       _bit(HEATER_COIL_ITL),
             'fault':     _bit(HEATER_COIL_FAULT),
@@ -594,6 +595,23 @@ class PLCController(QObject):
             self.status_message.emit("히터", f"목표 온도 {temp_c:.1f}°C 설정 (raw={raw})")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"히터 목표 온도 쓰기 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    @Slot(int)
+    def set_heater_ramp_rate(self, counts_per_sec: int):
+        """레시피 스텝마다 램프 속도(D00020)를 바꾼다. 1 카운트/초 = 6°C/min."""
+        if self.instrument is None:
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            v = max(1, min(100, int(counts_per_sec)))
+            self.instrument.write_register(HEATER_REG_RAMP_RATE, v, functioncode=6)
+            self.status_message.emit("히터", f"램프 속도 {v * 6}°C/min 설정 (raw={v})")
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"히터 램프 속도 쓰기 실패: {e}")
         finally:
             self._busy = False
             self._mutex.unlock()

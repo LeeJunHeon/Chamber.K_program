@@ -1,0 +1,9 @@
+step,target_c,ramp_c_per_min,soak_min
+# step           : 스텝 번호 (표시용)
+# target_c       : 목표 온도(°C). 0 ~ HEATER_MAX_TEMP
+# ramp_c_per_min : 승온 속도(°C/min). 비우면 config 기본값, 6 미만은 6으로 보정
+# soak_min       : 도달 후 유지 시간(분). 0이면 도달만 확인하고 다음 스텝
+# 마지막 스텝의 target_c가 30 이하이면 냉각 스텝으로 보고 도달 대기 없이 시간만 기다린다
+1,150,12,10
+2,300,6,30
+3,25,12,0

@@ -473,7 +473,7 @@ class Ui_Dialog(object):
         # --- 제목 ---
         self.heater_title_label = QLabel(self.heater_group)
         self.heater_title_label.setObjectName(u"heater_title_label")
-        self.heater_title_label.setGeometry(QRect(10, 6, 200, 20))
+        self.heater_title_label.setGeometry(QRect(10, 6, 134, 20))
         self.heater_title_label.setStyleSheet(
             u"QLabel {border: none; color: #333333; font-weight: bold;}"
         )
@@ -515,6 +515,16 @@ class Ui_Dialog(object):
             u"QLineEdit {background: #ffffff; border: 1px solid #cccccc; "
             u"border-radius: 3px; color: #333333;}"
             u"QLineEdit:focus {border: 1px solid #4a90d9;}"
+        )
+
+        # [레시피] 히터 전용 레시피 CSV 실행/중단. 스퍼터 공정과는 무관하다.
+        self.heater_recipe_button = QPushButton(self.heater_group)
+        self.heater_recipe_button.setObjectName(u"heater_recipe_button")
+        self.heater_recipe_button.setGeometry(QRect(148, 5, 62, 22))
+        self.heater_recipe_button.setStyleSheet(
+            u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
+            u"font-size: 9pt; border-radius: 4px; border: 1px solid #cccccc;}"
+            u"QPushButton:hover {background: #dcdcda;}"
         )
 
         # [적용] 목표 온도만 다시 전송. 운전 중에도 목표 변경 가능.
@@ -701,6 +711,7 @@ class Ui_Dialog(object):
         self.heater_status_label.setText(QCoreApplication.translate("Dialog", u"\uc5f0\uacb0 \ub300\uae30", None))
         self.heater_mv_label.setText(QCoreApplication.translate("Dialog", u"\ucd9c\ub825 : \uc815\uc9c0", None))
         self.heater_apply_button.setText(QCoreApplication.translate("Dialog", u"\uc801\uc6a9", None))
+        self.heater_recipe_button.setText(QCoreApplication.translate("Dialog", u"\ub808\uc2dc\ud53c", None))
         self.heater_onoff_button.setText(QCoreApplication.translate("Dialog", u"ON", None))
         # QLineEdit은 placeholderText를 지원 → 빈 칸에 안내 문구 표시
         self.heater_pv_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"--.-", None))

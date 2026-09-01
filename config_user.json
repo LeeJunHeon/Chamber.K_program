@@ -78,8 +78,9 @@
 
     "// 출력 0% 지점. PLC K1227(MV 최소값)과 반드시 일치시킬 것 (범위 0~4000)": "",
     "HEATER_MV_MIN": 400,
-    "// 절대 상한(약 24.6A). 코드는 어떤 경우에도 이 위로 쓰지 않음": "",
-    "HEATER_MV_ABS_MAX": 640,
+    "// 절대 상한(약 25A). 코드는 어떤 경우에도 이 위로 쓰지 않음": "",
+    "// 640은 재보정 식으로 약 27.7A = VARITAP 30A 정격의 93%라 620으로 낮춤": "",
+    "HEATER_MV_ABS_MAX": 620,
     "// → D00018. 실제 운전 상한. 600 ≈ 20A (범위 HEATER_MV_MIN+20 ~ ABS_MAX)": "",
     "HEATER_MV_LIMIT": 600,
 
@@ -97,5 +98,30 @@
     "HEATER_SLOW_RATE_C_PER_MIN": 6.0,
 
     "// 접속 시 위 값들을 PLC에 쓸지 여부. false면 PLC 현재값을 그대로 사용": "",
-    "HEATER_PUSH_CONFIG": true
+    "HEATER_PUSH_CONFIG": true,
+
+    "// --- 전류 추정 계수 (화면/로그 표시용. 제어에는 쓰이지 않음) ---": "",
+    "// 전류 A ≈ SLOPE × (DAC 카운트 − ZERO)": "",
+    "// 실측 앵커(2026-09-01): MV 520 → 11.5A, MV 600 → 22.4A": "",
+    "// 유효 범위: 100°C 이상 열적으로 안정된 상태. 저온에서는 오차가 큼": "",
+    "HEATER_CURRENT_SLOPE": 0.136,
+    "HEATER_CURRENT_ZERO": 436,
+
+    "// ------- 히터 레시피 / 로깅 -------": "",
+    "// 레시피 CSV 형식 (UTF-8, 첫 줄이 헤더):": "",
+    "//   step,target_c,ramp_c_per_min,soak_min": "",
+    "//   1,150,12,10   → 12°C/min 으로 150°C 까지 올린 뒤 10분 유지": "",
+    "//   ramp_c_per_min 은 6의 배수 권장(6 미만은 6으로 보정), soak_min 0 이면 도달만 확인": "",
+    "//   마지막 스텝의 target_c 가 30 이하이면 냉각 스텝으로 보고 도달 대기 없이 시간만 기다림": "",
+
+    "// 레시피 파일 선택 다이얼로그의 초기 폴더. 빈 문자열이면 프로그램 폴더": "",
+    "HEATER_RECIPE_DIR": "",
+    "// 히터 운전 중 CSV 로깅 사용 여부": "",
+    "HEATER_LOG_ENABLED": true,
+    "// CSV 기록 주기(ms). 허용 1000~60000": "",
+    "HEATER_LOG_PERIOD_MS": 3000,
+    "// 레시피 최대 스텝 수": "",
+    "HEATER_RECIPE_MAX_STEPS": 20,
+    "// 레시피 종료 후 마지막 목표 온도를 유지할지 여부(false면 히터 정지)": "",
+    "HEATER_RECIPE_HOLD_AT_END": false
 }

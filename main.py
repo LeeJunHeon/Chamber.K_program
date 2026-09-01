@@ -11,6 +11,7 @@ from pathlib import Path
 
 import re
 import csv
+import time
 import datetime
 
 from UI import Ui_Dialog
@@ -31,7 +32,10 @@ from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
-                        HEATER_MV_LIMIT)
+                        HEATER_MV_LIMIT, HEATER_LOG_ENABLED,
+                        HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR)
+from controller.heater_recipe import HeaterRecipeRunner
+from lib.heater_logger import HeaterCsvLogger
 
 class MainDialog(QDialog):
     shutdown_requested = Signal()
@@ -142,6 +146,12 @@ class MainDialog(QDialog):
             plc_controller=self.plc_controller
         )
         self.process_controller.moveToThread(self.process_thread)
+
+        # --- 히터 레시피 러너 / CSV 로거 (스퍼터 공정과 무관한 독립 경로) ---
+        self.heater_recipe = HeaterRecipeRunner(self.plc_controller, self)
+        self._heater_logger = HeaterCsvLogger()
+        self._heater_log_last_ms = 0.0
+        self._heater_run_prev = False
 
         self._connect_signals()
 
@@ -498,6 +508,15 @@ class MainDialog(QDialog):
             self.ui.heater_apply_button.clicked.connect(self._on_heater_apply_clicked)
             self.ui.heater_onoff_button.toggled.connect(self._on_heater_onoff_toggled)
 
+            # (4) 히터 레시피 러너 (GUI 스레드 → PLC 스레드는 큐 연결)
+            self.heater_recipe.status_message.connect(self.on_status_message)
+            self.heater_recipe.request_target.connect(self.plc_controller.set_heater_target)
+            self.heater_recipe.request_run.connect(self.plc_controller.set_heater_run)
+            self.heater_recipe.request_ramp.connect(self.plc_controller.set_heater_ramp_rate)
+            self.heater_recipe.step_changed.connect(self._on_heater_recipe_step)
+            self.heater_recipe.finished.connect(self._on_heater_recipe_finished)
+            self.ui.heater_recipe_button.clicked.connect(self._on_heater_recipe_clicked)
+
             # (4) ★ ProcessController -> PLC : 레시피(CSV/단일 공정)에서
             #     HEATER_SET 스텝이 실행될 때 목표 온도와 운전을 PLC로 보낸다.
             #     이 연결이 없으면 레시피의 히터 스텝이 아무 동작도 하지 않는다.
@@ -755,6 +774,103 @@ class MainDialog(QDialog):
             self.request_heater_run.emit(False)
             self.ui.heater_onoff_button.setText("ON")
 
+    # ==================== 히터 CSV 로깅 / 레시피 ====================
+    def _heater_log_tick(self, st: dict):
+        """히터 운전 구간 동안만 CSV를 남긴다. 화면 갱신 로직과는 독립."""
+        if not HEATER_LOG_ENABLED:
+            return
+        run = bool(st.get('run'))
+        try:
+            now = time.monotonic() * 1000.0
+
+            if run and not self._heater_run_prev:
+                path = self._heater_logger.start()
+                if path is not None:
+                    log_message_to_monitor("정보", f"히터 로그 시작: {path}")
+                self._heater_log_last_ms = 0.0
+
+            if run and (self._heater_log_last_ms == 0.0
+                        or now - self._heater_log_last_ms >= HEATER_LOG_PERIOD_MS):
+                self._heater_log_last_ms = now
+                self._heater_logger.write_row(st, self._heater_log_note())
+
+            if (not run) and self._heater_run_prev:
+                # 정지 직후 마지막 한 행을 남기고 파일을 닫는다
+                self._heater_logger.write_row(st, self._heater_log_note())
+                self._heater_logger.stop()
+        except Exception:
+            pass
+        finally:
+            self._heater_run_prev = run
+
+    def _heater_log_note(self) -> str:
+        """레시피 실행 중이면 'step k/N' 을 로그 note 컬럼에 남긴다."""
+        try:
+            if self.heater_recipe.is_running():
+                return (f"step {self.heater_recipe.current_step_no()}"
+                        f"/{self.heater_recipe.total_steps()}")
+        except Exception:
+            pass
+        return ""
+
+    @Slot()
+    def _on_heater_recipe_clicked(self):
+        # 실행 중이면 중단 확인
+        if self.heater_recipe.is_running():
+            reply = QMessageBox.question(
+                self, "레시피 중단",
+                "히터 레시피를 중단하고 히터를 끕니다. 계속할까요?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                self.heater_recipe.stop("사용자 중단")
+            return
+
+        # 스퍼터 공정과 동시 실행은 허용하지 않는다
+        if self.process_running or self.csv_mode or getattr(self, "_csv_delay_active", False):
+            QMessageBox.warning(self, "실행 불가",
+                                "스퍼터 공정이 진행 중입니다. 공정 종료 후 실행하세요.")
+            return
+
+        start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
+        path, _ = QFileDialog.getOpenFileName(
+            self, "히터 레시피 CSV 선택", start_dir, "CSV Files (*.csv);;All Files (*)")
+        if not path:
+            return
+        if not self.heater_recipe.load(path):
+            QMessageBox.warning(self, "레시피 오류",
+                                "레시피를 불러오지 못했습니다. 로그를 확인하세요.")
+            return
+
+        steps = self.heater_recipe.steps()
+        body = "\n".join(f"{i}. {s.describe()}" for i, s in enumerate(steps, 1))
+        reply = QMessageBox.question(
+            self, "히터 레시피 실행",
+            f"{Path(path).name}\n\n{body}\n\n이대로 실행할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        if self.heater_recipe.start():
+            self.ui.heater_recipe_button.setText("중단")
+
+    @Slot(int, int, str)
+    def _on_heater_recipe_step(self, cur: int, total: int, desc: str):
+        self.ui.heater_recipe_button.setText(f"{cur}/{total}")
+        self.update_stage_monitor(f"히터 레시피 {cur}/{total} - {desc}")
+
+    @Slot(bool, str)
+    def _on_heater_recipe_finished(self, ok: bool, reason: str):
+        self.ui.heater_recipe_button.setText("레시피")
+        self.update_stage_monitor(f"히터 레시피 {'완료' if ok else '중단'}: {reason}")
+        if self._is_closing:
+            return
+        if ok:
+            QMessageBox.information(self, "히터 레시피", reason)
+        else:
+            QMessageBox.warning(self, "히터 레시피", f"중단되었습니다.\n\n{reason}")
+
     @Slot(dict)
     def update_heater_display(self, st: dict):
         """PLC 폴링(200ms)으로 올라온 히터 상태를 화면에 반영한다.
@@ -811,6 +927,10 @@ class MainDialog(QDialog):
             f" · 홀드백 {st.get('holdback', 0.0):.1f}°C"
             f" · OT {st.get('ot_limit', 0.0):.1f}°C"
         )
+
+        # --- CSV 로깅 (운전 중에만, HEATER_LOG_PERIOD_MS 주기) ---
+        #     폴링은 200ms이므로 반드시 시각 비교로 솎아낸다.
+        self._heater_log_tick(st)
 
         # --- 이상 발생 시 ON 버튼 자동 해제 ---
         #     PLC 래더는 HEATER_RUN을 절대 건드리지 않으므로,
@@ -889,6 +1009,10 @@ class MainDialog(QDialog):
 
     @Slot()
     def _handle_start_process(self):
+        if HEATER_ENABLED and self.heater_recipe.is_running():
+            QMessageBox.warning(self, "경고",
+                                "히터 레시피가 실행 중입니다. 레시피를 먼저 중단하세요.")
+            return
         if self.process_running:
             QMessageBox.warning(self, "경고", "이미 공정이 진행 중입니다.")
             return
@@ -1874,6 +1998,15 @@ class MainDialog(QDialog):
         #     그쪽은 포트를 닫는 중이라 실패할 수 있어 여기서 한 번 더 끈다.
         #   - HEATER_RUN이 꺼지면 PLC 래더 H9가 DAC 출력을 0으로 강제한다.
         if HEATER_ENABLED:
+            try:
+                # 레시피가 돌고 있으면 먼저 멈춘다(내부에서 히터 OFF까지 처리한다)
+                self.heater_recipe.stop("프로그램 종료")
+            except Exception:
+                pass
+            try:
+                self._heater_logger.stop()
+            except Exception:
+                pass
             try:
                 self.request_heater_run.emit(False)
                 self.ui.heater_onoff_button.setChecked(False)
