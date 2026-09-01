@@ -304,6 +304,12 @@ class MainDialog(QDialog):
                 if not self.heater_recipe.start():
                     raise RuntimeError("히터 레시피 시작 실패")
 
+            elif name == "RECIPE_PROCESS_START":
+                # 적재된 CSV 레시피로 공정을 시작한다(장비 앞 Start 버튼과 동일 경로)
+                if not getattr(self, "csv_rows", None):
+                    raise RuntimeError("적재된 레시피가 없습니다. 먼저 레시피를 적재하세요.")
+                self._handle_start_process()
+
             elif name == "RECIPE_HEATER_STOP":
                 self.heater_recipe.stop("원격 중단")
 
@@ -929,8 +935,7 @@ class MainDialog(QDialog):
         start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
         path, _ = QFileDialog.getOpenFileName(
             self, "히터 레시피 파일 선택", start_dir,
-            "레시피 파일 (*.xlsx *.xlsm *.csv);;엑셀 (*.xlsx *.xlsm);;"
-            "CSV (*.csv);;모든 파일 (*)")
+            "CSV Files (*.csv);;All Files (*)")
         if not path:
             return
         if not self.heater_recipe.load(path):
@@ -1344,13 +1349,11 @@ class MainDialog(QDialog):
 
         self._csv_dialog_open = True
         try:
-            # 이름은 CSV지만 엑셀(.xlsx/.xlsm) 레시피도 같은 경로로 받는다.
             path, _ = QFileDialog.getOpenFileName(
                 self,
                 "공정 리스트 파일 선택",
                 "",
-                "레시피 파일 (*.xlsx *.xlsm *.csv);;엑셀 (*.xlsx *.xlsm);;"
-                "CSV (*.csv);;모든 파일 (*)"
+                "CSV Files (*.csv);;All Files (*)"
             )
         finally:
             self._csv_dialog_open = False
