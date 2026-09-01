@@ -264,6 +264,49 @@ class MainDialog(QDialog):
                 self._on_heater_apply_clicked()
             elif name == "HEATER_ONOFF":
                 self.ui.heater_onoff_button.setChecked(bool(args.get("on")))
+
+            elif name == "RECIPE_PROCESS_RUN":
+                # 웹에서 만든 공정 레시피를 CSV로 저장하고 기존 CSV 실행 경로를 그대로 사용한다
+                import csv as _csv, tempfile, os as _os
+                rows = args.get("rows") or []
+                if not rows:
+                    raise RuntimeError("레시피 행이 없습니다")
+                cols = ["Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
+                        "working_pressure", "process_time", "shutter_delay",
+                        "use_rf_power", "rf_power", "use_dc_power", "dc_power",
+                        "use_dc_delay", "use_heater", "heater_temp", "gun1", "gun2"]
+                d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
+                _os.makedirs(d, exist_ok=True)
+                path = _os.path.join(d, "process_web.csv")
+                with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                    w = _csv.DictWriter(f, fieldnames=cols)
+                    w.writeheader()
+                    for r in rows:
+                        w.writerow({c: r.get(c, "") for c in cols})
+                self._start_csv_process_from_path(path)
+
+            elif name == "RECIPE_HEATER_RUN":
+                import csv as _csv, tempfile, os as _os
+                rows = args.get("rows") or []
+                if not rows:
+                    raise RuntimeError("레시피 행이 없습니다")
+                cols = ["step", "target_c", "ramp_c_per_min", "soak_min"]
+                d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
+                _os.makedirs(d, exist_ok=True)
+                path = _os.path.join(d, "heater_web.csv")
+                with open(path, "w", encoding="utf-8-sig", newline="") as f:
+                    w = _csv.DictWriter(f, fieldnames=cols)
+                    w.writeheader()
+                    for r in rows:
+                        w.writerow({c: r.get(c, "") for c in cols})
+                if not self.heater_recipe.load(path):
+                    raise RuntimeError("히터 레시피 검증 실패 (로그 확인)")
+                if not self.heater_recipe.start():
+                    raise RuntimeError("히터 레시피 시작 실패")
+
+            elif name == "RECIPE_HEATER_STOP":
+                self.heater_recipe.stop("원격 중단")
+
             else:
                 raise RuntimeError(f"허용되지 않은 명령: {name}")
 
@@ -363,6 +406,10 @@ class MainDialog(QDialog):
                         "sv": _w("heater_sv_edit"),
                         "status": _w("heater_status_label"),
                         "output": _w("heater_mv_label"),
+                        "on": _checked("heater_onoff_button"),
+                        "recipeRunning": bool(
+                            getattr(getattr(self, "heater_recipe", None), "is_running", lambda: False)()
+                        ),
                     },
                     "ion": {
                         "run": bool(getattr(self, "_erp_indicators", {}).get("ION_RUN")),
@@ -1221,37 +1268,22 @@ class MainDialog(QDialog):
         self.ui.Sputter_Stop_Button.setEnabled(True)
         self.ui.select_csv_button.setEnabled(False)
 
-    @Slot()
-    def _on_select_csv_clicked(self):
-        """Process List용 CSV 파일 선택."""
+    def _start_csv_process_from_path(self, path: str):
+        """파일 대화상자 없이 지정된 CSV/엑셀 레시피를 적재한다(원격 실행용).
+
+        _on_select_csv_clicked 가 경로를 얻은 뒤 수행하는 처리와 동일하다.
+        (UI 경로와 동작을 하나로 유지하기 위해 본문을 이쪽으로 옮겼다)
+        """
         if self._is_closing:
             return
 
+        # UI 경로는 대화상자 앞에서 이미 막지만, 원격 호출은 여기서 막아야 한다
         if self.process_running or self.csv_mode or self._csv_delay_active:
             QMessageBox.warning(
                 self,
                 "변경 불가",
                 "공정 진행 중에는 CSV 파일을 변경할 수 없습니다."
             )
-            return
-
-        if self._csv_dialog_open:
-            return
-
-        self._csv_dialog_open = True
-        try:
-            # 이름은 CSV지만 엑셀(.xlsx/.xlsm) 레시피도 같은 경로로 받는다.
-            path, _ = QFileDialog.getOpenFileName(
-                self,
-                "공정 리스트 파일 선택",
-                "",
-                "레시피 파일 (*.xlsx *.xlsm *.csv);;엑셀 (*.xlsx *.xlsm);;"
-                "CSV (*.csv);;모든 파일 (*)"
-            )
-        finally:
-            self._csv_dialog_open = False
-
-        if self._is_closing:
             return
 
         if not path:
@@ -1292,6 +1324,41 @@ class MainDialog(QDialog):
         self._apply_params_to_ui(params)
         name = params.get("process_name") or "STEP 1"
         self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {name}")
+
+    @Slot()
+    def _on_select_csv_clicked(self):
+        """Process List용 CSV 파일 선택."""
+        if self._is_closing:
+            return
+
+        if self.process_running or self.csv_mode or self._csv_delay_active:
+            QMessageBox.warning(
+                self,
+                "변경 불가",
+                "공정 진행 중에는 CSV 파일을 변경할 수 없습니다."
+            )
+            return
+
+        if self._csv_dialog_open:
+            return
+
+        self._csv_dialog_open = True
+        try:
+            # 이름은 CSV지만 엑셀(.xlsx/.xlsm) 레시피도 같은 경로로 받는다.
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "공정 리스트 파일 선택",
+                "",
+                "레시피 파일 (*.xlsx *.xlsm *.csv);;엑셀 (*.xlsx *.xlsm);;"
+                "CSV (*.csv);;모든 파일 (*)"
+            )
+        finally:
+            self._csv_dialog_open = False
+
+        if not path:
+            return
+
+        self._start_csv_process_from_path(path)
 
     def _load_csv_process_list(self) -> bool:
         """
