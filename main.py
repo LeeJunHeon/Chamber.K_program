@@ -1099,15 +1099,21 @@ class MainDialog(QDialog):
         try:
             pv = st.get('pv')
             cur_sv = st.get('cur_sv')
+            running = bool(st.get('run'))
 
-            # SV(램프 중간 목표) — sv 가 아니라 cur_sv 를 봐야 PZ400 과 같다
-            if cur_sv is None:
+            # SV 표시값.
+            #  운전 중  : cur_sv(D00016) — 램프 중간 목표가 보여야 PZ400 과 같다
+            #  정지 중  : sv(D00012) — 래더가 cur_sv 를 운전 중에만 갱신해서
+            #             정지 상태에서는 마지막 운전 때의 중간 목표가 남는다.
+            #             그대로 두면 꺼져 있는데 600°C 를 향하는 것처럼 보인다.
+            sv_show = cur_sv if running else st.get('sv')
+            if sv_show is None:
                 ui.heater_sv_big.setText("---")
             else:
-                ui.heater_sv_big.setText(f"{float(cur_sv):.1f}")
+                ui.heater_sv_big.setText(f"{float(sv_show):.1f}")
 
-            # 편차
-            if pv is not None and cur_sv is not None:
+            # 편차 — 정지 중에는 의미가 없으므로 비운다
+            if running and pv is not None and cur_sv is not None:
                 dev = float(pv) - float(cur_sv)
                 ui.heater_dev_label.setText(f"\u0394{dev:+.1f}")
                 col = "#2e7d32" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#6b7280"
@@ -1121,7 +1127,18 @@ class MainDialog(QDialog):
 
             # 출력 바 — 운전 중이 아니면 0
             ui.heater_out_bar.setValue(
-                int(st.get('mv_pct') or 0) if st.get('run') else 0)
+                int(st.get('mv_pct') or 0) if running else 0)
+
+            # 목표 입력칸이 비어 있으면 PLC 에 들어 있는 목표로 한 번만 채운다.
+            #  사용자가 입력한 뒤에는 절대 덮어쓰지 않는다(_heater_sv_seeded).
+            if not getattr(self, "_heater_sv_seeded", False):
+                try:
+                    sv0 = float(st.get('sv') or 0.0)
+                    if sv0 > 0 and not ui.heater_sv_edit.text().strip():
+                        ui.heater_sv_edit.setText(f"{sv0:g}")
+                        self._heater_sv_seeded = True
+                except Exception:
+                    pass
 
             # 운전 배지 (우선순위: FAULT > ITL > HOLD > RUN > STOP)
             held = False
@@ -1133,9 +1150,9 @@ class MainDialog(QDialog):
             if st.get('fault'):
                 badge, bd, bg, fg = "FAULT", "#c62828", "#c62828", "#ffffff"
             elif not st.get('itl'):
-                badge, bd, bg, fg = "ITL", "#ffcc80", "#fff3e0", "#bf5000"
+                badge, bd, bg, fg = "ITL", "#ffcc80", "#fff3e0", "#b84c00"
             elif held:
-                badge, bd, bg, fg = "HOLD", "#ffe082", "#fff8e1", "#bf5000"
+                badge, bd, bg, fg = "HOLD", "#ffe082", "#fff8e1", "#b84c00"
             elif st.get('run'):
                 badge, bd, bg, fg = "RUN", "#a5d6a7", "#e8f5e9", "#2e7d32"
             else:
