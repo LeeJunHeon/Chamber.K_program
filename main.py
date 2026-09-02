@@ -1014,6 +1014,9 @@ class MainDialog(QDialog):
                 except Exception:
                     st = {}
 
+            # f-string 표현식 안에 역슬래시를 넣지 않기 위한 상수 (Py3.11 호환)
+            _DEG = "\u00b0C"
+
             def _n(key, fmt="{:.1f}", unit=""):
                 v = st.get(key)
                 if v is None:
@@ -1036,7 +1039,7 @@ class MainDialog(QDialog):
                 + (f", \u2248{amp:.1f}A)" if amp is not None else ")"))
 
             lines = [
-                f"히터 : PV {_n('pv', unit='\u00b0C')} / SV {_n('cur_sv', unit='\u00b0C')} / MV {mv_txt}",
+                f"히터 : PV {_n('pv', unit=_DEG)} / SV {_n('cur_sv', unit=_DEG)} / MV {mv_txt}",
                 (f"상태 : RUN {_b('run')} \u00b7 ITL {_b('itl')} \u00b7 FAULT {_b('fault')}"
                  f" \u00b7 OT {_b('ot')} \u00b7 TC {_b('tc_err')} \u00b7 WD {_b('wd_err')}"
                  f" \u00b7 PIDerr {st.get('pid_err', '-')}"),
@@ -1059,9 +1062,9 @@ class MainDialog(QDialog):
 
             lines.append(
                 f"설정 : DAC상한 {_n('mv_limit', '{:.0f}')}"
-                f" \u00b7 램프 {_n('ramp_rate', '{:.0f}', '\u00b0C/min')}"
-                f" \u00b7 홀드백 {_n('holdback', unit='\u00b0C')}"
-                f" \u00b7 OT {_n('ot_limit', unit='\u00b0C')}")
+                f" \u00b7 램프 {_n('ramp_rate', '{:.0f}', _DEG + '/min')}"
+                f" \u00b7 홀드백 {_n('holdback', unit=_DEG)}"
+                f" \u00b7 OT {_n('ot_limit', unit=_DEG)}")
             return "\n".join(lines)
         except Exception:
             return ""
