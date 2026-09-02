@@ -463,7 +463,7 @@ class Ui_Dialog(object):
 
         self.heater_group = QFrame(Dialog)
         self.heater_group.setObjectName(u"heater_group")
-        self.heater_group.setGeometry(QRect(1022, 20, 220, 140))
+        self.heater_group.setGeometry(QRect(1022, 20, 220, 176))
         self.heater_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.heater_group.setStyleSheet(
             u"QFrame#heater_group {background: #ffffff; "
@@ -555,13 +555,36 @@ class Ui_Dialog(object):
         self.heater_mv_label.setObjectName(u"heater_mv_label")
         self.heater_mv_label.setGeometry(QRect(10, 102, 200, 20))
         self.heater_mv_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
+
+        # --- 4행: 레시피 진행 조작 (실행 중에만 활성화된다) ---
+        self.heater_hold_button = QPushButton(self.heater_group)
+        self.heater_hold_button.setObjectName(u"heater_hold_button")
+        self.heater_hold_button.setGeometry(QRect(10, 128, 96, 26))
+        self.heater_hold_button.setEnabled(False)
+        self.heater_hold_button.setStyleSheet(
+            u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
+            u"font-size: 9pt; border-radius: 4px; border: 1px solid #cccccc;}"
+            u"QPushButton:hover {background: #dcdcda;}"
+            u"QPushButton:disabled {color: #aaaaaa;}"
+        )
+
+        self.heater_skip_button = QPushButton(self.heater_group)
+        self.heater_skip_button.setObjectName(u"heater_skip_button")
+        self.heater_skip_button.setGeometry(QRect(114, 128, 96, 26))
+        self.heater_skip_button.setEnabled(False)
+        self.heater_skip_button.setStyleSheet(
+            u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
+            u"font-size: 9pt; border-radius: 4px; border: 1px solid #cccccc;}"
+            u"QPushButton:hover {background: #dcdcda;}"
+            u"QPushButton:disabled {color: #aaaaaa;}"
+        )
         # ===================== 히터 =====================
 
         # ===================== 이오나이저 (SVC-K24) =====================
         # [구조] QFrame(ION_group)이 부모. 내부는 프레임 기준 상대 좌표.
         self.ION_group = QFrame(Dialog)
         self.ION_group.setObjectName(u"ION_group")
-        self.ION_group.setGeometry(QRect(1022, 175, 220, 160))
+        self.ION_group.setGeometry(QRect(1022, 215, 220, 160))
         self.ION_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.ION_group.setStyleSheet(
             u"QFrame#ION_group {background: #ffffff; "
@@ -713,6 +736,8 @@ class Ui_Dialog(object):
         self.heater_apply_button.setText(QCoreApplication.translate("Dialog", u"\uc801\uc6a9", None))
         self.heater_recipe_button.setText(QCoreApplication.translate("Dialog", u"\ub808\uc2dc\ud53c", None))
         self.heater_onoff_button.setText(QCoreApplication.translate("Dialog", u"ON", None))
+        self.heater_hold_button.setText(QCoreApplication.translate("Dialog", u"\uc77c\uc2dc\uc815\uc9c0", None))
+        self.heater_skip_button.setText(QCoreApplication.translate("Dialog", u"\uac74\ub108\ub6f0\uae30", None))
         # QLineEdit은 placeholderText를 지원 → 빈 칸에 안내 문구 표시
         self.heater_pv_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"--.-", None))
         self.heater_sv_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"\uc628\ub3c4", None))
@@ -727,6 +752,12 @@ class Ui_Dialog(object):
         self.heater_onoff_button.setToolTip(QCoreApplication.translate("Dialog",
             u"히터 운전 ON/OFF. ON을 누르면 목표 온도를 전송한 뒤 운전을 시작합니다.\n"
             u"실제 온도 제어는 PLC 내장 PID가 수행합니다.", None))
+        self.heater_hold_button.setToolTip(QCoreApplication.translate("Dialog",
+            u"레시피를 현재 지점에서 일시정지합니다. 승온 중이면 그 온도를 유지하고,\n"
+            u"유지 중이면 남은 시간을 멈춥니다. 다시 누르면 이어서 진행합니다.", None))
+        self.heater_skip_button.setToolTip(QCoreApplication.translate("Dialog",
+            u"현재 스텝을 건너뛰고 다음 스텝으로 넘어갑니다.\n"
+            u"마지막 스텝에서 누르면 레시피가 완료됩니다.", None))
         
         self.pushButton_3.setText("")
         self.pushButton_4.setText("")

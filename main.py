@@ -40,6 +40,14 @@ from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from lib.heater_logger import HeaterCsvLogger
 
+def _fmt_hms_sec(sec: float) -> str:
+    """초 → M:SS (1시간 넘으면 H:MM:SS). 히터 레시피 진행 표시용."""
+    v = max(0, int(sec))
+    h, rem = divmod(v, 3600)
+    m, ss = divmod(rem, 60)
+    return f"{h}:{m:02d}:{ss:02d}" if h else f"{m}:{ss:02d}"
+
+
 class MainDialog(QDialog):
     shutdown_requested = Signal()
     request_process_stop = Signal()
@@ -351,6 +359,23 @@ class MainDialog(QDialog):
             elif name == "RECIPE_HEATER_STOP":
                 self.heater_recipe.stop("원격 중단")
 
+            elif name == "HEATER_RECIPE_HOLD":
+                # args: on=true → 일시정지, on=false → 재개
+                if not self.heater_recipe.is_running():
+                    raise RuntimeError("실행 중인 히터 레시피가 없습니다")
+                if bool(args.get("on", True)):
+                    if not self.heater_recipe.hold():
+                        raise RuntimeError("일시정지에 실패했습니다")
+                else:
+                    if not self.heater_recipe.resume():
+                        raise RuntimeError("일시정지 상태가 아닙니다")
+
+            elif name == "HEATER_RECIPE_STEP":
+                if not self.heater_recipe.is_running():
+                    raise RuntimeError("실행 중인 히터 레시피가 없습니다")
+                if not self.heater_recipe.skip_step():
+                    raise RuntimeError("스텝 건너뛰기에 실패했습니다")
+
             else:
                 raise RuntimeError(f"허용되지 않은 명령: {name}")
 
@@ -650,6 +675,8 @@ class MainDialog(QDialog):
             self.heater_recipe.step_changed.connect(self._on_heater_recipe_step)
             self.heater_recipe.finished.connect(self._on_heater_recipe_finished)
             self.ui.heater_recipe_button.clicked.connect(self._on_heater_recipe_clicked)
+            self.ui.heater_hold_button.clicked.connect(self._on_heater_hold_clicked)
+            self.ui.heater_skip_button.clicked.connect(self._on_heater_skip_clicked)
 
             # (4) ★ ProcessController -> PLC : 레시피(CSV/단일 공정)에서
             #     HEATER_SET 스텝이 실행될 때 목표 온도와 운전을 PLC로 보낸다.
@@ -1038,14 +1065,69 @@ class MainDialog(QDialog):
         if self.heater_recipe.start():
             self.ui.heater_recipe_button.setText("중단")
 
+    def _sync_heater_recipe_buttons(self):
+        """레시피가 돌 때만 [일시정지]/[건너뛰기]를 쓸 수 있게 한다."""
+        try:
+            running = self.heater_recipe.is_running()
+            held = self.heater_recipe.is_held()
+            self.ui.heater_hold_button.setEnabled(running)
+            self.ui.heater_skip_button.setEnabled(running)
+            self.ui.heater_hold_button.setText("재개" if (running and held) else "일시정지")
+        except Exception:
+            pass
+
+    @Slot()
+    def _on_heater_hold_clicked(self):
+        """[일시정지] 토글. HOLD 중이면 재개한다."""
+        if not self.heater_recipe.is_running():
+            return
+        if self.heater_recipe.is_held():
+            self.heater_recipe.resume()
+        else:
+            self.heater_recipe.hold()
+        self._sync_heater_recipe_buttons()
+
+    @Slot()
+    def _on_heater_skip_clicked(self):
+        if not self.heater_recipe.is_running():
+            return
+        reply = QMessageBox.question(
+            self, "스텝 건너뛰기",
+            "현재 스텝을 건너뛰고 다음으로 진행합니다. 계속할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.heater_recipe.skip_step()
+        self._sync_heater_recipe_buttons()
+
     @Slot(int, int, str)
     def _on_heater_recipe_step(self, cur: int, total: int, desc: str):
         self.ui.heater_recipe_button.setText(f"{cur}/{total}")
-        self.update_stage_monitor(f"히터 레시피 {cur}/{total} - {desc}")
+        self._sync_heater_recipe_buttons()
+        self.update_stage_monitor(self._heater_recipe_stage_text(cur, total, desc))
+
+    def _heater_recipe_stage_text(self, cur: int, total: int, desc: str) -> str:
+        """진행률과 남은 시간까지 한 줄로 만든다.
+        예: 히터 레시피 2/3 (반복 1/2) · 610°C 유지 · 전체 43% · 남음 2:15:40
+        """
+        base = f"히터 레시피 {cur}/{total} - {desc}"
+        try:
+            pg = self.heater_recipe.progress()
+            total_est = int(pg.get("totalEstSec") or 0)
+            elapsed = int(pg.get("elapsedSec") or 0)
+            if total_est > 0:
+                remain = max(0, total_est - elapsed)
+                base += (f" · 전체 {pg.get('percent', 0):.0f}%"
+                         f" · 남음 {_fmt_hms_sec(remain)}")
+        except Exception:
+            pass
+        return base
 
     @Slot(bool, str)
     def _on_heater_recipe_finished(self, ok: bool, reason: str):
         self.ui.heater_recipe_button.setText("레시피")
+        self._sync_heater_recipe_buttons()
         self.update_stage_monitor(f"히터 레시피 {'완료' if ok else '중단'}: {reason}")
         if self._is_closing:
             return
