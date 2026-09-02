@@ -93,6 +93,9 @@ class MainDialog(QDialog):
         self._chat_user_stopped: bool = False
         self._chat_errors: list[str] = []
         self._chat_fail_notified: bool = False   # ✅ 실패 원인 일반채팅 중복 방지
+        # 설비 이상 상세 카드는 공정 1회당 1장만. 같은 이상이 PLC fault 와
+        # 레시피 중단 두 경로로 올라와 카드가 2장 뜨던 것을 막는다.
+        self._chat_fault_detail_sent: bool = False
         self._chat_fail_reason: str = ""         # ✅ 이번 공정에서 “가장 먼저 잡힌” 실패 원인 1개
 
         # === ERP Reporter (CH.K) ===
@@ -735,6 +738,7 @@ class MainDialog(QDialog):
         self._chat_user_stopped = False
         self._chat_errors = []
         self._chat_fail_notified = False
+        self._chat_fault_detail_sent = False
         self._chat_fail_reason = ""
         self._erp_run_ended = False   # ERP: 이번 공정 run_end 미전송 상태로 초기화
 
@@ -1112,8 +1116,15 @@ class MainDialog(QDialog):
             self._chat_notify_failed_now(reason, send_text=False)
         except Exception:
             pass
+        # 상세 카드는 공정 1회당 1장. 첫 사유가 대표 사유다.
+        #  (중단 동작 자체는 아래에서 가드 없이 계속 수행된다)
         try:
-            self._chat_send_fault_detail(reason, detail)
+            if not getattr(self, "_chat_fault_detail_sent", False):
+                self._chat_fault_detail_sent = True     # 발송 전에 세운다
+                self._chat_send_fault_detail(reason, detail)
+            else:
+                log_message_to_monitor(
+                    "경고", f"[공정 중단] 추가 사유(챗 중복 발송 안 함): {reason}")
         except Exception:
             pass
 
@@ -1570,10 +1581,17 @@ class MainDialog(QDialog):
                     "경고", f"[히터] 레시피가 중단되었습니다: {reason} → 공정을 중단합니다.")
             except Exception:
                 pass
+            # detail 은 먼저 만들어 둔다. 인자 자리에서 바로 부르면 그 계산이
+            # 예외를 낼 때 _abort_process_by_fault 가 호출조차 되지 않는다.
+            _detail = ""
+            try:
+                _detail = self._heater_fault_detail_text()
+            except Exception:
+                _detail = ""
             if _need_abort:
                 try:
                     self._abort_process_by_fault(
-                        f"히터 레시피 중단 — {reason}", self._heater_fault_detail_text())
+                        f"히터 레시피 중단 — {reason}", _detail)
                 except Exception:
                     pass
             return
@@ -1730,10 +1748,16 @@ class MainDialog(QDialog):
         # 히터를 실제로 쓰고 있을 때만 공정을 중단한다.
         #  아무도 안 쓰는 상태에서 예전 래치가 올라온 경우까지 공정을 죽이면 안 된다.
         #  (판정은 이 함수 맨 앞에서 이미 끝났다)
+        # detail 은 먼저 만들어 둔다. 인자 자리에서 바로 부르면 그 계산이
+        # 예외를 낼 때 _abort_process_by_fault 가 호출조차 되지 않는다.
+        _detail = ""
+        try:
+            _detail = self._heater_fault_detail_text()
+        except Exception:
+            _detail = ""
         if _need_abort:
             try:
-                self._abort_process_by_fault(f"히터 이상 — {reason}",
-                                             self._heater_fault_detail_text())
+                self._abort_process_by_fault(f"히터 이상 — {reason}", _detail)
             except Exception:
                 pass
     # ==================== 히터 ====================
