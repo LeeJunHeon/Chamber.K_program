@@ -17,7 +17,7 @@ from lib.config import (
     PLC_MV_COIL, PLC_MV_INTERLOCK_COIL,
     HEATER_ENABLED, HEATER_TEMP_SCALE, HEATER_WD_PERIOD_MS,
     HEATER_MV_MIN, HEATER_MV_ABS_MAX, HEATER_MV_LIMIT,
-    HEATER_CURRENT_SLOPE, HEATER_CURRENT_ZERO,
+    heater_est_current,
     HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT,
     HEATER_REG_PV, HEATER_REG_SV, HEATER_REG_SV_LIMIT,
     HEATER_REG_WD, HEATER_REG_CUR_SV, HEATER_REG_PID_ERR, HEATER_REG_MV,
@@ -464,7 +464,7 @@ class PLCController(QObject):
             except Exception as ex:
                 self.status_message.emit("히터(경고)", f"설정 되읽기 실패: {ex}")
 
-            amp = max(0.0, HEATER_CURRENT_SLOPE * (HEATER_MV_LIMIT - HEATER_CURRENT_ZERO))
+            amp = heater_est_current(HEATER_MV_LIMIT)
             self.status_message.emit(
                 "히터",
                 f"설정 적용: DAC상한 {int(HEATER_MV_LIMIT)}(약 {amp:.1f}A)"
@@ -531,8 +531,7 @@ class PLCController(QObject):
             'ramp_rate': _reg(HEATER_REG_RAMP_RATE) * 6,          # °C/min 환산
             'holdback':  _reg(HEATER_REG_HOLDBACK)  * HEATER_TEMP_SCALE,
             'ot_limit':  _reg(HEATER_REG_OT_LIMIT)  * HEATER_TEMP_SCALE,
-            'est_current': 0.0 if mv < HEATER_MV_MIN
-                           else max(0.0, HEATER_CURRENT_SLOPE * (mv - HEATER_CURRENT_ZERO)),
+            'est_current': 0.0 if mv < HEATER_MV_MIN else heater_est_current(mv),
             'run':       _bit(HEATER_COIL_RUN),
             'itl':       _bit(HEATER_COIL_ITL),
             'fault':     _bit(HEATER_COIL_FAULT),

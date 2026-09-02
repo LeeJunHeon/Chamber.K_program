@@ -1,4 +1,5 @@
 # config.py
+import math
 from typing import Dict, List, Tuple
 from lib.config_loader import get  # ← JSON 설정 로더 (없으면 기본값 사용)
 
@@ -98,6 +99,36 @@ HEATER_MV_LIMIT   = get('HEATER_MV_LIMIT',   600)   # D00018에 쓸 실제 운�
 #   저온이나 매우 낮은 DAC 에서는 오차가 커진다. 소자 노화 시 재측정 후 갱신할 것.
 HEATER_CURRENT_SLOPE = get('HEATER_CURRENT_SLOPE', 0.136)  # A / DAC 카운트
 HEATER_CURRENT_ZERO  = get('HEATER_CURRENT_ZERO',  436)    # 전류 0 이 되는 DAC 카운트
+#   ↑ 두 상수는 구형 선형식용이며 더 이상 계산에 쓰지 않는다(하위 호환 보존).
+#     선형식은 저온 앵커 2점(520/600)으로 맞춘 것이라 그 구간에서만 맞았고,
+#     MV 800(600°C 유지, 실측 59.8A)에서 49.5A로 17% 과소예측했다.
+
+# ---- 위상제어 전류 추정 (2026-09-01 재교정) ----
+# VARITAP은 위상제어라 전류가 DAC 카운트에 비례하지 않는다.
+# 점호각 α가 카운트에 선형이라고 보고 위상제어 실효값 공식을 쓴다.
+#     α = π × (MV_FULL − MV) / (MV_FULL − MV_ZERO)
+#     I = SCALE × √[(π − α + sin2α/2) / π]
+# 실측 앵커 3점을 ±6% 안에 재현한다:
+#     MV 520 → 11.5A(저온) · MV 600 → 22.4A(저온) · MV 800 → 59.8A(600°C 유지)
+# 앵커 범위 밖(600°C 이상)은 외삽이므로 전면 계기를 우선한다.
+HEATER_CURRENT_MV_ZERO = get('HEATER_CURRENT_MV_ZERO', 400)    # 출력 0   (점호각 180°)
+HEATER_CURRENT_MV_FULL = get('HEATER_CURRENT_MV_FULL', 1600)   # 전출력   (점호각 0°)
+HEATER_CURRENT_SCALE   = get('HEATER_CURRENT_SCALE',   135.1)  # 전출력 시 전류 [A]
+
+
+def heater_est_current(mv) -> float:
+    """DAC 카운트 → 전면 전류 추정 [A]. 추정치이며 계기 대체용이 아니다."""
+    try:
+        mv = float(mv)
+    except (TypeError, ValueError):
+        return 0.0
+    span = float(HEATER_CURRENT_MV_FULL) - float(HEATER_CURRENT_MV_ZERO)
+    if span <= 0:
+        return 0.0
+    x = (float(HEATER_CURRENT_MV_FULL) - mv) / span      # 1=완전 차단, 0=전출력
+    a = min(max(x, 0.0), 1.0) * math.pi                  # 점호각 [rad]
+    v = (math.pi - a + math.sin(2.0 * a) / 2.0) / math.pi
+    return float(HEATER_CURRENT_SCALE) * math.sqrt(max(0.0, v))
 
 # 하위 호환: 예전 이름으로 import 하는 코드가 있을 수 있다
 HEATER_MV_MAX = HEATER_MV_ABS_MAX
@@ -134,6 +165,7 @@ def _validate_heater_config() -> None:
     global HEATER_MV_LIMIT, HEATER_MV_MAX, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP
     global HEATER_RAMP_RATE_C_PER_MIN, HEATER_SLOW_RATE_C_PER_MIN
     global HEATER_LOG_PERIOD_MS, HEATER_CURRENT_SLOPE
+    global HEATER_CURRENT_SCALE, HEATER_CURRENT_MV_FULL, HEATER_CURRENT_MV_ZERO
 
     # 1) DAC 운전 상한: 최소 지점 +20 ~ 절대 상한
     lo, hi = HEATER_MV_MIN + 20, HEATER_MV_ABS_MAX
@@ -169,10 +201,21 @@ def _validate_heater_config() -> None:
         print(f"[Config] HEATER_LOG_PERIOD_MS {HEATER_LOG_PERIOD_MS} → {new} 로 클램프 (1000~60000)")
         HEATER_LOG_PERIOD_MS = new
 
-    # 6) 전류 추정 기울기는 양수여야 한다
+    # 6) 전류 추정 기울기는 양수여야 한다 (구형 선형식용. 계산에는 쓰이지 않는다)
     if HEATER_CURRENT_SLOPE <= 0:
         print(f"[Config] HEATER_CURRENT_SLOPE {HEATER_CURRENT_SLOPE} → 0.136 (0 이하 불가)")
         HEATER_CURRENT_SLOPE = 0.136
+
+    # 7) 위상제어 전류 추정 계수
+    if HEATER_CURRENT_SCALE <= 0:
+        print(f"[Config] HEATER_CURRENT_SCALE {HEATER_CURRENT_SCALE} → 135.1 (0 이하 불가)")
+        HEATER_CURRENT_SCALE = 135.1
+    if HEATER_CURRENT_MV_FULL <= HEATER_CURRENT_MV_ZERO:
+        print(f"[Config] HEATER_CURRENT_MV_FULL {HEATER_CURRENT_MV_FULL} / "
+              f"MV_ZERO {HEATER_CURRENT_MV_ZERO} → 1600 / 400 "
+              f"(MV_FULL 은 MV_ZERO 보다 커야 한다)")
+        HEATER_CURRENT_MV_FULL = 1600
+        HEATER_CURRENT_MV_ZERO = 400
 
 
 _validate_heater_config()

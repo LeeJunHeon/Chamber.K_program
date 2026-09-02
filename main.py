@@ -35,7 +35,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_MV_LIMIT, HEATER_LOG_ENABLED,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN,
-                        HEATER_CURRENT_SLOPE, HEATER_CURRENT_ZERO)
+                        heater_est_current)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from lib.heater_logger import HeaterCsvLogger
@@ -255,6 +255,8 @@ class MainDialog(QDialog):
             elif name == "ALL_STOP":
                 self.request_plc_emergency_stop.emit()
             elif name == "HEATER_SV":
+                if HEATER_ENABLED and self.heater_recipe.is_running():
+                    raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
                 val = args.get("value")
                 if val is None:
                     raise RuntimeError("목표 온도 없음")
@@ -263,6 +265,8 @@ class MainDialog(QDialog):
                     else self.ui.heater_sv_edit.setText(str(val))
                 self._on_heater_apply_clicked()
             elif name == "HEATER_ONOFF":
+                if HEATER_ENABLED and self.heater_recipe.is_running():
+                    raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
                 want = bool(args.get("on"))
                 btn = self.ui.heater_onoff_button
                 if want:
@@ -886,6 +890,20 @@ class MainDialog(QDialog):
 
     @Slot(bool)
     def _on_heater_onoff_toggled(self, checked: bool):
+        # 레시피가 관리 중인 히터를 수동으로 건드리면 상태 기계와 충돌한다.
+        # (레시피 실행 중 수동 OFF → 도달 못 할 온도를 타임아웃까지 대기)
+        if HEATER_ENABLED and self.heater_recipe.is_running():
+            QMessageBox.warning(
+                self, "조작 불가",
+                "히터 레시피 실행 중에는 수동 조작을 할 수 없습니다.\n"
+                "레시피를 먼저 중단하세요.")
+            btn = self.ui.heater_onoff_button
+            btn.blockSignals(True)          # setChecked 재진입 방지
+            btn.setChecked(not checked)     # 눌리기 전 상태로 되돌린다
+            btn.setText("OFF" if btn.isChecked() else "ON")
+            btn.blockSignals(False)
+            return
+
         if checked:
             st = self.plc_controller._heater_last or {}
             if not st.get('itl'):
@@ -913,7 +931,7 @@ class MainDialog(QDialog):
                 return
             t = float(params.get("heater_temp", 0.0) or 0.0)
             r = float(params.get("heater_ramp", 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
-            amp = max(0.0, HEATER_CURRENT_SLOPE * (HEATER_MV_LIMIT - HEATER_CURRENT_ZERO))
+            amp = heater_est_current(HEATER_MV_LIMIT)
             log_message_to_monitor(
                 "정보",
                 f"[히터] 목표 {t:.1f}°C · 램프 {r:.0f}°C/min · "
@@ -2710,23 +2728,54 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-    def _excepthook(exctype, value, tb):
+    # 같은 예외가 폭주할 때 로그와 챗 알림이 수백 건 나가는 것을 막는다.
+    # 실제 사고(2026-09-01): PLC 폴링 슬롯에서 200ms마다 IndexError가 터져
+    # 로그 100여 줄 + 구글챗 40건이 몇 초 만에 나갔다.
+    _EXC_SUPPRESS_SEC = 30.0
+    _exc_seen: dict = {}          # key -> [마지막 통과 시각, 그 뒤 억제된 건수]
+
+    def _exc_key(exctype, tb) -> str:
+        """예외 종류 + 마지막 프레임 위치. 같은 자리에서 반복되면 같은 키."""
+        try:
+            last = traceback.extract_tb(tb)[-1]
+            return f"{exctype.__name__}:{last.filename}:{last.lineno}"
+        except Exception:
+            return getattr(exctype, "__name__", "?")
+
+    def _exc_gate(key: str):
+        """(내보낼지, 직전까지 억제된 건수)"""
+        now = time.monotonic()
+        rec = _exc_seen.get(key)
+        if rec is None or now - rec[0] >= _EXC_SUPPRESS_SEC:
+            skipped = rec[1] if rec else 0
+            _exc_seen[key] = [now, 0]
+            return True, skipped
+        rec[1] += 1
+        return False, 0
+
+    def _report_exc(prefix: str, exctype, value, tb):
+        try:
+            ok, skipped = _exc_gate(_exc_key(exctype, tb))
+        except Exception:
+            ok, skipped = True, 0
+        if not ok:
+            return
+        tail = f"  (같은 예외 {skipped}건 생략)" if skipped else ""
         try:
             tb_text = "".join(traceback.format_exception(exctype, value, tb))
-            log_message_to_monitor("ERROR", f"[UNHANDLED] {tb_text}")
+            log_message_to_monitor("ERROR", f"[UNHANDLED{prefix}] {tb_text}{tail}")
         except Exception:
             pass
-        _send_fatal_to_chat(f"❌ CHK 프로그램 예외(메인): {value!r}")
+        who = prefix.lstrip(":") or "메인"
+        _send_fatal_to_chat(f"❌ CHK 프로그램 예외({who}): {value!r}{tail}")
+
+    def _excepthook(exctype, value, tb):
+        _report_exc("", exctype, value, tb)
 
     sys.excepthook = _excepthook
 
     def _thread_excepthook(args):
-        try:
-            tb_text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
-            log_message_to_monitor("ERROR", f"[UNHANDLED:{args.thread.name}] {tb_text}")
-        except Exception:
-            pass
-        _send_fatal_to_chat(f"❌ CHK 프로그램 예외({args.thread.name}): {args.exc_value!r}")
+        _report_exc(f":{args.thread.name}", args.exc_type, args.exc_value, args.exc_traceback)
 
     threading.excepthook = _thread_excepthook
 

@@ -46,6 +46,10 @@ TC_BAD_LIMIT_SEC = 60.0
 # 운전 중인데 DAC 출력이 0인 상태(PID 정지)가 이 시간 이상 계속되면 중단한다.
 OUT_DEAD_LIMIT_SEC = 10.0
 
+# 외부(수동/원격)에서 히터가 꺼진 상태가 이 시간 이상 계속되면 중단한다.
+# 히터 ON 요청 직후 PLC 되읽기가 반영되기까지의 유예를 겸한다.
+RUN_OFF_LIMIT_SEC = 5.0
+
 # 상태
 IDLE, RAMPING, SOAKING, DONE, ABORTED = "IDLE", "RAMPING", "SOAKING", "DONE", "ABORTED"
 
@@ -96,6 +100,7 @@ class HeaterRecipeRunner(QObject):
         self._in_band_since = 0.0    # 허용 편차 안에 들어온 시각. 0이면 밖
         self._tc_bad_since = 0.0
         self._out_dead_since = 0.0   # 출력 0 지속 시작 시각. 0이면 정상
+        self._run_off_since = 0.0    # 외부 OFF 지속 시작 시각. 0이면 정상
         self._soak_deadline = 0.0
         self._soak_last_report = 0.0
 
@@ -124,6 +129,17 @@ class HeaterRecipeRunner(QObject):
     def total_steps(self) -> int:
         return len(self._steps)
 
+    def _current_step(self) -> Optional[HeaterRecipeStep]:
+        """현재 스텝. 인덱스가 범위를 벗어나면 None(호출부가 안전 중단한다).
+
+        _steps 가 실행 중에 교체되면 인덱스가 범위를 벗어날 수 있다.
+        그 상태로 인덱싱하면 PLC 폴링(200ms)마다 예외가 터져 로그와
+        챗 알림이 폭주한다. 실제로 그 사고가 있었다.
+        """
+        if 0 <= self._idx < len(self._steps):
+            return self._steps[self._idx]
+        return None
+
     def progress(self) -> dict:
         """외부(ERP 리포터)에 넘길 진행 상태 요약."""
         import time as _t
@@ -151,7 +167,19 @@ class HeaterRecipeRunner(QObject):
 
     # ==================== 로딩 ====================
     def load(self, path) -> bool:
-        """레시피 CSV를 읽는다. 실패하면 사유를 emit하고 False."""
+        """레시피 CSV를 읽는다. 실패하면 사유를 emit하고 False.
+
+        실행 중에는 아무것도 바꾸지 않고 거부한다. start()에도 같은 가드가
+        있지만, 원격 RECIPE_HEATER_RUN 은 load() → start() 순서라
+        load() 가 먼저 성공하면 돌아가는 상태 기계 밑에서 _steps 가
+        교체되어 버린다(2026-09-01 IndexError 폭주 사고).
+        """
+        if self.is_running():
+            self.status_message.emit(
+                "히터(경고)",
+                "레시피 실행 중에는 새 레시피를 불러올 수 없습니다. 먼저 중단하세요.")
+            return False
+
         p = Path(path)
         try:
             # CSV/TSV/XLSX 를 같은 list[dict] 로 받는다 (lib/recipe_io.py)
@@ -275,6 +303,7 @@ class HeaterRecipeRunner(QObject):
         was_running = self.is_running()
         self._state = ABORTED
         self._out_dead_since = 0.0
+        self._run_off_since = 0.0
         self._tick.stop()
         self._safe_shutdown()
         if was_running:
@@ -297,6 +326,7 @@ class HeaterRecipeRunner(QObject):
     def _abort(self, reason: str):
         self._state = ABORTED
         self._out_dead_since = 0.0
+        self._run_off_since = 0.0
         self._tick.stop()
         self._safe_shutdown()
         self.status_message.emit("히터(오류)", f"레시피 중단: {reason}")
@@ -314,6 +344,7 @@ class HeaterRecipeRunner(QObject):
         self._in_band_since = 0.0
         self._tc_bad_since = 0.0
         self._out_dead_since = 0.0
+        self._run_off_since = 0.0
 
         self.request_ramp.emit(_ramp_raw(s.ramp_c_per_min))
         self.request_target.emit(float(s.target_c))
@@ -343,6 +374,7 @@ class HeaterRecipeRunner(QObject):
     def _complete(self):
         self._state = DONE
         self._out_dead_since = 0.0
+        self._run_off_since = 0.0
         self._tick.stop()
         last = self._steps[-1] if self._steps else None
         hold = bool(HEATER_RECIPE_HOLD_AT_END) and (last is not None and not last.is_cooldown)
@@ -365,6 +397,16 @@ class HeaterRecipeRunner(QObject):
             self._abort(f"히터 이상: {cause}")
             return
 
+        # 외부(수동/원격)에서 히터가 꺼진 경우. 레시피는 도달할 수 없는
+        # 온도를 타임아웃(기본 90분)까지 기다리게 되므로 즉시 중단한다.
+        if not st.get('run'):
+            if self._run_off_since == 0.0:
+                self._run_off_since = time.monotonic()
+            elif time.monotonic() - self._run_off_since >= RUN_OFF_LIMIT_SEC:
+                self._abort("히터 운전이 외부에서 꺼졌습니다")
+            return
+        self._run_off_since = 0.0
+
         # 래더는 정상인데 PID가 멈춰 출력이 0으로 죽은 경우.
         # 도달할 수 없는 온도를 타임아웃까지 기다리지 않고 중단한다.
         if st.get('output_dead'):
@@ -378,7 +420,10 @@ class HeaterRecipeRunner(QObject):
         if self._state != RAMPING:
             return
 
-        s = self._steps[self._idx]
+        s = self._current_step()
+        if s is None:
+            self._abort("내부 상태 불일치 (스텝 인덱스 범위 초과)")
+            return
         now = time.monotonic()
         pv = st.get('pv')
 
