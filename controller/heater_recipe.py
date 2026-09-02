@@ -259,6 +259,13 @@ class HeaterRecipeRunner(QObject):
                 remain = max(0.0, self._soak_deadline - _t.monotonic())
 
         elapsed = (_t.monotonic() - self._run_started) if self._run_started else 0.0
+        # HOLD 중에는 멈춘 시간만큼 빼서 진행률이 올라가지 않게 한다.
+        # resume() 이 _run_started 를 뒤로 미는 것과 이중 보정되지 않는다 —
+        # 멈춘 동안에는 여기서 실시간으로 빼고, 재개 후에는 기준 시각이
+        # 이미 밀려 있어 이 보정이 걸리지 않기 때문이다.
+        if self._held and self._held_at:
+            elapsed -= max(0.0, _t.monotonic() - self._held_at)
+        elapsed = max(0.0, elapsed)
         total_est = float(self._total_est_sec)
         percent = 0.0
         if total_est > 0:
