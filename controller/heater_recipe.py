@@ -275,7 +275,7 @@ class HeaterRecipeRunner(QObject):
 
         elapsed = (_t.monotonic() - self._run_started) if self._run_started else 0.0
         # HOLD 중에는 멈춘 시간만큼 빼서 진행률이 올라가지 않게 한다.
-        # resume() 이 _run_started 를 뒤로 미는 것과 이중 보정되지 않는다 —
+        # _clear_hold() 가 _run_started 를 뒤로 미는 것과 이중 보정되지 않는다 —
         # 멈춘 동안에는 여기서 실시간으로 빼고, 재개 후에는 기준 시각이
         # 이미 밀려 있어 이 보정이 걸리지 않기 때문이다.
         if self._held and self._held_at:
@@ -514,6 +514,10 @@ class HeaterRecipeRunner(QObject):
 
     # ==================== HOLD / STEP ====================
     def _clear_hold(self):
+        """HOLD 상태를 푼다. 멈춰 있던 시간만큼 기준 시각을 밀어
+        진행률에 잡히지 않게 한다(resume / skip / abort 어느 경로로 들어와도 동일)."""
+        if self._held and self._held_at and self._run_started:
+            self._run_started += max(0.0, time.monotonic() - self._held_at)
         self._held = False
         self._held_at = 0.0
         self._held_target = None
@@ -569,7 +573,7 @@ class HeaterRecipeRunner(QObject):
             self._soak_deadline = time.monotonic() + self._held_soak_remain
             self._soak_last_report = 0.0
 
-        self._run_started += paused
+        # _run_started 보정은 _clear_hold() 가 한다(여기서 또 밀면 이중 보정)
         self._clear_hold()
         self.status_message.emit("히터", f"스텝 {self._idx + 1} 재개")
         self._emit_step_changed()
