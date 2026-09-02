@@ -1146,7 +1146,19 @@ class MainDialog(QDialog):
             lst = self.ui.heater_step_list
             lst.clear()
             for s in self.heater_recipe.steps():
-                lst.addItem(f"{s.index}. {s.describe()}")
+                # 목록 폭(184px)에 맞춘 짧은 문구. describe() 는 다른 곳에서도
+                # 쓰므로 건드리지 않고 여기서만 줄인다. 원문은 툴팁으로 붙인다.
+                # (승온 시간과 유지 시간이 둘 다 '분'이라 ↗ 로 구분한다)
+                if s.is_cooldown:
+                    txt = f"{s.index}. {s.target_c:g}°C 냉각 · {s.soak_min:g}분"
+                elif s.ramp_min:
+                    txt = (f"{s.index}. {s.target_c:g}°C · {s.ramp_min:g}분↗"
+                           f" · {s.soak_min:g}분")
+                else:
+                    txt = (f"{s.index}. {s.target_c:g}°C · {s.ramp_c_per_min:g}°C/min"
+                           f" · {s.soak_min:g}분")
+                lst.addItem(txt)
+                lst.item(lst.count() - 1).setToolTip(f"{s.index}. {s.describe()}")
             self._highlight_heater_step()
         except Exception:
             pass
@@ -1180,10 +1192,12 @@ class MainDialog(QDialog):
             if running:
                 seg = f"STEP {pg.get('stepNo', 0)}/{pg.get('total', 0)}"
                 if int(pg.get("repeat", 1) or 1) > 1:
-                    seg += f" · 반복 {pg.get('cycle', 1)}/{pg.get('repeat', 1)}"
+                    seg += f" · ×{pg.get('cycle', 1)}/{pg.get('repeat', 1)}"
                 ui.heater_seg_label.setText(seg)
+                # 승온 구간은 추정치라 계산 불가(-1)면 --:-- 로 둔다
+                step_remain = int(pg.get("stepRemainSec", 0) or 0)
                 ui.heater_time_label.setText(
-                    _fmt_hms_sec(int(pg.get("soakRemainSec") or 0)))
+                    "--:--" if step_remain < 0 else _fmt_hms_sec(step_remain))
                 pct = float(pg.get("percent") or 0.0)
                 ui.heater_prog_bar.setValue(int(pct))
                 total_est = int(pg.get("totalEstSec") or 0)

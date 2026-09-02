@@ -567,7 +567,7 @@ class Ui_Dialog(object):
         # --- 레시피 스텝 / 남은 시간 ---
         self.heater_seg_label = QLabel(self.heater_lcd)
         self.heater_seg_label.setObjectName(u"heater_seg_label")
-        self.heater_seg_label.setGeometry(QRect(8, 92, 102, 18))
+        self.heater_seg_label.setGeometry(QRect(8, 92, 120, 18))
         self.heater_seg_label.setAlignment(Qt.AlignmentFlag.AlignLeft
                                            | Qt.AlignmentFlag.AlignVCenter)
         self.heater_seg_label.setStyleSheet(
@@ -577,7 +577,7 @@ class Ui_Dialog(object):
 
         self.heater_time_label = QLabel(self.heater_lcd)
         self.heater_time_label.setObjectName(u"heater_time_label")
-        self.heater_time_label.setGeometry(QRect(112, 92, 80, 18))
+        self.heater_time_label.setGeometry(QRect(132, 92, 60, 18))
         self.heater_time_label.setAlignment(Qt.AlignmentFlag.AlignRight
                                             | Qt.AlignmentFlag.AlignVCenter)
         self.heater_time_label.setStyleSheet(
@@ -915,7 +915,7 @@ class Ui_Dialog(object):
         self.heater_seg_label.setToolTip(QCoreApplication.translate("Dialog",
             u"실행 중인 레시피 스텝과 반복 회차", None))
         self.heater_time_label.setToolTip(QCoreApplication.translate("Dialog",
-            u"현재 스텝의 남은 시간", None))
+            u"현재 스텝의 남은 시간 (승온 구간은 현재 온도와 속도로 계산한 추정치)", None))
         self.heater_out_bar.setToolTip(QCoreApplication.translate("Dialog",
             u"PID 출력 (DAC 절대 최대치 기준 백분율)", None))
         self.heater_prog_bar.setToolTip(QCoreApplication.translate("Dialog",

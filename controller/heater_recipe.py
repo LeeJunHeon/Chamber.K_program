@@ -258,6 +258,21 @@ class HeaterRecipeRunner(QObject):
             elif self._soak_deadline > 0:
                 remain = max(0.0, self._soak_deadline - _t.monotonic())
 
+        # 현재 스텝의 남은 시간. SOAKING 은 위 remain 과 같고, RAMPING 은
+        # 현재 온도와 적용 속도로 계산한 추정치다. 계산할 수 없으면 -1
+        # (호출부가 '계산 불가'로 구분해 --:-- 를 띄운다).
+        step_remain = 0.0
+        if self._state == SOAKING:
+            step_remain = remain
+        elif self._state == RAMPING:
+            step_remain = -1.0
+            s_cur = self._current_step()
+            pv_cur = self._plc_pv()
+            if s_cur is not None and pv_cur is not None:
+                rate = float(getattr(s_cur, '_resolved_rate', 0.0) or 0.0)
+                if rate > 0:
+                    step_remain = abs(s_cur.target_c - pv_cur) / rate * 60.0
+
         elapsed = (_t.monotonic() - self._run_started) if self._run_started else 0.0
         # HOLD 중에는 멈춘 시간만큼 빼서 진행률이 올라가지 않게 한다.
         # resume() 이 _run_started 를 뒤로 미는 것과 이중 보정되지 않는다 —
@@ -277,6 +292,7 @@ class HeaterRecipeRunner(QObject):
             "stepNo": self.current_step_no(),
             "total": self.total_steps(),
             "soakRemainSec": int(remain),
+            "stepRemainSec": int(step_remain),
             "steps": steps,
             # --- 진행 표시용 추가 키 ---
             "cycle": self.cycle_no(),
