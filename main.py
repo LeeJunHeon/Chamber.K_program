@@ -108,6 +108,9 @@ class MainDialog(QDialog):
         self.erp = ErpReporter(_erp_url, _erp_token, equipment="CHK")
         self.erp.start()
         self._erp_run_ended: bool = True   # 아직 시작된 공정 없음
+        # MFC 실측값(유량/압력). MFC 폴링은 공정 중에만 돌므로 공정 밖에서는
+        # 비어 있어야 한다 — 죽은 값을 '실측'으로 보고하면 안 된다.
+        self._erp_meas: dict = {}
         try:
             from lib.logger import set_reporter
             set_reporter(self.erp)
@@ -469,8 +472,11 @@ class MainDialog(QDialog):
                 _stage_all = _w("stage_monitor")
                 stage = _stage_all.splitlines()[-1] if _stage_all else ""
 
-                # MFC 실측값 (update_mfc_*_display 가 채운다)
-                _meas = getattr(self, "_erp_meas", {}) or {}
+                # MFC 실측값 (update_mfc_*_display 가 채운다).
+                #  MFC 폴링은 공정 중에만 돌기 때문에, 공정 밖에서는 마지막에
+                #  읽은 죽은 값이 남는다. 그래서 공정 중일 때만 실측으로 내보낸다.
+                #  (setpoint 는 UI 설정값이라 공정과 무관하게 항상 유효하다)
+                _meas = (getattr(self, "_erp_meas", {}) or {}) if running else {}
                 _flow = _meas.get("flow") or {}
                 _press = _meas.get("pressure")
 
@@ -741,6 +747,7 @@ class MainDialog(QDialog):
         self._chat_fault_detail_sent = False
         self._chat_fail_reason = ""
         self._erp_run_ended = False   # ERP: 이번 공정 run_end 미전송 상태로 초기화
+        self._erp_meas = {}           # 이전 공정의 MFC 실측값을 물고 가지 않는다
 
     def _chat_build_params(self, params: dict, process_name: str) -> dict:
         """
@@ -2544,6 +2551,8 @@ class MainDialog(QDialog):
         self.on_status_message("정보", "프로세스 종료중.")
         # 히터 소유권 해제 — 다음 공정/레시피 판정에 남지 않게 한다
         self._process_heater_claimed = False
+        # MFC 폴링이 멈추므로 실측값도 함께 버린다(죽은 값 보고 방지)
+        self._erp_meas = {}
 
         # ★ 이번 STEP이 정상 종료됐는지 여부를 먼저 보관
         last_step_ok = getattr(self, "_chk_process_ok", False)
@@ -2716,7 +2725,13 @@ class MainDialog(QDialog):
         try:
             if not hasattr(self, "_erp_meas"):
                 self._erp_meas = {}
-            self._erp_meas["pressure"] = pressure
+            #  update_pressure 는 Signal(str) 이라 문자열로 온다. 유량(float)과
+            #  같은 타입으로 맞춰 내보낸다(시그널 정의는 건드리지 않는다).
+            try:
+                self._erp_meas["pressure"] = (
+                    None if pressure is None else float(pressure))
+            except (TypeError, ValueError):
+                self._erp_meas["pressure"] = None
         except Exception:
             pass
 
