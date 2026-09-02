@@ -446,6 +446,11 @@ class MainDialog(QDialog):
                 _stage_all = _w("stage_monitor")
                 stage = _stage_all.splitlines()[-1] if _stage_all else ""
 
+                # MFC 실측값 (update_mfc_*_display 가 채운다)
+                _meas = getattr(self, "_erp_meas", {}) or {}
+                _flow = _meas.get("flow") or {}
+                _press = _meas.get("pressure")
+
                 # 계측 그룹 — value=계측값(PV), setpoint=설정값(SV)
                 groups = [
                     {"label": "전원", "items": [
@@ -462,10 +467,13 @@ class MainDialog(QDialog):
                          "value": f'{_w("offset_edit")} / {_w("param_edit")}'},
                     ]},
                     {"label": "가스", "items": [
-                        {"label": "Ar", "setpoint": _w("Ar_flow_edit"), "unit": "sccm"},
-                        {"label": "O₂", "setpoint": _w("O2_flow_edit"), "unit": "sccm"},
+                        {"label": "Ar", "value": _flow.get("Ar"),
+                         "setpoint": _w("Ar_flow_edit"), "unit": "sccm"},
+                        {"label": "O\u2082", "value": _flow.get("O2"),
+                         "setpoint": _w("O2_flow_edit"), "unit": "sccm"},
                     ]},
                     {"label": "압력 · 시간", "items": [
+                        {"label": "챔버 압력", "value": _press, "unit": "mTorr"},
                         {"label": "Working P", "setpoint": _w("working_pressure_edit"),
                          "unit": "mTorr"},
                         {"label": "공정 시간", "setpoint": _w("process_time_edit"), "unit": "분"},
@@ -493,6 +501,14 @@ class MainDialog(QDialog):
                         "status": _w("heater_status_label"),
                         "output": _w("heater_mv_label"),
                         "on": _checked("heater_onoff_button"),
+                        "curSv": (getattr(self, "_erp_heater", {}) or {}).get("cur_sv"),
+                        "pidErr": (getattr(self, "_erp_heater", {}) or {}).get("pid_err"),
+                        "otLimit": (getattr(self, "_erp_heater", {}) or {}).get("ot_limit"),
+                        "run": bool((getattr(self, "_erp_heater", {}) or {}).get("run")),
+                        "fault": bool((getattr(self, "_erp_heater", {}) or {}).get("fault")),
+                        "tcErr": bool((getattr(self, "_erp_heater", {}) or {}).get("tc_err")),
+                        "wdErr": bool((getattr(self, "_erp_heater", {}) or {}).get("wd_err")),
+                        "ot": bool((getattr(self, "_erp_heater", {}) or {}).get("ot")),
                         "recipeRunning": bool(
                             getattr(getattr(self, "heater_recipe", None), "is_running", lambda: False)()
                         ),
@@ -1304,6 +1320,12 @@ class MainDialog(QDialog):
           est_current : DAC 카운트로 추정한 전류 [A]
           run/itl/fault/ot/tc_err/wd_err : 상태 비트
         """
+        # ERP 리포터용 히터 상세 상태 기록
+        try:
+            self._erp_heater = dict(st or {})
+        except Exception:
+            pass
+
         # --- 현재 온도 (QLineEdit이므로 setText 사용) ---
         if st.get('ok') and st.get('pv') is not None:
             self.ui.heater_pv_edit.setText(f"{st['pv']:.1f}")
@@ -2294,6 +2316,18 @@ class MainDialog(QDialog):
             self._chk_sampling_enabled = False
 
     def update_mfc_flow_display(self, gas, value):
+        # ERP 리포터용 실측값 기록 (표시 로직에는 영향 없음)
+        #  이 함수는 가스 하나씩 불리므로 가스 이름을 키로 누적해 둔다.
+        try:
+            if not hasattr(self, "_erp_meas"):
+                self._erp_meas = {}
+            if not isinstance(self._erp_meas.get("flow"), dict):
+                self._erp_meas["flow"] = {}
+            self._erp_meas["flow"][str(gas)] = (
+                None if value is None else float(value))
+        except Exception:
+            pass
+
         if not getattr(self, "process_running", False):
             return
         
@@ -2317,6 +2351,14 @@ class MainDialog(QDialog):
             self._cnt_o2 += 1
 
     def update_mfc_pressure_display(self, pressure):
+        # ERP 리포터용 실측값 기록
+        try:
+            if not hasattr(self, "_erp_meas"):
+                self._erp_meas = {}
+            self._erp_meas["pressure"] = pressure
+        except Exception:
+            pass
+
         if not getattr(self, "process_running", False):
             return
 
