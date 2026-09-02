@@ -1094,7 +1094,7 @@ class MainDialog(QDialog):
             if pv is not None and cur_sv is not None:
                 dev = float(pv) - float(cur_sv)
                 ui.heater_dev_label.setText(f"\u0394{dev:+.1f}")
-                col = "#2e7d32" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#9aa3ad"
+                col = "#2e7d32" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#6b7280"
                 if getattr(self, "_heater_dev_col", None) != col:
                     self._heater_dev_col = col
                     ui.heater_dev_label.setStyleSheet(
@@ -1117,13 +1117,13 @@ class MainDialog(QDialog):
             if st.get('fault'):
                 badge, bd, bg, fg = "FAULT", "#c62828", "#c62828", "#ffffff"
             elif not st.get('itl'):
-                badge, bd, bg, fg = "ITL", "#ffcc80", "#fff3e0", "#ef6c00"
+                badge, bd, bg, fg = "ITL", "#ffcc80", "#fff3e0", "#bf5000"
             elif held:
-                badge, bd, bg, fg = "HOLD", "#ffe082", "#fff8e1", "#f57f17"
+                badge, bd, bg, fg = "HOLD", "#ffe082", "#fff8e1", "#bf5000"
             elif st.get('run'):
                 badge, bd, bg, fg = "RUN", "#a5d6a7", "#e8f5e9", "#2e7d32"
             else:
-                badge, bd, bg, fg = "STOP", "#c8cdd3", "#eef1f4", "#6b7280"
+                badge, bd, bg, fg = "STOP", "#c8cdd3", "#eef1f4", "#5f6b76"
             if getattr(self, "_heater_badge", None) != badge:
                 self._heater_badge = badge
                 ui.heater_run_badge.setText(badge)

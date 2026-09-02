@@ -506,7 +506,7 @@ class Ui_Dialog(object):
         self.heater_pv_title.setGeometry(QRect(8, 6, 22, 14))
         self.heater_pv_title.setStyleSheet(
             u"QLabel {border: none; background: transparent; "
-            u"color: #9aa3ad; font-size: 8pt;}"
+            u"color: #6b7280; font-size: 8pt;}"
         )
 
         self.heater_pv_edit = QLineEdit(self.heater_lcd)
@@ -525,7 +525,7 @@ class Ui_Dialog(object):
         self.heater_pv_unit.setGeometry(QRect(172, 24, 22, 18))
         self.heater_pv_unit.setStyleSheet(
             u"QLabel {border: none; background: transparent; "
-            u"color: #9aa3ad; font-size: 9pt;}"
+            u"color: #6b7280; font-size: 9pt;}"
         )
 
         # --- SV (PLC 가 지금 쫓는 목표. 램프 중간 목표 포함) ---
@@ -534,7 +534,7 @@ class Ui_Dialog(object):
         self.heater_sv_small.setGeometry(QRect(8, 54, 22, 14))
         self.heater_sv_small.setStyleSheet(
             u"QLabel {border: none; background: transparent; "
-            u"color: #9aa3ad; font-size: 8pt;}"
+            u"color: #6b7280; font-size: 8pt;}"
         )
 
         self.heater_sv_big = QLabel(self.heater_lcd)
@@ -554,7 +554,7 @@ class Ui_Dialog(object):
                                            | Qt.AlignmentFlag.AlignVCenter)
         self.heater_dev_label.setStyleSheet(
             u"QLabel {border: none; background: transparent; "
-            u"color: #9aa3ad; font-size: 9pt;}"
+            u"color: #6b7280; font-size: 9pt;}"
         )
 
         # --- 구분선 ---
@@ -593,7 +593,7 @@ class Ui_Dialog(object):
         self.heater_run_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heater_run_badge.setStyleSheet(
             u"QLabel {border: 1px solid #c8cdd3; background: #eef1f4; "
-            u"color: #6b7280; font-size: 8pt; font-weight: bold; "
+            u"color: #5f6b76; font-size: 8pt; font-weight: bold; "
             u"border-radius: 3px;}"
         )
 
