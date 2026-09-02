@@ -163,6 +163,10 @@ class MainDialog(QDialog):
         self._heater_logger = HeaterCsvLogger()
         self._heater_log_last_ms = 0.0
         self._heater_run_prev = False
+        # 이번 공정이 히터를 '소유'하는가 (use_heater 且 heater_temp>0).
+        #  히터를 제어하는 주체는 한 번에 하나여야 한다 — 공정이 소유하면
+        #  히터 레시피를 못 띄우고, 소유하지 않으면 둘이 함께 돌 수 있다.
+        self._process_heater_claimed = False
         # 레시피 진행 표시는 1초 주기. PLC 폴링(200ms)에 얹지 않는다.
         self._heater_ui_timer = QTimer(self)
         self._heater_ui_timer.setInterval(1000)
@@ -266,7 +270,7 @@ class MainDialog(QDialog):
             elif name == "PROCESS_STOP":
                 self._on_sputter_stop_clicked()
             elif name == "ALL_STOP":
-                self.request_plc_emergency_stop.emit()
+                self._on_all_stop_clicked()
             elif name == "HEATER_SV":
                 if HEATER_ENABLED and self.heater_recipe.is_running():
                     raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
@@ -341,9 +345,11 @@ class MainDialog(QDialog):
                 #  HeaterRecipeRunner.start() 는 공정이 도는지 알지 못하므로
                 #  여기서 막지 않으면 공정과 레시피가 같은 D00012/M00040 을
                 #  서로 덮어쓴다.
-                if (self.process_running or self.csv_mode
-                        or getattr(self, "_csv_delay_active", False)):
-                    raise RuntimeError("스퍼터 공정이 진행 중입니다. 공정 종료 후 실행하세요.")
+                if ((self.process_running or self.csv_mode
+                     or getattr(self, "_csv_delay_active", False))
+                        and self._process_heater_claimed):
+                    raise RuntimeError("현재 공정이 히터를 제어하고 있습니다. "
+                                       "공정 레시피에 히터 목표값이 없을 때만 함께 실행할 수 있습니다.")
                 import csv as _csv, tempfile, os as _os
                 rows = args.get("rows") or []
                 if not rows:
@@ -609,7 +615,7 @@ class MainDialog(QDialog):
         # --- 2. UI 이벤트 -> 컨트롤러 동작 연결 ---
         self.ui.Sputter_Start_Button.clicked.connect(self._handle_start_process)
         #self.ui.Sputter_Stop_Button.clicked.connect(self._handle_sputter_stop)
-        self.ui.ALL_STOP_button.clicked.connect(self.request_plc_emergency_stop.emit)
+        self.ui.ALL_STOP_button.clicked.connect(self._on_all_stop_clicked)
         # ✅ STOP 버튼 전용 핸들러에서 CSV 전체 취소 여부를 먼저 표시
         self.ui.Sputter_Stop_Button.clicked.connect(self._on_sputter_stop_clicked)
 
@@ -979,6 +985,50 @@ class MainDialog(QDialog):
             self.ui.heater_onoff_button.setText("ON")
 
     # ==================== 히터 CSV 로깅 / 레시피 ====================
+    def _csv_list_uses_heater(self) -> bool:
+        """적재된 CSV 공정 목록의 어느 행이든 히터를 쓰면 True.
+
+        한 행만 보면 안 된다 — 3번째 행에서 히터를 켜는 레시피가 있을 수 있다.
+        판정 규칙은 _build_params_from_csv_row 와 같게 맞춘다. 여기서는 예외를
+        던지지 않는다(실제 검증은 그쪽이 한다).
+        """
+        try:
+            rows = getattr(self, "csv_rows", None) or []
+        except Exception:
+            return False
+        for row in rows:
+            try:
+                use = ""
+                temp = ""
+                for k, v in (row or {}).items():
+                    key = str(k or "").strip().lower()
+                    if key == "use_heater":
+                        use = str(v or "").strip().lower()
+                    elif key == "heater_temp":
+                        temp = str(v or "").strip()
+                if use not in ("1", "y", "yes", "true", "t", "on"):
+                    continue
+                if float(temp) > 0:
+                    return True
+            except Exception:
+                continue        # 값이 비었거나 숫자가 아니면 '히터 미사용'으로 본다
+        return False
+
+    @Slot()
+    def _on_all_stop_clicked(self):
+        """ALL STOP — 히터 레시피도 함께 멈춘다.
+
+        레시피는 공정과 무관하게 돌 수 있으므로, 비상정지 뒤에도 레시피가
+        살아 있으면 다음 스텝에서 히터를 다시 켜 버린다.
+        (공정 STOP(정상 종료)에서는 레시피를 건드리지 않는다)
+        """
+        try:
+            if HEATER_ENABLED and self.heater_recipe.is_running():
+                self.heater_recipe.stop("비상 정지")
+        except Exception:
+            pass
+        self.request_plc_emergency_stop.emit()
+
     def _log_heater_header(self, params: dict):
         """공정 로그 머리말에 히터 설정 한 줄. 히터를 안 쓰면 '미사용'."""
         try:
@@ -1064,10 +1114,14 @@ class MainDialog(QDialog):
                 self.heater_recipe.stop("사용자 중단")
             return
 
-        # 스퍼터 공정과 동시 실행은 허용하지 않는다
-        if self.process_running or self.csv_mode or getattr(self, "_csv_delay_active", False):
+        # 공정이 히터를 소유할 때만 막는다. 공정 레시피에 히터값이 없으면
+        # 히터 레시피를 함께 돌릴 수 있다(제어 주체가 하나면 충돌하지 않는다).
+        if ((self.process_running or self.csv_mode
+             or getattr(self, "_csv_delay_active", False))
+                and self._process_heater_claimed):
             QMessageBox.warning(self, "실행 불가",
-                                "스퍼터 공정이 진행 중입니다. 공정 종료 후 실행하세요.")
+                                "현재 공정이 히터를 제어하고 있습니다.\n"
+                                "공정 레시피에 히터 목표값이 없을 때만 히터 레시피를 함께 돌릴 수 있습니다.")
             return
 
         start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
@@ -1298,7 +1352,11 @@ class MainDialog(QDialog):
     def _on_heater_recipe_step(self, cur: int, total: int, desc: str):
         self.ui.heater_recipe_button.setText(f"{cur}/{total}")
         self._sync_heater_recipe_buttons()
-        self.update_stage_monitor(self._heater_recipe_stage_text(cur, total, desc))
+        # 공정 중에는 stage monitor 를 공정이 쓴다. 히터 진행은 히터 패널에
+        # 자체 표시(STEP/남은시간/진행률/스텝목록)가 있으므로 덮어쓰지 않는다.
+        if not (self.process_running or self.csv_mode
+                or getattr(self, "_csv_delay_active", False)):
+            self.update_stage_monitor(self._heater_recipe_stage_text(cur, total, desc))
 
     def _heater_recipe_stage_text(self, cur: int, total: int, desc: str) -> str:
         """진행률과 남은 시간까지 한 줄로 만든다.
@@ -1323,9 +1381,35 @@ class MainDialog(QDialog):
         self._sync_heater_recipe_buttons()
         # 목록은 남겨 두고 강조만 해제한다(무엇을 돌렸는지 확인용)
         self._refresh_heater_progress()
-        self.update_stage_monitor(f"히터 레시피 {'완료' if ok else '중단'}: {reason}")
+
+        in_process = bool(self.process_running or self.csv_mode
+                          or getattr(self, "_csv_delay_active", False))
+        if not in_process:
+            self.update_stage_monitor(f"히터 레시피 {'완료' if ok else '중단'}: {reason}")
+
         if self._is_closing:
             return
+
+        if in_process:
+            # 공정 중에는 모달을 띄우지 않는다 — 작업자가 공정 화면을 못 본다.
+            # 공정은 히터를 소유하지 않으므로 자동 중단하지도 않는다.
+            # (증착 중 중단은 시료를 버리고 셔터·파워 순서를 꼬이게 한다)
+            if ok:
+                log_message_to_monitor("정보", f"[히터] 레시피 완료: {reason}")
+            else:
+                log_message_to_monitor(
+                    "경고",
+                    f"[히터] 레시피가 중단되었습니다: {reason} — 공정은 계속 진행합니다. "
+                    f"히터 상태를 확인하세요.")
+                try:
+                    if self.chat_chk:
+                        self.chat_chk.notify_text(
+                            f"⚠️ CHK 히터 레시피 중단: {reason} (공정은 계속 진행 중)")
+                        self.chat_chk.flush()
+                except Exception:
+                    pass
+            return
+
         if ok:
             QMessageBox.information(self, "히터 레시피", reason)
         else:
@@ -1478,10 +1562,15 @@ class MainDialog(QDialog):
 
     @Slot()
     def _handle_start_process(self):
+        # 히터 레시피가 돌아도, 이 공정이 히터를 건드리지 않으면 시작을 허용한다.
         if HEATER_ENABLED and self.heater_recipe.is_running():
-            QMessageBox.warning(self, "경고",
-                                "히터 레시피가 실행 중입니다. 레시피를 먼저 중단하세요.")
-            return
+            if self.csv_file_path and self._csv_list_uses_heater():
+                QMessageBox.warning(self, "시작 불가",
+                                    "히터 레시피가 실행 중입니다.\n"
+                                    "이 공정 레시피에는 히터 목표값이 들어 있어 함께 실행할 수 없습니다.\n"
+                                    "히터 레시피를 중단하거나, 레시피에서 히터값을 빼세요.")
+                return
+            # 수동 모드는 아래에서 use_heater 를 강제로 끈다
         if self.process_running:
             QMessageBox.warning(self, "경고", "이미 공정이 진행 중입니다.")
             return
@@ -1503,6 +1592,10 @@ class MainDialog(QDialog):
     
         try:
             # --- 가스 선택: Ar / O2 를 각각 체크박스로 처리 ---
+            # 히터 레시피가 히터를 제어 중이면 이번 공정은 히터를 소유하지 않는다
+            _recipe_owns_heater = bool(
+                HEATER_ENABLED and self.heater_recipe.is_running())
+
             use_ar = self.ui.Ar_gas_radio.isChecked()
             use_o2 = self.ui.O2_gas_radio.isChecked()
 
@@ -1582,7 +1675,12 @@ class MainDialog(QDialog):
                 "use_dc_delay": self.ui.dc_delay_checkbox.isChecked(),
 
                 # ▼ 히터: 수동 UI 값 그대로. 0이면 히터 대기 스텝 생략
-                "use_heater": HEATER_ENABLED and bool(self.ui.heater_onoff_button.isChecked()),
+                #    단, 히터 레시피가 제어 중이면 공정은 히터를 건드리지 않는다.
+                #    (레시피가 켜 둔 ON 버튼을 공정 소유로 오해하면 공정 종료 때
+                #     레시피가 돌고 있는 히터를 꺼 버린다)
+                "use_heater": (HEATER_ENABLED
+                               and bool(self.ui.heater_onoff_button.isChecked())
+                               and not _recipe_owns_heater),
                 # QLineEdit → text(). 비어 있으면 0 (= 히터 미사용)
                 "heater_temp": float(self.ui.heater_sv_edit.text().strip() or 0),
 
@@ -1620,6 +1718,16 @@ class MainDialog(QDialog):
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
         set_process_log_file(prefix="CHK")
         log_message_to_monitor("정보", "=== CHK 공정 시작 ===")
+
+        # 이번 공정이 히터를 소유하는가 (히터 레시피와의 충돌 판정 기준)
+        self._process_heater_claimed = bool(
+            params.get("use_heater") and float(params.get("heater_temp") or 0) > 0)
+        if HEATER_ENABLED and self.heater_recipe.is_running() \
+                and not self._process_heater_claimed:
+            log_message_to_monitor(
+                "정보",
+                "[히터] 히터 레시피가 제어 중입니다. 이번 공정은 히터를 제어하지 않습니다.")
+
         # 이번 공정의 히터 설정을 로그 머리말에 남긴다
         self._log_heater_header(params)
 
@@ -2208,6 +2316,8 @@ class MainDialog(QDialog):
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
         self.on_status_message("정보", "프로세스 종료중.")
+        # 히터 소유권 해제 — 다음 공정/레시피 판정에 남지 않게 한다
+        self._process_heater_claimed = False
 
         # ★ 이번 STEP이 정상 종료됐는지 여부를 먼저 보관
         last_step_ok = getattr(self, "_chk_process_ok", False)
@@ -2980,6 +3090,16 @@ class MainDialog(QDialog):
 
         # ★★★ 이 CSV STEP 전용 로그 파일 생성 ★★★
         set_process_log_file(prefix="CHK")
+
+        # 이번 STEP 이 히터를 소유하는가 (히터 레시피와의 충돌 판정 기준)
+        self._process_heater_claimed = bool(
+            params.get("use_heater") and float(params.get("heater_temp") or 0) > 0)
+        if HEATER_ENABLED and self.heater_recipe.is_running() \
+                and not self._process_heater_claimed:
+            log_message_to_monitor(
+                "정보",
+                "[히터] 히터 레시피가 제어 중입니다. 이번 공정은 히터를 제어하지 않습니다.")
+
         # 이번 공정의 히터 설정을 로그 머리말에 남긴다
         self._log_heater_header(params)
 
