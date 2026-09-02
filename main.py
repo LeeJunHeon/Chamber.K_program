@@ -345,11 +345,17 @@ class MainDialog(QDialog):
                 #  HeaterRecipeRunner.start() 는 공정이 도는지 알지 못하므로
                 #  여기서 막지 않으면 공정과 레시피가 같은 D00012/M00040 을
                 #  서로 덮어쓴다.
-                if ((self.process_running or self.csv_mode
-                     or getattr(self, "_csv_delay_active", False))
-                        and self._process_heater_claimed):
+                _proc_active = (self.process_running or self.csv_mode
+                                or getattr(self, "_csv_delay_active", False))
+                # CSV 리스트 공정은 뒤 STEP 에서 히터를 켤 수 있으므로 목록 전체를 본다
+                _list_owns = (bool(getattr(self, "csv_file_path", ""))
+                              and self._csv_list_uses_heater())
+                if _proc_active and (self._process_heater_claimed or _list_owns):
+                    _tail = (" (공정 목록의 뒤 STEP 에 히터 목표값이 있습니다)"
+                             if (_list_owns and not self._process_heater_claimed) else "")
                     raise RuntimeError("현재 공정이 히터를 제어하고 있습니다. "
-                                       "공정 레시피에 히터 목표값이 없을 때만 함께 실행할 수 있습니다.")
+                                       "공정 레시피에 히터 목표값이 없을 때만 함께 실행할 수 있습니다."
+                                       + _tail)
                 import csv as _csv, tempfile, os as _os
                 rows = args.get("rows") or []
                 if not rows:
@@ -985,6 +991,153 @@ class MainDialog(QDialog):
             self.ui.heater_onoff_button.setText("ON")
 
     # ==================== 히터 CSV 로깅 / 레시피 ====================
+    # ---------- 설비 이상으로 인한 공정 중단 ----------
+    def _heater_fault_detail_text(self) -> str:
+        """이상 시점의 히터/레시피 상태를 한 덩어리 텍스트로 만든다.
+
+        구글챗 본문에 붙여 원인 파악에 쓴다. 어떤 접근이 실패해도
+        빈 문자열을 돌려주고 예외를 밖으로 내보내지 않는다.
+        """
+        try:
+            st = {}
+            try:
+                st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
+            except Exception:
+                st = {}
+            if not st:
+                try:
+                    st = dict(self.plc_controller.get_heater_status() or {})
+                except Exception:
+                    st = {}
+
+            def _n(key, fmt="{:.1f}", unit=""):
+                v = st.get(key)
+                if v is None:
+                    return "-"
+                try:
+                    return fmt.format(float(v)) + unit
+                except Exception:
+                    return str(v)
+
+            def _b(key):
+                return int(bool(st.get(key)))
+
+            mv = st.get('mv')
+            try:
+                amp = heater_est_current(mv) if mv is not None else None
+            except Exception:
+                amp = None
+            mv_txt = "-" if mv is None else (
+                f"{int(mv)} ({int(st.get('mv_pct') or 0)}%"
+                + (f", \u2248{amp:.1f}A)" if amp is not None else ")"))
+
+            lines = [
+                f"히터 : PV {_n('pv', unit='\u00b0C')} / SV {_n('cur_sv', unit='\u00b0C')} / MV {mv_txt}",
+                (f"상태 : RUN {_b('run')} \u00b7 ITL {_b('itl')} \u00b7 FAULT {_b('fault')}"
+                 f" \u00b7 OT {_b('ot')} \u00b7 TC {_b('tc_err')} \u00b7 WD {_b('wd_err')}"
+                 f" \u00b7 PIDerr {st.get('pid_err', '-')}"),
+            ]
+
+            # 레시피 줄 — 실행 중일 때만
+            try:
+                pg = self.heater_recipe.progress()
+                if pg.get("running"):
+                    seg = f"STEP {pg.get('stepNo', 0)}/{pg.get('total', 0)}"
+                    if int(pg.get("repeat", 1) or 1) > 1:
+                        seg += f" (\ubc18\ubcf5 {pg.get('cycle', 1)}/{pg.get('repeat', 1)})"
+                    total_est = int(pg.get("totalEstSec") or 0)
+                    remain = max(0, total_est - int(pg.get("elapsedSec") or 0))
+                    lines.append(
+                        f"레시피: {seg} \u00b7 전체 {pg.get('percent', 0):.0f}%"
+                        f" \u00b7 남음 {_fmt_hms_sec(remain)}")
+            except Exception:
+                pass
+
+            lines.append(
+                f"설정 : DAC상한 {_n('mv_limit', '{:.0f}')}"
+                f" \u00b7 램프 {_n('ramp_rate', '{:.0f}', '\u00b0C/min')}"
+                f" \u00b7 홀드백 {_n('holdback', unit='\u00b0C')}"
+                f" \u00b7 OT {_n('ot_limit', unit='\u00b0C')}")
+            return "\n".join(lines)
+        except Exception:
+            return ""
+
+    def _chat_send_fault_detail(self, reason: str, detail: str = ""):
+        """중단 사유와 설비 상태를 구글챗으로 1회 보낸다(기존 카드와 별도)."""
+        try:
+            if not self.chat_chk:
+                return
+            name = self.current_process_name or "CHK"
+            if self.csv_mode and self.csv_rows:
+                name += f"  (CSV {self.csv_index + 1}/{len(self.csv_rows)})"
+            now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            body = (f"\u274c CHK 공정 중단 \u2014 {reason}\n"
+                    f"공정 : {name}\n"
+                    f"시각 : {now}")
+            if detail:
+                body += "\n" + detail
+            self.chat_chk.notify_text(body)
+            self.chat_chk.flush()
+        except Exception:
+            pass
+
+    def _abort_process_by_fault(self, reason: str, detail: str = ""):
+        """설비 이상으로 공정을 즉시 중단한다(사용자 STOP 과 구분).
+
+        온도가 무너진 시점에 그 시료는 이미 버린 것이라, 계속 돌리면
+        타겟과 시간만 더 쓴다. 즉시 종료가 맞다.
+        _chat_user_stopped 는 건드리지 않는다 — 그 플래그는 사용자 STOP
+        전용이고, 설비 이상은 '실패'로 기록되어야 한다.
+        """
+        try:
+            if not (self.process_running or self.csv_mode
+                    or getattr(self, "_csv_delay_active", False)):
+                return
+        except Exception:
+            return
+
+        try:
+            self._chk_process_ok = False
+        except Exception:
+            pass
+        try:
+            log_message_to_monitor("경고", f"[공정 중단] {reason}")
+            if detail:
+                for _l in str(detail).splitlines():
+                    log_message_to_monitor("경고", f"  {_l}")
+        except Exception:
+            pass
+        try:
+            self._chat_add_error(reason)
+            self._chat_notify_failed_now(reason, send_text=False)
+        except Exception:
+            pass
+        try:
+            self._chat_send_fault_detail(reason, detail)
+        except Exception:
+            pass
+
+        # CSV 리스트면 뒤 STEP 을 모두 취소한다
+        try:
+            if self.csv_mode:
+                self.csv_cancelled = True
+                log_message_to_monitor("정보", "설비 이상 → CSV 리스트 전체 취소 플래그 설정")
+            if getattr(self, "_csv_delay_active", False):
+                log_message_to_monitor("정보", "CSV Delay 중 설비 이상 → 딜레이 중단 및 리스트 취소")
+                self._cancel_csv_list_now("CSV 공정 중단됨(설비 이상)")
+                return
+            if self.csv_mode and (not self.process_running):
+                self._cancel_csv_list_now("CSV 공정 중단됨(설비 이상)")
+                return
+        except Exception:
+            pass
+
+        try:
+            if self.process_controller and self.process_running:
+                self.request_process_stop.emit()
+        except Exception:
+            pass
+
     def _csv_list_uses_heater(self) -> bool:
         """적재된 CSV 공정 목록의 어느 행이든 히터를 쓰면 True.
 
@@ -1116,12 +1269,18 @@ class MainDialog(QDialog):
 
         # 공정이 히터를 소유할 때만 막는다. 공정 레시피에 히터값이 없으면
         # 히터 레시피를 함께 돌릴 수 있다(제어 주체가 하나면 충돌하지 않는다).
-        if ((self.process_running or self.csv_mode
-             or getattr(self, "_csv_delay_active", False))
-                and self._process_heater_claimed):
+        _proc_active = (self.process_running or self.csv_mode
+                        or getattr(self, "_csv_delay_active", False))
+        # CSV 리스트 공정은 뒤 STEP 에서 히터를 켤 수 있으므로 목록 전체를 본다
+        _list_owns = (bool(getattr(self, "csv_file_path", ""))
+                      and self._csv_list_uses_heater())
+        if _proc_active and (self._process_heater_claimed or _list_owns):
+            _tail = ("\n(공정 목록의 뒤 STEP 에 히터 목표값이 있습니다)"
+                     if (_list_owns and not self._process_heater_claimed) else "")
             QMessageBox.warning(self, "실행 불가",
                                 "현재 공정이 히터를 제어하고 있습니다.\n"
-                                "공정 레시피에 히터 목표값이 없을 때만 히터 레시피를 함께 돌릴 수 있습니다.")
+                                "공정 레시피에 히터 목표값이 없을 때만 히터 레시피를 함께 돌릴 수 있습니다."
+                                + _tail)
             return
 
         start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
@@ -1397,17 +1556,11 @@ class MainDialog(QDialog):
             if ok:
                 log_message_to_monitor("정보", f"[히터] 레시피 완료: {reason}")
             else:
+                # 히터가 무너진 시점에 시료는 이미 버린 것이다. 공정을 즉시 끝낸다.
                 log_message_to_monitor(
-                    "경고",
-                    f"[히터] 레시피가 중단되었습니다: {reason} — 공정은 계속 진행합니다. "
-                    f"히터 상태를 확인하세요.")
-                try:
-                    if self.chat_chk:
-                        self.chat_chk.notify_text(
-                            f"⚠️ CHK 히터 레시피 중단: {reason} (공정은 계속 진행 중)")
-                        self.chat_chk.flush()
-                except Exception:
-                    pass
+                    "경고", f"[히터] 레시피가 중단되었습니다: {reason} → 공정을 중단합니다.")
+                self._abort_process_by_fault(
+                    f"히터 레시피 중단 — {reason}", self._heater_fault_detail_text())
             return
 
         if ok:
@@ -1537,6 +1690,16 @@ class MainDialog(QDialog):
                 pass
         if self.process_running:
             self._chat_add_error(f"HEATER: {reason}")
+
+        # 히터를 실제로 쓰고 있을 때만 공정을 중단한다.
+        #  아무도 안 쓰는 상태에서 예전 래치가 올라온 경우까지 공정을 죽이면 안 된다.
+        try:
+            if self.process_running and (self._process_heater_claimed
+                                         or self.heater_recipe.is_running()):
+                self._abort_process_by_fault(f"히터 이상 — {reason}",
+                                             self._heater_fault_detail_text())
+        except Exception:
+            pass
     # ==================== 히터 ====================
 
     def _check_main_valve_open(self) -> bool:
