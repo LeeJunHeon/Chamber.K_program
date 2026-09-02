@@ -1094,7 +1094,7 @@ class MainDialog(QDialog):
             if pv is not None and cur_sv is not None:
                 dev = float(pv) - float(cur_sv)
                 ui.heater_dev_label.setText(f"\u0394{dev:+.1f}")
-                col = "#7CFC00" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#8a8a8a"
+                col = "#2e7d32" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#9aa3ad"
                 if getattr(self, "_heater_dev_col", None) != col:
                     self._heater_dev_col = col
                     ui.heater_dev_label.setStyleSheet(
@@ -1113,30 +1113,31 @@ class MainDialog(QDialog):
                 held = bool(self.heater_recipe.progress().get('held'))
             except Exception:
                 held = False
+            # 색은 상태에만 쓴다. FAULT 만 진한 단색이라 이상이 나면 눈에 띈다.
             if st.get('fault'):
-                badge, bg, fg = "FAULT", "#c62828", "white"
+                badge, bd, bg, fg = "FAULT", "#c62828", "#c62828", "#ffffff"
             elif not st.get('itl'):
-                badge, bg, fg = "ITL", "#ef6c00", "white"
+                badge, bd, bg, fg = "ITL", "#ffcc80", "#fff3e0", "#ef6c00"
             elif held:
-                badge, bg, fg = "HOLD", "#fbc02d", "#333333"
+                badge, bd, bg, fg = "HOLD", "#ffe082", "#fff8e1", "#f57f17"
             elif st.get('run'):
-                badge, bg, fg = "RUN", "#2e7d32", "white"
+                badge, bd, bg, fg = "RUN", "#a5d6a7", "#e8f5e9", "#2e7d32"
             else:
-                badge, bg, fg = "STOP", "#444444", "#cccccc"
+                badge, bd, bg, fg = "STOP", "#c8cdd3", "#eef1f4", "#6b7280"
             if getattr(self, "_heater_badge", None) != badge:
                 self._heater_badge = badge
                 ui.heater_run_badge.setText(badge)
                 ui.heater_run_badge.setStyleSheet(
-                    f"QLabel {{border: none; background: {bg}; color: {fg}; "
+                    f"QLabel {{border: 1px solid {bd}; background: {bg}; color: {fg}; "
                     f"font-size: 8pt; font-weight: bold; border-radius: 3px;}}")
 
-            # LCD 테두리 — 이상이면 붉게
-            border = "#c62828" if st.get('fault') else "#333333"
+            # LCD 테두리 — 이상이면 붉고 두껍게
+            border = "2px solid #c62828" if st.get('fault') else "1px solid #dfe3e8"
             if getattr(self, "_heater_lcd_border", None) != border:
                 self._heater_lcd_border = border
                 ui.heater_lcd.setStyleSheet(
-                    f"QFrame#heater_lcd {{background: #0d0d0d; "
-                    f"border: 2px solid {border}; border-radius: 6px;}}")
+                    f"QFrame#heater_lcd {{background: #f7f8fa; "
+                    f"border: {border}; border-radius: 6px;}}")
         except Exception:
             pass
 
