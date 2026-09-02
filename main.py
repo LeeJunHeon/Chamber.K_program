@@ -337,11 +337,19 @@ class MainDialog(QDialog):
                 self._start_csv_process_from_path(path)
 
             elif name == "RECIPE_HEATER_RUN":
+                # UI 경로(_on_heater_recipe_clicked)와 같은 가드.
+                #  HeaterRecipeRunner.start() 는 공정이 도는지 알지 못하므로
+                #  여기서 막지 않으면 공정과 레시피가 같은 D00012/M00040 을
+                #  서로 덮어쓴다.
+                if (self.process_running or self.csv_mode
+                        or getattr(self, "_csv_delay_active", False)):
+                    raise RuntimeError("스퍼터 공정이 진행 중입니다. 공정 종료 후 실행하세요.")
                 import csv as _csv, tempfile, os as _os
                 rows = args.get("rows") or []
                 if not rows:
                     raise RuntimeError("레시피 행이 없습니다")
-                cols = ["step", "target_c", "ramp_c_per_min", "soak_min"]
+                cols = ["step", "target_c", "ramp_c_per_min", "ramp_min",
+                        "soak_min", "repeat"]
                 d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
                 _os.makedirs(d, exist_ok=True)
                 path = _os.path.join(d, "heater_web.csv")
