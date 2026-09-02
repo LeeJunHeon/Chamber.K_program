@@ -51,16 +51,38 @@ def set_process_log_file(prefix: str = "CHK") -> Path:
     return _current_log_file
 
 def log_message_to_monitor(level, message):
-    """UI 모니터에 로그"""
-    now = datetime.datetime.now().strftime("%H:%M:%S")
-    msg = f"[{now}][{level}] {message}"
-    _monitor_widget.append(msg)
-    # (스크롤 자동 하단으로)
-    if hasattr(_monitor_widget, "verticalScrollBar"):
-        sb = _monitor_widget.verticalScrollBar()
-        sb.setValue(sb.maximum())
+    """UI 모니터에 로그.
+
+    이 함수는 어떤 경우에도 예외를 밖으로 내보내지 않는다.
+    안전 동작(공정 중단 등) 직전에 불리는 자리가 많아, 로그를 못 남겼다는
+    이유로 뒤따르는 처리가 통째로 건너뛰어지면 안 되기 때문이다.
+    화면·파일·ERP 세 경로를 각각 감싸서 하나가 죽어도 나머지는 남는다.
+    """
+    try:
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        msg = f"[{now}][{level}] {message}"
+    except Exception:
+        return
+
+    # --- 화면 위젯 ---
+    #  위젯이 아직 등록되지 않았거나(초기화 시점), 종료 중에 C++ 객체가 먼저
+    #  파괴된 경우(RuntimeError: wrapped C/C++ object has been deleted) 모두 삼킨다.
+    if _monitor_widget is not None:
+        try:
+            _monitor_widget.append(msg)
+            # (스크롤 자동 하단으로)
+            if hasattr(_monitor_widget, "verticalScrollBar"):
+                sb = _monitor_widget.verticalScrollBar()
+                sb.setValue(sb.maximum())
+        except Exception:
+            pass
+
     # --- 파일에도 로그 추가 ---
-    log_message_to_file(level, message)
+    #  재시작 후에도 남는 유일한 기록이라 화면 출력 실패와 무관하게 시도한다.
+    try:
+        log_message_to_file(level, message)
+    except Exception:
+        pass
 
     # --- ERP 리포터로 전달 (실패해도 무시) ---
     if _reporter is not None:
@@ -78,8 +100,11 @@ def log_message_to_file(level, message):
       - NAS_LOG_DIR/log.txt 시도 후,
       - 실패 시 현재 폴더의 log.txt에 기록.
     """
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    line = f"[{now}] [{level}] {message}\n"
+    try:
+        now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line = f"[{now}] [{level}] {message}\n"
+    except Exception:
+        return          # 메시지를 문자열로 못 만들면 남길 것도 없다
 
     global _current_log_file
 

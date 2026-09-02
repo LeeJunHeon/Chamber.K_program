@@ -800,7 +800,7 @@ class MainDialog(QDialog):
         ✅ CH1&2 방식에 맞추기 위해 기본값(send_text=False)은 '저장만' 한다.
         - 카드(종료) 이후에 실패 원인을 일반채팅으로 1회 추가 전송하는 건 _chat_notify_finished에서 수행
         - 다만 필요하면 send_text=True로 즉시 전송도 가능
-        """
+        """ 
         if not self.chat_chk:
             return
 
@@ -1536,31 +1536,49 @@ class MainDialog(QDialog):
 
     @Slot(bool, str)
     def _on_heater_recipe_finished(self, ok: bool, reason: str):
-        self.ui.heater_recipe_button.setText("레시피")
-        self._sync_heater_recipe_buttons()
-        # 목록은 남겨 두고 강조만 해제한다(무엇을 돌렸는지 확인용)
-        self._refresh_heater_progress()
+        # ★ 중단 여부를 맨 앞에서 확정한다. 아래 표시 갱신이 무엇을 하든
+        #   공정 중단은 반드시 실행되어야 한다.
+        try:
+            in_process = bool(self.process_running or self.csv_mode
+                              or getattr(self, "_csv_delay_active", False))
+        except Exception:
+            in_process = False
+        _need_abort = bool(in_process and not ok)
 
-        in_process = bool(self.process_running or self.csv_mode
-                          or getattr(self, "_csv_delay_active", False))
-        if not in_process:
-            self.update_stage_monitor(f"히터 레시피 {'완료' if ok else '중단'}: {reason}")
-
-        if self._is_closing:
-            return
+        try:
+            self.ui.heater_recipe_button.setText("레시피")
+            self._sync_heater_recipe_buttons()
+            # 목록은 남겨 두고 강조만 해제한다(무엇을 돌렸는지 확인용)
+            self._refresh_heater_progress()
+            if not in_process:
+                self.update_stage_monitor(
+                    f"히터 레시피 {'완료' if ok else '중단'}: {reason}")
+        except Exception:
+            pass
 
         if in_process:
             # 공정 중에는 모달을 띄우지 않는다 — 작업자가 공정 화면을 못 본다.
-            # 공정은 히터를 소유하지 않으므로 자동 중단하지도 않는다.
-            # (증착 중 중단은 시료를 버리고 셔터·파워 순서를 꼬이게 한다)
             if ok:
-                log_message_to_monitor("정보", f"[히터] 레시피 완료: {reason}")
-            else:
-                # 히터가 무너진 시점에 시료는 이미 버린 것이다. 공정을 즉시 끝낸다.
+                try:
+                    log_message_to_monitor("정보", f"[히터] 레시피 완료: {reason}")
+                except Exception:
+                    pass
+                return
+            # 히터가 무너진 시점에 시료는 이미 버린 것이다. 공정을 즉시 끝낸다.
+            try:
                 log_message_to_monitor(
                     "경고", f"[히터] 레시피가 중단되었습니다: {reason} → 공정을 중단합니다.")
-                self._abort_process_by_fault(
-                    f"히터 레시피 중단 — {reason}", self._heater_fault_detail_text())
+            except Exception:
+                pass
+            if _need_abort:
+                try:
+                    self._abort_process_by_fault(
+                        f"히터 레시피 중단 — {reason}", self._heater_fault_detail_text())
+                except Exception:
+                    pass
+            return
+
+        if self._is_closing:
             return
 
         if ok:
@@ -1665,6 +1683,18 @@ class MainDialog(QDialog):
         #    프로그램을 재시작해도 기록이 남는다. (화면 모니터는 재시작 시 지워짐)
         #  - 나중에 재발했을 때 과온/센서/워치독 중 무엇이었는지 구분하려면
         #    비트 상태가 반드시 필요하다.
+        #
+        # ★ 중단 여부는 맨 앞에서 확정한다. 로그·챗 같은 부수 작업이 무엇을 하든
+        #   공정 중단은 반드시 실행되어야 하기 때문이다(로그를 못 남겼다는 이유로
+        #   히터 이상이 난 공정이 그대로 도는 일이 없어야 한다).
+        _need_abort = False
+        try:
+            _need_abort = bool(self.process_running
+                               and (self._process_heater_claimed
+                                    or self.heater_recipe.is_running()))
+        except Exception:
+            _need_abort = False
+
         st = {}
         try:
             st = self.plc_controller.get_heater_status()   # 마지막 폴링 캐시(추가 통신 없음)
@@ -1681,25 +1711,31 @@ class MainDialog(QDialog):
             f"MV={st.get('mv')} "
             f"PIDerr={st.get('pid_err')}"
         )
-        log_message_to_monitor("경고", detail)
+        try:
+            log_message_to_monitor("경고", detail)
+        except Exception:
+            pass
 
         if self.chat_chk:
             try:
                 self.chat_chk.notify_error_with_src("HEATER", reason)
             except Exception:
                 pass
-        if self.process_running:
-            self._chat_add_error(f"HEATER: {reason}")
+        try:
+            if self.process_running:
+                self._chat_add_error(f"HEATER: {reason}")
+        except Exception:
+            pass
 
         # 히터를 실제로 쓰고 있을 때만 공정을 중단한다.
         #  아무도 안 쓰는 상태에서 예전 래치가 올라온 경우까지 공정을 죽이면 안 된다.
-        try:
-            if self.process_running and (self._process_heater_claimed
-                                         or self.heater_recipe.is_running()):
+        #  (판정은 이 함수 맨 앞에서 이미 끝났다)
+        if _need_abort:
+            try:
                 self._abort_process_by_fault(f"히터 이상 — {reason}",
                                              self._heater_fault_detail_text())
-        except Exception:
-            pass
+            except Exception:
+                pass
     # ==================== 히터 ====================
 
     def _check_main_valve_open(self) -> bool:
