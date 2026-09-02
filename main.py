@@ -34,7 +34,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
                         HEATER_MV_LIMIT, HEATER_LOG_ENABLED,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
-                        HEATER_RAMP_RATE_C_PER_MIN,
+                        HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
                         heater_est_current)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
@@ -163,6 +163,11 @@ class MainDialog(QDialog):
         self._heater_logger = HeaterCsvLogger()
         self._heater_log_last_ms = 0.0
         self._heater_run_prev = False
+        # 레시피 진행 표시는 1초 주기. PLC 폴링(200ms)에 얹지 않는다.
+        self._heater_ui_timer = QTimer(self)
+        self._heater_ui_timer.setInterval(1000)
+        self._heater_ui_timer.timeout.connect(self._refresh_heater_progress)
+        self._heater_ui_timer.start()
 
         self._connect_signals()
 
@@ -1062,8 +1067,140 @@ class MainDialog(QDialog):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
+        self._rebuild_heater_step_list()
         if self.heater_recipe.start():
             self.ui.heater_recipe_button.setText("중단")
+            self._refresh_heater_progress()
+
+    # ---------- PZ400 스타일 표시부 ----------
+    def _update_heater_lcd(self, st: dict):
+        """LCD 영역(PV/SV/편차/출력/배지/테두리)을 갱신한다.
+
+        PLC 폴링(200ms)마다 불린다. 스타일시트 재적용은 비싸므로
+        바뀔 때만 넣는다.
+        """
+        ui = self.ui
+        try:
+            pv = st.get('pv')
+            cur_sv = st.get('cur_sv')
+
+            # SV(램프 중간 목표) — sv 가 아니라 cur_sv 를 봐야 PZ400 과 같다
+            if cur_sv is None:
+                ui.heater_sv_big.setText("---")
+            else:
+                ui.heater_sv_big.setText(f"{float(cur_sv):.1f}")
+
+            # 편차
+            if pv is not None and cur_sv is not None:
+                dev = float(pv) - float(cur_sv)
+                ui.heater_dev_label.setText(f"\u0394{dev:+.1f}")
+                col = "#7CFC00" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#8a8a8a"
+                if getattr(self, "_heater_dev_col", None) != col:
+                    self._heater_dev_col = col
+                    ui.heater_dev_label.setStyleSheet(
+                        f"QLabel {{border: none; background: transparent; "
+                        f"color: {col}; font-size: 9pt;}}")
+            else:
+                ui.heater_dev_label.setText("")
+
+            # 출력 바 — 운전 중이 아니면 0
+            ui.heater_out_bar.setValue(
+                int(st.get('mv_pct') or 0) if st.get('run') else 0)
+
+            # 운전 배지 (우선순위: FAULT > ITL > HOLD > RUN > STOP)
+            held = False
+            try:
+                held = bool(self.heater_recipe.progress().get('held'))
+            except Exception:
+                held = False
+            if st.get('fault'):
+                badge, bg, fg = "FAULT", "#c62828", "white"
+            elif not st.get('itl'):
+                badge, bg, fg = "ITL", "#ef6c00", "white"
+            elif held:
+                badge, bg, fg = "HOLD", "#fbc02d", "#333333"
+            elif st.get('run'):
+                badge, bg, fg = "RUN", "#2e7d32", "white"
+            else:
+                badge, bg, fg = "STOP", "#444444", "#cccccc"
+            if getattr(self, "_heater_badge", None) != badge:
+                self._heater_badge = badge
+                ui.heater_run_badge.setText(badge)
+                ui.heater_run_badge.setStyleSheet(
+                    f"QLabel {{border: none; background: {bg}; color: {fg}; "
+                    f"font-size: 8pt; font-weight: bold; border-radius: 3px;}}")
+
+            # LCD 테두리 — 이상이면 붉게
+            border = "#c62828" if st.get('fault') else "#333333"
+            if getattr(self, "_heater_lcd_border", None) != border:
+                self._heater_lcd_border = border
+                ui.heater_lcd.setStyleSheet(
+                    f"QFrame#heater_lcd {{background: #0d0d0d; "
+                    f"border: 2px solid {border}; border-radius: 6px;}}")
+        except Exception:
+            pass
+
+    def _rebuild_heater_step_list(self):
+        """레시피 스텝 목록을 다시 채운다. 레시피가 없으면 비운다."""
+        try:
+            lst = self.ui.heater_step_list
+            lst.clear()
+            for s in self.heater_recipe.steps():
+                lst.addItem(f"{s.index}. {s.describe()}")
+            self._highlight_heater_step()
+        except Exception:
+            pass
+
+    def _highlight_heater_step(self):
+        """현재 실행 중인 스텝만 강조한다. 실행 중이 아니면 전부 해제."""
+        try:
+            from PyQt6.QtGui import QBrush, QColor, QFont
+            lst = self.ui.heater_step_list
+            cur = self.heater_recipe.current_step_no() if self.heater_recipe.is_running() else 0
+            for i in range(lst.count()):
+                it = lst.item(i)
+                on = (i + 1 == cur)
+                f = it.font()
+                f.setBold(on)
+                it.setFont(f)
+                it.setBackground(QBrush(QColor("#e3f0fb")) if on
+                                 else QBrush(QColor("#fafafa")))
+            if cur:
+                lst.scrollToItem(lst.item(cur - 1))
+        except Exception:
+            pass
+
+    def _refresh_heater_progress(self):
+        """레시피 진행 표시(1초 주기). PLC 폴링에 얹지 않는다."""
+        ui = self.ui
+        try:
+            pg = self.heater_recipe.progress()
+            running = bool(pg.get("running"))
+
+            if running:
+                seg = f"STEP {pg.get('stepNo', 0)}/{pg.get('total', 0)}"
+                if int(pg.get("repeat", 1) or 1) > 1:
+                    seg += f" · 반복 {pg.get('cycle', 1)}/{pg.get('repeat', 1)}"
+                ui.heater_seg_label.setText(seg)
+                ui.heater_time_label.setText(
+                    _fmt_hms_sec(int(pg.get("soakRemainSec") or 0)))
+                pct = float(pg.get("percent") or 0.0)
+                ui.heater_prog_bar.setValue(int(pct))
+                total_est = int(pg.get("totalEstSec") or 0)
+                remain = max(0, total_est - int(pg.get("elapsedSec") or 0))
+                ui.heater_prog_label.setText(
+                    f"전체 {pct:.0f}% · 남음 {_fmt_hms_sec(remain)}"
+                    if total_est > 0 else "")
+            else:
+                ui.heater_seg_label.setText("레시피 없음")
+                ui.heater_time_label.setText("--:--:--")
+                ui.heater_prog_bar.setValue(0)
+                ui.heater_prog_label.setText("")
+
+            self._highlight_heater_step()
+            self._sync_heater_recipe_buttons()
+        except Exception:
+            pass
 
     def _sync_heater_recipe_buttons(self):
         """레시피가 돌 때만 [일시정지]/[건너뛰기]를 쓸 수 있게 한다."""
@@ -1128,6 +1265,8 @@ class MainDialog(QDialog):
     def _on_heater_recipe_finished(self, ok: bool, reason: str):
         self.ui.heater_recipe_button.setText("레시피")
         self._sync_heater_recipe_buttons()
+        # 목록은 남겨 두고 강조만 해제한다(무엇을 돌렸는지 확인용)
+        self._refresh_heater_progress()
         self.update_stage_monitor(f"히터 레시피 {'완료' if ok else '중단'}: {reason}")
         if self._is_closing:
             return
@@ -1196,6 +1335,9 @@ class MainDialog(QDialog):
         # --- CSV 로깅 (운전 중에만, HEATER_LOG_PERIOD_MS 주기) ---
         #     폴링은 200ms이므로 반드시 시각 비교로 솎아낸다.
         self._heater_log_tick(st)
+
+        # --- PZ400 스타일 LCD 표시 ---
+        self._update_heater_lcd(st)
 
         # --- 이상 발생 시 ON 버튼 자동 해제 ---
         #     PLC 래더는 HEATER_RUN을 절대 건드리지 않으므로,
@@ -2314,6 +2456,10 @@ class MainDialog(QDialog):
             try:
                 # 레시피가 돌고 있으면 먼저 멈춘다(내부에서 히터 OFF까지 처리한다)
                 self.heater_recipe.stop("프로그램 종료")
+            except Exception:
+                pass
+            try:
+                self._heater_ui_timer.stop()
             except Exception:
                 pass
             try:
