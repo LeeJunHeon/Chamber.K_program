@@ -258,14 +258,28 @@ class HeaterRecipeRunner(QObject):
             ramp = abs(s.target_c - from_temp) / rate if rate > 0 else 0.0
         return ramp + float(HEATER_SOAK_TIME_SEC) / 60.0 + float(s.soak_min)
 
-    def _estimate_total_sec(self, start_pv: float) -> float:
-        """전체 예상 시간(초) = Σ(스텝 시간) × repeat."""
+    def _cycle_minutes(self, from_temp: float) -> float:
+        """한 사이클(모든 스텝)의 예상 시간(분). 첫 스텝의 출발 온도를 받는다."""
         total = 0.0
-        prev = float(start_pv)
+        prev = float(from_temp)
         for s in self._steps:
             total += self._step_minutes(s, prev)
             prev = s.target_c
-        return total * 60.0 * max(1, self._repeat)
+        return total
+
+    def _estimate_total_sec(self, start_pv: float) -> float:
+        """전체 예상 시간(초).
+
+        2회차 이후의 첫 스텝은 시작 PV 가 아니라 직전 회차 마지막 스텝의 목표에서
+        출발한다. 그걸 무시하면 반복 레시피의 예상 시간이 크게 부풀려진다
+        (예: 60°C 2스텝 × 2회에서 2회차 스텝1 은 승온이 사실상 0인데
+         시작 PV 43°C 에서 올리는 시간으로 잡혔다).
+        """
+        if not self._steps:
+            return 0.0
+        first = self._cycle_minutes(float(start_pv))
+        rest = self._cycle_minutes(float(self._steps[-1].target_c))
+        return (first + rest * max(0, self._repeat - 1)) * 60.0
 
     def _phase(self) -> str:
         """지금이 승온인지 도달 확인인지 유지인지.
@@ -360,24 +374,23 @@ class HeaterRecipeRunner(QObject):
 
             # (b) 같은 사이클의 이후 스텝 (직전 스텝 목표에서 출발한다고 본다)
             prev = float(cur.target_c) if cur is not None else 0.0
-            one_cycle = 0.0
             for i, s_ in enumerate(self._steps):
-                m = self._step_minutes(s_, prev if i > 0 else self._start_pv)
-                one_cycle += m
                 if i > self._idx:
-                    total += m * 60.0
+                    total += self._step_minutes(s_, prev) * 60.0
                 prev = s_.target_c
 
-            # (c) 남은 반복 회차
+            # (c) 남은 반복 회차 — 다음 회차의 첫 스텝은 이번 회차 마지막 스텝의
+            #     목표에서 출발한다(시작 PV 가 아니다)
             left_cycles = max(0, self._repeat - (self._cycle + 1))
-            total += one_cycle * 60.0 * left_cycles
+            if left_cycles and self._steps:
+                total += (self._cycle_minutes(float(self._steps[-1].target_c))
+                          * 60.0 * left_cycles)
             return max(0.0, total)
         except Exception:
             return -1.0
 
     def progress(self) -> dict:
         """외부(ERP 리포터)에 넘길 진행 상태 요약."""
-        import time as _t
         steps = [
             {
                 "no": i + 1,
@@ -394,20 +407,20 @@ class HeaterRecipeRunner(QObject):
             if self._held:
                 remain = max(0.0, self._held_soak_remain)
             elif self._soak_deadline > 0:
-                remain = max(0.0, self._soak_deadline - _t.monotonic())
+                remain = max(0.0, self._soak_deadline - time.monotonic())
 
         # 현재 단계(승온 / 도달확인 / 유지)와 그 단계의 남은 시간.
         #  계산할 수 없으면 -1 (호출부가 '계산 불가'로 구분해 --:-- 를 띄운다).
         phase = self._phase()
         step_remain = self._step_remain_sec(phase, remain)
 
-        elapsed = (_t.monotonic() - self._run_started) if self._run_started else 0.0
+        elapsed = (time.monotonic() - self._run_started) if self._run_started else 0.0
         # HOLD 중에는 멈춘 시간만큼 빼서 진행률이 올라가지 않게 한다.
         # _clear_hold() 가 _run_started 를 뒤로 미는 것과 이중 보정되지 않는다 —
         # 멈춘 동안에는 여기서 실시간으로 빼고, 재개 후에는 기준 시각이
         # 이미 밀려 있어 이 보정이 걸리지 않기 때문이다.
         if self._held and self._held_at:
-            elapsed -= max(0.0, _t.monotonic() - self._held_at)
+            elapsed -= max(0.0, time.monotonic() - self._held_at)
         elapsed = max(0.0, elapsed)
         total_est = float(self._total_est_sec)
 

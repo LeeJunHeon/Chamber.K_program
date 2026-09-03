@@ -931,13 +931,14 @@ class Ui_Dialog(object):
         self.heater_dev_label.setToolTip(QCoreApplication.translate("Dialog",
             u"목표 대비 현재 온도의 편차", None))
         self.heater_seg_label.setToolTip(QCoreApplication.translate("Dialog",
-            u"실행 중인 레시피 스텝과 반복 회차", None))
+            u"실행 중인 레시피 스텝과 반복 회차, 그리고 현재 단계.\n"
+            u"승온 = 목표까지 올리는 중 / 도달 = 도달 확인 대기 / 유지 = 소크", None))
         self.heater_time_label.setToolTip(QCoreApplication.translate("Dialog",
             u"현재 스텝의 남은 시간 (승온 구간은 현재 온도와 속도로 계산한 추정치)", None))
         self.heater_out_bar.setToolTip(QCoreApplication.translate("Dialog",
-            u"PID 출력. DAC 원본값과 추정 전류를 함께 보여준다.\n"
-            u"비율은 운전 상한(D00018) 대비다 — 600/1200 이면 50%.\n"
-            u"히터가 꺼져 있으면 비율 대신 '정지' 로 표시한다.", None))
+            u"PID 출력. 막대는 운전 상한(D00018) 대비 비율이고,\n"
+            u"DAC 400 이 출력 0점이다(VARITAP 입력 0.8V).\n"
+            u"히터가 꺼져 있으면 '정지 (DAC n)' 으로 표시한다.", None))
         self.heater_prog_bar.setToolTip(QCoreApplication.translate("Dialog",
             u"레시피 전체 진행률", None))
         self.heater_step_list.setToolTip(QCoreApplication.translate("Dialog",

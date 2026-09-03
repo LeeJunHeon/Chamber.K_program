@@ -1252,8 +1252,9 @@ class MainDialog(QDialog):
     def _heater_output_text(self, st: dict | None = None) -> str:
         """DAC 출력 한 줄. 출력 바의 텍스트와 ERP 스냅샷이 같은 문구를 쓴다.
 
-        비율은 운전 상한(D00018) 대비다. 히터가 꺼진 상태(mv <= MV_MIN)에서는
-        mv/mv_limit 가 33% 처럼 보이므로 퍼센트를 아예 띄우지 않는다.
+        퍼센트는 넣지 않는다. DAC 400 이 출력 0점(VARITAP 0.8V)이라
+        mv/mv_limit 로는 401 이 33% 로 보이는데 실제 전류는 0.0A 다.
+        분수(600/1200)와 추정 전류만으로 충분하다. 막대 채움에는 비율을 쓴다.
         """
         try:
             if st is None:
@@ -1263,7 +1264,6 @@ class MainDialog(QDialog):
                 return f"정지 (DAC {mv})"
             lim = int(st.get('mv_limit', HEATER_MV_LIMIT) or HEATER_MV_LIMIT)
             return (f"DAC {mv}/{lim}"
-                    f" · {self._heater_output_pct(st):.0f}%"
                     f" · ≈{float(st.get('est_current', 0.0) or 0.0):.1f}A")
         except Exception:
             return ""
@@ -1572,11 +1572,15 @@ class MainDialog(QDialog):
 
             if running:
                 # 지금이 승온인지 도달확인인지 유지인지 — 화면에 없던 정보다.
-                #  라벨 폭이 120px 뿐이라 'STEP'/구분점을 빼고 'S1/2 ×2/2 도달'
-                #  형태로 줄인다(최악 문구 106px, 실측 확인).
-                seg = f"S{pg.get('stepNo', 0)}/{pg.get('total', 0)}"
-                if int(pg.get("repeat", 1) or 1) > 1:
-                    seg += f" ×{pg.get('cycle', 1)}/{pg.get('repeat', 1)}"
+                #  라벨 폭 120px. 실사용 범위(9스텝 × 9회)에서는 "STEP 9/9 ×9/9 도달"
+                #  이 104px 로 들어간다. 두 자리가 되면 넘치므로 그때만 "S" 로 줄인다.
+                #  (폰트 계산을 매초 하지 않고 이 규칙으로 가른다)
+                _tot = int(pg.get("total", 0) or 0)
+                _rep = int(pg.get("repeat", 1) or 1)
+                _head = "S" if (_tot >= 10 or _rep >= 10) else "STEP "
+                seg = f"{_head}{pg.get('stepNo', 0)}/{_tot}"
+                if _rep > 1:
+                    seg += f" ×{pg.get('cycle', 1)}/{_rep}"
                 _ph = {"ramp": "승온", "settle": "도달", "soak": "유지"}.get(
                     str(pg.get("phase") or ""), "")
                 if _ph:
