@@ -43,6 +43,10 @@ from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from lib.heater_logger import HeaterCsvLogger
 
+# 히터 레시피 단계 표기. 화면/툴팁이 같은 말을 쓰도록 여기 한 곳에서만 정한다.
+HEATER_PHASE_TEXT = {"ramp": "가열", "wait": "대기", "soak": "유지"}
+
+
 def _fmt_hms_sec(sec: float) -> str:
     """초 → M:SS (1시간 넘으면 H:MM:SS). 히터 레시피 진행 표시용."""
     v = max(0, int(sec))
@@ -1529,7 +1533,7 @@ class MainDialog(QDialog):
             for s in self.heater_recipe.steps():
                 # 목록 폭(184px)에 맞춘 짧은 문구. describe() 는 다른 곳에서도
                 # 쓰므로 건드리지 않고 여기서만 줄인다. 원문은 툴팁으로 붙인다.
-                # (승온 시간과 유지 시간이 둘 다 '분'이라 ↗ 로 구분한다)
+                # (가열 시간과 유지 시간이 둘 다 '분'이라 ↗ 로 구분한다)
                 if s.is_cooldown:
                     txt = f"{s.index}. {s.target_c:g}°C 냉각 · {s.soak_min:g}분"
                 elif s.ramp_min:
@@ -1571,8 +1575,8 @@ class MainDialog(QDialog):
             running = bool(pg.get("running"))
 
             if running:
-                # 지금이 승온인지 도달확인인지 유지인지 — 화면에 없던 정보다.
-                #  라벨 폭 120px. 실사용 범위(9스텝 × 9회)에서는 "STEP 9/9 ×9/9 도달"
+                # 지금이 가열인지 대기인지 유지인지 — 화면에 없던 정보다.
+                #  라벨 폭 120px. 실사용 범위(9스텝 × 9회)에서는 "STEP 9/9 ×9/9 가열"
                 #  이 104px 로 들어간다. 두 자리가 되면 넘치므로 그때만 "S" 로 줄인다.
                 #  (폰트 계산을 매초 하지 않고 이 규칙으로 가른다)
                 _tot = int(pg.get("total", 0) or 0)
@@ -1581,12 +1585,12 @@ class MainDialog(QDialog):
                 seg = f"{_head}{pg.get('stepNo', 0)}/{_tot}"
                 if _rep > 1:
                     seg += f" ×{pg.get('cycle', 1)}/{_rep}"
-                _ph = {"ramp": "승온", "settle": "도달", "soak": "유지"}.get(
+                _ph = HEATER_PHASE_TEXT.get(
                     str(pg.get("phase") or ""), "")
                 if _ph:
                     seg += f" {_ph}"
                 ui.heater_seg_label.setText(seg)
-                # 승온 구간은 추정치라 계산 불가(-1)면 --:-- 로 둔다
+                # 가열 구간은 추정치라 계산 불가(-1)면 --:-- 로 둔다
                 step_remain = int(pg.get("stepRemainSec", 0) or 0)
                 ui.heater_time_label.setText(
                     "--:--" if step_remain < 0 else _fmt_hms_sec(step_remain))
@@ -3218,7 +3222,7 @@ class MainDialog(QDialog):
         if use_heater and heater_temp > HEATER_MAX_TEMP:
             raise ValueError(f"[{process_name or 'STEP'}] heater_temp가 상한({HEATER_MAX_TEMP:.0f}°C)을 넘습니다.")
 
-        # 승온 속도(°C/min). 컬럼이 없거나 0이면 config 기본값을 쓴다.
+        # 가열 속도(°C/min). 컬럼이 없거나 0이면 config 기본값을 쓴다.
         heater_ramp = _f("heater_ramp", required=False, default=0.0) or 0.0
         if use_heater:
             if heater_ramp <= 0:

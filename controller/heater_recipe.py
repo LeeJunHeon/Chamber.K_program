@@ -34,7 +34,6 @@ from lib.config import (
     HEATER_MAX_TEMP,
     HEATER_RAMP_RATE_C_PER_MIN,
     HEATER_SOAK_TOLERANCE,
-    HEATER_SOAK_TIME_SEC,
     HEATER_WAIT_TIMEOUT_SEC,
     HEATER_RECIPE_MAX_STEPS,
     HEATER_RECIPE_HOLD_AT_END,
@@ -50,8 +49,8 @@ TC_BAD_LIMIT_SEC = 60.0
 # 운전 중인데 DAC 출력이 0인 상태(PID 정지)가 이 시간 이상 계속되면 중단한다.
 OUT_DEAD_LIMIT_SEC = 10.0
 
-# 승온 예정시간에 더할 여유. 도달 판정에 램프 완료 조건이 들어가면서
-# HEATER_WAIT_TIMEOUT_SEC 이 스텝별 승온시간의 하드캡이 되어버렸다.
+# 가열 예정시간에 더할 여유. 도달 판정에 램프 완료 조건이 들어가면서
+# HEATER_WAIT_TIMEOUT_SEC 이 스텝별 가열시간의 하드캡이 되어버렸다.
 WAIT_TIMEOUT_MARGIN_SEC = 1800.0     # 30분
 WAIT_TIMEOUT_MAX_SEC    = 43200.0    # 12시간 — 계산이 이상해져도 이 위로는 안 간다
 
@@ -113,8 +112,8 @@ class HeaterRecipeStep:
             return f"{self.target_c:g}°C 냉각 · {self.soak_min:g}분 대기"
         if self.ramp_min:
             hours = self.ramp_min / 60.0
-            span = (f"{hours:.1f}시간 승온" if hours >= 1.0
-                    else f"{self.ramp_min:g}분 승온")
+            span = (f"{hours:.1f}시간 가열" if hours >= 1.0
+                    else f"{self.ramp_min:g}분 가열")
             return f"{self.target_c:g}°C · {span} · 유지 {self.soak_min:g}분"
         return (f"{self.target_c:g}°C · 램프 {self.ramp_c_per_min:g}°C/min"
                 f" · 유지 {self.soak_min:g}분")
@@ -139,9 +138,8 @@ class HeaterRecipeRunner(QObject):
         self._state = IDLE
         self._idx = -1
 
-        self._step_started = 0.0     # RAMPING 시작 시각 (monotonic)
-        self._step_timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)  # 이번 스텝의 승온 타임아웃
-        self._in_band_since = 0.0    # 허용 편차 안에 들어온 시각. 0이면 밖
+        self._step_started = 0.0     # RAMPING 시작 시각 (레시피 시계)
+        self._step_timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)  # 이번 스텝의 가열 타임아웃
         self._tc_bad_since = 0.0
         self._out_dead_since = 0.0   # 출력 0 지속 시작 시각. 0이면 정상
         self._run_off_since = 0.0    # 외부 OFF 지속 시작 시각. 0이면 정상
@@ -162,9 +160,10 @@ class HeaterRecipeRunner(QObject):
 
         # --- HOLD ---
         self._held = False
-        self._held_at = 0.0          # HOLD 시작 시각
+        self._held_at = 0.0          # 지금 정지 중이면 그 시작 시각(실시간), 아니면 0
+        self._paused_total = 0.0     # 누적 일시정지 시간(초)
         self._held_target = None     # RAMPING 중 HOLD 시 보관한 원래 목표
-        self._held_soak_remain = 0.0
+        self._held_target_saved = None   # resume 이 _clear_hold 전에 옮겨 담는 값
 
         # 사용자/시스템이 의도적으로 멈춘 것인가(stop) vs 설비 이상인가(_abort).
         # 호출부가 이걸로 '공정도 같이 중단할지'를 판단한다.
@@ -186,6 +185,19 @@ class HeaterRecipeRunner(QObject):
         except Exception:
             # PLC가 없는 환경(단위 테스트)에서도 load()는 되어야 한다
             pass
+
+    # ==================== 시계 ====================
+    def _now(self) -> float:
+        """레시피 진행 시계. 일시정지 중에는 흐르지 않는다.
+
+        진행 타이머(_run_started / _step_started / _slow_t0 / _soak_deadline ...)는
+        전부 이 시계를 기준으로 둔다. 예전에는 타이머마다 정지 시간을 손으로
+        밀어 줬는데, 타이머를 추가할 때마다 하나씩 빠뜨렸다.
+        안전 타이머(_tc_bad_since / _out_dead_since / _run_off_since)는 정지 중에도
+        흘러야 하므로 time.monotonic() 을 그대로 쓴다 — 여기로 바꾸지 말 것.
+        """
+        base = self._held_at if self._held_at else time.monotonic()
+        return base - self._paused_total
 
     # ==================== 조회 ====================
     def steps(self) -> List[HeaterRecipeStep]:
@@ -244,11 +256,7 @@ class HeaterRecipeRunner(QObject):
 
     # ---------- 예상 소요 시간 ----------
     def _step_minutes(self, s: HeaterRecipeStep, from_temp: float) -> float:
-        """한 스텝의 예상 소요 시간(분) = 승온 + 도달 확인 + 유지.
-
-        램프 완료 조건이 들어간 뒤로 '도달 확인'(HEATER_SOAK_TIME_SEC)이 승온 뒤에
-        붙는 별도 구간이 됐다. 이걸 빼면 실측과 어긋난다(실측 419초 vs 예상 360초).
-        """
+        """한 스텝의 예상 소요 시간(분) = 가열 + 유지."""
         if s.is_cooldown:
             return float(s.soak_min)
         if s.ramp_min:
@@ -256,7 +264,7 @@ class HeaterRecipeRunner(QObject):
         else:
             rate = s.ramp_c_per_min or float(HEATER_RAMP_RATE_C_PER_MIN)
             ramp = abs(s.target_c - from_temp) / rate if rate > 0 else 0.0
-        return ramp + float(HEATER_SOAK_TIME_SEC) / 60.0 + float(s.soak_min)
+        return ramp + float(s.soak_min)
 
     def _cycle_minutes(self, from_temp: float) -> float:
         """한 사이클(모든 스텝)의 예상 시간(분). 첫 스텝의 출발 온도를 받는다."""
@@ -272,7 +280,7 @@ class HeaterRecipeRunner(QObject):
 
         2회차 이후의 첫 스텝은 시작 PV 가 아니라 직전 회차 마지막 스텝의 목표에서
         출발한다. 그걸 무시하면 반복 레시피의 예상 시간이 크게 부풀려진다
-        (예: 60°C 2스텝 × 2회에서 2회차 스텝1 은 승온이 사실상 0인데
+        (예: 60°C 2스텝 × 2회에서 2회차 스텝1 은 가열이 사실상 0인데
          시작 PV 43°C 에서 올리는 시간으로 잡혔다).
         """
         if not self._steps:
@@ -282,10 +290,11 @@ class HeaterRecipeRunner(QObject):
         return (first + rest * max(0, self._repeat - 1)) * 60.0
 
     def _phase(self) -> str:
-        """지금이 승온인지 도달 확인인지 유지인지.
+        """지금이 가열인지 대기인지 유지인지.
 
-        램프 완료 조건 때문에 승온 뒤에 '도달 확인' 구간이 생겼는데 화면과 시간
-        계산이 그 단계를 몰랐다. sv_ramp(D00019)가 목표에 닿았는지로 가른다.
+        ramp : 램프(sv_ramp)가 아직 목표에 못 닿았다
+        wait : 램프는 끝났는데 PV 가 아직 허용오차 밖이다(드물다)
+        soak : 목표에서 머무는 중
         """
         try:
             if self._state == SOAKING:
@@ -301,7 +310,7 @@ class HeaterRecipeRunner(QObject):
                 svr = None
             if svr is None:
                 return "ramp"        # 못 읽으면 기존 동작에 가깝게
-            return ("settle"
+            return ("wait"
                     if abs(float(svr) - float(s.target_c)) <= RAMP_DONE_TOL_C
                     else "ramp")
         except Exception:
@@ -310,7 +319,7 @@ class HeaterRecipeRunner(QObject):
     def _step_remain_sec(self, phase: str, soak_remain: float) -> float:
         """현재 스텝의 남은 시간(초). 계산 불가면 -1.
 
-        승온 구간은 PV 가 아니라 sv_ramp 기준으로 잰다. PV 기준 abs() 를 쓰면
+        가열 구간은 PV 가 아니라 sv_ramp 기준으로 잰다. PV 기준 abs() 를 쓰면
         오버슈트에서 거리가 다시 벌어져 남은 시간이 거꾸로 차오른다
         (실측: PV 45.0 → 46.9 일 때 0 → 38초로 역주행).
         """
@@ -318,11 +327,10 @@ class HeaterRecipeRunner(QObject):
             if phase == "soak":
                 return max(0.0, float(soak_remain))
 
-            if phase == "settle":
-                if self._in_band_since == 0.0:
-                    return float(HEATER_SOAK_TIME_SEC)
-                left = float(HEATER_SOAK_TIME_SEC) - (time.monotonic() - self._in_band_since)
-                return max(0.0, left)
+            # 램프는 끝났는데 PV 가 밴드 밖이면 언제 들어올지 알 수 없다.
+            #  영영 못 들어오면 _on_tick 의 가열 타임아웃(_step_started 기준)이 잡는다.
+            if phase == "wait":
+                return -1.0
 
             if phase == "ramp":
                 s = self._current_step()
@@ -339,7 +347,7 @@ class HeaterRecipeRunner(QObject):
                     return -1.0
                 # 부호 있는 거리. abs() 를 쓰면 오버슈트에서 거리가 다시
                 # 벌어져 남은 시간이 거꾸로 차오른다. 넘어섰으면 0 이다.
-                #  (냉각 스텝은 _advance 가 바로 _enter_soak 하므로 여기는 항상 승온)
+                #  (냉각 스텝은 _advance 가 바로 _enter_soak 하므로 여기는 항상 가열)
                 gap = float(s.target_c) - float(svr)
                 return max(0.0, gap / rate * 60.0)
             return -1.0
@@ -350,27 +358,28 @@ class HeaterRecipeRunner(QObject):
         """현재 시점 기준 남은 시간(초).
 
         스텝 남은 시간(온도 기준)과 전체 남은 시간을 같은 근거로 맞춘다.
-        시계 기준(totalEst − elapsed)과 섞으면 승온이 늦을 때 전체가 스텝보다
+        시계 기준(totalEst − elapsed)과 섞으면 가열이 늦을 때 전체가 스텝보다
         작아지는 역전이 난다(실기 280s < 247+60s).
-          (a) 현재 스텝 남은 시간 + 남은 도달확인 + 남은 소크
+          (a) 현재 스텝 남은 시간 + 남은 유지
           (b) 같은 사이클의 이후 스텝들
           (c) 남은 반복 회차 × 1사이클
         """
         try:
-            if step_remain < 0:
-                return -1.0                     # 계산 불가 → 호출부가 폴백한다
-            total = float(step_remain)
             cur = self._current_step()
+            # wait 은 stepRemain 이 -1(계산 불가)이지만, 남은 '유지'는 알 수 있다.
+            #  이때만 0 에서 시작해 쌓는다. 그 외 -1 은 호출부가 폴백한다.
+            if step_remain < 0:
+                if phase != "wait":
+                    return -1.0
+                total = 0.0
+            else:
+                total = float(step_remain)
 
             # (a) 아직 안 지난 단계를 더한다.
-            #     ramp   : 도달확인 + 소크가 통째로 남았다
-            #     settle : 소크가 남았다
-            #     soak   : 더할 것 없다
-            if cur is not None and not cur.is_cooldown:
-                if phase == "ramp":
-                    total += float(HEATER_SOAK_TIME_SEC) + float(cur.soak_min) * 60.0
-                elif phase == "settle":
-                    total += float(cur.soak_min) * 60.0
+            #     ramp / wait : 유지가 통째로 남았다
+            #     soak        : 더할 것 없다
+            if cur is not None and not cur.is_cooldown and phase in ("ramp", "wait"):
+                total += float(cur.soak_min) * 60.0
 
             # (b) 같은 사이클의 이후 스텝 (직전 스텝 목표에서 출발한다고 본다)
             prev = float(cur.target_c) if cur is not None else 0.0
@@ -403,24 +412,17 @@ class HeaterRecipeRunner(QObject):
             for i, s in enumerate(self._steps)
         ]
         remain = 0.0
-        if self._state == SOAKING:
-            if self._held:
-                remain = max(0.0, self._held_soak_remain)
-            elif self._soak_deadline > 0:
-                remain = max(0.0, self._soak_deadline - time.monotonic())
+        if self._state == SOAKING and self._soak_deadline > 0:
+            # 레시피 시계 기준이라 정지 중에는 저절로 고정된다
+            remain = max(0.0, self._soak_deadline - self._now())
 
-        # 현재 단계(승온 / 도달확인 / 유지)와 그 단계의 남은 시간.
+        # 현재 단계(가열 / 대기 / 유지)와 그 단계의 남은 시간.
         #  계산할 수 없으면 -1 (호출부가 '계산 불가'로 구분해 --:-- 를 띄운다).
         phase = self._phase()
         step_remain = self._step_remain_sec(phase, remain)
 
-        elapsed = (time.monotonic() - self._run_started) if self._run_started else 0.0
-        # HOLD 중에는 멈춘 시간만큼 빼서 진행률이 올라가지 않게 한다.
-        # _clear_hold() 가 _run_started 를 뒤로 미는 것과 이중 보정되지 않는다 —
-        # 멈춘 동안에는 여기서 실시간으로 빼고, 재개 후에는 기준 시각이
-        # 이미 밀려 있어 이 보정이 걸리지 않기 때문이다.
-        if self._held and self._held_at:
-            elapsed -= max(0.0, time.monotonic() - self._held_at)
+        # 레시피 시계라 정지 중에는 elapsed 가 늘지 않는다(별도 보정 불필요)
+        elapsed = (self._now() - self._run_started) if self._run_started else 0.0
         elapsed = max(0.0, elapsed)
         total_est = float(self._total_est_sec)
 
@@ -429,7 +431,7 @@ class HeaterRecipeRunner(QObject):
         if remain_sec < 0:
             remain_sec = max(0.0, total_est - elapsed)   # 폴백(기존 방식)
 
-        # 진행률도 남은 시간 기준으로. 승온이 늦어지면 값이 줄 수 있으므로
+        # 진행률도 남은 시간 기준으로. 가열이 늦어지면 값이 줄 수 있으므로
         # 최댓값을 기억해 단조 증가시킨다(바가 뒤로 가면 안 된다).
         percent = 0.0
         denom = elapsed + remain_sec
@@ -451,7 +453,7 @@ class HeaterRecipeRunner(QObject):
             "total": self.total_steps(),
             "soakRemainSec": int(remain),
             "stepRemainSec": int(step_remain),
-            "phase": phase,          # ramp / settle / soak / "" 
+            "phase": phase,          # ramp / wait / soak / "" 
             "remainSec": int(remain_sec),
             "steps": steps,
             # --- 진행 표시용 추가 키 ---
@@ -647,7 +649,9 @@ class HeaterRecipeRunner(QObject):
 
         pv = st.get('pv')
         self._start_pv = float(pv) if pv is not None else 0.0
-        self._run_started = time.monotonic()
+        self._paused_total = 0.0
+        self._held_at = 0.0
+        self._run_started = self._now()
         self._total_est_sec = self._estimate_total_sec(self._start_pv)
         self._percent_max = 0.0
 
@@ -682,14 +686,16 @@ class HeaterRecipeRunner(QObject):
 
     # ==================== HOLD / STEP ====================
     def _clear_hold(self):
-        """HOLD 상태를 푼다. 멈춰 있던 시간만큼 기준 시각을 밀어
-        진행률에 잡히지 않게 한다(resume / skip / abort 어느 경로로 들어와도 동일)."""
-        if self._held and self._held_at and self._run_started:
-            self._run_started += max(0.0, time.monotonic() - self._held_at)
+        """HOLD 상태를 푼다. 멈춰 있던 시간을 시계에 누적한다.
+
+        resume / skip / abort / stop 어느 경로로 들어와도 여기를 지나므로,
+        타이머를 하나씩 밀어 줄 필요가 없다(_now() 가 알아서 멈춰 있었다).
+        """
+        if self._held and self._held_at:
+            self._paused_total += max(0.0, time.monotonic() - self._held_at)
         self._held = False
         self._held_at = 0.0
         self._held_target = None
-        self._held_soak_remain = 0.0
 
     def hold(self) -> bool:
         """현재 스텝을 그 자리에 멈춘다. 이미 HOLD면 아무것도 하지 않는다."""
@@ -715,8 +721,8 @@ class HeaterRecipeRunner(QObject):
                 hold_at = pv if pv is not None else self._held_target
             if hold_at is not None:
                 self.request_target.emit(float(hold_at))
-        else:   # SOAKING — 남은 시간을 보관하고 카운트다운을 멈춘다
-            self._held_soak_remain = max(0.0, self._soak_deadline - time.monotonic())
+        # SOAKING 은 따로 할 일이 없다 — _soak_deadline 이 레시피 시계 기준이라
+        # 정지 중에는 (deadline − _now()) 가 저절로 고정된다.
 
         self.status_message.emit(
             "히터", f"스텝 {self._idx + 1} 일시정지 (현재 {pv_txt}°C)")
@@ -727,22 +733,20 @@ class HeaterRecipeRunner(QObject):
         """HOLD를 풀고 멈춘 지점부터 이어간다."""
         if not self._held:
             return False
+        self._held_target_saved = self._held_target   # _clear_hold 가 지우기 전에
 
-        paused = max(0.0, time.monotonic() - self._held_at)
+        # 시계 보정은 _clear_hold() 가 한다. 타이머를 손으로 밀지 않는다.
+        _slow = self._slow_ramp
+        self._clear_hold()
 
         if self._state == RAMPING:
-            if self._held_target is not None:
-                self.request_target.emit(float(self._held_target))
-            # 멈춘 시간만큼 기준 시각을 밀어 승온 타임아웃과 진행률을 보존한다
-            self._step_started += paused
-            if self._slow_ramp:
-                self._slow_t0 += paused
-        else:   # SOAKING
-            self._soak_deadline = time.monotonic() + self._held_soak_remain
-            self._soak_last_report = 0.0
-
-        # _run_started 보정은 _clear_hold() 가 한다(여기서 또 밀면 이중 보정)
-        self._clear_hold()
+            if _slow:
+                # 느린 램프에 최종 목표를 보내면 1초 뒤 램프가 중간값으로 되돌린다.
+                #  (실기 로그 17:20:26~27) 대신 지금 있어야 할 값을 즉시 다시 민다.
+                self._slow_last_push = 0.0
+                self._push_slow_ramp(self._now())
+            elif self._held_target_saved is not None:
+                self.request_target.emit(float(self._held_target_saved))
         self.status_message.emit("히터", f"스텝 {self._idx + 1} 재개")
         self._emit_step_changed()
         return True
@@ -798,9 +802,9 @@ class HeaterRecipeRunner(QObject):
         self.step_changed.emit(self._idx + 1, len(self._steps), desc)
 
     def _calc_step_timeout(self, s: HeaterRecipeStep, from_temp: float) -> float:
-        """이번 스텝의 승온 타임아웃(초).
+        """이번 스텝의 가열 타임아웃(초).
 
-        기본값보다 예정 승온시간이 길면 그쪽에 여유를 더해 쓴다. 산정 근거가
+        기본값보다 예정 가열시간이 길면 그쪽에 여유를 더해 쓴다. 산정 근거가
         없으면(냉각/속도 0 등) 기본값 그대로.
         """
         base = float(HEATER_WAIT_TIMEOUT_SEC)
@@ -841,8 +845,7 @@ class HeaterRecipeRunner(QObject):
             return
 
         s = self._steps[self._idx]
-        self._step_started = time.monotonic()
-        self._in_band_since = 0.0
+        self._step_started = self._now()
         self._tc_bad_since = 0.0
         self._out_dead_since = 0.0
         self._run_off_since = 0.0
@@ -860,16 +863,16 @@ class HeaterRecipeRunner(QObject):
             self.status_message.emit(
                 "히터",
                 f"스텝 {self._idx + 1}: {s.target_c:g}°C 까지 {s.ramp_min:g}분"
-                f" → {s._resolved_rate:.1f}°C/min 으로 승온")
+                f" → {s._resolved_rate:.1f}°C/min 으로 가열")
         else:
             s._resolved_rate = float(s.ramp_c_per_min)
 
-        # 이번 스텝의 승온 타임아웃을 산정한다. 기본값(HEATER_WAIT_TIMEOUT_SEC)이
-        # 예정 승온시간보다 짧으면 램프가 끝나기 전에 확정적으로 중단되기 때문이다.
+        # 이번 스텝의 가열 타임아웃을 산정한다. 기본값(HEATER_WAIT_TIMEOUT_SEC)이
+        # 예정 가열시간보다 짧으면 램프가 끝나기 전에 확정적으로 중단되기 때문이다.
         self._step_timeout_sec = self._calc_step_timeout(s, float(from_temp))
         self.status_message.emit(
             "히터",
-            f"스텝 {self._idx + 1}: 승온 타임아웃 {self._step_timeout_sec / 60:.0f}분")
+            f"스텝 {self._idx + 1}: 가열 타임아웃 {self._step_timeout_sec / 60:.0f}분")
 
         rate = s._resolved_rate
         if rate >= PLC_MIN_RAMP_C_PER_MIN or s.is_cooldown or rate <= 0:
@@ -885,7 +888,7 @@ class HeaterRecipeRunner(QObject):
             self._slow_from = float(from_temp)
             self._slow_to = float(s.target_c)
             self._slow_rate = rate
-            self._slow_t0 = time.monotonic()
+            self._slow_t0 = self._now()
             self._slow_last_push = 0.0
             self.request_ramp.emit(_ramp_raw(PLC_MIN_RAMP_C_PER_MIN))
             self.request_target.emit(float(from_temp))
@@ -912,7 +915,7 @@ class HeaterRecipeRunner(QObject):
             self.request_target.emit(float(s.target_c))
         except Exception:
             pass
-        self._soak_deadline = time.monotonic() + s.soak_min * 60.0
+        self._soak_deadline = self._now() + s.soak_min * 60.0
         self._soak_last_report = 0.0
         if s.soak_min <= 0:
             self.status_message.emit(
@@ -976,6 +979,16 @@ class HeaterRecipeRunner(QObject):
             return
         self._out_dead_since = 0.0
 
+        # TC 값을 잃은 경우. 이것도 안전 판정이라 HOLD 중에도 실시간으로 센다
+        #  (멈춰 둔 사이에 TC 가 빠져도 설비는 가열 중이다)
+        if st.get('pv') is None:
+            if self._tc_bad_since == 0.0:
+                self._tc_bad_since = time.monotonic()
+            elif time.monotonic() - self._tc_bad_since >= TC_BAD_LIMIT_SEC:
+                self._abort("온도값을 읽을 수 없습니다 (TC 이상 60초 지속)")
+            return
+        self._tc_bad_since = 0.0
+
         # --- 여기부터는 진행 판정. HOLD 중에는 하지 않는다 ---
         if self._held:
             return
@@ -987,17 +1000,7 @@ class HeaterRecipeRunner(QObject):
         if s is None:
             self._abort("내부 상태 불일치 (스텝 인덱스 범위 초과)")
             return
-        now = time.monotonic()
-        pv = st.get('pv')
-
-        if pv is None:
-            # TC 이상 — 도달 판정 보류. 오래 가면 중단
-            if self._tc_bad_since == 0.0:
-                self._tc_bad_since = now
-            elif now - self._tc_bad_since >= TC_BAD_LIMIT_SEC:
-                self._abort("온도값을 읽을 수 없습니다 (TC 이상 60초 지속)")
-            return
-        self._tc_bad_since = 0.0
+        pv = st.get('pv')      # 위에서 None 을 걱랬냈다
 
         # 램프가 아직 최종 목표에 닿지 않았으면 도달로 보지 않는다.
         #  (허용오차만으로 판정하면 유지 구간이 목표보다 낮은 온도에서 시작된다.
@@ -1010,15 +1013,13 @@ class HeaterRecipeRunner(QObject):
         except Exception:
             _ramp_done = True      # 값을 못 읽으면 기존 동작(온도만으로 판정)
 
+        # 램프가 끝났고 온도가 허용오차 안이면 바로 유지로 넘어간다.
+        #  예전의 '도달 확인 60초'는 온도만으로 판정하던 시절의 안전장치였다.
+        #  램프 완료 조건이 들어간 지금은 레시피에 없는 1분을 만들 뿐이다.
         if _ramp_done and abs(float(pv) - s.target_c) <= HEATER_SOAK_TOLERANCE:
-            if self._in_band_since == 0.0:
-                self._in_band_since = now
-            elif now - self._in_band_since >= HEATER_SOAK_TIME_SEC:
-                self.status_message.emit(
-                    "히터", f"스텝 {self._idx + 1}: {s.target_c:g}°C 도달 (현재 {pv:.1f}°C)")
-                self._enter_soak(s)
-        else:
-            self._in_band_since = 0.0
+            self.status_message.emit(
+                "히터", f"스텝 {self._idx + 1}: {s.target_c:g}°C 도달 (현재 {pv:.1f}°C)")
+            self._enter_soak(s)
 
     def _push_slow_ramp(self, now: float):
         """느린 램프: 경과 시간만큼 SV를 밀어 올린다(냉각이면 내린다)."""
@@ -1034,7 +1035,7 @@ class HeaterRecipeRunner(QObject):
         self.request_target.emit(float(target))
 
     def _on_tick(self):
-        now = time.monotonic()
+        now = self._now()
 
         # HOLD 중에는 타임아웃/카운트다운/램프 밀어올리기를 모두 멈춘다.
         # (이상 검출은 _on_heater_status 에서 계속 돈다)
@@ -1047,7 +1048,7 @@ class HeaterRecipeRunner(QObject):
             _to = float(getattr(self, "_step_timeout_sec", HEATER_WAIT_TIMEOUT_SEC))
             if now - self._step_started > _to:
                 self._abort(
-                    f"스텝 {self._idx + 1} 승온 시간 초과 ({_to:.0f}초)")
+                    f"스텝 {self._idx + 1} 가열 시간 초과 ({_to:.0f}초)")
         elif self._state == SOAKING:
             remain = self._soak_deadline - now
             if remain <= 0:

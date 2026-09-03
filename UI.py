@@ -919,7 +919,7 @@ class Ui_Dialog(object):
             u"히터 운전 ON/OFF. ON을 누르면 목표 온도를 전송한 뒤 운전을 시작합니다.\n"
             u"실제 온도 제어는 PLC 내장 PID가 수행합니다.", None))
         self.heater_hold_button.setToolTip(QCoreApplication.translate("Dialog",
-            u"레시피를 현재 지점에서 일시정지합니다. 승온 중이면 그 온도를 유지하고,\n"
+            u"레시피를 현재 지점에서 일시정지합니다. 가열 중이면 그 온도를 유지하고,\n"
             u"유지 중이면 남은 시간을 멈춥니다. 다시 누르면 이어서 진행합니다.", None))
         self.heater_skip_button.setToolTip(QCoreApplication.translate("Dialog",
             u"현재 스텝을 건너뛰고 다음 스텝으로 넘어갑니다.\n"
@@ -932,9 +932,9 @@ class Ui_Dialog(object):
             u"목표 대비 현재 온도의 편차", None))
         self.heater_seg_label.setToolTip(QCoreApplication.translate("Dialog",
             u"실행 중인 레시피 스텝과 반복 회차, 그리고 현재 단계.\n"
-            u"승온 = 목표까지 올리는 중 / 도달 = 도달 확인 대기 / 유지 = 소크", None))
+            u"가열 = 목표까지 올리는 중 / 대기 = 온도 안정 대기 / 유지 = 목표 유지", None))
         self.heater_time_label.setToolTip(QCoreApplication.translate("Dialog",
-            u"현재 스텝의 남은 시간 (승온 구간은 현재 온도와 속도로 계산한 추정치)", None))
+            u"현재 스텝의 남은 시간 (가열 구간은 현재 온도와 속도로 계산한 추정치)", None))
         self.heater_out_bar.setToolTip(QCoreApplication.translate("Dialog",
             u"PID 출력. 막대는 운전 상한(D00018) 대비 비율이고,\n"
             u"DAC 400 이 출력 0점이다(VARITAP 입력 0.8V).\n"
