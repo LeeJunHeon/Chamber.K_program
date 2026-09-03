@@ -35,7 +35,7 @@ from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
-                        HEATER_MV_LIMIT, HEATER_LOG_ENABLED,
+                        HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
                         heater_est_current)
@@ -1234,20 +1234,36 @@ class MainDialog(QDialog):
         except Exception:
             pass
 
+    def _heater_output_pct(self, st: dict) -> float:
+        """화면용 DAC 출력 비율 = mv / 운전상한(D00018) × 100.
+
+        st['mv_pct'] 는 절대 최대치 기준이라 578/1200 이 20% 로 보여 혼란스러웠다.
+        표시만 바꾸고 mv_pct 자체는 건드리지 않는다(히터 CSV 컬럼이 쓴다).
+        """
+        try:
+            mv = float(st.get('mv', 0) or 0)
+            lim = float(st.get('mv_limit', 0) or 0) or float(HEATER_MV_LIMIT)
+            if lim <= 0:
+                return 0.0
+            return max(0.0, min(100.0, mv / lim * 100.0))
+        except Exception:
+            return 0.0
+
     def _heater_output_text(self, st: dict | None = None) -> str:
         """DAC 출력 한 줄. 출력 바의 텍스트와 ERP 스냅샷이 같은 문구를 쓴다.
 
-        '출력 %'는 절대 최대치(HEATER_MV_ABS_MAX) 기준이라 DAC 분수와 비율이
-        다르게 보인다. 그래서 "(20%)" 대신 "출력 20%" 로 풀어 쓴다.
+        비율은 운전 상한(D00018) 대비다. 히터가 꺼진 상태(mv <= MV_MIN)에서는
+        mv/mv_limit 가 33% 처럼 보이므로 퍼센트를 아예 띄우지 않는다.
         """
         try:
             if st is None:
                 st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
             mv = int(st.get('mv', 0) or 0)
-            if not st.get('run'):
+            if (not st.get('run')) or mv <= HEATER_MV_MIN:
                 return f"정지 (DAC {mv})"
-            return (f"DAC {mv}/{int(st.get('mv_limit', HEATER_MV_LIMIT) or HEATER_MV_LIMIT)}"
-                    f" · 출력 {float(st.get('mv_pct', 0) or 0):.0f}%"
+            lim = int(st.get('mv_limit', HEATER_MV_LIMIT) or HEATER_MV_LIMIT)
+            return (f"DAC {mv}/{lim}"
+                    f" · {self._heater_output_pct(st):.0f}%"
                     f" · ≈{float(st.get('est_current', 0.0) or 0.0):.1f}A")
         except Exception:
             return ""
@@ -1555,9 +1571,16 @@ class MainDialog(QDialog):
             running = bool(pg.get("running"))
 
             if running:
-                seg = f"STEP {pg.get('stepNo', 0)}/{pg.get('total', 0)}"
+                # 지금이 승온인지 도달확인인지 유지인지 — 화면에 없던 정보다.
+                #  라벨 폭이 120px 뿐이라 'STEP'/구분점을 빼고 'S1/2 ×2/2 도달'
+                #  형태로 줄인다(최악 문구 106px, 실측 확인).
+                seg = f"S{pg.get('stepNo', 0)}/{pg.get('total', 0)}"
                 if int(pg.get("repeat", 1) or 1) > 1:
-                    seg += f" · ×{pg.get('cycle', 1)}/{pg.get('repeat', 1)}"
+                    seg += f" ×{pg.get('cycle', 1)}/{pg.get('repeat', 1)}"
+                _ph = {"ramp": "승온", "settle": "도달", "soak": "유지"}.get(
+                    str(pg.get("phase") or ""), "")
+                if _ph:
+                    seg += f" {_ph}"
                 ui.heater_seg_label.setText(seg)
                 # 승온 구간은 추정치라 계산 불가(-1)면 --:-- 로 둔다
                 step_remain = int(pg.get("stepRemainSec", 0) or 0)
@@ -1821,8 +1844,10 @@ class MainDialog(QDialog):
         # --- 출력 표시 : DAC 원본값 + 출력% + 추정 전류 (바 안에 텍스트로) ---
         #     DAC 원본을 함께 보여야 PLC 모니터(D00041)와 대조할 수 있다.
         try:
+            _mv = int(st.get('mv', 0) or 0)
+            _on = bool(st.get('run')) and _mv > HEATER_MV_MIN
             self.ui.heater_out_bar.setValue(
-                int(st.get('mv_pct') or 0) if st.get('run') else 0)
+                int(self._heater_output_pct(st)) if _on else 0)
             self.ui.heater_out_bar.setFormat(self._heater_output_text(st))
         except Exception:
             pass

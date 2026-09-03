@@ -935,9 +935,9 @@ class Ui_Dialog(object):
         self.heater_time_label.setToolTip(QCoreApplication.translate("Dialog",
             u"현재 스텝의 남은 시간 (승온 구간은 현재 온도와 속도로 계산한 추정치)", None))
         self.heater_out_bar.setToolTip(QCoreApplication.translate("Dialog",
-            u"PID 출력. DAC 원본값 / 운전 상한(D00018) 과 추정 전류를 함께 보여준다.\n"
-            u"출력 %는 운전 상한이 아니라 절대 최대치(HEATER_MV_ABS_MAX) 기준이라\n"
-            u"DAC 값의 분수와 비율이 다르게 보인다.", None))
+            u"PID 출력. DAC 원본값과 추정 전류를 함께 보여준다.\n"
+            u"비율은 운전 상한(D00018) 대비다 — 600/1200 이면 50%.\n"
+            u"히터가 꺼져 있으면 비율 대신 '정지' 로 표시한다.", None))
         self.heater_prog_bar.setToolTip(QCoreApplication.translate("Dialog",
             u"레시피 전체 진행률", None))
         self.heater_step_list.setToolTip(QCoreApplication.translate("Dialog",

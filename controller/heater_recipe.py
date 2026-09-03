@@ -244,7 +244,11 @@ class HeaterRecipeRunner(QObject):
 
     # ---------- 예상 소요 시간 ----------
     def _step_minutes(self, s: HeaterRecipeStep, from_temp: float) -> float:
-        """한 스텝의 예상 소요 시간(분) = 승온 시간 + 유지 시간."""
+        """한 스텝의 예상 소요 시간(분) = 승온 + 도달 확인 + 유지.
+
+        램프 완료 조건이 들어간 뒤로 '도달 확인'(HEATER_SOAK_TIME_SEC)이 승온 뒤에
+        붙는 별도 구간이 됐다. 이걸 빼면 실측과 어긋난다(실측 419초 vs 예상 360초).
+        """
         if s.is_cooldown:
             return float(s.soak_min)
         if s.ramp_min:
@@ -252,7 +256,7 @@ class HeaterRecipeRunner(QObject):
         else:
             rate = s.ramp_c_per_min or float(HEATER_RAMP_RATE_C_PER_MIN)
             ramp = abs(s.target_c - from_temp) / rate if rate > 0 else 0.0
-        return ramp + float(s.soak_min)
+        return ramp + float(HEATER_SOAK_TIME_SEC) / 60.0 + float(s.soak_min)
 
     def _estimate_total_sec(self, start_pv: float) -> float:
         """전체 예상 시간(초) = Σ(스텝 시간) × repeat."""
@@ -263,13 +267,78 @@ class HeaterRecipeRunner(QObject):
             prev = s.target_c
         return total * 60.0 * max(1, self._repeat)
 
-    def _remaining_sec(self, step_remain: float) -> float:
+    def _phase(self) -> str:
+        """지금이 승온인지 도달 확인인지 유지인지.
+
+        램프 완료 조건 때문에 승온 뒤에 '도달 확인' 구간이 생겼는데 화면과 시간
+        계산이 그 단계를 몰랐다. sv_ramp(D00019)가 목표에 닿았는지로 가른다.
+        """
+        try:
+            if self._state == SOAKING:
+                return "soak"
+            if self._state != RAMPING:
+                return ""
+            s = self._current_step()
+            if s is None:
+                return ""
+            try:
+                svr = (self._plc.get_heater_status() or {}).get('sv_ramp')
+            except Exception:
+                svr = None
+            if svr is None:
+                return "ramp"        # 못 읽으면 기존 동작에 가깝게
+            return ("settle"
+                    if abs(float(svr) - float(s.target_c)) <= RAMP_DONE_TOL_C
+                    else "ramp")
+        except Exception:
+            return ""
+
+    def _step_remain_sec(self, phase: str, soak_remain: float) -> float:
+        """현재 스텝의 남은 시간(초). 계산 불가면 -1.
+
+        승온 구간은 PV 가 아니라 sv_ramp 기준으로 잰다. PV 기준 abs() 를 쓰면
+        오버슈트에서 거리가 다시 벌어져 남은 시간이 거꾸로 차오른다
+        (실측: PV 45.0 → 46.9 일 때 0 → 38초로 역주행).
+        """
+        try:
+            if phase == "soak":
+                return max(0.0, float(soak_remain))
+
+            if phase == "settle":
+                if self._in_band_since == 0.0:
+                    return float(HEATER_SOAK_TIME_SEC)
+                left = float(HEATER_SOAK_TIME_SEC) - (time.monotonic() - self._in_band_since)
+                return max(0.0, left)
+
+            if phase == "ramp":
+                s = self._current_step()
+                if s is None:
+                    return -1.0
+                rate = float(getattr(s, '_resolved_rate', 0.0) or 0.0)
+                if rate <= 0:
+                    return -1.0
+                try:
+                    svr = (self._plc.get_heater_status() or {}).get('sv_ramp')
+                except Exception:
+                    svr = None
+                if svr is None:
+                    return -1.0
+                # 부호 있는 거리. abs() 를 쓰면 오버슈트에서 거리가 다시
+                # 벌어져 남은 시간이 거꾸로 차오른다. 넘어섰으면 0 이다.
+                #  (냉각 스텝은 _advance 가 바로 _enter_soak 하므로 여기는 항상 승온)
+                gap = float(s.target_c) - float(svr)
+                return max(0.0, gap / rate * 60.0)
+            return -1.0
+        except Exception:
+            return -1.0
+
+    def _remaining_sec(self, step_remain: float, phase: str) -> float:
         """현재 시점 기준 남은 시간(초).
 
         스텝 남은 시간(온도 기준)과 전체 남은 시간을 같은 근거로 맞춘다.
         시계 기준(totalEst − elapsed)과 섞으면 승온이 늦을 때 전체가 스텝보다
         작아지는 역전이 난다(실기 280s < 247+60s).
-          (a) 현재 스텝 남은 시간 + 남은 소크
+          (a) 현재 스텝 남은 시간 + 남은 도달확인 + 남은 소크
           (b) 같은 사이클의 이후 스텝들
           (c) 남은 반복 회차 × 1사이클
         """
@@ -279,9 +348,15 @@ class HeaterRecipeRunner(QObject):
             total = float(step_remain)
             cur = self._current_step()
 
-            # (a) RAMPING 이면 이 스텝의 소크가 통째로 남아 있다
-            if self._state == RAMPING and cur is not None and not cur.is_cooldown:
-                total += float(cur.soak_min) * 60.0
+            # (a) 아직 안 지난 단계를 더한다.
+            #     ramp   : 도달확인 + 소크가 통째로 남았다
+            #     settle : 소크가 남았다
+            #     soak   : 더할 것 없다
+            if cur is not None and not cur.is_cooldown:
+                if phase == "ramp":
+                    total += float(HEATER_SOAK_TIME_SEC) + float(cur.soak_min) * 60.0
+                elif phase == "settle":
+                    total += float(cur.soak_min) * 60.0
 
             # (b) 같은 사이클의 이후 스텝 (직전 스텝 목표에서 출발한다고 본다)
             prev = float(cur.target_c) if cur is not None else 0.0
@@ -321,20 +396,10 @@ class HeaterRecipeRunner(QObject):
             elif self._soak_deadline > 0:
                 remain = max(0.0, self._soak_deadline - _t.monotonic())
 
-        # 현재 스텝의 남은 시간. SOAKING 은 위 remain 과 같고, RAMPING 은
-        # 현재 온도와 적용 속도로 계산한 추정치다. 계산할 수 없으면 -1
-        # (호출부가 '계산 불가'로 구분해 --:-- 를 띄운다).
-        step_remain = 0.0
-        if self._state == SOAKING:
-            step_remain = remain
-        elif self._state == RAMPING:
-            step_remain = -1.0
-            s_cur = self._current_step()
-            pv_cur = self._plc_pv()
-            if s_cur is not None and pv_cur is not None:
-                rate = float(getattr(s_cur, '_resolved_rate', 0.0) or 0.0)
-                if rate > 0:
-                    step_remain = abs(s_cur.target_c - pv_cur) / rate * 60.0
+        # 현재 단계(승온 / 도달확인 / 유지)와 그 단계의 남은 시간.
+        #  계산할 수 없으면 -1 (호출부가 '계산 불가'로 구분해 --:-- 를 띄운다).
+        phase = self._phase()
+        step_remain = self._step_remain_sec(phase, remain)
 
         elapsed = (_t.monotonic() - self._run_started) if self._run_started else 0.0
         # HOLD 중에는 멈춘 시간만큼 빼서 진행률이 올라가지 않게 한다.
@@ -347,7 +412,7 @@ class HeaterRecipeRunner(QObject):
         total_est = float(self._total_est_sec)
 
         # 남은 시간 — 스텝 남은 시간과 같은 근거로 계산한다.
-        remain_sec = self._remaining_sec(step_remain)
+        remain_sec = self._remaining_sec(step_remain, phase)
         if remain_sec < 0:
             remain_sec = max(0.0, total_est - elapsed)   # 폴백(기존 방식)
 
@@ -373,6 +438,7 @@ class HeaterRecipeRunner(QObject):
             "total": self.total_steps(),
             "soakRemainSec": int(remain),
             "stepRemainSec": int(step_remain),
+            "phase": phase,          # ramp / settle / soak / "" 
             "remainSec": int(remain_sec),
             "steps": steps,
             # --- 진행 표시용 추가 키 ---
