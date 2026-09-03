@@ -19,6 +19,10 @@ def set_reporter(r):
 # 이번 공정에서 사용할 로그 파일 경로 (공정 시작 시 설정)
 _current_log_file: Optional[Path] = None
 
+# 히터 전용 텍스트 로그 경로 (히터 운전 시작 시 설정).
+#  히터 CSV 와 같은 이름/타임스탬프로 짝을 이룬다.
+_heater_log_file: Optional[Path] = None
+
 # NAS 로그 기본 경로 (UNC 경로)
 NAS_LOG_DIR = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK")
 
@@ -49,6 +53,28 @@ def set_process_log_file(prefix: str = "CHK") -> Path:
 
     _current_log_file = base_dir / f"{prefix}_{timestamp}.txt"
     return _current_log_file
+
+def clear_process_log_file() -> None:
+    """공정 로그 파일 지정을 해제한다(공정 종료 시).
+
+    해제하지 않으면 공정이 끝난 뒤의 모든 로그가 이미 끝난 공정의 .txt 에
+    계속 덧붙는다(히터만 돌려도 그렇다).
+    """
+    global _current_log_file
+    _current_log_file = None
+
+def set_heater_log_file(path) -> None:
+    """히터 전용 텍스트 로그 파일을 지정한다. 경로는 호출부가 정한다
+    (히터 CSV 와 같은 이름/타임스탬프로 맞추기 위해)."""
+    global _heater_log_file
+    try:
+        _heater_log_file = Path(path) if path else None
+    except Exception:
+        _heater_log_file = None
+
+def clear_heater_log_file() -> None:
+    global _heater_log_file
+    _heater_log_file = None
 
 def log_message_to_monitor(level, message):
     """UI 모니터에 로그.
@@ -95,10 +121,14 @@ def log_message_to_monitor(level, message):
 
 def log_message_to_file(level, message):
     """
-    현재 설정된 공정 로그 파일(_current_log_file)에 한 줄 추가.
-    공정 로그 파일이 아직 없으면:
-      - NAS_LOG_DIR/log.txt 시도 후,
-      - 실패 시 현재 폴더의 log.txt에 기록.
+    로그 한 줄을 파일에 남긴다.
+
+    라우팅:
+      - 공정 로그(_current_log_file)가 있으면 항상 거기에 쓴다.
+        히터 메시지도 공정 로그에 남아야 나중에 원인 분석이 된다.
+      - level 이 "히터" 로 시작하면 히터 로그(_heater_log_file)에도 쓴다.
+      - 둘 다 없으면 NAS_LOG_DIR/log.txt → 실패 시 ./log.txt.
+    각 파일 쓰기는 독립적으로 감싸서 한쪽이 실패해도 다른 쪽은 남는다.
     """
     try:
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -106,31 +136,48 @@ def log_message_to_file(level, message):
     except Exception:
         return          # 메시지를 문자열로 못 만들면 남길 것도 없다
 
-    global _current_log_file
+    global _current_log_file, _heater_log_file
 
-    # 1) 공정 시작 시 set_process_log_file로 지정된 파일이 있으면 그걸 사용
-    path: Path
-    if _current_log_file is not None:
-        path = _current_log_file
-    else:
-        # 2) 아직 공정 로그 파일이 없으면 기본 log.txt를 사용
+    def _append(path: Path) -> bool:
         try:
-            NAS_LOG_DIR.mkdir(parents=True, exist_ok=True)
-            path = NAS_LOG_DIR / "log.txt"
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line)
+            return True
         except Exception:
-            path = Path("log.txt")
+            return False
 
+    wrote = False
+
+    # 1) 공정 로그가 지정돼 있으면 항상 거기에 남긴다(히터 메시지 포함)
+    if _current_log_file is not None:
+        wrote = _append(_current_log_file) or wrote
+
+    # 2) 히터 메시지는 히터 전용 로그에도 남긴다
     try:
-        with path.open("a", encoding="utf-8") as f:
+        is_heater = str(level or "").startswith("히터")
+    except Exception:
+        is_heater = False
+    if is_heater and _heater_log_file is not None:
+        wrote = _append(_heater_log_file) or wrote
+
+    if wrote:
+        return
+
+    # 3) 지정된 파일이 없거나 전부 실패하면 기본 log.txt
+    try:
+        NAS_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        path = NAS_LOG_DIR / "log.txt"
+    except Exception:
+        path = Path("log.txt")
+    if _append(path):
+        return
+    # 최후의 폴백: 현재 작업 디렉터리의 log.txt
+    try:
+        with open("log.txt", "a", encoding="utf-8") as f:
             f.write(line)
     except Exception:
-        # 최후의 폴백: 현재 작업 디렉터리의 log.txt
-        try:
-            with open("log.txt", "a", encoding="utf-8") as f:
-                f.write(line)
-        except Exception:
-            # 정말 쓸 수 있는 데가 없으면 조용히 무시
-            pass
+        # 정말 쓸 수 있는 데가 없으면 조용히 무시
+        pass
 
 def append_chk_csv_row(row: dict) -> bool:
     """

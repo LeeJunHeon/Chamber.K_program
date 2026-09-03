@@ -33,6 +33,11 @@ from lib.config import (
     HEATER_COIL_AT_REQ, HEATER_COIL_AT_DONE, HEATER_COIL_PID_RUN,
 )
 
+# PLC 내장 PID의 연산 주기(K1217)가 1000ms라, 운전 ON 직후 최소 1초는
+# MV가 이전 값(0)에 머문다. 그 사이에 '출력이 죽었다'고 알리면 정상 기동에서도
+# 반드시 경고가 뜬다. 운전 시작 후 이 시간이 지나야 판정한다.
+HEATER_OUT_DEAD_GRACE_SEC = 5.0
+
 # 주의: 아래 표에서 대괄호 […]가 실제 Modbus 주소(0-based, HEX 표시)입니다.
 # 예) S1: [31] -> 0x31(=49), S2: [32] -> 0x32(=50)
 # 이 주소들은 lib.config.PLC_COIL_MAP에서 바로 int로 지정합니다.
@@ -132,6 +137,8 @@ class PLCController(QObject):
         self._heater_fault_notified = False
         self._heater_out_dead_cnt = 0        # '운전 중인데 출력 0' 연속 폴링 횟수
         self._heater_out_dead_notified = False
+        self._heater_run_since: float = 0.0      # 운전 ON 이 된 시각(monotonic)
+        self._heater_run_prev_bit: bool = False  # 직전 폴링의 run 비트
         # 첫 폴링 여부.
         #  PLC의 이상 비트는 SET 코일(래치)이라 프로그램을 껐다 켜도 남아 있다.
         #  시작 직후 읽은 이상은 '지금 발생'이 아니라 '이전부터 있던 것'이므로
@@ -551,10 +558,24 @@ class PLCController(QObject):
         self._heater_last = st
         self.update_heater_status.emit(st)
 
+        # 운전 ON 시점을 기록한다(출력 죽음 판정의 유예 기준).
+        _run_bit = bool(st.get('run'))
+        if _run_bit and not self._heater_run_prev_bit:
+            self._heater_run_since = time.monotonic()
+        elif not _run_bit:
+            self._heater_run_since = 0.0
+        self._heater_run_prev_bit = _run_bit
+
         # 출력이 죽은 상태가 연속 3회(약 0.6초) 이어지면 한 번만 알린다.
+        #  단 운전 직후 PID 연산 주기(1초)만큼은 MV가 이전 값에 머물러 있으므로
+        #  HEATER_OUT_DEAD_GRACE_SEC 이 지나기 전에는 판정하지 않는다.
+        _grace_passed = (self._heater_run_since > 0.0 and
+                         (time.monotonic() - self._heater_run_since)
+                         >= HEATER_OUT_DEAD_GRACE_SEC)
         if st['output_dead']:
             self._heater_out_dead_cnt += 1
-            if self._heater_out_dead_cnt >= 3 and not self._heater_out_dead_notified:
+            if (self._heater_out_dead_cnt >= 3 and _grace_passed
+                    and not self._heater_out_dead_notified):
                 self._heater_out_dead_notified = True
                 self.status_message.emit(
                     "히터(경고)",

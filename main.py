@@ -20,6 +20,9 @@ from lib.logger import (
     set_monitor_widget,
     log_message_to_monitor,
     set_process_log_file,
+    clear_process_log_file,
+    set_heater_log_file,
+    clear_heater_log_file,
     log_message_to_file,
     append_chk_csv_row,
 )
@@ -1255,6 +1258,12 @@ class MainDialog(QDialog):
             if run and not self._heater_run_prev:
                 path = self._heater_logger.start(self._heater_log_prefix())
                 if path is not None:
+                    # CSV 와 같은 이름/타임스탬프의 .txt 를 히터 전용 텍스트 로그로 쓴다
+                    #  (HEATER_20260903_144337.csv / .txt 로 짝을 이룬다)
+                    try:
+                        set_heater_log_file(Path(path).with_suffix(".txt"))
+                    except Exception:
+                        pass
                     log_message_to_monitor("정보", f"히터 로그 시작: {path}")
                 self._heater_log_last_ms = 0.0
 
@@ -1267,6 +1276,10 @@ class MainDialog(QDialog):
                 # 정지 직후 마지막 한 행을 남기고 파일을 닫는다
                 self._heater_logger.write_row(st, self._heater_log_note())
                 self._heater_logger.stop()
+                try:
+                    clear_heater_log_file()
+                except Exception:
+                    pass
         except Exception:
             pass
         finally:
@@ -2658,6 +2671,7 @@ class MainDialog(QDialog):
                 self.ui.select_csv_button.setEnabled(True)
                 self.update_stage_monitor("CSV 공정 취소됨")
                 self._reset_process_ui_fields()
+                clear_process_log_file()   # 리스트 종료 — 이후 로그는 log.txt 로
                 return
 
             # ✅ (2) STOP이 아닌 경우: 성공/실패에 따라 분기
@@ -2687,6 +2701,7 @@ class MainDialog(QDialog):
                 self.ui.select_csv_button.setEnabled(True)
                 self.update_stage_monitor("CSV 공정 실패로 중단됨")
                 self._reset_process_ui_fields()
+                clear_process_log_file()   # 리스트 종료 — 이후 로그는 log.txt 로
                 return
 
         # 🔻 여기 이하(단일 공정 종료 처리)는 그대로 유지
@@ -2698,6 +2713,13 @@ class MainDialog(QDialog):
         
         # ▶ 공통 UI 초기화
         self._reset_process_ui_fields()
+
+        # 공정 로그 파일 해제 — 반드시 종료 처리의 맨 마지막.
+        #  해제하지 않으면 공정이 끝난 뒤의 모든 로그(히터만 돌려도)가 이미 끝난
+        #  공정의 .txt 에 계속 덧붙는다.
+        #  CSV 리스트가 이어지는 중(_start_next_csv_step)에는 해제하지 않는다 —
+        #  다음 STEP 이 set_process_log_file 로 새 파일을 만든다.
+        clear_process_log_file()
 
     @Slot(str)
     def _handle_critical_error(self, error_message):
@@ -2956,6 +2978,7 @@ class MainDialog(QDialog):
                 pass
             try:
                 self._heater_logger.stop()
+                clear_heater_log_file()
             except Exception:
                 pass
             try:

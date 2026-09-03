@@ -724,6 +724,13 @@ class HeaterRecipeRunner(QObject):
     def _enter_soak(self, s: HeaterRecipeStep):
         self._state = SOAKING
         self._slow_ramp = False
+        # 느린 램프는 파이썬이 SV를 밀어 올리는 방식이라, 여기서 밀어올림이 멈추면
+        # SV가 중간값에 그대로 남는다(실제로 45°C 스텝이 43.8°C로 유지된 적이 있다).
+        # 래더 램프 경로에서는 이미 같은 값이 들어가 있어 무해하다.
+        try:
+            self.request_target.emit(float(s.target_c))
+        except Exception:
+            pass
         self._soak_deadline = time.monotonic() + s.soak_min * 60.0
         self._soak_last_report = 0.0
         if s.soak_min <= 0:
@@ -742,6 +749,13 @@ class HeaterRecipeRunner(QObject):
         self._tick.stop()
         last = self._steps[-1] if self._steps else None
         hold = bool(HEATER_RECIPE_HOLD_AT_END) and (last is not None and not last.is_cooldown)
+        if hold:
+            # 히터를 켠 채 끝낸다면 SV가 마지막 목표여야 한다. 느린 램프 도중에
+            # skip_step 으로 빠져나오면 중간값이 남아 그 온도로 유지된다.
+            try:
+                self.request_target.emit(float(last.target_c))
+            except Exception:
+                pass
         self._safe_shutdown(keep_running=hold)
         msg = "레시피 완료" + (" (히터 계속 운전)" if hold else "")
         self.status_message.emit("히터", msg)
