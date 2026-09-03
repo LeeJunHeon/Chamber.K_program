@@ -335,7 +335,8 @@ class MainDialog(QDialog):
                 cols = ["Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
                         "working_pressure", "process_time", "shutter_delay",
                         "use_rf_power", "rf_power", "use_dc_power", "dc_power",
-                        "use_dc_delay", "use_heater", "heater_temp", "gun1", "gun2"]
+                        "use_dc_delay", "use_heater", "heater_temp", "heater_ramp",
+                        "gun1", "gun2", "G1 Target", "G2 Target"]
                 d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
                 _os.makedirs(d, exist_ok=True)
                 path = _os.path.join(d, "process_web.csv")
