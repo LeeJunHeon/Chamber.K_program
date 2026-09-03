@@ -480,18 +480,23 @@ class MainDialog(QDialog):
                 _flow = _meas.get("flow") or {}
                 _press = _meas.get("pressure")
 
+                # 공정 중이 아니면 계측값(PV)은 신뢰할 수 없다.
+                # 위젯에는 이전 공정의 마지막 값이 남아 있으므로 대기 중에는 비운다.
+                def _pv(name: str):
+                    return _w(name) if running else ""
+
                 # 계측 그룹 — value=계측값(PV), setpoint=설정값(SV)
                 groups = [
                     {"label": "전원", "items": [
-                        {"label": "DC Power", "value": _w("Power_edit"),
+                        {"label": "DC Power", "value": _pv("Power_edit"),
                          "setpoint": _w("DC_power_edit"), "unit": "W"},
-                        {"label": "Voltage", "value": _w("Voltage_edit"), "unit": "V"},
-                        {"label": "Current", "value": _w("Current_edit"), "unit": "A"},
+                        {"label": "Voltage", "value": _pv("Voltage_edit"), "unit": "V"},
+                        {"label": "Current", "value": _pv("Current_edit"), "unit": "A"},
                     ]},
                     {"label": "RF", "items": [
-                        {"label": "for.P", "value": _w("for_p_edit"),
+                        {"label": "for.P", "value": _pv("for_p_edit"),
                          "setpoint": _w("RF_power_edit"), "unit": "W"},
-                        {"label": "ref.P", "value": _w("ref_p_edit"), "unit": "W"},
+                        {"label": "ref.P", "value": _pv("ref_p_edit"), "unit": "W"},
                         {"label": "offset / param",
                          "value": f'{_w("offset_edit")} / {_w("param_edit")}'},
                     ]},
@@ -853,6 +858,11 @@ class MainDialog(QDialog):
                     if not _reason and self._chat_errors:
                         _reason = str(self._chat_errors[0])
                     self.erp.run_end("error", _reason)
+        except Exception:
+            pass
+
+        try:
+            self._erp_meas = {}   # 종료 후 대기 중에 이전 공정 값이 남지 않도록 비운다
         except Exception:
             pass
 
