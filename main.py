@@ -1265,6 +1265,10 @@ class MainDialog(QDialog):
                     except Exception:
                         pass
                     log_message_to_monitor("정보", f"히터 로그 시작: {path}")
+                    # 파일이 열리기 전에 나간 레시피 시작 로그는 이 파일에 없다.
+                    #  (더 일찍 열면 시작 직후 실패 시 파일이 닫히지 않는다)
+                    #  그래서 여는 순간 무엇을 돌리는지 머리말로 남긴다.
+                    self._write_heater_log_header()
                 self._heater_log_last_ms = 0.0
 
             if run and (self._heater_log_last_ms == 0.0
@@ -1284,6 +1288,70 @@ class MainDialog(QDialog):
             pass
         finally:
             self._heater_run_prev = run
+
+    def _write_heater_log_header(self):
+        """히터 로그 파일이 열리는 순간, 무엇을 돌리는지 요약을 남긴다.
+
+        level="히터" 로 남겨야 히터 파일로 라우팅된다(공정 파일에도 함께 들어간다).
+        어떤 정보를 못 읽어도 예외를 밖으로 내보내지 않는다.
+        """
+        def _emit(msg: str):
+            try:
+                log_message_to_monitor("히터", msg)
+            except Exception:
+                pass
+
+        _emit("=== 로그 시작 ===")
+
+        # --- 레시피 정보 (없으면 수동 운전) ---
+        try:
+            rc = self.heater_recipe
+            if rc.is_running() or rc.total_steps() > 0:
+                name = rc.recipe_name() or "(이름 없음)"
+                rep = rc.repeat_count()
+                rep_txt = f" × {rep}회 반복" if rep > 1 else ""
+                est = ""
+                try:
+                    total = int(rc.progress().get("totalEstSec") or 0)
+                    if total > 0:
+                        est = f" · 예상 {_fmt_hms_sec(total)}"
+                except Exception:
+                    pass
+                _emit(f"레시피: {name} · {rc.total_steps()}스텝{rep_txt}{est}")
+                for st_ in rc.steps():
+                    _emit(f"  {st_.index}. {st_.describe()}")
+            else:
+                _emit("수동 운전 (레시피 없음)")
+        except Exception:
+            pass
+
+        # --- 함께 돌고 있는 공정 ---
+        try:
+            if self.process_running or self.csv_mode:
+                nm = (self.current_process_name or "").strip()
+                if nm:
+                    _emit(f"공정: {nm}")
+        except Exception:
+            pass
+
+        # --- PLC 에 들어 있는 설정값 ---
+        try:
+            st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
+            if st:
+                def _n(k, fmt="{:.1f}", unit=""):
+                    v = st.get(k)
+                    if v is None:
+                        return "-"
+                    try:
+                        return fmt.format(float(v)) + unit
+                    except Exception:
+                        return str(v)
+                _emit(f"설정: DAC상한 {_n('mv_limit', '{:.0f}')}"
+                      f" · 램프 {_n('ramp_rate', '{:.0f}', '°C/min')}"
+                      f" · 홀드백 {_n('holdback', unit='°C')}"
+                      f" · OT {_n('ot_limit', unit='°C')}")
+        except Exception:
+            pass
 
     def _heater_log_note(self) -> str:
         """공정 중이면 현재 스텝 설명, 히터 레시피 중이면 'step k/N'."""

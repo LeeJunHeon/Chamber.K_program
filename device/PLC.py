@@ -38,6 +38,12 @@ from lib.config import (
 # 반드시 경고가 뜬다. 운전 시작 후 이 시간이 지나야 판정한다.
 HEATER_OUT_DEAD_GRACE_SEC = 5.0
 
+# 느린 램프는 SV를 3초마다 밀어 올린다. 그때마다 로그를 남기면 공정 로그가
+# 그 줄로 뒤덮인다(실기 219줄 중 180줄). 같은 값이 히터 CSV의 sv_c 컬럼에
+# 3초 주기로 이미 들어가므로 텍스트 로그는 솎아낸다.
+HEATER_SV_LOG_MIN_DELTA_C      = 1.0
+HEATER_SV_LOG_MIN_INTERVAL_SEC = 30.0
+
 # 주의: 아래 표에서 대괄호 […]가 실제 Modbus 주소(0-based, HEX 표시)입니다.
 # 예) S1: [31] -> 0x31(=49), S2: [32] -> 0x32(=50)
 # 이 주소들은 lib.config.PLC_COIL_MAP에서 바로 int로 지정합니다.
@@ -138,6 +144,8 @@ class PLCController(QObject):
         self._heater_out_dead_cnt = 0        # '운전 중인데 출력 0' 연속 폴링 횟수
         self._heater_out_dead_notified = False
         self._heater_run_since: float = 0.0      # 운전 ON 이 된 시각(monotonic)
+        self._heater_sv_log_last_c = None        # 마지막으로 로그한 목표 온도
+        self._heater_sv_log_last_t: float = 0.0  # 그 시각(monotonic)
         self._heater_run_prev_bit: bool = False  # 직전 폴링의 run 비트
         # 첫 폴링 여부.
         #  PLC의 이상 비트는 SET 코일(래치)이라 프로그램을 껐다 켜도 남아 있다.
@@ -174,6 +182,9 @@ class PLCController(QObject):
             self.instrument.handle_local_echo = False
 
             self._is_running = True
+            # 재연결 후 첫 목표 설정은 반드시 로그되게 초기화한다
+            self._heater_sv_log_last_c = None
+            self._heater_sv_log_last_t = 0.0
             self.polling_timer.start()
             if HEATER_ENABLED:
                 self._heater_wd_timer.start()      # ★ 하트비트 시작
@@ -641,7 +652,16 @@ class PLCController(QObject):
             raw = int(round(float(temp_c) / HEATER_TEMP_SCALE))
             raw = max(0, min(32767, raw))
             self.instrument.write_register(HEATER_REG_SV, raw, functioncode=6)
-            self.status_message.emit("히터", f"목표 온도 {temp_c:.1f}°C 설정 (raw={raw})")
+            # 쓰기는 매번, 로그만 솎아낸다.
+            #  스텝이 바뀌며 목표가 점프하면 |Δ| 조건에 걸려 반드시 남는다.
+            _now = time.monotonic()
+            _last_c = self._heater_sv_log_last_c
+            if (_last_c is None
+                    or abs(float(temp_c) - float(_last_c)) >= HEATER_SV_LOG_MIN_DELTA_C
+                    or (_now - self._heater_sv_log_last_t) >= HEATER_SV_LOG_MIN_INTERVAL_SEC):
+                self._heater_sv_log_last_c = float(temp_c)
+                self._heater_sv_log_last_t = _now
+                self.status_message.emit("히터", f"목표 온도 {temp_c:.1f}°C 설정 (raw={raw})")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"히터 목표 온도 쓰기 실패: {e}")
         finally:

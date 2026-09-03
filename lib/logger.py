@@ -33,6 +33,8 @@ NAS_HEATER_LOG_DIR  = NAS_LOG_DIR / "heater"
 
 # NAS 폴백 경고는 프로그램 실행당 1회만. 공정마다 반복되면 로그가 지저분해진다.
 _nas_fallback_warned: bool = False
+# 히터 로그 쓰기 실패 경고도 1회만. 새 파일이 지정되면 리셋한다.
+_heater_write_failed_warned: bool = False
 
 def set_monitor_widget(widget):
     """메인 코드에서 로그창 위젯을 한번 등록"""
@@ -91,7 +93,8 @@ def clear_process_log_file() -> None:
 def set_heater_log_file(path) -> None:
     """히터 전용 텍스트 로그 파일을 지정한다. 경로는 호출부가 정한다
     (히터 CSV 와 같은 이름/타임스탬프로 맞추기 위해)."""
-    global _heater_log_file
+    global _heater_log_file, _heater_write_failed_warned
+    _heater_write_failed_warned = False      # 새 파일이니 경고를 다시 낼 수 있게
     try:
         _heater_log_file = Path(path) if path else None
     except Exception:
@@ -187,7 +190,20 @@ def log_message_to_file(level, message):
     except Exception:
         is_heater = False
     if is_heater and _heater_log_file is not None:
-        wrote = _append(_heater_log_file) or wrote
+        _hok = _append(_heater_log_file)
+        wrote = _hok or wrote
+        if not _hok:
+            # 공정 파일 쓰기가 성공하면 그대로 return 하므로, 알리지 않으면
+            # 히터 파일에 빠진 사실이 어디에도 안 남는다.
+            global _heater_write_failed_warned
+            if not _heater_write_failed_warned:
+                _heater_write_failed_warned = True      # 경고 전에 먼저 세운다
+                try:
+                    log_message_to_monitor(
+                        "경고",
+                        f"히터 로그 파일에 쓰지 못했습니다: {_heater_log_file}")
+                except Exception:
+                    pass
 
     if wrote:
         return

@@ -215,6 +215,13 @@ class HeaterRecipeRunner(QObject):
     def repeat_count(self) -> int:
         return self._repeat
 
+    def recipe_name(self) -> str:
+        """불러온 레시피 파일 이름(로그 머리말용). 없으면 빈 문자열."""
+        try:
+            return self._path.name if self._path else ""
+        except Exception:
+            return ""
+
     def _current_step(self) -> Optional[HeaterRecipeStep]:
         """현재 스텝. 인덱스가 범위를 벗어나면 None(호출부가 안전 중단한다).
 
