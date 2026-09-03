@@ -26,6 +26,11 @@ _heater_log_file: Optional[Path] = None
 # NAS 로그 기본 경로 (UNC 경로)
 NAS_LOG_DIR = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK")
 
+# 종류별 하위 폴더. 한 폴더에 공정/히터 파일이 섞이면 찾기 어렵다.
+#  log.txt(어디에도 속하지 않는 로그)는 지금처럼 CHK 루트에 그대로 둔다.
+NAS_PROCESS_LOG_DIR = NAS_LOG_DIR / "process"
+NAS_HEATER_LOG_DIR  = NAS_LOG_DIR / "heater"
+
 def set_monitor_widget(widget):
     """메인 코드에서 로그창 위젯을 한번 등록"""
     global _monitor_widget
@@ -35,21 +40,25 @@ def set_process_log_file(prefix: str = "CHK") -> Path:
     r"""
     공정 시작 시 호출해서, 이번 공정 로그를 기록할 파일을 생성/지정한다.
     - 기본 파일 이름: {prefix}_YYYYmmdd_HHMMSS.txt
-    - 기본 경로: \\VanaM_NAS\VanaM_toShare\JH_Lee\Logs
-    - NAS 접근 실패 시: 현재 작업 폴더 아래 Logs 폴더에 저장
+    - 기본 경로: \\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK\process
+    - NAS 접근 실패 시: 현재 작업 폴더 아래 Logs\process 폴더에 저장
+      (NAS와 로컬의 폴더 구조를 같게 유지한다)
     """
     global _current_log_file
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # 우선 NAS 경로 시도
-    base_dir = NAS_LOG_DIR
+    base_dir = NAS_PROCESS_LOG_DIR
     try:
         base_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
-        # NAS에 접근 안 되면 로컬 Logs 폴더로 폴백
-        base_dir = Path.cwd() / "Logs"
-        base_dir.mkdir(parents=True, exist_ok=True)
+        # NAS에 접근 안 되면 로컬 Logs/process 폴더로 폴백
+        base_dir = Path.cwd() / "Logs" / "process"
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass       # 폴더를 못 만들어도 예외를 밖으로 내보내지 않는다
 
     _current_log_file = base_dir / f"{prefix}_{timestamp}.txt"
     return _current_log_file

@@ -4,8 +4,8 @@
 PLC 폴링(200ms)으로 올라오는 히터 상태 딕셔너리를 일정 주기로 CSV에 남긴다.
 솎아내기(주기 판정)는 호출자(main.update_heater_display)가 한다.
 
-저장 위치는 lib/logger.py 의 NAS_LOG_DIR 을 재사용하고, 접근 실패 시
-./Logs 로 폴백한다 (set_process_log_file 과 동일한 정책).
+저장 위치는 lib/logger.py 의 NAS_HEATER_LOG_DIR(<CHK>/heater)을 쓰고,
+접근 실패 시 ./Logs/heater 로 폴백한다 (set_process_log_file 과 동일한 정책).
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from lib.logger import NAS_LOG_DIR
+from lib.logger import NAS_HEATER_LOG_DIR
 
 COLUMNS = [
     "timestamp", "elapsed_sec",
@@ -50,11 +50,11 @@ class HeaterCsvLogger:
         if self._fp is not None:
             return self._path
 
-        base_dir = NAS_LOG_DIR
+        base_dir = NAS_HEATER_LOG_DIR
         try:
             base_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
-            base_dir = Path.cwd() / "Logs"
+            base_dir = Path.cwd() / "Logs" / "heater"
             try:
                 base_dir.mkdir(parents=True, exist_ok=True)
             except Exception:
