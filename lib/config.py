@@ -148,6 +148,8 @@ HEATER_RAMP_RATE_C_PER_MIN = get('HEATER_RAMP_RATE_C_PER_MIN', 12.0)   # D00020 
 HEATER_HOLDBACK_C          = get('HEATER_HOLDBACK_C',          2.0)    # D00021 [°C]
 HEATER_OT_LIMIT_C          = get('HEATER_OT_LIMIT_C',          550.0)  # D00026 [°C]
 HEATER_SLOW_ZONE_C         = get('HEATER_SLOW_ZONE_C',         10.0)   # D00027 [°C]
+# 마지막 스텝 목표가 이 온도 이하면 냉각 스텝으로 본다(램프 없이 대기)
+HEATER_COOLDOWN_TARGET_C   = get('HEATER_COOLDOWN_TARGET_C',   30.0)   # [°C]
 HEATER_SLOW_RATE_C_PER_MIN = get('HEATER_SLOW_RATE_C_PER_MIN', 6.0)    # D00028 [°C/min]
 HEATER_PUSH_CONFIG         = get('HEATER_PUSH_CONFIG',         True)   # False면 PLC 쓰기 생략
 

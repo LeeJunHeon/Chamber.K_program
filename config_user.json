@@ -110,6 +110,9 @@
     "// → D00026. 과온 트립(°C). 래치되므로 풀려면 이상 리셋이 필요하다.": "",
     "HEATER_OT_LIMIT_C": 750.0,
     "// → D00027. 목표 도달 전 감속을 시작할 폭(°C)": "",
+    "_HEATER_COOLDOWN_TARGET_C": "마지막 스텝 목표가 이 온도 이하면 냉각 스텝 — 램프·도달 판정 없이 soak 시간만 기다린다. 히터는 식는 속도를 제어할 수 없기 때문",
+    "HEATER_COOLDOWN_TARGET_C": 30.0,
+
     "HEATER_SLOW_ZONE_C": 10.0,
     "// → D00028. 감속 구간 램프 속도(°C/min). 최소 6.0": "",
     "HEATER_SLOW_RATE_C_PER_MIN": 6.0,
