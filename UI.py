@@ -685,7 +685,7 @@ class Ui_Dialog(object):
         # --- 레시피 진행 조작 (실행 중에만 활성화된다) ---
         self.heater_hold_button = QPushButton(self.heater_group)
         self.heater_hold_button.setObjectName(u"heater_hold_button")
-        self.heater_hold_button.setGeometry(QRect(10, 302, 96, 28))
+        self.heater_hold_button.setGeometry(QRect(10, 302, 70, 28))
         self.heater_hold_button.setEnabled(False)
         self.heater_hold_button.setStyleSheet(
             u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
@@ -696,12 +696,25 @@ class Ui_Dialog(object):
 
         self.heater_skip_button = QPushButton(self.heater_group)
         self.heater_skip_button.setObjectName(u"heater_skip_button")
-        self.heater_skip_button.setGeometry(QRect(114, 302, 96, 28))
+        self.heater_skip_button.setGeometry(QRect(84, 302, 70, 28))
         self.heater_skip_button.setEnabled(False)
         self.heater_skip_button.setStyleSheet(
             u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
             u"font-size: 9pt; border-radius: 4px; border: 1px solid #cccccc;}"
             u"QPushButton:hover {background: #dcdcda;}"
+            u"QPushButton:disabled {color: #aaaaaa;}"
+        )
+
+        # [정지] 레시피 중단. 안전 조작이라 일시정지·건너뛰기와 같은 줄에 둔다.
+        #  배경만 옅은 적색으로 구분한다(#b3261e on #fdecea = 5.72:1, WCAG AA).
+        self.heater_stop_button = QPushButton(self.heater_group)
+        self.heater_stop_button.setObjectName(u"heater_stop_button")
+        self.heater_stop_button.setGeometry(QRect(158, 302, 52, 28))
+        self.heater_stop_button.setEnabled(False)
+        self.heater_stop_button.setStyleSheet(
+            u"QPushButton {background: #fdecea; color: #b3261e; font-weight: bold; "
+            u"font-size: 9pt; border-radius: 4px; border: 1px solid #f5c6c0;}"
+            u"QPushButton:hover {background: #f9dcd8;}"
             u"QPushButton:disabled {color: #aaaaaa;}"
         )
 
@@ -882,6 +895,7 @@ class Ui_Dialog(object):
         self.heater_onoff_button.setText(QCoreApplication.translate("Dialog", u"ON", None))
         self.heater_hold_button.setText(QCoreApplication.translate("Dialog", u"\uc77c\uc2dc\uc815\uc9c0", None))
         self.heater_skip_button.setText(QCoreApplication.translate("Dialog", u"\uac74\ub108\ub6f0\uae30", None))
+        self.heater_stop_button.setText(QCoreApplication.translate("Dialog", u"\uc815\uc9c0", None))
         # --- LCD 표시부 기본 텍스트 ---
         self.heater_pv_unit.setText(QCoreApplication.translate("Dialog", u"\u00b0C", None))
         self.heater_sv_small.setText(QCoreApplication.translate("Dialog", u"SV", None))
@@ -911,6 +925,8 @@ class Ui_Dialog(object):
         self.heater_skip_button.setToolTip(QCoreApplication.translate("Dialog",
             u"현재 스텝을 건너뛰고 다음 스텝으로 넘어갑니다.\n"
             u"마지막 스텝에서 누르면 레시피가 완료됩니다.", None))
+        self.heater_stop_button.setToolTip(QCoreApplication.translate("Dialog",
+            u"레시피를 중단하고 히터를 끕니다", None))
         self.heater_sv_big.setToolTip(QCoreApplication.translate("Dialog",
             u"PLC 가 지금 실제로 쫓고 있는 목표 온도(램프 중간 목표 포함)", None))
         self.heater_dev_label.setToolTip(QCoreApplication.translate("Dialog",

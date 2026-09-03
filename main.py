@@ -733,6 +733,7 @@ class MainDialog(QDialog):
             self.ui.heater_recipe_button.clicked.connect(self._on_heater_recipe_clicked)
             self.ui.heater_hold_button.clicked.connect(self._on_heater_hold_clicked)
             self.ui.heater_skip_button.clicked.connect(self._on_heater_skip_clicked)
+            self.ui.heater_stop_button.clicked.connect(self._on_heater_stop_clicked)
 
             # (4) ★ ProcessController -> PLC : 레시피(CSV/단일 공정)에서
             #     HEATER_SET 스텝이 실행될 때 목표 온도와 운전을 PLC로 보낸다.
@@ -1288,15 +1289,9 @@ class MainDialog(QDialog):
 
     @Slot()
     def _on_heater_recipe_clicked(self):
-        # 실행 중이면 중단 확인
+        # [레시피]는 불러오기 전용이다. 중단은 [정지] 버튼이 맡는다.
+        # (실행 중에는 _sync_heater_recipe_buttons 가 이 버튼을 비활성화한다)
         if self.heater_recipe.is_running():
-            reply = QMessageBox.question(
-                self, "레시피 중단",
-                "히터 레시피를 중단하고 히터를 끕니다. 계속할까요?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.Yes:
-                self.heater_recipe.stop("사용자 중단")
             return
 
         # 공정이 히터를 소유할 때만 막는다. 공정 레시피에 히터값이 없으면
@@ -1338,8 +1333,7 @@ class MainDialog(QDialog):
 
         self._rebuild_heater_step_list()
         if self.heater_recipe.start():
-            self.ui.heater_recipe_button.setText("중단")
-            self._refresh_heater_progress()
+            self._refresh_heater_progress()   # 버튼 상태는 여기서 함께 맞춰진다
 
     # ---------- PZ400 스타일 표시부 ----------
     def _update_heater_lcd(self, st: dict):
@@ -1504,13 +1498,20 @@ class MainDialog(QDialog):
             pass
 
     def _sync_heater_recipe_buttons(self):
-        """레시피가 돌 때만 [일시정지]/[건너뛰기]를 쓸 수 있게 한다."""
+        """레시피 조작 버튼 상태를 한 곳에서 맞춘다.
+
+        [레시피]는 '불러오기 전용'이라 실행 중에는 비활성으로만 표현한다.
+        버튼 하나가 상황에 따라 다른 일을 하지 않게 하는 것이 목적이다.
+        """
         try:
             running = self.heater_recipe.is_running()
             held = self.heater_recipe.is_held()
             self.ui.heater_hold_button.setEnabled(running)
             self.ui.heater_skip_button.setEnabled(running)
+            self.ui.heater_stop_button.setEnabled(running)
             self.ui.heater_hold_button.setText("재개" if (running and held) else "일시정지")
+            self.ui.heater_recipe_button.setEnabled(not running)
+            self.ui.heater_recipe_button.setText("레시피")
         except Exception:
             pass
 
@@ -1523,6 +1524,27 @@ class MainDialog(QDialog):
             self.heater_recipe.resume()
         else:
             self.heater_recipe.hold()
+        self._sync_heater_recipe_buttons()
+
+    @Slot()
+    def _on_heater_stop_clicked(self):
+        """[정지] 레시피를 중단한다. 공정이 돌고 있어도 공정은 건드리지 않는다."""
+        if not self.heater_recipe.is_running():
+            return
+        _in_process = (self.process_running or self.csv_mode
+                       or getattr(self, "_csv_delay_active", False))
+        msg = ("히터 레시피를 중단하고 히터를 끕니다.\n"
+               "공정은 계속 진행됩니다.\n"
+               "계속할까요?") if _in_process else (
+              "히터 레시피를 중단하고 히터를 끕니다.\n"
+              "계속할까요?")
+        reply = QMessageBox.question(
+            self, "레시피 중단", msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self.heater_recipe.stop("사용자 중단")
         self._sync_heater_recipe_buttons()
 
     @Slot()
@@ -1541,7 +1563,7 @@ class MainDialog(QDialog):
 
     @Slot(int, int, str)
     def _on_heater_recipe_step(self, cur: int, total: int, desc: str):
-        self.ui.heater_recipe_button.setText(f"{cur}/{total}")
+        # 버튼 텍스트는 건드리지 않는다. 스텝 진행은 LCD(STEP n/m)에 나온다.
         self._sync_heater_recipe_buttons()
         # 공정 중에는 stage monitor 를 공정이 쓴다. 히터 진행은 히터 패널에
         # 자체 표시(STEP/남은시간/진행률/스텝목록)가 있으므로 덮어쓰지 않는다.
@@ -1575,10 +1597,16 @@ class MainDialog(QDialog):
                               or getattr(self, "_csv_delay_active", False))
         except Exception:
             in_process = False
-        _need_abort = bool(in_process and not ok)
+        # stop() 으로 끝난 경우는 의도적 중단이다. 설비 이상(_abort)과 달리
+        # 공정까지 '설비 이상 실패'로 죽이면 안 된다.
+        _user_stop = False
+        try:
+            _user_stop = bool(self.heater_recipe.was_user_stopped())
+        except Exception:
+            _user_stop = False
+        _need_abort = bool(in_process and not ok and not _user_stop)
 
         try:
-            self.ui.heater_recipe_button.setText("레시피")
             self._sync_heater_recipe_buttons()
             # 목록은 남겨 두고 강조만 해제한다(무엇을 돌렸는지 확인용)
             self._refresh_heater_progress()
@@ -1596,6 +1624,26 @@ class MainDialog(QDialog):
                 except Exception:
                     pass
                 return
+            if _user_stop:
+                # 사람이 의도적으로 멈춘 것이다. 공정은 그대로 둔다.
+                #  실패가 아니므로 _chat_add_error / _chat_notify_failed_now 는 부르지 않는다
+                #  (종료 카드의 실패 원인 목록에 들어가면 안 된다).
+                try:
+                    log_message_to_monitor(
+                        "경고",
+                        f"[히터] 사용자가 레시피를 중단했습니다: {reason}"
+                        f" → 공정은 계속됩니다. 히터는 꺼집니다.")
+                except Exception:
+                    pass
+                try:
+                    if self.chat_chk:
+                        self.chat_chk.notify_text(
+                            f"\u23f9 CHK 히터 레시피 중단(사용자): {reason} — 공정은 계속 진행됩니다.")
+                        self.chat_chk.flush()
+                except Exception:
+                    pass
+                return
+
             # 히터가 무너진 시점에 시료는 이미 버린 것이다. 공정을 즉시 끝낸다.
             try:
                 log_message_to_monitor(

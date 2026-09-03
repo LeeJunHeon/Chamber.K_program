@@ -156,6 +156,10 @@ class HeaterRecipeRunner(QObject):
         self._held_target = None     # RAMPING 중 HOLD 시 보관한 원래 목표
         self._held_soak_remain = 0.0
 
+        # 사용자/시스템이 의도적으로 멈춘 것인가(stop) vs 설비 이상인가(_abort).
+        # 호출부가 이걸로 '공정도 같이 중단할지'를 판단한다.
+        self._stopped_by_user: bool = False
+
         # --- 진행 표시 ---
         self._run_started = 0.0
         self._total_est_sec = 0.0
@@ -182,6 +186,10 @@ class HeaterRecipeRunner(QObject):
 
     def is_held(self) -> bool:
         return bool(self._held)
+
+    def was_user_stopped(self) -> bool:
+        """마지막 종료가 stop()(의도적 중단)이었는가. _abort(설비 이상)면 False."""
+        return bool(self._stopped_by_user)
 
     def current_step_no(self) -> int:
         """1-based. 실행 중이 아니면 0."""
@@ -481,6 +489,7 @@ class HeaterRecipeRunner(QObject):
         self._idx = -1
         self._cycle = 0
         self._state = IDLE
+        self._stopped_by_user = False   # 지난 실행의 플래그를 물고 가지 않는다
         self._clear_hold()
         self._slow_ramp = False
 
@@ -499,8 +508,14 @@ class HeaterRecipeRunner(QObject):
         return True
 
     def stop(self, reason: str = "중단"):
-        """어떤 경로로 들어와도 히터를 끄고 램프 속도를 원복한다."""
+        """어떤 경로로 들어와도 히터를 끄고 램프 속도를 원복한다.
+
+        stop() 은 사람이/시스템이 의도적으로 부르는 경로다(원격 중단·비상 정지·
+        사용자 중단·프로그램 종료). 설비 이상인 _abort() 와 구분해야, 공정 중에
+        레시피만 멈췄을 때 스퍼터 공정까지 '설비 이상 실패'로 죽지 않는다.
+        """
         was_running = self.is_running()
+        self._stopped_by_user = True
         self._state = ABORTED
         self._out_dead_since = 0.0
         self._run_off_since = 0.0
