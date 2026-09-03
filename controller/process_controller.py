@@ -14,6 +14,10 @@ from lib.config import (DC_POWER_DELAY_SEC,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
                         HEATER_WAIT_TIMEOUT_SEC)
 
+# 승온 예정시간에 더할 여유 / 상한. heater_recipe.py 와 같은 값이다.
+WAIT_TIMEOUT_MARGIN_SEC = 1800.0     # 30분
+WAIT_TIMEOUT_MAX_SEC    = 43200.0    # 12시간
+
 # 래더 램프 목표(D00019)가 최종 목표에 닿았다고 볼 허용치.
 # D00019 는 0.1°C 단위 정수라 그만큼의 여유를 둔다.
 RAMP_DONE_TOL_C = 0.15
@@ -126,6 +130,8 @@ class SputterProcessController(QObject):
         # 사용 여부
         self.is_dc_on = False
         self._heater_used = False   # 이번 공정이 히터를 쓰는가 (종료 시 OFF 판단용)
+        #  이번 공정의 램프 속도(°C/min). _heater_wait 의 타임아웃 산정에 쓴다.
+        self._heater_ramp_c_per_min = float(HEATER_RAMP_RATE_C_PER_MIN)
         self.is_rf_on = False
 
         self._stop_pending = False
@@ -296,6 +302,7 @@ class SputterProcessController(QObject):
         #  공정 가스를 도입하기 위해서다. 배기는 3)에서 최대로 열어 두었다.
         heater_temp = float(p.get('heater_temp', 0.0) or 0.0)
         heater_ramp = float(p.get('heater_ramp', 0.0) or 0.0) or float(HEATER_RAMP_RATE_C_PER_MIN)
+        self._heater_ramp_c_per_min = heater_ramp   # 대기 타임아웃 산정용
         self._heater_used = bool(p.get('use_heater', False)) and heater_temp > 0.0
 
         if self._heater_used:
@@ -745,7 +752,28 @@ class SputterProcessController(QObject):
         """PLC 히터 상태 폴링을 구독해 목표 ±tol 이 N초 연속 유지되면 통과."""
         tol        = float(HEATER_SOAK_TOLERANCE)
         need_sec   = int(HEATER_SOAK_TIME_SEC)
-        timeout_ms = int(HEATER_WAIT_TIMEOUT_SEC * 1000)
+
+        # 승온 대기 타임아웃을 이번 공정의 램프 속도로 산정한다.
+        #  도달 판정에 램프 완료 조건이 들어가면서 실제로 목표에 닿아야 넘어가는데,
+        #  고정 90분이면 고온 구간(홀드백으로 램프가 느려짐)에서 공정이 실패한다.
+        try:
+            _cur = (self.plc.get_heater_status() or {}).get('pv')
+        except Exception:
+            _cur = None
+
+        _timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)
+        if _cur is not None:
+            try:
+                _rate = float(getattr(self, "_heater_ramp_c_per_min", 0.0) or 0.0)
+                if _rate <= 0:
+                    _rate = float(HEATER_RAMP_RATE_C_PER_MIN)
+                _need = abs(float(target_c) - float(_cur)) / _rate * 60.0
+                _timeout_sec = min(
+                    max(float(HEATER_WAIT_TIMEOUT_SEC), _need + WAIT_TIMEOUT_MARGIN_SEC),
+                    WAIT_TIMEOUT_MAX_SEC)
+            except Exception:
+                _timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)
+        timeout_ms = int(_timeout_sec * 1000)
 
         loop = QEventLoop()
         state = {'in_band_since': None, 'aborted': False, 'reason': '',
@@ -798,10 +826,6 @@ class SputterProcessController(QObject):
             else:
                 state['in_band_since'] = None
 
-        try:
-            _cur = (self.plc.get_heater_status() or {}).get('pv')
-        except Exception:
-            _cur = None
         state['first_pv'] = _cur
 
         self.plc.update_heater_status.connect(_on_status)
@@ -810,11 +834,12 @@ class SputterProcessController(QObject):
         self.status_message.emit(
             "히터",
             f"히터 승온 대기 시작 — 현재 "
-            f"{('%.1f' % _cur) if _cur is not None else '--.-'}°C, 목표 {target_c:.1f}°C")
+            f"{('%.1f' % _cur) if _cur is not None else '--.-'}°C, 목표 {target_c:.1f}°C"
+            f" (타임아웃 {_timeout_sec / 60:.0f}분)")
 
         ok = self._exec_loop_with_timeout(
             loop, timeout_ms,
-            timeout_message=(f"히터 승온 timeout({HEATER_WAIT_TIMEOUT_SEC}s) — 목표 미도달 "
+            timeout_message=(f"히터 승온 timeout({_timeout_sec:.0f}s) — 목표 미도달 "
                              f"(램프가 끝나기 전에 타임아웃일 수 있으니 "
                              f"HEATER_WAIT_TIMEOUT_SEC 확인)"))
 

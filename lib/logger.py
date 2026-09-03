@@ -31,6 +31,9 @@ NAS_LOG_DIR = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK")
 NAS_PROCESS_LOG_DIR = NAS_LOG_DIR / "process"
 NAS_HEATER_LOG_DIR  = NAS_LOG_DIR / "heater"
 
+# NAS 폴백 경고는 프로그램 실행당 1회만. 공정마다 반복되면 로그가 지저분해진다.
+_nas_fallback_warned: bool = False
+
 def set_monitor_widget(widget):
     """메인 코드에서 로그창 위젯을 한번 등록"""
     global _monitor_widget
@@ -54,11 +57,24 @@ def set_process_log_file(prefix: str = "CHK") -> Path:
         base_dir.mkdir(parents=True, exist_ok=True)
     except Exception:
         # NAS에 접근 안 되면 로컬 Logs/process 폴더로 폴백
+        _nas_tried = base_dir
         base_dir = Path.cwd() / "Logs" / "process"
         try:
             base_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass       # 폴더를 못 만들어도 예외를 밖으로 내보내지 않는다
+        # 조용히 폴백하면 NAS에 로그가 안 쌓이는 것을 한참 뒤에 알게 된다.
+        #  (이 시점 _current_log_file 은 아직 설정 전이라 이 경고는 log.txt 로 간다)
+        global _nas_fallback_warned
+        if not _nas_fallback_warned:
+            _nas_fallback_warned = True
+            try:
+                log_message_to_monitor(
+                    "경고",
+                    f"NAS 로그 폴더를 만들 수 없어 로컬로 저장합니다. "
+                    f"시도={_nas_tried} → 사용={base_dir}")
+            except Exception:
+                pass
 
     _current_log_file = base_dir / f"{prefix}_{timestamp}.txt"
     return _current_log_file

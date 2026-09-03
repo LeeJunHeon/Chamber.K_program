@@ -16,7 +16,10 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from lib.logger import NAS_HEATER_LOG_DIR
+from lib.logger import NAS_HEATER_LOG_DIR, log_message_to_monitor
+
+# NAS 폴백 경고는 프로그램 실행당 1회만(인스턴스가 아니라 모듈 전역).
+_nas_fallback_warned: bool = False
 
 COLUMNS = [
     "timestamp", "elapsed_sec",
@@ -54,11 +57,22 @@ class HeaterCsvLogger:
         try:
             base_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
+            _nas_tried = base_dir
             base_dir = Path.cwd() / "Logs" / "heater"
             try:
                 base_dir.mkdir(parents=True, exist_ok=True)
             except Exception:
                 return None
+            global _nas_fallback_warned
+            if not _nas_fallback_warned:
+                _nas_fallback_warned = True
+                try:
+                    log_message_to_monitor(
+                        "경고",
+                        f"NAS 히터 로그 폴더를 만들 수 없어 로컬로 저장합니다. "
+                        f"시도={_nas_tried} → 사용={base_dir}")
+                except Exception:
+                    pass
 
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = base_dir / f"{prefix}_{stamp}.csv"
