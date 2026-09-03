@@ -14,6 +14,10 @@ from lib.config import (DC_POWER_DELAY_SEC,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
                         HEATER_WAIT_TIMEOUT_SEC)
 
+# 래더 램프 목표(D00019)가 최종 목표에 닿았다고 볼 허용치.
+# D00019 는 0.1°C 단위 정수라 그만큼의 여유를 둔다.
+RAMP_DONE_TOL_C = 0.15
+
 # ===================== 액션 / 스텝 정의 =====================
 
 if TYPE_CHECKING:
@@ -774,7 +778,17 @@ class SputterProcessController(QObject):
                     f"히터 승온 중 — {float(pv):.1f}°C / {target_c:.1f}°C, "
                     f"{int(elapsed_ms // 60000)}분 경과")
 
-            if abs(float(pv) - target_c) <= tol:
+            # 램프가 아직 최종 목표에 닿지 않았으면 도달로 보지 않는다.
+            #  (허용오차만으로 판정하면 유지 구간이 목표보다 낮은 온도에서 시작된다)
+            _ramp_done = True
+            try:
+                _svr = st.get('sv_ramp')
+                if _svr is not None:
+                    _ramp_done = abs(float(_svr) - float(target_c)) <= RAMP_DONE_TOL_C
+            except Exception:
+                _ramp_done = True      # 값을 못 읽으면 기존 동작(온도만으로 판정)
+
+            if _ramp_done and abs(float(pv) - target_c) <= tol:
                 if state['in_band_since'] is None:
                     clock.start()
                     state['in_band_since'] = True

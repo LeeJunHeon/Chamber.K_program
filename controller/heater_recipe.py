@@ -50,6 +50,10 @@ TC_BAD_LIMIT_SEC = 60.0
 # 운전 중인데 DAC 출력이 0인 상태(PID 정지)가 이 시간 이상 계속되면 중단한다.
 OUT_DEAD_LIMIT_SEC = 10.0
 
+# 래더 램프 목표(D00019)가 최종 목표에 닿았다고 볼 허용치.
+# D00019 는 0.1°C 단위 정수라 그만큼의 여유를 둔다.
+RAMP_DONE_TOL_C = 0.15
+
 # 외부(수동/원격)에서 히터가 꺼진 상태가 이 시간 이상 계속되면 중단한다.
 # 히터 ON 요청 직후 PLC 되읽기가 반영되기까지의 유예를 겸한다.
 RUN_OFF_LIMIT_SEC = 5.0
@@ -818,7 +822,18 @@ class HeaterRecipeRunner(QObject):
             return
         self._tc_bad_since = 0.0
 
-        if abs(float(pv) - s.target_c) <= HEATER_SOAK_TOLERANCE:
+        # 램프가 아직 최종 목표에 닿지 않았으면 도달로 보지 않는다.
+        #  (허용오차만으로 판정하면 유지 구간이 목표보다 낮은 온도에서 시작된다.
+        #   실기에서 목표 45°C 가 43.8°C 에서 유지 시작된 적이 있다)
+        _ramp_done = True
+        try:
+            _svr = st.get('sv_ramp')
+            if _svr is not None:
+                _ramp_done = abs(float(_svr) - float(s.target_c)) <= RAMP_DONE_TOL_C
+        except Exception:
+            _ramp_done = True      # 값을 못 읽으면 기존 동작(온도만으로 판정)
+
+        if _ramp_done and abs(float(pv) - s.target_c) <= HEATER_SOAK_TOLERANCE:
             if self._in_band_since == 0.0:
                 self._in_band_since = now
             elif now - self._in_band_since >= HEATER_SOAK_TIME_SEC:
