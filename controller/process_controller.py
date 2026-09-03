@@ -814,7 +814,9 @@ class SputterProcessController(QObject):
 
         ok = self._exec_loop_with_timeout(
             loop, timeout_ms,
-            timeout_message=f"히터 승온 timeout({HEATER_WAIT_TIMEOUT_SEC}s) — 목표 미도달")
+            timeout_message=(f"히터 승온 timeout({HEATER_WAIT_TIMEOUT_SEC}s) — 목표 미도달 "
+                             f"(램프가 끝나기 전에 타임아웃일 수 있으니 "
+                             f"HEATER_WAIT_TIMEOUT_SEC 확인)"))
 
         try:
             self.plc.update_heater_status.disconnect(_on_status)

@@ -154,7 +154,11 @@ def log_message_to_file(level, message):
 
     # 2) 히터 메시지는 히터 전용 로그에도 남긴다
     try:
-        is_heater = str(level or "").startswith("히터")
+        _lv = str(level or "")
+        _msg = str(message or "").lstrip()
+        # 레벨이 "히터…" 이거나, 메시지가 "[히터]" 로 시작하면 히터 로그에도 남긴다.
+        #  (히터 이상 상세는 level="경고" 로 남기기 때문에 레벨만으로는 놓친다)
+        is_heater = _lv.startswith("히터") or _msg.startswith("[히터]")
     except Exception:
         is_heater = False
     if is_heater and _heater_log_file is not None:

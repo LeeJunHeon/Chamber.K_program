@@ -50,6 +50,11 @@ TC_BAD_LIMIT_SEC = 60.0
 # 운전 중인데 DAC 출력이 0인 상태(PID 정지)가 이 시간 이상 계속되면 중단한다.
 OUT_DEAD_LIMIT_SEC = 10.0
 
+# 승온 예정시간에 더할 여유. 도달 판정에 램프 완료 조건이 들어가면서
+# HEATER_WAIT_TIMEOUT_SEC 이 스텝별 승온시간의 하드캡이 되어버렸다.
+WAIT_TIMEOUT_MARGIN_SEC = 1800.0     # 30분
+WAIT_TIMEOUT_MAX_SEC    = 43200.0    # 12시간 — 계산이 이상해져도 이 위로는 안 간다
+
 # 래더 램프 목표(D00019)가 최종 목표에 닿았다고 볼 허용치.
 # D00019 는 0.1°C 단위 정수라 그만큼의 여유를 둔다.
 RAMP_DONE_TOL_C = 0.15
@@ -135,6 +140,7 @@ class HeaterRecipeRunner(QObject):
         self._idx = -1
 
         self._step_started = 0.0     # RAMPING 시작 시각 (monotonic)
+        self._step_timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)  # 이번 스텝의 승온 타임아웃
         self._in_band_since = 0.0    # 허용 편차 안에 들어온 시각. 0이면 밖
         self._tc_bad_since = 0.0
         self._out_dead_since = 0.0   # 출력 0 지속 시작 시각. 0이면 정상
@@ -648,6 +654,27 @@ class HeaterRecipeRunner(QObject):
             desc = f"[일시정지] {desc}"
         self.step_changed.emit(self._idx + 1, len(self._steps), desc)
 
+    def _calc_step_timeout(self, s: HeaterRecipeStep, from_temp: float) -> float:
+        """이번 스텝의 승온 타임아웃(초).
+
+        기본값보다 예정 승온시간이 길면 그쪽에 여유를 더해 쓴다. 산정 근거가
+        없으면(냉각/속도 0 등) 기본값 그대로.
+        """
+        base = float(HEATER_WAIT_TIMEOUT_SEC)
+        try:
+            if s.is_cooldown:
+                return base
+            if s.ramp_min:
+                need = float(s.ramp_min) * 60.0
+            else:
+                rate = float(s._resolved_rate or 0.0)
+                if rate <= 0:
+                    return base
+                need = abs(float(s.target_c) - from_temp) / rate * 60.0
+            return min(max(base, need + WAIT_TIMEOUT_MARGIN_SEC), WAIT_TIMEOUT_MAX_SEC)
+        except Exception:
+            return base
+
     def _advance(self):
         """다음 스텝으로 진입한다. 남은 스텝이 없으면 반복하거나 완료 처리."""
         self._slow_ramp = False
@@ -693,6 +720,13 @@ class HeaterRecipeRunner(QObject):
                 f" → {s._resolved_rate:.1f}°C/min 으로 승온")
         else:
             s._resolved_rate = float(s.ramp_c_per_min)
+
+        # 이번 스텝의 승온 타임아웃을 산정한다. 기본값(HEATER_WAIT_TIMEOUT_SEC)이
+        # 예정 승온시간보다 짧으면 램프가 끝나기 전에 확정적으로 중단되기 때문이다.
+        self._step_timeout_sec = self._calc_step_timeout(s, float(from_temp))
+        self.status_message.emit(
+            "히터",
+            f"스텝 {self._idx + 1}: 승온 타임아웃 {self._step_timeout_sec / 60:.0f}분")
 
         rate = s._resolved_rate
         if rate >= PLC_MIN_RAMP_C_PER_MIN or s.is_cooldown or rate <= 0:
@@ -867,9 +901,10 @@ class HeaterRecipeRunner(QObject):
         if self._state == RAMPING:
             if self._slow_ramp:
                 self._push_slow_ramp(now)
-            if now - self._step_started > HEATER_WAIT_TIMEOUT_SEC:
+            _to = float(getattr(self, "_step_timeout_sec", HEATER_WAIT_TIMEOUT_SEC))
+            if now - self._step_started > _to:
                 self._abort(
-                    f"스텝 {self._idx + 1} 승온 시간 초과 ({HEATER_WAIT_TIMEOUT_SEC:.0f}초)")
+                    f"스텝 {self._idx + 1} 승온 시간 초과 ({_to:.0f}초)")
         elif self._state == SOAKING:
             remain = self._soak_deadline - now
             if remain <= 0:

@@ -2528,6 +2528,8 @@ class MainDialog(QDialog):
         self.ui.select_csv_button.setEnabled(True)
         self.update_stage_monitor(stage_text)
         self._reset_process_ui_fields()
+        # 반드시 맨 끝 — 중단 사유 로그는 해당 공정 파일에 남아야 한다
+        clear_process_log_file()
 
     def _start_csv_delay_step(self, delay_sec: int, raw_name: str) -> None:
         """CSV 리스트 중 'delay Xm' 스텝 실행: UI는 멈추지 않고(타이머로) 카운트다운."""
@@ -3337,6 +3339,8 @@ class MainDialog(QDialog):
 
             # ▶ 공통 UI 초기화
             self._reset_process_ui_fields()
+            # 리스트 정상 완료 — 이후 로그가 마지막 STEP 파일에 덧붙지 않게 해제
+            clear_process_log_file()
             return
 
         row = self.csv_rows[self.csv_index]
