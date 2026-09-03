@@ -597,36 +597,26 @@ class Ui_Dialog(object):
             u"border-radius: 3px;}"
         )
 
-        self.heater_out_bar = QProgressBar(self.heater_lcd)
-        self.heater_out_bar.setObjectName(u"heater_out_bar")
-        self.heater_out_bar.setGeometry(QRect(60, 116, 132, 18))
-        self.heater_out_bar.setRange(0, 100)
-        self.heater_out_bar.setValue(0)
-        self.heater_out_bar.setTextVisible(True)
-        self.heater_out_bar.setFormat(u"%p%")
-        self.heater_out_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.heater_out_bar.setStyleSheet(
+        # (LCD 안에는 전체 진행률 바가 들어간다. DAC 출력 바는 아래 패널로)
+        self.heater_prog_bar = QProgressBar(self.heater_lcd)
+        self.heater_prog_bar.setObjectName(u"heater_prog_bar")
+        self.heater_prog_bar.setGeometry(QRect(60, 116, 132, 18))
+        self.heater_prog_bar.setRange(0, 100)
+        self.heater_prog_bar.setValue(0)
+        self.heater_prog_bar.setTextVisible(True)
+        self.heater_prog_bar.setFormat(u"%p%")
+        self.heater_prog_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.heater_prog_bar.setStyleSheet(
             u"QProgressBar {background: #eceff1; border: 1px solid #dfe3e8; "
             u"border-radius: 3px; color: #37474f; font-size: 8pt;}"
             u"QProgressBar::chunk {background: #90a4ae; border-radius: 2px;}"
         )
         # ============ LCD 끝 ============
 
-        # --- 레시피 전체 진행률 ---
-        self.heater_prog_bar = QProgressBar(self.heater_group)
-        self.heater_prog_bar.setObjectName(u"heater_prog_bar")
-        self.heater_prog_bar.setGeometry(QRect(10, 180, 200, 10))
-        self.heater_prog_bar.setRange(0, 100)
-        self.heater_prog_bar.setValue(0)
-        self.heater_prog_bar.setTextVisible(False)
-        self.heater_prog_bar.setStyleSheet(
-            u"QProgressBar {background: #eeeeee; border: none; border-radius: 5px;}"
-            u"QProgressBar::chunk {background: #4a90d9; border-radius: 5px;}"
-        )
-
+        # --- 남은 시간 (전체 %는 LCD 안 바에 들어간다) ---
         self.heater_prog_label = QLabel(self.heater_group)
         self.heater_prog_label.setObjectName(u"heater_prog_label")
-        self.heater_prog_label.setGeometry(QRect(10, 193, 200, 16))
+        self.heater_prog_label.setGeometry(QRect(10, 180, 200, 16))
         self.heater_prog_label.setStyleSheet(
             u"QLabel {border: none; color: #666666; font-size: 8.5pt;}"
         )
@@ -677,10 +667,20 @@ class Ui_Dialog(object):
         self.heater_status_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         # PLC 내장 PID의 실제 출력 (DAC 카운트 + %)
-        self.heater_mv_label = QLabel(self.heater_group)
-        self.heater_mv_label.setObjectName(u"heater_mv_label")
-        self.heater_mv_label.setGeometry(QRect(10, 274, 200, 20))
-        self.heater_mv_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
+        # DAC 출력 바. 텍스트(DAC 원본/출력%/추정전류)는 main.py 가 setFormat 으로 넣는다.
+        self.heater_out_bar = QProgressBar(self.heater_group)
+        self.heater_out_bar.setObjectName(u"heater_out_bar")
+        self.heater_out_bar.setGeometry(QRect(10, 274, 200, 20))
+        self.heater_out_bar.setRange(0, 100)
+        self.heater_out_bar.setValue(0)
+        self.heater_out_bar.setTextVisible(True)
+        self.heater_out_bar.setFormat(u"")
+        self.heater_out_bar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.heater_out_bar.setStyleSheet(
+            u"QProgressBar {background: #eceff1; border: 1px solid #dfe3e8; "
+            u"border-radius: 3px; color: #37474f; font-size: 8pt;}"
+            u"QProgressBar::chunk {background: #90a4ae; border-radius: 2px;}"
+        )
 
         # --- 레시피 진행 조작 (실행 중에만 활성화된다) ---
         self.heater_hold_button = QPushButton(self.heater_group)
@@ -889,7 +889,6 @@ class Ui_Dialog(object):
         self.heater_sv_title.setText(QCoreApplication.translate("Dialog", u"\ubaa9\ud45c", None))
         # 초기 표시: 아직 PLC 연결 전이므로 '연결 대기' 상태임을 명시
         self.heater_status_label.setText(QCoreApplication.translate("Dialog", u"\uc5f0\uacb0 \ub300\uae30", None))
-        self.heater_mv_label.setText(QCoreApplication.translate("Dialog", u"\ucd9c\ub825 : \uc815\uc9c0", None))
         self.heater_apply_button.setText(QCoreApplication.translate("Dialog", u"\uc801\uc6a9", None))
         self.heater_recipe_button.setText(QCoreApplication.translate("Dialog", u"\ub808\uc2dc\ud53c", None))
         self.heater_onoff_button.setText(QCoreApplication.translate("Dialog", u"ON", None))
@@ -936,7 +935,9 @@ class Ui_Dialog(object):
         self.heater_time_label.setToolTip(QCoreApplication.translate("Dialog",
             u"현재 스텝의 남은 시간 (승온 구간은 현재 온도와 속도로 계산한 추정치)", None))
         self.heater_out_bar.setToolTip(QCoreApplication.translate("Dialog",
-            u"PID 출력 (DAC 절대 최대치 기준 백분율)", None))
+            u"PID 출력. DAC 원본값 / 운전 상한(D00018) 과 추정 전류를 함께 보여준다.\n"
+            u"출력 %는 운전 상한이 아니라 절대 최대치(HEATER_MV_ABS_MAX) 기준이라\n"
+            u"DAC 값의 분수와 비율이 다르게 보인다.", None))
         self.heater_prog_bar.setToolTip(QCoreApplication.translate("Dialog",
             u"레시피 전체 진행률", None))
         self.heater_step_list.setToolTip(QCoreApplication.translate("Dialog",

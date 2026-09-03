@@ -173,6 +173,7 @@ class HeaterRecipeRunner(QObject):
         # --- 진행 표시 ---
         self._run_started = 0.0
         self._total_est_sec = 0.0
+        self._percent_max = 0.0      # 진행률은 뒤로 가지 않는다(단조 증가)
         self._start_pv = 0.0
 
         # 1초 틱 — 상태 시그널이 끊겨도 타임아웃은 돌아야 한다
@@ -262,6 +263,43 @@ class HeaterRecipeRunner(QObject):
             prev = s.target_c
         return total * 60.0 * max(1, self._repeat)
 
+    def _remaining_sec(self, step_remain: float) -> float:
+        """현재 시점 기준 남은 시간(초).
+
+        스텝 남은 시간(온도 기준)과 전체 남은 시간을 같은 근거로 맞춘다.
+        시계 기준(totalEst − elapsed)과 섞으면 승온이 늦을 때 전체가 스텝보다
+        작아지는 역전이 난다(실기 280s < 247+60s).
+          (a) 현재 스텝 남은 시간 + 남은 소크
+          (b) 같은 사이클의 이후 스텝들
+          (c) 남은 반복 회차 × 1사이클
+        """
+        try:
+            if step_remain < 0:
+                return -1.0                     # 계산 불가 → 호출부가 폴백한다
+            total = float(step_remain)
+            cur = self._current_step()
+
+            # (a) RAMPING 이면 이 스텝의 소크가 통째로 남아 있다
+            if self._state == RAMPING and cur is not None and not cur.is_cooldown:
+                total += float(cur.soak_min) * 60.0
+
+            # (b) 같은 사이클의 이후 스텝 (직전 스텝 목표에서 출발한다고 본다)
+            prev = float(cur.target_c) if cur is not None else 0.0
+            one_cycle = 0.0
+            for i, s_ in enumerate(self._steps):
+                m = self._step_minutes(s_, prev if i > 0 else self._start_pv)
+                one_cycle += m
+                if i > self._idx:
+                    total += m * 60.0
+                prev = s_.target_c
+
+            # (c) 남은 반복 회차
+            left_cycles = max(0, self._repeat - (self._cycle + 1))
+            total += one_cycle * 60.0 * left_cycles
+            return max(0.0, total)
+        except Exception:
+            return -1.0
+
     def progress(self) -> dict:
         """외부(ERP 리포터)에 넘길 진행 상태 요약."""
         import time as _t
@@ -307,9 +345,26 @@ class HeaterRecipeRunner(QObject):
             elapsed -= max(0.0, _t.monotonic() - self._held_at)
         elapsed = max(0.0, elapsed)
         total_est = float(self._total_est_sec)
+
+        # 남은 시간 — 스텝 남은 시간과 같은 근거로 계산한다.
+        remain_sec = self._remaining_sec(step_remain)
+        if remain_sec < 0:
+            remain_sec = max(0.0, total_est - elapsed)   # 폴백(기존 방식)
+
+        # 진행률도 남은 시간 기준으로. 승온이 늦어지면 값이 줄 수 있으므로
+        # 최댓값을 기억해 단조 증가시킨다(바가 뒤로 가면 안 된다).
         percent = 0.0
-        if total_est > 0:
+        denom = elapsed + remain_sec
+        if denom > 0:
+            percent = max(0.0, min(100.0, elapsed / denom * 100.0))
+        elif total_est > 0:
             percent = max(0.0, min(100.0, elapsed / total_est * 100.0))
+        try:
+            if not self._held:
+                self._percent_max = max(float(self._percent_max), percent)
+            percent = min(100.0, float(self._percent_max))
+        except Exception:
+            pass
 
         return {
             "running": self.is_running(),
@@ -318,6 +373,7 @@ class HeaterRecipeRunner(QObject):
             "total": self.total_steps(),
             "soakRemainSec": int(remain),
             "stepRemainSec": int(step_remain),
+            "remainSec": int(remain_sec),
             "steps": steps,
             # --- 진행 표시용 추가 키 ---
             "cycle": self.cycle_no(),
@@ -514,6 +570,7 @@ class HeaterRecipeRunner(QObject):
         self._start_pv = float(pv) if pv is not None else 0.0
         self._run_started = time.monotonic()
         self._total_est_sec = self._estimate_total_sec(self._start_pv)
+        self._percent_max = 0.0
 
         self._tick.start()
         rep_txt = f" × {self._repeat}회" if self._repeat > 1 else ""

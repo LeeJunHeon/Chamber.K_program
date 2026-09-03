@@ -537,7 +537,7 @@ class MainDialog(QDialog):
                         "pv": _w("heater_pv_edit"),
                         "sv": _w("heater_sv_edit"),
                         "status": _w("heater_status_label"),
-                        "output": _w("heater_mv_label"),
+                        "output": self._heater_output_text(),
                         "on": _checked("heater_onoff_button"),
                         "curSv": (getattr(self, "_erp_heater", {}) or {}).get("cur_sv"),
                         "pidErr": (getattr(self, "_erp_heater", {}) or {}).get("pid_err"),
@@ -1234,6 +1234,24 @@ class MainDialog(QDialog):
         except Exception:
             pass
 
+    def _heater_output_text(self, st: dict | None = None) -> str:
+        """DAC 출력 한 줄. 출력 바의 텍스트와 ERP 스냅샷이 같은 문구를 쓴다.
+
+        '출력 %'는 절대 최대치(HEATER_MV_ABS_MAX) 기준이라 DAC 분수와 비율이
+        다르게 보인다. 그래서 "(20%)" 대신 "출력 20%" 로 풀어 쓴다.
+        """
+        try:
+            if st is None:
+                st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
+            mv = int(st.get('mv', 0) or 0)
+            if not st.get('run'):
+                return f"정지 (DAC {mv})"
+            return (f"DAC {mv}/{int(st.get('mv_limit', HEATER_MV_LIMIT) or HEATER_MV_LIMIT)}"
+                    f" · 출력 {float(st.get('mv_pct', 0) or 0):.0f}%"
+                    f" · ≈{float(st.get('est_current', 0.0) or 0.0):.1f}A")
+        except Exception:
+            return ""
+
     def _heater_log_prefix(self) -> str:
         """히터 CSV 파일명 접두사. 공정 중이면 공정명을 붙인다."""
         try:
@@ -1453,21 +1471,6 @@ class MainDialog(QDialog):
             else:
                 ui.heater_dev_label.setText("")
 
-            # 출력 바 — 운전 중이 아니면 0
-            ui.heater_out_bar.setValue(
-                int(st.get('mv_pct') or 0) if running else 0)
-
-            # 목표 입력칸이 비어 있으면 PLC 에 들어 있는 목표로 한 번만 채운다.
-            #  사용자가 입력한 뒤에는 절대 덮어쓰지 않는다(_heater_sv_seeded).
-            if not getattr(self, "_heater_sv_seeded", False):
-                try:
-                    sv0 = float(st.get('sv') or 0.0)
-                    if sv0 > 0 and not ui.heater_sv_edit.text().strip():
-                        ui.heater_sv_edit.setText(f"{sv0:g}")
-                        self._heater_sv_seeded = True
-                except Exception:
-                    pass
-
             # 운전 배지 (우선순위: FAULT > ITL > HOLD > RUN > STOP)
             held = False
             try:
@@ -1562,15 +1565,16 @@ class MainDialog(QDialog):
                     "--:--" if step_remain < 0 else _fmt_hms_sec(step_remain))
                 pct = float(pg.get("percent") or 0.0)
                 ui.heater_prog_bar.setValue(int(pct))
-                total_est = int(pg.get("totalEstSec") or 0)
-                remain = max(0, total_est - int(pg.get("elapsedSec") or 0))
+                ui.heater_prog_bar.setFormat(f"전체 {pct:.0f}%")
+                # 남은 시간은 스텝 남은 시간과 같은 근거로 계산된 remainSec 를 쓴다
+                remain = int(pg.get("remainSec", -1) or 0)
                 ui.heater_prog_label.setText(
-                    f"전체 {pct:.0f}% · 남음 {_fmt_hms_sec(remain)}"
-                    if total_est > 0 else "")
+                    f"남음 {_fmt_hms_sec(remain)}" if remain >= 0 else "")
             else:
                 ui.heater_seg_label.setText("레시피 없음")
                 ui.heater_time_label.setText("--:--:--")
                 ui.heater_prog_bar.setValue(0)
+                ui.heater_prog_bar.setFormat("레시피 없음")
                 ui.heater_prog_label.setText("")
 
             self._highlight_heater_step()
@@ -1593,6 +1597,21 @@ class MainDialog(QDialog):
             self.ui.heater_hold_button.setText("재개" if (running and held) else "일시정지")
             self.ui.heater_recipe_button.setEnabled(not running)
             self.ui.heater_recipe_button.setText("레시피")
+
+            # 레시피가 목표를 관리하는 동안에는 수동 입력을 막고, 목표칸에
+            # 현재 스텝 목표를 보여준다. 끝나면 마지막 목표를 남긴 채 다시 연다.
+            #  (HEATER_ENABLED=false 면 _connect_signals 가 이미 잠가 뒀다)
+            if running:
+                try:
+                    steps = self.heater_recipe.steps()
+                    no = self.heater_recipe.current_step_no()
+                    if 1 <= no <= len(steps):
+                        self.ui.heater_sv_edit.setText(f"{steps[no - 1].target_c:g}")
+                except Exception:
+                    pass
+            if HEATER_ENABLED:
+                for _w in ("heater_sv_edit", "heater_apply_button", "heater_onoff_button"):
+                    getattr(self.ui, _w).setEnabled(not running)
         except Exception:
             pass
 
@@ -1799,23 +1818,14 @@ class MainDialog(QDialog):
         self.ui.heater_status_label.setStyleSheet(
             f"border: none; color:{c}; font-weight:bold;")
 
-        # --- 출력 표시 : DAC 원본값 + 백분율 + 램프 목표 ---
+        # --- 출력 표시 : DAC 원본값 + 출력% + 추정 전류 (바 안에 텍스트로) ---
         #     DAC 원본을 함께 보여야 PLC 모니터(D00041)와 대조할 수 있다.
-        if st.get('run'):
-            self.ui.heater_mv_label.setText(
-                f"DAC {int(st.get('mv', 0))}/{int(st.get('mv_limit', HEATER_MV_LIMIT))}"
-                f" ({st.get('mv_pct', 0):.0f}%) · ≈{st.get('est_current', 0.0):.1f}A"
-            )
-        else:
-            self.ui.heater_mv_label.setText(f"출력 : 정지 (DAC {int(st.get('mv', 0))})")
-
-        # 라벨 폭(200px)에 다 못 넣는 램프/한계값은 툴팁으로 뺀다.
-        self.ui.heater_mv_label.setToolTip(
-            f"램프 목표 {st.get('sv_ramp', 0.0):.1f}°C"
-            f" · 램프 {st.get('ramp_rate', 0):.0f}°C/min"
-            f" · 홀드백 {st.get('holdback', 0.0):.1f}°C"
-            f" · OT {st.get('ot_limit', 0.0):.1f}°C"
-        )
+        try:
+            self.ui.heater_out_bar.setValue(
+                int(st.get('mv_pct') or 0) if st.get('run') else 0)
+            self.ui.heater_out_bar.setFormat(self._heater_output_text(st))
+        except Exception:
+            pass
 
         # --- CSV 로깅 (운전 중에만, HEATER_LOG_PERIOD_MS 주기) ---
         #     폴링은 200ms이므로 반드시 시각 비교로 솎아낸다.
