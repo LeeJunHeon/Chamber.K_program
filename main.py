@@ -1349,7 +1349,11 @@ class MainDialog(QDialog):
         # --- 레시피 정보 (없으면 수동 운전) ---
         try:
             rc = self.heater_recipe
-            if rc.is_running() or rc.total_steps() > 0:
+            # is_running() 만 본다. 러너는 끝난 뒤에도 _steps/_path 를 화면
+            #  확인용으로 남겨 두므로 total_steps() 는 계속 0보다 크다. 그걸
+            #  같이 보면 수동 ON 인데 지난 레시피가 머리말에 찍힌다
+            #  (2026-09-04 10:34:42 히터 로그. 동작은 정상, 표시만 틀렸다).
+            if rc.is_running():
                 name = rc.recipe_name() or "(이름 없음)"
                 rep = rc.repeat_count()
                 rep_txt = f" × {rep}회 반복" if rep > 1 else ""
@@ -1879,15 +1883,6 @@ class MainDialog(QDialog):
             self.ui.heater_onoff_button.setChecked(False)
 
         # --- NAS CSV 로그용 평균 누적 (운전 중 + 온도 유효할 때만) ---
-        if st.get('ok') and st.get('pv') is not None and st.get('run'):
-            self._chk_heater_sum += float(st['pv'])
-            self._chk_heater_cnt += 1
-
-        # 이상 시 ON 버튼 자동 해제 (래더는 HEATER_RUN을 건드리지 않음)
-        if st.get('fault') and self.ui.heater_onoff_button.isChecked():
-            self.ui.heater_onoff_button.setChecked(False)
-
-        # 통계 누적 (NAS CSV용)
         if st.get('ok') and st.get('pv') is not None and st.get('run'):
             self._chk_heater_sum += float(st['pv'])
             self._chk_heater_cnt += 1
