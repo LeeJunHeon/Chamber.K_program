@@ -738,6 +738,7 @@ class MainDialog(QDialog):
             self.heater_recipe.step_changed.connect(self._on_heater_recipe_step)
             self.heater_recipe.finished.connect(self._on_heater_recipe_finished)
             self.ui.heater_recipe_button.clicked.connect(self._on_heater_recipe_clicked)
+            self.ui.heater_reset_button.clicked.connect(self._on_heater_reset_clicked)
             self.ui.heater_hold_button.clicked.connect(self._on_heater_hold_clicked)
             self.ui.heater_skip_button.clicked.connect(self._on_heater_skip_clicked)
             self.ui.heater_stop_button.clicked.connect(self._on_heater_stop_clicked)
@@ -750,7 +751,8 @@ class MainDialog(QDialog):
         else:
             # 히터 비활성(config_user.json의 HEATER_ENABLED=false) 시
             # 조작 위젯을 잠가 오조작을 막는다. 표시용 위젯은 그대로 둔다.
-            for w in ("heater_apply_button", "heater_onoff_button", "heater_sv_edit"):
+            for w in ("heater_apply_button", "heater_onoff_button", "heater_sv_edit",
+                      "heater_reset_button"):
                 getattr(self.ui, w).setEnabled(False)
 
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
@@ -1682,6 +1684,30 @@ class MainDialog(QDialog):
             pass
 
     @Slot()
+    def _on_heater_reset_clicked(self):
+        """PLC 에 래치된 히터 이상을 지운다(M00043).
+
+        래치는 프로그램을 껐다 켜도 안 지워진다. 예전에는 XG5000 을 띄워야만
+        풀 수 있었다(2026-09-04 TC 배선 후 TC=1/ITL=0 이 걸렸다).
+        안전 래치를 지우는 동작이라 무조건 확인을 받는다.
+        """
+        reply = QMessageBox.question(
+            self, "히터 이상 리셋",
+            "히터 이상을 리셋합니다.\n"
+            "원인(배선 · TC 모듈 · 과온)을 먼저 확인하셨습니까?\n\n"
+            "원인이 남아 있으면 리셋 직후 다시 이상이 걸립니다.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        # 누가 언제 눌렀는지 남긴다 — 래치를 지우는 조작이다
+        try:
+            log_message_to_monitor("히터", "사용자가 히터 이상 리셋을 요청했습니다")
+        except Exception:
+            pass
+        self.request_heater_reset.emit()
+
+    @Slot()
     def _on_heater_hold_clicked(self):
         """[일시정지] 토글. HOLD 중이면 재개한다."""
         if not self.heater_recipe.is_running():
@@ -1917,6 +1943,14 @@ class MainDialog(QDialog):
 
         # --- PZ400 스타일 LCD 표시 ---
         self._update_heater_lcd(st)
+
+        # --- 이상 리셋 버튼: 이상일 때만, 레시피가 안 돌 때만 ---
+        #     눌러야 할 이유가 없을 때 눌리면 안 된다.
+        try:
+            self.ui.heater_reset_button.setEnabled(
+                bool(st.get('fault')) and not self.heater_recipe.is_running())
+        except Exception:
+            pass
 
         # --- 이상 발생 시 ON 버튼 자동 해제 ---
         #     PLC 래더는 HEATER_RUN을 절대 건드리지 않으므로,

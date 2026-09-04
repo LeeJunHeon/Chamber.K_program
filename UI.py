@@ -663,8 +663,22 @@ class Ui_Dialog(object):
         # 상태 문구. 색상은 main.py의 update_heater_display()가 상황별로 덮어쓴다.
         self.heater_status_label = QLabel(self.heater_group)
         self.heater_status_label.setObjectName(u"heater_status_label")
-        self.heater_status_label.setGeometry(QRect(10, 252, 200, 20))
+        self.heater_status_label.setGeometry(QRect(10, 252, 138, 20))
         self.heater_status_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
+
+        # PLC 에 래치된 히터 이상을 지운다(M00043). 이상일 때만 켜진다.
+        #  정지(#b3261e/빨강)와 구분되는 주의색. 대비 5.98:1 (AA 통과).
+        self.heater_reset_button = QPushButton(self.heater_group)
+        self.heater_reset_button.setObjectName(u"heater_reset_button")
+        self.heater_reset_button.setGeometry(QRect(152, 250, 58, 24))
+        self.heater_reset_button.setEnabled(False)
+        self.heater_reset_button.setStyleSheet(
+            u"QPushButton {background: #fff3e0; color: #9a4400; font-weight: bold; "
+            u"font-size: 8pt; border-radius: 4px; border: 1px solid #e8b979;}"
+            u"QPushButton:hover {background: #ffe6c4;}"
+            u"QPushButton:disabled {background: #f5f5f5; color: #6a6a6a; "
+            u"border: 1px solid #d9d9d9;}"
+        )
 
         # PLC 내장 PID의 실제 출력 (DAC 카운트 + %)
         # DAC 출력 바. 텍스트(DAC 원본/출력%/추정전류)는 main.py 가 setFormat 으로 넣는다.
@@ -895,6 +909,7 @@ class Ui_Dialog(object):
         self.heater_hold_button.setText(QCoreApplication.translate("Dialog", u"\uc77c\uc2dc\uc815\uc9c0", None))
         self.heater_skip_button.setText(QCoreApplication.translate("Dialog", u"\uac74\ub108\ub6f0\uae30", None))
         self.heater_stop_button.setText(QCoreApplication.translate("Dialog", u"\uc815\uc9c0", None))
+        self.heater_reset_button.setText(QCoreApplication.translate("Dialog", u"\ub9ac\uc14b", None))
         # --- LCD 표시부 기본 텍스트 ---
         self.heater_pv_unit.setText(QCoreApplication.translate("Dialog", u"\u00b0C", None))
         self.heater_sv_small.setText(QCoreApplication.translate("Dialog", u"SV", None))
@@ -926,6 +941,9 @@ class Ui_Dialog(object):
             u"마지막 스텝에서 누르면 레시피가 완료됩니다.", None))
         self.heater_stop_button.setToolTip(QCoreApplication.translate("Dialog",
             u"레시피를 중단하고 히터를 끕니다", None))
+        self.heater_reset_button.setToolTip(QCoreApplication.translate("Dialog",
+            u"PLC 에 래치된 히터 이상을 지웁니다.\n"
+            u"원인을 먼저 확인한 뒤 누르세요.", None))
         self.heater_sv_big.setToolTip(QCoreApplication.translate("Dialog",
             u"PLC 가 지금 실제로 쫓고 있는 목표 온도(램프 중간 목표 포함)", None))
         self.heater_dev_label.setToolTip(QCoreApplication.translate("Dialog",
