@@ -76,32 +76,23 @@ HEATER_COIL_PID_RUN = 73      # M00049 PID 동작 중
 
 # --- DAC 출력 범위 ---
 #   DAC(XBF-DV04A): 0~10V 를 0~4000 카운트로 출력  →  1 카운트 = 2.5mV
-#   VSCD-30 입력 사양: 0.8~4V  (0.8V = 출력 0%, 4V = 100%)
+#   VSCD-30 입력 사양: 0.8~4V  →  카운트로는 320~1600 이다.
 #
-#   실측(2026-09-01, 300°C 런): MV 516→11.3A / 520→11.5A / 600→22.4A
-#         → 전류 A ≈ HEATER_CURRENT_SLOPE × (카운트 − HEATER_CURRENT_ZERO)
-#         400 ≈ 출력 0% / 600 ≈ 22.4A / 620 ≈ 25A(절대 상한)
-#   ※ ABS_MAX 를 640 → 620 으로 낮췄다. 재보정한 식으로 640 은 약 27.7A 로
-#      VARITAP 30A 정격의 93%까지 올라간다. 620 은 약 25A(83%).
-#      운전 상한 HEATER_MV_LIMIT=600 은 그대로이므로 실사용에는 영향이 없다.
+#   눈금:
+#      400  출력 0점. PLC K1227(MV 최소값)과 반드시 같아야 한다 — 현재 양쪽 다 400.
+#           다르면 화면 출력%가 틀어진다.
+#     1200  현재 운전 상한 HEATER_MV_LIMIT (약 121A 환산)
+#     1300  현재 절대 상한 HEATER_MV_ABS_MAX
+#     1600  VSCD-30 의 4V 규격 상한. 래더가 D00018 을 여기로 클램프한다.
 #
-#   ※ HEATER_MV_MIN 은 PLC K1227(MV 최소값)과 반드시 같아야 한다.
-#      다르면 화면 출력%가 틀어진다.
 #   ※ 운전 상한 HEATER_MV_LIMIT 은 접속 시 D00018로 전송되며,
 #      래더가 이를 PID 최대 조작값으로 넘긴다. 코드는 절대
 #      HEATER_MV_ABS_MAX 위로는 쓰지 않는다.
+#   ※ 전류 표시는 아래 heater_est_current()(위상제어식)만 쓴다.
+#      카운트에 비례하는 선형식이 아니다.
 HEATER_MV_MIN     = get('HEATER_MV_MIN',     400)   # PLC K1227과 일치. 출력 0% 지점
-HEATER_MV_ABS_MAX = get('HEATER_MV_ABS_MAX', 620)   # 절대 안전 상한
-HEATER_MV_LIMIT   = get('HEATER_MV_LIMIT',   600)   # D00018에 쓸 실제 운전 상한
-
-# 전류 추정 계수 (화면/로그 표시용. 제어에는 쓰이지 않는다)
-#   실측 앵커: (520, 11.5A), (600, 22.4A) — 100°C 이상 열적으로 안정된 상태 기준.
-#   저온이나 매우 낮은 DAC 에서는 오차가 커진다. 소자 노화 시 재측정 후 갱신할 것.
-HEATER_CURRENT_SLOPE = get('HEATER_CURRENT_SLOPE', 0.136)  # A / DAC 카운트
-HEATER_CURRENT_ZERO  = get('HEATER_CURRENT_ZERO',  436)    # 전류 0 이 되는 DAC 카운트
-#   ↑ 두 상수는 구형 선형식용이며 더 이상 계산에 쓰지 않는다(하위 호환 보존).
-#     선형식은 저온 앵커 2점(520/600)으로 맞춘 것이라 그 구간에서만 맞았고,
-#     MV 800(600°C 유지, 실측 59.8A)에서 49.5A로 17% 과소예측했다.
+HEATER_MV_ABS_MAX = get('HEATER_MV_ABS_MAX', 1300)  # 절대 안전 상한
+HEATER_MV_LIMIT   = get('HEATER_MV_LIMIT',   1200)  # D00018에 쓸 실제 운전 상한
 
 # ---- 위상제어 전류 추정 (2026-09-01 재교정) ----
 # VARITAP은 위상제어라 전류가 DAC 카운트에 비례하지 않는다.
@@ -110,7 +101,9 @@ HEATER_CURRENT_ZERO  = get('HEATER_CURRENT_ZERO',  436)    # 전류 0 이 되는
 #     I = SCALE × √[(π − α + sin2α/2) / π]
 # 실측 앵커 3점을 ±6% 안에 재현한다:
 #     MV 520 → 11.5A(저온) · MV 600 → 22.4A(저온) · MV 800 → 59.8A(600°C 유지)
-# 앵커 범위 밖(600°C 이상)은 외삽이므로 전면 계기를 우선한다.
+#     ↑ MV 800 이 600°C 유지점이었다(실측). 앵커 밖(600°C 이상)은 외삽이므로
+#       그 구간은 전면 전류계를 우선한다.
+# 저온 2점으로 맞춘 옛 선형식은 MV 800 에서 49.5A(17% 과소)여서 폐기했다.
 HEATER_CURRENT_MV_ZERO = get('HEATER_CURRENT_MV_ZERO', 400)    # 출력 0   (점호각 180°)
 HEATER_CURRENT_MV_FULL = get('HEATER_CURRENT_MV_FULL', 1600)   # 전출력   (점호각 0°)
 HEATER_CURRENT_SCALE   = get('HEATER_CURRENT_SCALE',   135.1)  # 전출력 시 전류 [A]
@@ -130,17 +123,14 @@ def heater_est_current(mv) -> float:
     v = (math.pi - a + math.sin(2.0 * a) / 2.0) / math.pi
     return float(HEATER_CURRENT_SCALE) * math.sqrt(max(0.0, v))
 
-# 하위 호환: 예전 이름으로 import 하는 코드가 있을 수 있다
-HEATER_MV_MAX = HEATER_MV_ABS_MAX
-
 # --- config_user.json에서 변경 가능 ---
 HEATER_ENABLED          = get('HEATER_ENABLED',          True)
 HEATER_TEMP_SCALE       = get('HEATER_TEMP_SCALE',       0.1)   # ★ 실측 후 확정
 HEATER_WD_PERIOD_MS     = get('HEATER_WD_PERIOD_MS',     3000)  # PLC 10초의 1/3
 HEATER_MAX_TEMP         = get('HEATER_MAX_TEMP',         500.0) # UI 입력 상한
 HEATER_SOAK_TOLERANCE   = get('HEATER_SOAK_TOLERANCE',   3.0)   # °C
-HEATER_SOAK_TIME_SEC    = get('HEATER_SOAK_TIME_SEC',    60)    # 도달 유지 시간
-HEATER_WAIT_TIMEOUT_SEC = get('HEATER_WAIT_TIMEOUT_SEC', 3600)  # 승온 대기 최대
+HEATER_SOAK_TIME_SEC    = get('HEATER_SOAK_TIME_SEC',    60)    # 공정 레시피 전용
+HEATER_WAIT_TIMEOUT_SEC = get('HEATER_WAIT_TIMEOUT_SEC', 3600)  # RAMP 대기 최대
 
 # --- PLC로 밀어 넣는 한계값 (사람 단위. PLC raw 변환은 PLC.py가 한다) ---
 HEATER_SV_LIMIT_C          = get('HEATER_SV_LIMIT_C',          500.0)  # D00013 [°C]
@@ -164,9 +154,9 @@ HEATER_RECIPE_HOLD_AT_END = get('HEATER_RECIPE_HOLD_AT_END', False)  # True면 �
 def _validate_heater_config() -> None:
     """JSON 값이 위험하거나 앞뒤가 안 맞으면 안전한 쪽으로 클램프한다.
     예외는 던지지 않는다 — 설정이 틀려도 프로그램은 떠야 한다."""
-    global HEATER_MV_LIMIT, HEATER_MV_MAX, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP
+    global HEATER_MV_LIMIT, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP
     global HEATER_RAMP_RATE_C_PER_MIN, HEATER_SLOW_RATE_C_PER_MIN
-    global HEATER_LOG_PERIOD_MS, HEATER_CURRENT_SLOPE
+    global HEATER_LOG_PERIOD_MS
     global HEATER_CURRENT_SCALE, HEATER_CURRENT_MV_FULL, HEATER_CURRENT_MV_ZERO
 
     # 1) DAC 운전 상한: 최소 지점 +20 ~ 절대 상한
@@ -197,18 +187,13 @@ def _validate_heater_config() -> None:
         print(f"[Config] HEATER_SLOW_RATE_C_PER_MIN {HEATER_SLOW_RATE_C_PER_MIN} → 6.0 (최소 1카운트/초)")
         HEATER_SLOW_RATE_C_PER_MIN = 6.0
 
-    # 5) 로깅 주기: 너무 짧으면 NAS I/O 폭주, 너무 길면 승온 곡선이 뭉갠다
+    # 5) 로깅 주기: 너무 짧으면 NAS I/O 폭주, 너무 길면 RAMP 곡선이 뭉갠다
     if not (1000 <= HEATER_LOG_PERIOD_MS <= 60000):
         new = min(max(int(HEATER_LOG_PERIOD_MS), 1000), 60000)
         print(f"[Config] HEATER_LOG_PERIOD_MS {HEATER_LOG_PERIOD_MS} → {new} 로 클램프 (1000~60000)")
         HEATER_LOG_PERIOD_MS = new
 
-    # 6) 전류 추정 기울기는 양수여야 한다 (구형 선형식용. 계산에는 쓰이지 않는다)
-    if HEATER_CURRENT_SLOPE <= 0:
-        print(f"[Config] HEATER_CURRENT_SLOPE {HEATER_CURRENT_SLOPE} → 0.136 (0 이하 불가)")
-        HEATER_CURRENT_SLOPE = 0.136
-
-    # 7) 위상제어 전류 추정 계수
+    # 6) 위상제어 전류 추정 계수
     if HEATER_CURRENT_SCALE <= 0:
         print(f"[Config] HEATER_CURRENT_SCALE {HEATER_CURRENT_SCALE} → 135.1 (0 이하 불가)")
         HEATER_CURRENT_SCALE = 135.1

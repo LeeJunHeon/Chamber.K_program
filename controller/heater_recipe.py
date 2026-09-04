@@ -21,10 +21,9 @@ process_controller를 import하지 않으며, ActionType도 쓰지 않는다.
 
 from __future__ import annotations
 
-import csv
 import time
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Optional
 
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal as Signal
 
@@ -261,7 +260,7 @@ class HeaterRecipeRunner(QObject):
 
         래더(H6a)는 남은 거리가 HEATER_SLOW_ZONE_C 안에 들어오면 속도를
         HEATER_SLOW_RATE_C_PER_MIN 으로 낮춘다(오버슈트 방지). 이 구간을 빼고
-        재면 예상이 계속 모자란다(12°C/min·575°C 승온에서 50초).
+        재면 예상이 계속 모자란다(12°C/min·575°C RAMP 에서 50초).
         느린 램프(속도가 감속 구간 속도 이하)는 파이썬이 시계로 SV 를 밀어
         올리므로 감속 구간이 걸리지 않는다 — 그때는 단순 나눗셈이다.
         """
@@ -312,10 +311,15 @@ class HeaterRecipeRunner(QObject):
         return (first + rest * max(0, self._repeat - 1)) * 60.0
 
     def _phase(self) -> str:
-        """지금이 RAMP 인지 SOAK 인지. 이 둘뿐이다."""
+        """지금이 RAMP 인지 SOAK 인지. 이 둘뿐이다.
+
+        냉각 스텝의 SOAK 는 "cool" 로 구분한다. 시간 계산은 SOAK 와 완전히
+        같고(soak 카운트다운), 화면 라벨만 COOL 로 나간다.
+        """
         try:
             if self._state == SOAKING:
-                return "soak"
+                s = self._current_step()
+                return "cool" if (s is not None and s.is_cooldown) else "soak"
             if self._state != RAMPING:
                 return ""
             s = self._current_step()
@@ -337,7 +341,7 @@ class HeaterRecipeRunner(QObject):
         (실측: PV 45.0 → 46.9 일 때 0 → 38초로 역주행).
         """
         try:
-            if phase == "soak":
+            if phase in ("soak", "cool"):
                 return max(0.0, float(soak_remain))
 
             if phase == "ramp":
@@ -381,7 +385,8 @@ class HeaterRecipeRunner(QObject):
                 return -1.0                     # 호출부가 폴백한다
             total = float(step_remain)
 
-            # (a) RAMP 중이면 SOAK 가 통째로 남았다. SOAK 중이면 더할 것 없다.
+            # (a) RAMP 중이면 SOAK 가 통째로 남았다.
+            #     SOAK/COOL 중이면 stepRemain 이 곧 그 남은 시간이라 더할 것 없다.
             if cur is not None and not cur.is_cooldown and phase == "ramp":
                 total += float(cur.soak_min) * 60.0
 
@@ -459,7 +464,7 @@ class HeaterRecipeRunner(QObject):
             #  같은 값에서 서로 다르게 잘려 remainSec - stepRemainSec 가 1초 어긋났다.
             "soakRemainSec": int(round(remain)),
             "stepRemainSec": int(round(step_remain)),
-            "phase": phase,          # ramp / soak / "" 
+            "phase": phase,          # ramp / soak / cool / "" 
             "remainSec": int(round(remain_sec)),
             "steps": steps,
             # --- 진행 표시용 추가 키 ---
@@ -997,7 +1002,7 @@ class HeaterRecipeRunner(QObject):
         self._out_dead_since = 0.0
 
         # TC 값을 잃은 경우. 이것도 안전 판정이라 HOLD 중에도 실시간으로 센다
-        #  (멈춰 둔 사이에 TC 가 빠져도 설비는 가열 중이다)
+        #  (멈춰 둔 사이에 TC 가 빠져도 설비는 열을 내고 있다)
         if st.get('pv') is None:
             if self._tc_bad_since == 0.0:
                 self._tc_bad_since = time.monotonic()

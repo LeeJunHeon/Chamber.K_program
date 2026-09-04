@@ -44,7 +44,7 @@ from controller.heater_recipe import HeaterRecipeRunner
 from lib.heater_logger import HeaterCsvLogger
 
 # 히터 레시피 단계 표기. 화면/툴팁이 같은 말을 쓰도록 여기 한 곳에서만 정한다.
-HEATER_PHASE_TEXT = {"ramp": "RAMP", "soak": "SOAK"}
+HEATER_PHASE_TEXT = {"ramp": "RAMP", "soak": "SOAK", "cool": "COOL"}
 
 
 def _fmt_hms_sec(sec: float) -> str:

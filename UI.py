@@ -932,7 +932,8 @@ class Ui_Dialog(object):
             u"목표 대비 현재 온도의 편차", None))
         self.heater_seg_label.setToolTip(QCoreApplication.translate("Dialog",
             u"실행 중인 레시피 스텝과 반복 회차, 그리고 현재 단계.\n"
-            u"RAMP = 목표까지 올리는 중 / SOAK = 목표에서 머무는 중 / COOL = 냉각 대기", None))
+            u"RAMP = 목표까지 올리는 중 / SOAK = 목표에서 머무는 중\n"
+            u"COOL = 냉각 스텝 — 램프 없이 설정 시간만 기다린다", None))
         self.heater_time_label.setToolTip(QCoreApplication.translate("Dialog",
             u"현재 스텝의 남은 시간 (RAMP 구간은 현재 온도와 속도로 계산한 추정치)", None))
         self.heater_out_bar.setToolTip(QCoreApplication.translate("Dialog",
