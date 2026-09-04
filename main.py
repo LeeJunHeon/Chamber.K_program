@@ -1264,9 +1264,14 @@ class MainDialog(QDialog):
             if st is None:
                 st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
             mv = int(st.get('mv', 0) or 0)
-            if (not st.get('run')) or mv <= HEATER_MV_MIN:
-                return f"정지 (DAC {mv})"
             lim = int(st.get('mv_limit', HEATER_MV_LIMIT) or HEATER_MV_LIMIT)
+            if not st.get('run'):
+                return f"정지 (DAC {mv})"
+            # 운전 중인데 PID 가 출력을 0점까지 내린 정상 상황.
+            #  이걸 '정지'로 쓰면 바로 위 '운전 중' 라벨과 화면이 자기모순이다
+            #  (SOAK 오버슈트 구간에서 30초 넘게 그렇게 떠 있었다).
+            if mv <= HEATER_MV_MIN:
+                return f"출력 0% (DAC {mv}/{lim})"
             return (f"DAC {mv}/{lim}"
                     f" · ≈{float(st.get('est_current', 0.0) or 0.0):.1f}A")
         except Exception:
