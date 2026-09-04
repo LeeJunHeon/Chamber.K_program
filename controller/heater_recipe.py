@@ -202,6 +202,23 @@ class HeaterRecipeRunner(QObject):
     def steps(self) -> List[HeaterRecipeStep]:
         return list(self._steps)
 
+    def clear(self) -> bool:
+        """불러온 레시피를 버린다. 실행 중이면 아무것도 하지 않고 False.
+
+        끝난 레시피의 스텝 목록이 화면에 남아 수동 운전인데 뭔가 돌고 있는
+        것처럼 보였다. 다시 돌리려면 [레시피]로 파일을 다시 연다.
+        """
+        if self.is_running():
+            return False
+        self._steps = []
+        self._path = None
+        self._repeat = 1
+        self._idx = -1
+        self._cycle = 0
+        self._percent_max = 0.0
+        self._total_est_sec = 0.0
+        return True
+
     def is_running(self) -> bool:
         """HOLD 중에도 '실행 중'이다."""
         return self._state in (RAMPING, SOAKING)
@@ -212,6 +229,23 @@ class HeaterRecipeRunner(QObject):
     def was_user_stopped(self) -> bool:
         """마지막 종료가 stop()(의도적 중단)이었는가. _abort(설비 이상)면 False."""
         return bool(self._stopped_by_user)
+
+    def resolved_rate(self) -> Optional[float]:
+        """이번 스텝에 실제로 적용된 램프 속도[°C/min]. 산정 전이면 None."""
+        try:
+            s = self._current_step()
+            r = float(getattr(s, "_resolved_rate", 0.0) or 0.0) if s else 0.0
+            return r if r > 0 else None
+        except Exception:
+            return None
+
+    def step_timeout_sec(self) -> Optional[float]:
+        """이번 스텝에 산정된 RAMP 타임아웃[초]. 없으면 None."""
+        try:
+            v = float(getattr(self, "_step_timeout_sec", 0.0) or 0.0)
+            return v if v > 0 else None
+        except Exception:
+            return None
 
     def current_step_no(self) -> int:
         """1-based. 실행 중이 아니면 0."""
@@ -448,8 +482,12 @@ class HeaterRecipeRunner(QObject):
             percent = max(0.0, min(100.0, elapsed / denom * 100.0))
         elif total_est > 0:
             percent = max(0.0, min(100.0, elapsed / total_est * 100.0))
+        # 남은시간을 못 구했거나(-1 → 시계 폴백) 현재 스텝을 못 읽는 순간에는
+        #  최댓값을 갱신하지 않는다. 한 번 튄 값이 박히면 되돌릴 수 없다.
+        _trust = (self._remaining_sec(step_remain, phase) >= 0
+                  and self._current_step() is not None)
         try:
-            if not self._held:
+            if not self._held and _trust:
                 self._percent_max = max(float(self._percent_max), percent)
             percent = min(100.0, float(self._percent_max))
         except Exception:
@@ -796,6 +834,17 @@ class HeaterRecipeRunner(QObject):
             self.request_ramp.emit(_ramp_raw(HEATER_RAMP_RATE_C_PER_MIN))
         except Exception:
             pass
+        # 히터를 껐으면 목표도 현재 온도로 내린다. 안 그러면 D00012 에
+        #  마지막 스텝 목표가 남아 화면에 서로 다른 두 목표가 뜬다
+        #  (목표칸 70 / SV 110.0). 래더가 !RUN 일 때 D00019 ← D00010 하는 것과
+        #  같은 취지다. 계속 돌리는 경우(HOLD_AT_END)에는 손대지 않는다.
+        if not keep_running:
+            try:
+                pv = self._plc_pv()
+                if pv is not None:
+                    self.request_target.emit(float(pv))
+            except Exception:
+                pass
 
     def _abort(self, reason: str):
         self._state = ABORTED
@@ -867,6 +916,17 @@ class HeaterRecipeRunner(QObject):
             return
 
         s = self._steps[self._idx]
+
+        # ★ 어떤 시그널도 내보내기 전에 새 스텝 상태를 확정한다.
+        #   _emit_step_changed() → step_changed → main 이 progress() 를 읽는데,
+        #   그때 _state 가 아직 SOAKING 이고 _soak_deadline 이 이전 스텝 값이면
+        #   새 스텝의 RAMP+SOAK 를 통째로 빼먹은 남은시간이 나온다. 그 값이
+        #   _percent_max 에 박히면 단조증가 보정 때문에 내려오지 않는다.
+        #   (실측: elapsed 935초 + 이전 SOAK 잔여 141초 → 86.9% 에 고착)
+        self._soak_deadline = 0.0
+        self._soak_last_report = 0.0
+        self._state = RAMPING
+
         self._step_started = self._now()
         self._tc_bad_since = 0.0
         self._out_dead_since = 0.0
@@ -923,9 +983,8 @@ class HeaterRecipeRunner(QObject):
 
         if s.is_cooldown:
             # 냉각은 램프 없이 SOAK 시간만 기다린다
+            #  (_state 는 위에서 이미 RAMPING 이고 여기서 SOAKING 으로 덮인다)
             self._enter_soak(s)
-        else:
-            self._state = RAMPING
 
     def _enter_soak(self, s: HeaterRecipeStep):
         self._state = SOAKING

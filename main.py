@@ -1367,6 +1367,26 @@ class MainDialog(QDialog):
                 _emit(f"레시피: {name} · {rc.total_steps()}스텝{rep_txt}{est}")
                 for st_ in rc.steps():
                     _emit(f"  {st_.index}. {st_.describe()}")
+                # 로그 파일은 PLC 가 run=True 를 읽은 뒤에야 열린다. 그래서
+                #  스텝1 의 시작 로그(속도 확정·타임아웃)가 파일에 안 남았다.
+                #  지금 돌고 있는 스텝을 한 줄로 다시 적어 둔다.
+                try:
+                    _no = rc.current_step_no()
+                    _steps = rc.steps()
+                    if 1 <= _no <= len(_steps):
+                        _cur = _steps[_no - 1]
+                        _bits = [f"{_no}/{len(_steps)}", _cur.describe()]
+                        # 속도 지정 스텝은 describe() 에 이미 °C/min 이 들어 있다.
+                        #  시간 지정(ramp_min) 스텝일 때만 확정된 속도를 덧붙인다.
+                        _rate = rc.resolved_rate()
+                        if _rate and getattr(_cur, "ramp_min", None):
+                            _bits.append(f"→ {_rate:.1f}°C/min")
+                        _to = rc.step_timeout_sec()
+                        if _to:
+                            _bits.append(f"타임아웃 {_to / 60:.0f}분")
+                        _emit("현재 스텝: " + " · ".join(_bits))
+                except Exception:
+                    pass
             else:
                 _emit("수동 운전 (레시피 없음)")
         except Exception:
@@ -1721,7 +1741,15 @@ class MainDialog(QDialog):
             total_est = int(pg.get("totalEstSec") or 0)
             elapsed = int(pg.get("elapsedSec") or 0)
             if total_est > 0:
-                remain = max(0, total_est - elapsed)
+                # 히터 패널과 같은 근거(스텝 남은시간 기준)를 쓴다. 옛 시계
+                #  기준을 쓰면 같은 화면에 '남음'이 두 개 다르게 뜬다.
+                _r = pg.get("remainSec")
+                try:
+                    remain = int(_r) if (_r is not None and int(_r) >= 0) else -1
+                except Exception:
+                    remain = -1
+                if remain < 0:
+                    remain = max(0, total_est - elapsed)
                 base += (f" · 전체 {pg.get('percent', 0):.0f}%"
                          f" · 남음 {_fmt_hms_sec(remain)}")
         except Exception:
@@ -1746,9 +1774,17 @@ class MainDialog(QDialog):
             _user_stop = False
         _need_abort = bool(in_process and not ok and not _user_stop)
 
+        # 끝난 레시피는 로드 상태와 화면 목록을 함께 비운다. 남겨 두면
+        #  수동 운전 중에도 지난 스텝 목록이 떠 있어 뭔가 돌고 있는 것처럼 보인다.
+        #  (in_process 로 일찍 return 하는 경로들보다 앞에서 부른다)
+        try:
+            self.heater_recipe.clear()
+            self._rebuild_heater_step_list()
+        except Exception:
+            pass
+
         try:
             self._sync_heater_recipe_buttons()
-            # 목록은 남겨 두고 강조만 해제한다(무엇을 돌렸는지 확인용)
             self._refresh_heater_progress()
             if not in_process:
                 self.update_stage_monitor(
