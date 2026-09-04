@@ -68,7 +68,7 @@
     "// ※ HEATER_SV_LIMIT_C 를 넘으면 그 값으로 자동 하향된다": "",
     "HEATER_MAX_TEMP": 700.0,
     "// 온도 도달 판정 허용 편차(°C)": "",
-    "HEATER_SOAK_TOLERANCE": 3.0,
+    "HEATER_SOAK_TOLERANCE": 1.0,
     "// [공정 레시피 전용] 히터 목표 도달 후 이 시간 유지되어야 다음 단계로 진행": "",
     "// ※ 히터 레시피(heater_recipe.py)는 이 값을 쓰지 않는다 — RAMP 완료 즉시 SOAK": "",
     "HEATER_SOAK_TIME_SEC": 60,

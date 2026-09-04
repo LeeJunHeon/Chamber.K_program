@@ -1,0 +1,4 @@
+﻿step,target_c,ramp_c_per_min,ramp_min,soak_min,repeat
+1,300,12,,30,2
+2,600,,180,120,
+3,25,,,60,
