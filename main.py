@@ -1071,18 +1071,23 @@ class MainDialog(QDialog):
                  f" \u00b7 PIDerr {st.get('pid_err', '-')}"),
             ]
 
-            # 레시피 줄 — 실행 중일 때만
+            # 레시피 줄 — 실행 중이면 지금 값, 끝났으면 중단 시점 스냅샷.
+            #  이상으로 공정이 죽는 순간 러너는 이미 ABORTED 라 running=False 다.
+            #  그때가 이 정보가 가장 필요한 때이므로 스냅샷으로 채운다.
             try:
                 pg = self.heater_recipe.progress()
-                if pg.get("running"):
+                _tail = ""
+                if not pg.get("running"):
+                    pg = self.heater_recipe.last_snapshot() or {}
+                    _tail = " (중단 시점)"
+                if pg:
                     seg = f"STEP {pg.get('stepNo', 0)}/{pg.get('total', 0)}"
                     if int(pg.get("repeat", 1) or 1) > 1:
                         seg += f" (\ubc18\ubcf5 {pg.get('cycle', 1)}/{pg.get('repeat', 1)})"
-                    total_est = int(pg.get("totalEstSec") or 0)
-                    remain = max(0, total_est - int(pg.get("elapsedSec") or 0))
+                    _el = int(pg.get("elapsedSec") or 0)
                     lines.append(
-                        f"레시피: {seg} \u00b7 전체 {pg.get('percent', 0):.0f}%"
-                        f" \u00b7 남음 {_fmt_hms_sec(remain)}")
+                        f"\ub808\uc2dc\ud53c: {seg} \u00b7 \uc804\uccb4 {pg.get('percent', 0):.0f}%"
+                        f" \u00b7 \uacbd\uacfc {_fmt_hms_sec(_el)}{_tail}")
             except Exception:
                 pass
 
@@ -1349,10 +1354,11 @@ class MainDialog(QDialog):
         # --- 레시피 정보 (없으면 수동 운전) ---
         try:
             rc = self.heater_recipe
-            # is_running() 만 본다. 러너는 끝난 뒤에도 _steps/_path 를 화면
-            #  확인용으로 남겨 두므로 total_steps() 는 계속 0보다 크다. 그걸
-            #  같이 보면 수동 ON 인데 지난 레시피가 머리말에 찍힌다
-            #  (2026-09-04 10:34:42 히터 로그. 동작은 정상, 표시만 틀렸다).
+            # 머리말은 '지금 무엇이 돌고 있는가'만 적는다.
+            #  그래서 로드 여부(total_steps)가 아니라 is_running() 을 본다.
+            #  예전에 둘을 같이 보다가 수동 ON 인데 지난 레시피가
+            #  머리말에 찍혔다(2026-09-04 10:34:42 히터 로그.
+            #  동작은 정상, 표시만 틀렸다).
             if rc.is_running():
                 name = rc.recipe_name() or "(이름 없음)"
                 rep = rc.repeat_count()

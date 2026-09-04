@@ -169,6 +169,9 @@ class HeaterRecipeRunner(QObject):
         self._stopped_by_user: bool = False
 
         # --- 진행 표시 ---
+        # 끝나기 직전의 진행 상황. 종료 후에는 progress() 가 빈 값을 내고
+        #  clear() 가 스텝까지 지우므로, 이상 알림에 붙일 근거가 남지 않는다.
+        self._last_snapshot: dict = {}
         self._run_started = 0.0
         self._total_est_sec = 0.0
         self._percent_max = 0.0      # 진행률은 뒤로 가지 않는다(단조 증가)
@@ -201,6 +204,32 @@ class HeaterRecipeRunner(QObject):
     # ==================== 조회 ====================
     def steps(self) -> List[HeaterRecipeStep]:
         return list(self._steps)
+
+    def last_snapshot(self) -> dict:
+        """마지막으로 끝났을 때의 진행 상황. 없으면 빈 dict.
+
+        clear() 로 지워지지 않는다(start() 에서만 비운다). 이상으로 중단된
+        뒤 구글챗 카드에 '어디까지 갔었는지'를 붙이는 데 쓴다.
+        """
+        try:
+            return dict(self._last_snapshot or {})
+        except Exception:
+            return {}
+
+    def _save_snapshot(self):
+        """상태를 바꾸기 직전에 부른다. 예외를 밖으로 내보내지 않는다."""
+        try:
+            p = self.progress()
+            self._last_snapshot = {
+                "stepNo": p.get("stepNo"),
+                "total": p.get("total"),
+                "cycle": p.get("cycle"),
+                "repeat": p.get("repeat"),
+                "percent": p.get("percent"),
+                "elapsedSec": p.get("elapsedSec"),
+            }
+        except Exception:
+            pass
 
     def clear(self) -> bool:
         """불러온 레시피를 버린다. 실행 중이면 아무것도 하지 않고 False.
@@ -470,7 +499,9 @@ class HeaterRecipeRunner(QObject):
         total_est = float(self._total_est_sec)
 
         # 남은 시간 — 스텝 남은 시간과 같은 근거로 계산한다.
-        remain_sec = self._remaining_sec(step_remain, phase)
+        #  원본(_raw_remain)은 폴백 판정과 _trust 판정이 함께 쓴다.
+        _raw_remain = self._remaining_sec(step_remain, phase)
+        remain_sec = _raw_remain
         if remain_sec < 0:
             remain_sec = max(0.0, total_est - elapsed)   # 폴백(기존 방식)
 
@@ -484,8 +515,7 @@ class HeaterRecipeRunner(QObject):
             percent = max(0.0, min(100.0, elapsed / total_est * 100.0))
         # 남은시간을 못 구했거나(-1 → 시계 폴백) 현재 스텝을 못 읽는 순간에는
         #  최댓값을 갱신하지 않는다. 한 번 튄 값이 박히면 되돌릴 수 없다.
-        _trust = (self._remaining_sec(step_remain, phase) >= 0
-                  and self._current_step() is not None)
+        _trust = (_raw_remain >= 0 and self._current_step() is not None)
         try:
             if not self._held and _trust:
                 self._percent_max = max(float(self._percent_max), percent)
@@ -711,6 +741,7 @@ class HeaterRecipeRunner(QObject):
         self._start_pv = float(pv) if pv is not None else 0.0
         self._paused_total = 0.0
         self._held_at = 0.0
+        self._last_snapshot = {}     # 지난 실행의 스냅샷을 물고 가지 않는다
         self._run_started = self._now()
         self._total_est_sec = self._estimate_total_sec(self._start_pv)
         self._percent_max = 0.0
@@ -732,6 +763,7 @@ class HeaterRecipeRunner(QObject):
         레시피만 멈췄을 때 스퍼터 공정까지 '설비 이상 실패'로 죽지 않는다.
         """
         was_running = self.is_running()
+        self._save_snapshot()        # 상태를 바꾸기 전에 찍는다
         self._stopped_by_user = True
         self._state = ABORTED
         self._out_dead_since = 0.0
@@ -847,6 +879,7 @@ class HeaterRecipeRunner(QObject):
                 pass
 
     def _abort(self, reason: str):
+        self._save_snapshot()        # 상태를 바꾸기 전에 찍는다
         self._state = ABORTED
         self._out_dead_since = 0.0
         self._run_off_since = 0.0
@@ -1006,6 +1039,7 @@ class HeaterRecipeRunner(QObject):
                 "히터", f"스텝 {self._idx + 1}: {s.target_c:g}°C SOAK {s.soak_min:g}분 시작")
 
     def _complete(self):
+        self._save_snapshot()        # 상태를 바꾸기 전에 찍는다
         self._state = DONE
         self._out_dead_since = 0.0
         self._run_off_since = 0.0
