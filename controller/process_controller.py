@@ -70,6 +70,186 @@ def _invoke_connect(obj, method_name: str) -> bool:
 
 # ===================== 메인 컨트롤러 =====================
 
+# ==================== 가스/압력 스텝 빌더 ====================
+#  스퍼터 공정과 히터 전용 분위기 제어가 같은 시퀀스를 쓴다. 한쪽만 고쳐서
+#  둘이 어긋나지 않도록 여기 한 곳에 둔다.
+
+# 압력 도달 대기 파라미터 (공통)
+WAIT_TOL_RATIO = 0.10       # ±10%
+WAIT_STABLE_COUNT = 3       # 3회 연속
+WAIT_TIMEOUT_SEC = 180.0    # 최대 3분
+
+
+def build_gas_pre_steps(channels: List[int]) -> List[ProcessStep]:
+    """배기 개방: 채널별 Flow OFF → MFC 메인 밸브 Open."""
+    steps: List[ProcessStep] = []
+    for ch in channels:
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                f"Ch{ch} Flow OFF",
+                params=('FLOW_OFF', {'channel': ch}),
+            )
+        )
+
+    # MFC 메인 밸브 Open (공용 1회)
+    steps.append(
+        ProcessStep(
+            ActionType.MFC_CMD,
+            "MFC Valve Open",
+            params=('VALVE_OPEN', {}),
+        )
+    )
+    return steps
+
+
+def build_gas_intro_steps(channels: List[int],
+                          flows: Dict[int, float],
+                          gas_buttons: List[str]) -> List[ProcessStep]:
+    """영점 → 가스 밸브 Open → 채널별 유량 설정/Flow ON.
+
+    SP4_ON 과 압력 안정화 대기는 여기 넣지 않는다. 스퍼터 공정에만 있는
+    단계라서 호출부가 직접 붙인다.
+    """
+    steps: List[ProcessStep] = []
+
+    # 각 채널 Zeroing
+    for ch in channels:
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                f"Ch{ch} ZEROING",
+                params=('MFC_ZEROING', {'channel': ch}),
+            )
+        )
+
+    # Power Supply Zeroing
+    steps.append(
+        ProcessStep(
+            ActionType.MFC_CMD,
+            "PS ZEROING",
+            params=('PS_ZEROING', {}),
+        )
+    )
+
+    # 가스 밸브(PLC) Open: 선택된 모든 가스에 대해
+    for btn in gas_buttons:
+        gas_name = "Ar" if "Ar" in btn else "O2"
+        steps.append(
+            ProcessStep(
+                ActionType.PLC_CMD,
+                f"{gas_name} Valve Open",
+                params=(btn, True),
+            )
+        )
+
+    # 채널별 유량 설정 & Flow ON
+    for ch in channels:
+        flow = float(flows.get(ch, 0.0))
+        if flow > 0.0:
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    f"Ch{ch} {flow:.2f}sccm 설정",
+                    params=('FLOW_SET', {'channel': ch, 'value': flow}),
+                )
+            )
+            steps.append(
+                ProcessStep(
+                    ActionType.MFC_CMD,
+                    f"Ch{ch} Flow ON",
+                    params=('FLOW_ON', {'channel': ch}),
+                )
+            )
+    return steps
+
+
+def build_pressure_stage_steps(sp_index: int,
+                               sp_value: float,
+                               label: str,
+                               timeout_sec: float = WAIT_TIMEOUT_SEC,
+                               fail_on_timeout: bool = False) -> List[ProcessStep]:
+    """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝
+
+    fail_on_timeout=True 이면 timeout 시 공정 중단 + Google Chat 알림.
+    False 이면 경고 로그만 남기고 다음 단계 진행.
+    """
+    steps: List[ProcessStep] = []
+    set_cmd = f"SP{sp_index}_SET"
+    on_cmd = f"SP{sp_index}_ON"
+
+    # 1) SET
+    steps.append(
+        ProcessStep(
+            ActionType.MFC_CMD,
+            f"{label}: {set_cmd}={sp_value:.2f} 설정",
+            params=(set_cmd, {'value': sp_value}),
+        )
+    )
+
+    # 2) ON
+    steps.append(
+        ProcessStep(
+            ActionType.MFC_CMD,
+            f"{label}: {on_cmd}",
+            params=(on_cmd, {}),
+        )
+    )
+
+    # 3) WAIT_PRESSURE (실제 압력이 setpoint ±10% 안에 3회 연속 들어올 때까지)
+    steps.append(
+        ProcessStep(
+            ActionType.MFC_CMD,
+            f"{label}: 압력 도달 대기 (target={sp_value:.2f}, ±{WAIT_TOL_RATIO*100:.0f}%, "
+            f"timeout={int(timeout_sec)}s"
+            + (", FAIL ON TIMEOUT" if fail_on_timeout else "") + ")",
+            params=("WAIT_PRESSURE", {
+                "target": sp_value,
+                "tolerance_ratio": WAIT_TOL_RATIO,
+                "stable_count": WAIT_STABLE_COUNT,
+                "timeout_sec": timeout_sec,
+                "fail_on_timeout": fail_on_timeout,
+            }),
+        )
+    )
+    return steps
+
+
+def build_gas_release_steps(channels: List[int],
+                            gas_buttons: List[str]) -> List[ProcessStep]:
+    """가스 해제: 채널별 Flow OFF → MFC 밸브 Open(배기) → 가스 밸브 Close.
+
+    공정 STOP 시퀀스는 인라인 코드라 이 함수를 쓰지 않는다. 히터 전용
+    분위기 제어(HeaterAtmosphere)가 쓴다.
+    """
+    steps: List[ProcessStep] = []
+    for ch in channels:
+        steps.append(
+            ProcessStep(
+                ActionType.MFC_CMD,
+                f"Ch{ch} Flow OFF",
+                params=('FLOW_OFF', {'channel': ch}),
+            )
+        )
+    steps.append(
+        ProcessStep(
+            ActionType.MFC_CMD,
+            "MFC Valve Open",
+            params=('VALVE_OPEN', {}),
+        )
+    )
+    for btn in gas_buttons:
+        gas_name = "Ar" if "Ar" in btn else "O2"
+        steps.append(
+            ProcessStep(
+                ActionType.PLC_CMD,
+                f"{gas_name} Valve Close",
+                params=(btn, False),
+            )
+        )
+    return steps
+
+
 class SputterProcessController(QObject):
     # --- 로그/상태(UI) ---
     status_message        = Signal(str, str)   # (level, text)
@@ -276,24 +456,8 @@ class SputterProcessController(QObject):
         steps.append(ProcessStep(ActionType.RF_POWER_STOP, "PRE: RF Power OFF"))
         steps.append(ProcessStep(ActionType.DELAY, "PRE: Power OFF settle", duration_sec=1))
 
-        # --- 3) 배기 개방: 각 채널 Flow OFF ---
-        for ch in channels:
-            steps.append(
-                ProcessStep(
-                    ActionType.MFC_CMD,
-                    f"Ch{ch} Flow OFF",
-                    params=('FLOW_OFF', {'channel': ch}),
-                )
-            )
-
-        # MFC 메인 밸브 Open (공용 1회)
-        steps.append(
-            ProcessStep(
-                ActionType.MFC_CMD,
-                "MFC Valve Open",
-                params=('VALVE_OPEN', {}),
-            )
-        )
+        # --- 3) 배기 개방: 각 채널 Flow OFF + MFC 메인 밸브 Open ---
+        steps.extend(build_gas_pre_steps(channels))
 
         # --- 4) 히터 승온 시작 (선택) ---
         #  Start 시점에 이미 진공이 잡혀 있고(_check_main_valve_open 이 메인밸브+인터락을
@@ -322,57 +486,10 @@ class SputterProcessController(QObject):
                 f"{HEATER_SOAK_TIME_SEC}s 유지, timeout {HEATER_WAIT_TIMEOUT_SEC}s)",
                 value=heater_temp))
 
-        # --- 6) 영점 ---
+        # --- 6~8) 영점 → 가스 밸브 Open → 유량 설정/Flow ON ---
         #  승온이 끝나 아웃가싱이 잦아든 뒤에 잡아야 영점이 정확하다.
-        # 각 채널 Zeroing
-        for ch in channels:
-            steps.append(
-                ProcessStep(
-                    ActionType.MFC_CMD,
-                    f"Ch{ch} ZEROING",
-                    params=('MFC_ZEROING', {'channel': ch}),
-                )
-            )
-
-        # Power Supply Zeroing
-        steps.append(
-            ProcessStep(
-                ActionType.MFC_CMD,
-                "PS ZEROING",
-                params=('PS_ZEROING', {}),
-            )
-        )
-
-        # --- 7) 가스 밸브(PLC) Open: 선택된 모든 가스에 대해 ---
         gas_buttons = getattr(self, "_gas_valve_buttons", [self._gas_valve_button])
-        for btn in gas_buttons:
-            gas_name = "Ar" if "Ar" in btn else "O2"
-            steps.append(
-                ProcessStep(
-                    ActionType.PLC_CMD,
-                    f"{gas_name} Valve Open",
-                    params=(btn, True),
-                )
-            )
-
-        # --- 8) 채널별 유량 설정 & Flow ON ---
-        for ch in channels:
-            flow = float(flows.get(ch, 0.0))
-            if flow > 0.0:
-                steps.append(
-                    ProcessStep(
-                        ActionType.MFC_CMD,
-                        f"Ch{ch} {flow:.2f}sccm 설정",
-                        params=('FLOW_SET', {'channel': ch, 'value': flow}),
-                    )
-                )
-                steps.append(
-                    ProcessStep(
-                        ActionType.MFC_CMD,
-                        f"Ch{ch} Flow ON",
-                        params=('FLOW_ON', {'channel': ch}),
-                    )
-                )
+        steps.extend(build_gas_intro_steps(channels, flows, gas_buttons))
 
         # --- 9) 압력 제어 준비 및 목표 설정(SP1=UI값) ---
         #  기체 밀도가 온도에 따라 달라지므로, 목표 온도에 도달한 상태에서
@@ -429,75 +546,20 @@ class SputterProcessController(QObject):
         #   WP < 5   : SP3 → SP2 → SP1 (3단계 모두)
         # ──────────────────────────────────────────────────────────
 
-        # 압력 도달 대기 파라미터 (공통)
-        WAIT_TOL_RATIO = 0.10      # ±10%
-        WAIT_STABLE_COUNT = 3       # 3회 연속
-        WAIT_TIMEOUT_SEC = 180.0    # 최대 3분
-
-        def _append_pressure_stage(
-            sp_index: int,
-            sp_value: float,
-            label: str,
-            timeout_sec: float = WAIT_TIMEOUT_SEC,
-            fail_on_timeout: bool = False,
-        ):
-            """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝 추가
-            
-            fail_on_timeout=True 이면 timeout 시 공정 중단 + Google Chat 알림.
-            False 이면 경고 로그만 남기고 다음 단계 진행.
-            """
-            set_cmd = f"SP{sp_index}_SET"
-            on_cmd = f"SP{sp_index}_ON"
-
-            # 1) SET
-            steps.append(
-                ProcessStep(
-                    ActionType.MFC_CMD,
-                    f"{label}: {set_cmd}={sp_value:.2f} 설정",
-                    params=(set_cmd, {'value': sp_value}),
-                )
-            )
-
-            # 2) ON
-            steps.append(
-                ProcessStep(
-                    ActionType.MFC_CMD,
-                    f"{label}: {on_cmd}",
-                    params=(on_cmd, {}),
-                )
-            )
-
-            # 3) WAIT_PRESSURE (실제 압력이 setpoint ±10% 안에 3회 연속 들어올 때까지)
-            steps.append(
-                ProcessStep(
-                    ActionType.MFC_CMD,
-                    f"{label}: 압력 도달 대기 (target={sp_value:.2f}, ±{WAIT_TOL_RATIO*100:.0f}%, "
-                    f"timeout={int(timeout_sec)}s"
-                    + (", FAIL ON TIMEOUT" if fail_on_timeout else "") + ")",
-                    params=("WAIT_PRESSURE", {
-                        "target": sp_value,
-                        "tolerance_ratio": WAIT_TOL_RATIO,
-                        "stable_count": WAIT_STABLE_COUNT,
-                        "timeout_sec": timeout_sec,
-                        "fail_on_timeout": fail_on_timeout,
-                    }),
-                )
-            )
-
         # --- SP3 (15.0) : WP < 15 일 때만 (timeout 180s, 도달 못해도 진행) ---
         if sp1_ui < 15.0:
-            _append_pressure_stage(3, 15.0, "Stage1(SP3)")
+            steps.extend(build_pressure_stage_steps(3, 15.0, "Stage1(SP3)"))
 
         # --- SP2 (5.0)  : WP < 5  일 때만 (timeout 180s, 도달 못해도 진행) ---
         if sp1_ui < 5.0:
-            _append_pressure_stage(2, 5.0, "Stage2(SP2)")
+            steps.extend(build_pressure_stage_steps(2, 5.0, "Stage2(SP2)"))
 
         # --- SP1 (WP)   : 최종 단계 (timeout 300s, 도달 못하면 공정 중단 + Chat 알림) ---
-        _append_pressure_stage(
+        steps.extend(build_pressure_stage_steps(
             1, sp1_ui, f"Stage3(SP1={sp1_ui:.2f})",
             timeout_sec=300.0,
             fail_on_timeout=True,
-        )
+        ))
 
         # --- DC Power Delay (SP1 도달 후 파워 안정화 대기 / ±% abort OFF 구간) ---
         dc_power = float(p.get('dc_power', 0.0) or 0.0)
