@@ -1551,11 +1551,27 @@ class MainDialog(QDialog):
                                 "레시피를 불러오지 못했습니다. 로그를 확인하세요.")
             return
 
+        # 레시피에 가스·압력이 적혀 있으면 패널에 옮겨 담는다. 이후 흐름은
+        #  패널 값을 보는 기존 경로(_heater_gas_wanted → HeaterAtmosphere)가 맡는다.
+        gas = self.heater_recipe.recipe_gas()
+        atm_txt = self.heater_recipe.describe_gas()
+        if gas is None:
+            pass                                   # 옛 레시피 — 패널 그대로
+        elif self.heater_atmosphere.is_active():
+            # 이미 가스가 잡혀 있다. 그 위에 다른 조건을 덮어쓰지 않는다.
+            log_message_to_monitor(
+                "히터(경고)",
+                "[히터] 가스가 이미 잡혀 있어 레시피의 가스 설정을 적용하지 않습니다"
+                " — 현재 분위기로 진행")
+            atm_txt = "현재 잡혀 있는 가스 유지"
+        else:
+            self._apply_recipe_gas_to_panel(gas)
+
         steps = self.heater_recipe.steps()
         body = "\n".join(f"{i}. {s.describe()}" for i, s in enumerate(steps, 1))
         reply = QMessageBox.question(
             self, "히터 레시피 실행",
-            f"{Path(path).name}\n\n{body}\n\n이대로 실행할까요?",
+            f"{Path(path).name}\n\n{body}\n\n분위기: {atm_txt}\n\n이대로 실행할까요?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
@@ -1789,6 +1805,44 @@ class MainDialog(QDialog):
             "o2_flow": _f("heater_o2_flow_edit"),
             "sp1": _f("heater_wp_edit"),
         }
+
+    def _apply_recipe_gas_to_panel(self, gas: dict):
+        """레시피의 가스·압력을 패널 입력칸에 옮겨 담는다.
+
+        체크박스는 blockSignals 로 감싼다 — heater_gas_check.toggled 가
+        _on_heater_gas_toggled(해제 시 release) 로 가므로, 프로그램이 값을
+        바꾸는 것이 가스 해제로 이어지면 안 된다.
+        """
+        try:
+            ui = self.ui
+            use_ar = bool(gas.get("use_ar"))
+            use_o2 = bool(gas.get("use_o2"))
+            uses_gas = use_ar or use_o2
+
+            for w, v in ((ui.heater_gas_check, uses_gas),
+                         (ui.heater_ar_check, use_ar),
+                         (ui.heater_o2_check, use_o2)):
+                w.blockSignals(True)
+                w.setChecked(v)
+                w.blockSignals(False)
+
+            if uses_gas:
+                # 쓰지 않는 가스의 유량칸은 비워 둔다(옛 값이 남으면 헷갈린다)
+                ui.heater_ar_flow_edit.setText(
+                    f"{float(gas.get('ar_flow', 0.0)):g}" if use_ar else "")
+                ui.heater_o2_flow_edit.setText(
+                    f"{float(gas.get('o2_flow', 0.0)):g}" if use_o2 else "")
+                ui.heater_wp_edit.setText(f"{float(gas.get('wp_mtorr', 0.0)):g}")
+            # 가스 없음을 명시한 경우 유량/압력 텍스트는 그대로 둔다
+            #  (다음 수동 운전에 다시 쓸 수 있다)
+        except Exception:
+            pass
+        try:
+            log_message_to_monitor(
+                "히터",
+                f"[히터] 레시피 가스 설정 적용: {self.heater_recipe.describe_gas()}")
+        except Exception:
+            pass
 
     def _heater_gas_wanted(self) -> bool:
         """가스·압력 단계를 실제로 밟아야 하는가.

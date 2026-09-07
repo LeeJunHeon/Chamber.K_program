@@ -70,6 +70,22 @@ SLOW_RAMP_TICK_SEC     = 3.0   # 느린 램프에서 SV 를 갱신하는 주기
 # 반복 횟수 허용 범위
 REPEAT_MIN, REPEAT_MAX = 1, 99
 
+# 가스·압력 컬럼. 하나라도 헤더에 있으면 '가스를 아는 레시피'로 본다.
+GAS_COLUMNS = ("use_ar", "ar_flow", "use_o2", "o2_flow", "wp_mtorr")
+
+_TRUE_WORDS = {"t", "true", "y", "yes", "1", "on", "o"}
+_FALSE_WORDS = {"", "f", "false", "n", "no", "0", "off", "x"}
+
+
+def _parse_bool(txt: str):
+    """T/F · 1/0 · Y/N · true/false · on/off. 모르면 None."""
+    v = str(txt or "").strip().lower()
+    if v in _TRUE_WORDS:
+        return True
+    if v in _FALSE_WORDS:
+        return False
+    return None
+
 # 상태
 IDLE, RAMPING, SOAKING, DONE, ABORTED = "IDLE", "RAMPING", "SOAKING", "DONE", "ABORTED"
 
@@ -133,6 +149,8 @@ class HeaterRecipeRunner(QObject):
 
         self._steps: List[HeaterRecipeStep] = []
         self._path: Optional[Path] = None
+        # 레시피가 들고 있는 가스·압력. 컬럼이 없는 옛 레시피면 None.
+        self._gas: Optional[dict] = None
 
         self._state = IDLE
         self._idx = -1
@@ -231,6 +249,28 @@ class HeaterRecipeRunner(QObject):
         except Exception:
             pass
 
+    def recipe_gas(self) -> Optional[dict]:
+        """레시피에 적힌 가스·압력. 가스 컬럼이 없는 옛 레시피면 None.
+
+        {"use_ar", "ar_flow", "use_o2", "o2_flow", "wp_mtorr"}
+        """
+        return dict(self._gas) if self._gas is not None else None
+
+    def describe_gas(self) -> str:
+        """로그/대화상자에 쓸 한 줄."""
+        g = self._gas
+        if g is None:
+            return "패널 설정 사용"
+        bits = []
+        if g.get("use_ar"):
+            bits.append(f"Ar {g.get('ar_flow', 0.0):g} sccm")
+        if g.get("use_o2"):
+            bits.append(f"O2 {g.get('o2_flow', 0.0):g} sccm")
+        if not bits:
+            return "없음 (진공)"
+        bits.append(f"WP {g.get('wp_mtorr', 0.0):.2f} mTorr")
+        return " · ".join(bits)
+
     def clear(self) -> bool:
         """불러온 레시피를 버린다. 실행 중이면 아무것도 하지 않고 False.
 
@@ -241,6 +281,7 @@ class HeaterRecipeRunner(QObject):
             return False
         self._steps = []
         self._path = None
+        self._gas = None
         self._repeat = 1
         self._idx = -1
         self._cycle = 0
@@ -571,9 +612,15 @@ class HeaterRecipeRunner(QObject):
             self.status_message.emit("히터(오류)", "레시피가 비어 있습니다.")
             return False
 
+        # 가스 컬럼이 하나라도 있으면 '가스를 아는 레시피'다. 하나도 없으면
+        #  옛 형식이고, 패널의 가스·압력 설정을 그대로 쓴다.
+        _head = {str(k).strip().lower() for k in (rows[0] or {}) if k is not None}
+        has_gas_cols = any(c in _head for c in GAS_COLUMNS)
+
         steps: List[HeaterRecipeStep] = []
         repeat = 1
         repeat_seen = False
+        gas: Optional[dict] = None
 
         for lineno, raw in enumerate(rows, start=2):
             # 컬럼명은 대소문자/공백 무시하고 매칭
@@ -658,9 +705,13 @@ class HeaterRecipeRunner(QObject):
                     "히터(오류)", f"{lineno}행: soak_min 은 음수일 수 없습니다.")
                 return False
 
-            # repeat 은 전체 패턴에 걸리는 값이라 첫 데이터 행만 읽는다
+            # repeat 과 가스·압력은 전체 패턴에 걸리는 값이라 첫 데이터 행만 읽는다
             if not repeat_seen:
                 repeat_seen = True
+                if has_gas_cols:
+                    gas = self._parse_gas_row(row, lineno)
+                    if gas is None:
+                        return False
                 rep_txt = row.get('repeat') or ""
                 if rep_txt:
                     try:
@@ -701,10 +752,77 @@ class HeaterRecipeRunner(QObject):
         self._steps = steps
         self._path = p
         self._repeat = repeat
+        self._gas = gas
         rep_txt = f" × {repeat}회 반복" if repeat > 1 else ""
         self.status_message.emit(
             "히터", f"레시피 로드: {p.name} ({len(steps)}스텝{rep_txt})")
+        if gas is not None:
+            if gas.get("use_ar") or gas.get("use_o2"):
+                self.status_message.emit(
+                    "히터", f"레시피 분위기: {self.describe_gas()}")
+            else:
+                self.status_message.emit(
+                    "히터", "레시피 분위기: 없음 (가스·압력 사용 안 함)")
         return True
+
+    def _parse_gas_row(self, row: dict, lineno: int) -> Optional[dict]:
+        """첫 데이터 행에서 가스·압력을 읽는다. 잘못되면 사유를 내고 None.
+
+        검증 규칙은 HeaterAtmosphere.start() 와 같다. 가스를 안 쓰는데
+        유량/압력이 적혀 있는 것은 오류가 아니다 — 그냥 안 쓴다.
+        """
+        def _flag(name):
+            v = _parse_bool(row.get(name))
+            if v is None:
+                self.status_message.emit(
+                    "히터(오류)",
+                    f"{lineno}행: {name} 은 T/F(또는 1/0, Y/N)여야 합니다.")
+            return v
+
+        def _num(name):
+            txt = (row.get(name) or "").strip()
+            if not txt:
+                return 0.0
+            try:
+                return float(txt)
+            except ValueError:
+                self.status_message.emit(
+                    "히터(오류)", f"{lineno}행: {name} 이 숫자가 아닙니다.")
+                return None
+
+        use_ar = _flag("use_ar")
+        if use_ar is None:
+            return None
+        use_o2 = _flag("use_o2")
+        if use_o2 is None:
+            return None
+
+        ar_flow = _num("ar_flow")
+        if ar_flow is None:
+            return None
+        o2_flow = _num("o2_flow")
+        if o2_flow is None:
+            return None
+        wp = _num("wp_mtorr")
+        if wp is None:
+            return None
+
+        if use_ar and ar_flow <= 0:
+            self.status_message.emit(
+                "히터(오류)", f"{lineno}행: use_ar 이 T 이면 ar_flow 는 0보다 커야 합니다.")
+            return None
+        if use_o2 and o2_flow <= 0:
+            self.status_message.emit(
+                "히터(오류)", f"{lineno}행: use_o2 가 T 이면 o2_flow 는 0보다 커야 합니다.")
+            return None
+        if (use_ar or use_o2) and wp <= 0:
+            self.status_message.emit(
+                "히터(오류)", f"{lineno}행: 가스를 쓰면 wp_mtorr 는 0보다 커야 합니다.")
+            return None
+
+        return {"use_ar": bool(use_ar), "ar_flow": float(ar_flow),
+                "use_o2": bool(use_o2), "o2_flow": float(o2_flow),
+                "wp_mtorr": float(wp)}
 
     # ==================== 실행 ====================
     def start(self) -> bool:
