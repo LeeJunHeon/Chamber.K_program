@@ -38,6 +38,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
+                        HEATER_GAS_HOLD_RELEASE_C,
                         heater_est_current)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
@@ -184,6 +185,10 @@ class MainDialog(QDialog):
         self._atm_run_prev = False
         # 가스 준비 진행도("3/9"). 상태 문구에 붙인다.
         self._atm_progress = ""
+        # 히터가 꺼진 뒤에도 식을 때까지 가스를 물고 있는 중인가
+        self._atm_hold = False
+        # 가스 해제가 끝나면 공정을 시작해야 하는가
+        self._start_after_release = False
         # 이번 공정이 히터를 '소유'하는가 (use_heater 且 heater_temp>0).
         #  히터를 제어하는 주체는 한 번에 하나여야 한다 — 공정이 소유하면
         #  히터 레시피를 못 띄우고, 소유하지 않으면 둘이 함께 돌 수 있다.
@@ -748,6 +753,8 @@ class MainDialog(QDialog):
             self.heater_recipe.finished.connect(self._on_heater_recipe_finished)
             self.ui.heater_recipe_button.clicked.connect(self._on_heater_recipe_clicked)
             self.ui.heater_reset_button.clicked.connect(self._on_heater_reset_clicked)
+            self.ui.heater_gas_release_button.clicked.connect(
+                self._on_heater_gas_release_clicked)
             self.ui.heater_hold_button.clicked.connect(self._on_heater_hold_clicked)
             self.ui.heater_skip_button.clicked.connect(self._on_heater_skip_clicked)
             self.ui.heater_stop_button.clicked.connect(self._on_heater_stop_clicked)
@@ -783,7 +790,8 @@ class MainDialog(QDialog):
             # 히터 비활성(config_user.json의 HEATER_ENABLED=false) 시
             # 조작 위젯을 잠가 오조작을 막는다. 표시용 위젯은 그대로 둔다.
             for w in ("heater_apply_button", "heater_onoff_button", "heater_sv_edit",
-                      "heater_reset_button", "heater_ar_check",
+                      "heater_reset_button", "heater_gas_release_button",
+                      "heater_ar_check",
                       "heater_ar_flow_edit", "heater_o2_check", "heater_o2_flow_edit",
                       "heater_wp_edit"):
                 getattr(self.ui, w).setEnabled(False)
@@ -1604,6 +1612,123 @@ class MainDialog(QDialog):
             self._refresh_heater_progress()   # 버튼 상태는 여기서 함께 맞춰진다
 
     # ---------- PZ400 스타일 표시부 ----------
+    def _heater_gas_hold_tick(self, st: dict):
+        """히터 RUN 하강 에지에서 가스 유지/해제를 정하고,
+        유지 중이면 PV 를 보며 해제 시점을 잡는다.
+
+        뜨거운 상태에서 가스를 끊으면 진공만 남은 챔버에서 시료가 식는다.
+        식을 때까지는 분위기를 유지한다. PV 를 못 읽는 동안에는 자동으로
+        끊지 않는다 — 수동 [가스 해제] 가 있다.
+        """
+        try:
+            atm = self.heater_atmosphere
+            run = bool(st.get('run'))
+            pv_ok = bool(st.get('ok')) and st.get('pv') is not None
+            pv = float(st['pv']) if pv_ok else None
+            thr = float(HEATER_GAS_HOLD_RELEASE_C)
+
+            if self._atm_run_prev and not run and atm.is_active():
+                if pv_ok and pv <= thr:
+                    atm.release("히터 OFF")
+                else:
+                    self._atm_hold = True
+                    pv_txt = f"{pv:.1f}°C" if pv_ok else "온도 미확인"
+                    log_message_to_monitor(
+                        "히터",
+                        f"[히터] 히터 OFF — 가스·압력은 PV {thr:g}°C 이하가 될 때까지"
+                        f" 유지합니다 (현재 {pv_txt})")
+                    if not (self.process_running or self.csv_mode
+                            or getattr(self, "_csv_delay_active", False)):
+                        self.update_stage_monitor(
+                            f"[가스 유지] 냉각 대기 — PV ≤ {thr:g}°C 에서 해제")
+
+            if run:
+                self._atm_hold = False
+
+            if self._atm_hold:
+                if atm.state() != "READY":
+                    self._atm_hold = False          # 다른 경로로 이미 풀렸다
+                elif pv_ok and pv <= thr:
+                    self._atm_hold = False
+                    log_message_to_monitor(
+                        "히터", f"[히터] PV {pv:.1f}°C ≤ {thr:g}°C — 가스·압력 해제")
+                    atm.release(f"냉각 완료 {pv:.1f}°C")
+
+            self._atm_run_prev = run
+        except Exception:
+            pass
+
+    @Slot()
+    def _on_heater_gas_release_clicked(self):
+        """냉각 대기 중인 가스를 사용자가 지금 끊는다."""
+        if not (HEATER_ENABLED and self.heater_atmosphere.is_active()):
+            return
+        pv_txt = (self.ui.heater_pv_edit.text() or "").strip()
+        reply = QMessageBox.question(
+            self, "가스·압력 해제",
+            "냉각 대기 중인 가스·압력을 지금 해제할까요?"
+            + (f"\n(현재 {pv_txt}°C)" if pv_txt else "")
+            + "\nAr/O2 유량을 끊고 밸브를 닫습니다.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        self._atm_hold = False
+        log_message_to_monitor("히터", "[히터] 사용자가 가스·압력을 해제했습니다")
+        self.heater_atmosphere.release("사용자 해제")
+
+    def _heater_gas_guard_for_process(self) -> bool:
+        """히터 가스·압력이 MFC 를 쥐고 있을 때 공정 시작을 허용할지. True 면 진행.
+
+        냉각 대기 중(히터는 꺼졌고 분위기만 READY)이면 해제할지 한 번 묻고,
+        예를 고르면 해제가 끝난 뒤 공정을 자동으로 시작한다.
+        """
+        if not (HEATER_ENABLED and getattr(self, "heater_atmosphere", None) is not None):
+            return True
+        atm = self.heater_atmosphere
+        if not atm.is_active():
+            return True
+
+        if self._start_after_release:
+            QMessageBox.information(
+                self, "가스 해제 중",
+                "히터 가스·압력을 해제하는 중입니다.\n해제가 끝나면 공정이 자동으로 시작됩니다.")
+            return False
+
+        st = self.plc_controller._heater_last or {}
+        heater_busy = (bool(st.get('run')) or self.ui.heater_onoff_button.isChecked()
+                       or self._heater_pending is not None
+                       or self.heater_recipe.is_running())
+        if heater_busy or atm.state() != "READY":
+            QMessageBox.warning(
+                self, "공정 시작 불가",
+                "히터 가스·압력이 MFC를 사용 중입니다.\n"
+                "히터를 끄고 가스가 해제된 뒤 시작하세요.")
+            return False
+
+        p = atm.params() or {}
+        pv_txt = (self.ui.heater_pv_edit.text() or "").strip()
+        reply = QMessageBox.question(
+            self, "가스·압력 해제 확인",
+            "히터 가스·압력이 잡혀 있습니다 (냉각 대기 중"
+            + (f", PV {pv_txt}°C" if pv_txt else "") + ").\n"
+            f"Ar {float(p.get('ar_flow', 0)):g} sccm · "
+            f"O2 {float(p.get('o2_flow', 0)):g} sccm · "
+            f"WP {float(p.get('sp1', 0)):g} mTorr\n\n"
+            "이 가스를 해제하고 공정을 시작할까요?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return False
+
+        self._atm_hold = False
+        self._start_after_release = True
+        log_message_to_monitor(
+            "히터", "[히터] 공정 시작을 위해 가스·압력 해제 — 해제가 끝나면 공정을 시작합니다")
+        self.update_stage_monitor("[가스 해제 중 — 공정 시작 대기]")
+        atm.release("공정 시작")
+        return False
+
     def _heater_status_text(self, st: dict) -> tuple[str, str]:
         """상태 라벨의 (문구, 색). 우선순위: 이상 > 인터락 > 가스 > 운전 > 정지.
 
@@ -1626,6 +1751,8 @@ class MainDialog(QDialog):
             return "가스 해제중", "#616161"
         if st.get('run'):
             return "운전 중", "#2e7d32"
+        if self._atm_hold and state == "READY":
+            return "가스 유지 · 냉각 중", "#1565c0"
         return "정지", "#616161"
 
     def _update_heater_lcd(self, st: dict):
@@ -2028,7 +2155,13 @@ class MainDialog(QDialog):
     @Slot()
     def _on_heater_atmosphere_released(self):
         self._atm_progress = ""
+        self._atm_hold = False
         self._sync_heater_gas_inputs()
+        if self._start_after_release:
+            self._start_after_release = False
+            if not self._is_closing:
+                # 이제 IDLE 이라 정상 경로로 들어간다
+                QTimer.singleShot(0, self._handle_start_process)
 
     @Slot()
     def _on_heater_reset_clicked(self):
@@ -2279,17 +2412,8 @@ class MainDialog(QDialog):
         # --- PZ400 스타일 LCD 표시 ---
         self._update_heater_lcd(st)
 
-        # --- 히터 OFF → 가스 해제 ---
-        #     모든 OFF 경로(수동/레시피 종료/이상 정지)가 RUN 비트로 모인다.
-        #     각 경로에 따로 넣지 않는 이유다.
-        try:
-            _run = bool(st.get('run'))
-            if self._atm_run_prev and not _run:
-                if self.heater_atmosphere.is_active():
-                    self.heater_atmosphere.release("히터 OFF")
-            self._atm_run_prev = _run
-        except Exception:
-            pass
+        # --- 히터 OFF → 가스 유지/해제 ---
+        self._heater_gas_hold_tick(st)
 
         # --- 가스·압력 위젯 활성 ---
         self._sync_heater_gas_inputs()
@@ -2300,6 +2424,9 @@ class MainDialog(QDialog):
             self.ui.heater_reset_button.setVisible(bool(st.get('fault')))
             self.ui.heater_reset_button.setEnabled(
                 bool(st.get('fault')) and not self.heater_recipe.is_running())
+            # 같은 자리를 쓰는 [가스 해제]. 이상이 우선이라 fault 면 내린다.
+            self.ui.heater_gas_release_button.setVisible(
+                self._atm_hold and not bool(st.get('fault')))
         except Exception:
             pass
 
@@ -2419,11 +2546,7 @@ class MainDialog(QDialog):
             return
         
         # 히터 전용 가스·압력이 MFC 를 쥐고 있으면 공정이 그 위에 겹칠 수 없다
-        if HEATER_ENABLED and self.heater_atmosphere.is_active():
-            QMessageBox.warning(
-                self, "공정 시작 불가",
-                "히터 가스·압력이 MFC를 사용 중입니다.\n"
-                "히터를 끄고 가스가 해제된 뒤 시작하세요.")
+        if not self._heater_gas_guard_for_process():
             return
 
         # ★ 메인밸브 개방 확인: MV & MV_INTERLOCK 둘 다 ON일 때만 공정 시작 허용
@@ -3478,6 +3601,16 @@ class MainDialog(QDialog):
                 "종료 불가",
                 "공정 진행 중에는 프로그램을 종료할 수 없습니다.\n먼저 STOP으로 공정을 종료한 뒤 다시 닫아주세요."
             )
+            event.ignore()
+            return
+
+        # 가스를 문 채로 나가면 밸브가 열린 상태로 남는다. 먼저 풀고 나가게 한다.
+        if (HEATER_ENABLED and getattr(self, "heater_atmosphere", None) is not None
+                and self.heater_atmosphere.is_active()):
+            QMessageBox.warning(
+                self, "종료 불가",
+                "히터 가스·압력이 잡혀 있거나 해제 중입니다.\n"
+                "[가스 해제](냉각 대기 중) 또는 [취소](준비 중)로 해제가 끝난 뒤 다시 닫아주세요.")
             event.ignore()
             return
 

@@ -131,6 +131,8 @@ HEATER_MAX_TEMP         = get('HEATER_MAX_TEMP',         500.0) # UI 입력 상�
 HEATER_SOAK_TOLERANCE   = get('HEATER_SOAK_TOLERANCE',   3.0)   # °C
 HEATER_SOAK_TIME_SEC    = get('HEATER_SOAK_TIME_SEC',    60)    # 공정 레시피 전용
 HEATER_WAIT_TIMEOUT_SEC = get('HEATER_WAIT_TIMEOUT_SEC', 3600)  # RAMP 대기 최대
+# 히터 OFF 후 가스·압력을 유지하는 PV 상한 [°C]. 이 아래로 식으면 해제한다.
+HEATER_GAS_HOLD_RELEASE_C = get('HEATER_GAS_HOLD_RELEASE_C', 100.0)
 
 # --- PLC로 밀어 넣는 한계값 (사람 단위. PLC raw 변환은 PLC.py가 한다) ---
 HEATER_SV_LIMIT_C          = get('HEATER_SV_LIMIT_C',          500.0)  # D00013 [°C]

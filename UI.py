@@ -756,6 +756,18 @@ class Ui_Dialog(object):
         self.heater_reset_button.setGeometry(QRect(152, 316, 58, 24))
         self.heater_reset_button.setEnabled(False)
         self.heater_reset_button.setVisible(False)   # 이상일 때만 보인다
+
+        # 냉각 대기 중인 가스·압력을 지금 끊는다. 리셋 버튼과 같은 자리를 쓴다
+        #  — 이상이면 [리셋], 냉각 대기면 [가스 해제]. 둘이 함께 뜰 일은 없다.
+        self.heater_gas_release_button = QPushButton(self.heater_group)
+        self.heater_gas_release_button.setObjectName(u"heater_gas_release_button")
+        self.heater_gas_release_button.setGeometry(QRect(152, 316, 58, 24))
+        self.heater_gas_release_button.setVisible(False)
+        self.heater_gas_release_button.setStyleSheet(
+            u"QPushButton {background: #e3f2fd; color: #0d47a1; font-weight: bold; "
+            u"font-size: 8pt; border-radius: 4px; border: 1px solid #90caf9;}"
+            u"QPushButton:hover {background: #bbdefb;}"
+        )
         self.heater_reset_button.setStyleSheet(
             u"QPushButton {background: #fff3e0; color: #9a4400; font-weight: bold; "
             u"font-size: 8pt; border-radius: 4px; border: 1px solid #e8b979;}"
@@ -992,9 +1004,9 @@ class Ui_Dialog(object):
         self.heater_wp_unit.setText(QCoreApplication.translate("Dialog", u"mTorr", None))
         self.heater_ar_unit.setText(QCoreApplication.translate("Dialog", u"sccm", None))
         self.heater_o2_unit.setText(QCoreApplication.translate("Dialog", u"sccm", None))
-        self.heater_ar_flow_edit.setText(QCoreApplication.translate("Dialog", u"5", None))
+        self.heater_ar_flow_edit.setText(QCoreApplication.translate("Dialog", u"", None))
         self.heater_o2_flow_edit.setText(QCoreApplication.translate("Dialog", u"", None))
-        self.heater_wp_edit.setText(QCoreApplication.translate("Dialog", u"2", None))
+        self.heater_wp_edit.setText(QCoreApplication.translate("Dialog", u"", None))
         # 초기 표시: 아직 PLC 연결 전이므로 '연결 대기' 상태임을 명시
         self.heater_status_label.setText(QCoreApplication.translate("Dialog", u"\uc5f0\uacb0 \ub300\uae30", None))
         self.heater_apply_button.setText(QCoreApplication.translate("Dialog", u"\uc801\uc6a9", None))
@@ -1004,6 +1016,8 @@ class Ui_Dialog(object):
         self.heater_skip_button.setText(QCoreApplication.translate("Dialog", u"\uac74\ub108\ub6f0\uae30", None))
         self.heater_stop_button.setText(QCoreApplication.translate("Dialog", u"\uc815\uc9c0", None))
         self.heater_reset_button.setText(QCoreApplication.translate("Dialog", u"\ub9ac\uc14b", None))
+        self.heater_gas_release_button.setText(
+            QCoreApplication.translate("Dialog", u"\uac00\uc2a4 \ud574\uc81c", None))
         # --- LCD 표시부 기본 텍스트 ---
         self.heater_pv_unit.setText(QCoreApplication.translate("Dialog", u"\u00b0C", None))
         self.heater_sv_small.setText(QCoreApplication.translate("Dialog", u"SV", None))
@@ -1038,6 +1052,8 @@ class Ui_Dialog(object):
         self.heater_reset_button.setToolTip(QCoreApplication.translate("Dialog",
             u"PLC 에 래치된 히터 이상을 지웁니다.\n"
             u"원인을 먼저 확인한 뒤 누르세요.", None))
+        self.heater_gas_release_button.setToolTip(QCoreApplication.translate("Dialog",
+            u"냉각 대기 중인 가스·압력을 지금 해제합니다", None))
         self.heater_ar_flow_edit.setToolTip(QCoreApplication.translate("Dialog",
             u"Ar 유량 [sccm]", None))
         self.heater_o2_flow_edit.setToolTip(QCoreApplication.translate("Dialog",
