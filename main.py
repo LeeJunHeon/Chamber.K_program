@@ -1046,8 +1046,7 @@ class MainDialog(QDialog):
 
             # 가스·압력을 쓰기로 했으면 먼저 준비한다. 히터는 준비가 끝난 뒤
             #  _on_heater_atmosphere_ready 에서 켠다.
-            if (self.ui.heater_gas_check.isChecked()
-                    and not self.heater_atmosphere.is_ready()):
+            if self._heater_gas_wanted() and not self.heater_atmosphere.is_ready():
                 if not self._heater_gas_start_guard():
                     self._revert_heater_onoff()
                     return
@@ -1055,6 +1054,10 @@ class MainDialog(QDialog):
                 self.ui.heater_onoff_button.setText("준비중…")
                 self.ui.heater_onoff_button.setEnabled(False)
                 return
+            if (self.ui.heater_gas_check.isChecked()
+                    and not self._heater_gas_wanted()):
+                log_message_to_monitor(
+                    "히터", "[히터] 가스 미선택 — 가스·압력 단계를 건너뜁니다")
 
             self.request_heater_target.emit(v)
             self.request_heater_run.emit(True)
@@ -1561,12 +1564,15 @@ class MainDialog(QDialog):
         self._rebuild_heater_step_list()
 
         # 가스·압력을 쓰기로 했으면 먼저 준비한다. 레시피는 준비가 끝난 뒤 시작한다.
-        if (self.ui.heater_gas_check.isChecked()
-                and not self.heater_atmosphere.is_ready()):
+        if self._heater_gas_wanted() and not self.heater_atmosphere.is_ready():
             if not self._heater_gas_start_guard():
                 return
             self._heater_pending = ("recipe_start", None)
             return
+        if (self.ui.heater_gas_check.isChecked()
+                and not self._heater_gas_wanted()):
+            log_message_to_monitor(
+                "히터", "[히터] 가스 미선택 — 가스·압력 단계를 건너뜁니다")
 
         if self.heater_recipe.start():
             self._refresh_heater_progress()   # 버튼 상태는 여기서 함께 맞춰진다
@@ -1783,6 +1789,16 @@ class MainDialog(QDialog):
             "o2_flow": _f("heater_o2_flow_edit"),
             "sp1": _f("heater_wp_edit"),
         }
+
+    def _heater_gas_wanted(self) -> bool:
+        """가스·압력 단계를 실제로 밟아야 하는가.
+
+        마스터 체크가 꺼져 있거나, Ar/O2 를 하나도 안 골랐으면 False.
+        가스를 안 쓰면 압력도 안 쓴다 — 막을 일이 아니라 건너뛸 일이다.
+        """
+        return (self.ui.heater_gas_check.isChecked()
+                and (self.ui.heater_ar_check.isChecked()
+                     or self.ui.heater_o2_check.isChecked()))
 
     def _heater_gas_start_guard(self) -> bool:
         """가스·압력 준비를 시작해도 되는지 확인하고 시작한다.

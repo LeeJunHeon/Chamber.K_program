@@ -1036,7 +1036,8 @@ class Ui_Dialog(object):
             u"원인을 먼저 확인한 뒤 누르세요.", None))
         self.heater_gas_check.setToolTip(QCoreApplication.translate("Dialog",
             u"히터를 켤 때 가스를 먼저 넣고 압력을 잡은 뒤 켭니다.\n"
-            u"히터가 꺼지면 가스도 해제됩니다.", None))
+            u"히터가 꺼지면 가스도 해제됩니다.\n"
+            u"Ar/O2 를 하나도 선택하지 않으면 이 단계는 건너뜁니다.", None))
         self.heater_ar_flow_edit.setToolTip(QCoreApplication.translate("Dialog",
             u"Ar 유량 [sccm]", None))
         self.heater_o2_flow_edit.setToolTip(QCoreApplication.translate("Dialog",
