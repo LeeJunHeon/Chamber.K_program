@@ -66,7 +66,7 @@
     "HEATER_WD_PERIOD_MS": 3000,
     "// UI 목표 온도 입력 상한(°C)": "",
     "// ※ HEATER_SV_LIMIT_C 를 넘으면 그 값으로 자동 하향된다": "",
-    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_MAX_TEMP": 630.0,
     "// 온도 도달 판정 허용 편차(°C)": "",
     "HEATER_SOAK_TOLERANCE": 1.0,
     "// [공정 레시피 전용] 히터 목표 도달 후 이 시간 유지되어야 다음 단계로 진행": "",
@@ -100,7 +100,7 @@
     "HEATER_MV_LIMIT": 1200,
 
     "// → D00013. PLC 쪽 목표 온도 소프트 상한(°C). HEATER_MAX_TEMP 이상일 것": "",
-    "HEATER_SV_LIMIT_C": 700.0,
+    "HEATER_SV_LIMIT_C": 630.0,
     "// → D00020. 램프 속도(°C/min). PLC 분해능이 6°C/min 이라 6의 배수로 쓸 것": "",
     "// 실제 승온 속도 = min(이 값, 그 온도에서 히터가 낼 수 있는 속도)": "",
     "// 즉 이 값은 '상한'이지 '하한'이 아니다. 낮추면 느려지고, 올려도 히터 능력을 넘지 못한다.": "",
@@ -109,12 +109,12 @@
     "// 적분 와인드업을 막는 장치이므로 함부로 키우지 말 것.": "",
     "HEATER_HOLDBACK_C": 2.0,
     "// → D00026. 과온 트립(°C). 래치되므로 풀려면 이상 리셋이 필요하다.": "",
-    "HEATER_OT_LIMIT_C": 750.0,
+    "HEATER_OT_LIMIT_C": 650.0,
     "// → D00027. 목표 도달 전 감속을 시작할 폭(°C)": "",
     "_HEATER_COOLDOWN_TARGET_C": "마지막 스텝 목표가 이 온도 이하면 냉각 스텝 — 램프·도달 판정 없이 soak 시간만 기다린다. 히터는 식는 속도를 제어할 수 없기 때문",
     "HEATER_COOLDOWN_TARGET_C": 30.0,
 
-    "HEATER_SLOW_ZONE_C": 10.0,
+    "HEATER_SLOW_ZONE_C": 40.0,
     "// → D00028. 감속 구간 램프 속도(°C/min). 최소 6.0": "",
     "HEATER_SLOW_RATE_C_PER_MIN": 6.0,
 
