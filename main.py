@@ -41,6 +41,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         heater_est_current)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
+from controller.heater_atmosphere import HeaterAtmosphere
 from lib.heater_logger import HeaterCsvLogger
 
 # 히터 레시피 단계 표기. 화면/툴팁이 같은 말을 쓰도록 여기 한 곳에서만 정한다.
@@ -176,6 +177,11 @@ class MainDialog(QDialog):
         self._heater_logger = HeaterCsvLogger()
         self._heater_log_last_ms = 0.0
         self._heater_run_prev = False
+        # 가스·압력 준비가 끝나면 무엇을 이어서 할지. ("manual_on", 목표온도) 또는
+        #  ("recipe_start", None). 준비 중이 아니면 None.
+        self._heater_pending = None
+        # 히터 RUN 의 True→False 전이 감시용. _heater_run_prev(CSV 로거용)와 별도로 둔다.
+        self._atm_run_prev = False
         # 이번 공정이 히터를 '소유'하는가 (use_heater 且 heater_temp>0).
         #  히터를 제어하는 주체는 한 번에 하나여야 한다 — 공정이 소유하면
         #  히터 레시피를 못 띄우고, 소유하지 않으면 둘이 함께 돌 수 있다.
@@ -542,6 +548,7 @@ class MainDialog(QDialog):
                         "sv": _w("heater_sv_edit"),
                         "status": _w("heater_status_label"),
                         "output": self._heater_output_text(),
+                        "atmosphere": self._heater_atmosphere_snapshot(),
                         "on": _checked("heater_onoff_button"),
                         "curSv": (getattr(self, "_erp_heater", {}) or {}).get("cur_sv"),
                         "pidErr": (getattr(self, "_erp_heater", {}) or {}).get("pid_err"),
@@ -743,6 +750,25 @@ class MainDialog(QDialog):
             self.ui.heater_skip_button.clicked.connect(self._on_heater_skip_clicked)
             self.ui.heater_stop_button.clicked.connect(self._on_heater_stop_clicked)
 
+            # --- 히터 전용 가스·압력 ---
+            #  공정 컨트롤러와 같은 MFC 를 쓴다. 동시에 못 쓰도록 서로 시작을 막는다.
+            self.heater_atmosphere = HeaterAtmosphere(self.mfc_controller, self)
+            self.heater_atmosphere.command_requested.connect(
+                self.mfc_controller.handle_command)
+            self.heater_atmosphere.update_plc_port.connect(
+                self.plc_controller.update_port_state)
+            self.mfc_controller.command_confirmed.connect(
+                self.heater_atmosphere.on_mfc_confirmed)
+            self.mfc_controller.command_failed.connect(
+                self.heater_atmosphere.on_mfc_failed)
+            self.heater_atmosphere.status_message.connect(self.on_status_message)
+            self.heater_atmosphere.state_changed.connect(
+                self._on_heater_atmosphere_state)
+            self.heater_atmosphere.ready.connect(self._on_heater_atmosphere_ready)
+            self.heater_atmosphere.failed.connect(self._on_heater_atmosphere_failed)
+            self.heater_atmosphere.released.connect(self._on_heater_atmosphere_released)
+            self.ui.heater_gas_check.toggled.connect(self._on_heater_gas_toggled)
+
             # (4) ★ ProcessController -> PLC : 레시피(CSV/단일 공정)에서
             #     HEATER_SET 스텝이 실행될 때 목표 온도와 운전을 PLC로 보낸다.
             #     이 연결이 없으면 레시피의 히터 스텝이 아무 동작도 하지 않는다.
@@ -752,7 +778,9 @@ class MainDialog(QDialog):
             # 히터 비활성(config_user.json의 HEATER_ENABLED=false) 시
             # 조작 위젯을 잠가 오조작을 막는다. 표시용 위젯은 그대로 둔다.
             for w in ("heater_apply_button", "heater_onoff_button", "heater_sv_edit",
-                      "heater_reset_button"):
+                      "heater_reset_button", "heater_gas_check", "heater_ar_check",
+                      "heater_ar_flow_edit", "heater_o2_check", "heater_o2_flow_edit",
+                      "heater_wp_edit", "heater_gas_state_label"):
                 getattr(self.ui, w).setEnabled(False)
 
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
@@ -1015,6 +1043,19 @@ class MainDialog(QDialog):
             if v is None:
                 self.ui.heater_onoff_button.setChecked(False)
                 return
+
+            # 가스·압력을 쓰기로 했으면 먼저 준비한다. 히터는 준비가 끝난 뒤
+            #  _on_heater_atmosphere_ready 에서 켠다.
+            if (self.ui.heater_gas_check.isChecked()
+                    and not self.heater_atmosphere.is_ready()):
+                if not self._heater_gas_start_guard():
+                    self._revert_heater_onoff()
+                    return
+                self._heater_pending = ("manual_on", v)
+                self.ui.heater_onoff_button.setText("준비중…")
+                self.ui.heater_onoff_button.setEnabled(False)
+                return
+
             self.request_heater_target.emit(v)
             self.request_heater_run.emit(True)
             self.ui.heater_onoff_button.setText("OFF")
@@ -1260,6 +1301,22 @@ class MainDialog(QDialog):
         except Exception:
             return 0.0
 
+    def _heater_atmosphere_snapshot(self) -> dict:
+        """ERP 스냅샷용 가스·압력 상태. 비활성이면 state 만 담는다."""
+        try:
+            a = self.heater_atmosphere
+            if not a.is_active():
+                return {"state": "IDLE"}
+            p = a.params()
+            return {
+                "state": a.state(),
+                "sp1": p.get("sp1"),
+                "arFlow": p.get("ar_flow") if p.get("use_ar") else None,
+                "o2Flow": p.get("o2_flow") if p.get("use_o2") else None,
+            }
+        except Exception:
+            return {"state": "IDLE"}
+
     def _heater_output_text(self, st: dict | None = None) -> str:
         """DAC 출력 한 줄. 출력 바의 텍스트와 ERP 스냅샷이 같은 문구를 쓴다.
 
@@ -1395,8 +1452,22 @@ class MainDialog(QDialog):
                         _emit("현재 스텝: " + " · ".join(_bits))
                 except Exception:
                     pass
+
             else:
                 _emit("수동 운전 (레시피 없음)")
+        except Exception:
+            pass
+
+        # --- 히터 전용 가스·압력 ---
+        try:
+            if self.heater_atmosphere.is_active():
+                p = self.heater_atmosphere.params()
+                _ar = f"{p.get('ar_flow', 0.0):.1f} sccm" if p.get("use_ar") else "—"
+                _o2 = f"{p.get('o2_flow', 0.0):.1f} sccm" if p.get("use_o2") else "—"
+                _stt = {"PREPARING": "준비중", "READY": "준비됨",
+                        "RELEASING": "해제중"}.get(self.heater_atmosphere.state(), "-")
+                _emit(f"분위기: Ar {_ar} · O2 {_o2} · "
+                      f"WP {p.get('sp1', 0.0):.2f} mTorr · {_stt}")
         except Exception:
             pass
 
@@ -1488,6 +1559,15 @@ class MainDialog(QDialog):
             return
 
         self._rebuild_heater_step_list()
+
+        # 가스·압력을 쓰기로 했으면 먼저 준비한다. 레시피는 준비가 끝난 뒤 시작한다.
+        if (self.ui.heater_gas_check.isChecked()
+                and not self.heater_atmosphere.is_ready()):
+            if not self._heater_gas_start_guard():
+                return
+            self._heater_pending = ("recipe_start", None)
+            return
+
         if self.heater_recipe.start():
             self._refresh_heater_progress()   # 버튼 상태는 여기서 함께 맞춰진다
 
@@ -1680,6 +1760,161 @@ class MainDialog(QDialog):
             if HEATER_ENABLED:
                 for _w in ("heater_sv_edit", "heater_apply_button", "heater_onoff_button"):
                     getattr(self.ui, _w).setEnabled(not running)
+                # 가스 입력은 분위기 제어가 놀고 있을 때만 연다
+                _idle = (self.heater_atmosphere.state() == "IDLE")
+                for _w in ("heater_ar_check", "heater_ar_flow_edit", "heater_o2_check",
+                           "heater_o2_flow_edit", "heater_wp_edit"):
+                    getattr(self.ui, _w).setEnabled((not running) and _idle)
+        except Exception:
+            pass
+
+    # ---------- 히터 전용 가스·압력 ----------
+    def _read_heater_gas_inputs(self) -> dict:
+        """패널의 가스·압력 입력을 읽는다. 숫자가 아니면 0.0."""
+        def _f(name):
+            try:
+                return float((getattr(self.ui, name).text() or "").strip())
+            except (TypeError, ValueError):
+                return 0.0
+        return {
+            "use_ar": self.ui.heater_ar_check.isChecked(),
+            "use_o2": self.ui.heater_o2_check.isChecked(),
+            "ar_flow": _f("heater_ar_flow_edit"),
+            "o2_flow": _f("heater_o2_flow_edit"),
+            "sp1": _f("heater_wp_edit"),
+        }
+
+    def _heater_gas_start_guard(self) -> bool:
+        """가스·압력 준비를 시작해도 되는지 확인하고 시작한다.
+
+        MFC 는 공정과 공유하는 자원이라 소유자가 하나여야 한다.
+        """
+        if (self.process_running or self.csv_mode
+                or getattr(self, "_csv_delay_active", False)):
+            QMessageBox.warning(
+                self, "가스 사용 불가",
+                "공정이 MFC를 사용 중입니다.\n공정이 끝난 뒤에 사용하세요.")
+            return False
+        if not self._check_main_valve_open():
+            return False
+        kw = self._read_heater_gas_inputs()
+        if not self.heater_atmosphere.start(**kw):
+            QMessageBox.warning(
+                self, "가스 준비 불가",
+                "가스·압력을 시작하지 못했습니다.\n"
+                "Ar/O2 선택과 유량·압력 값을 확인하세요. 자세한 사유는 로그에 있습니다.")
+            return False
+        return True
+
+    def _revert_heater_onoff(self):
+        """ON 버튼을 눌리기 전 상태로 되돌린다."""
+        try:
+            btn = self.ui.heater_onoff_button
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.setText("ON")
+            btn.setEnabled(True)
+            btn.blockSignals(False)
+        except Exception:
+            pass
+
+    @Slot(bool)
+    def _on_heater_gas_toggled(self, checked: bool):
+        if checked:
+            return
+        # 체크 해제가 곧 취소/해제 수단이다
+        try:
+            if self.heater_atmosphere.is_active():
+                self.heater_atmosphere.release("사용자 해제")
+        except Exception:
+            pass
+        if self._heater_pending is not None:
+            self._heater_pending = None
+            self._revert_heater_onoff()
+
+    @Slot(str, str)
+    def _on_heater_atmosphere_state(self, state: str, detail: str):
+        txt = {"IDLE": "대기", "PREPARING": "준비중", "READY": "준비됨",
+               "RELEASING": "해제중"}.get(state, state)
+        if state == "PREPARING":
+            head = (detail.split(" ", 1)[0] if detail else "")
+            if "/" in head:
+                txt = f"준비중 {head}"
+        elif detail.startswith("오류"):
+            txt = "오류"
+        try:
+            self.ui.heater_gas_state_label.setText(txt)
+        except Exception:
+            pass
+        # 공정이 stage monitor 를 쓰는 중에는 덮어쓰지 않는다
+        if not (self.process_running or self.csv_mode
+                or getattr(self, "_csv_delay_active", False)):
+            try:
+                self.update_stage_monitor(f"[가스 {detail}]" if detail else f"[가스] {txt}")
+            except Exception:
+                pass
+
+    @Slot()
+    def _on_heater_atmosphere_ready(self):
+        pending, self._heater_pending = self._heater_pending, None
+        try:
+            p = self.heater_atmosphere.params()
+            log_message_to_monitor(
+                "히터",
+                f"[히터] 가스·압력 준비됨 — "
+                f"Ar {p.get('ar_flow', 0.0):g} sccm · O2 {p.get('o2_flow', 0.0):g} sccm"
+                f" · WP {p.get('sp1', 0.0):g} mTorr")
+        except Exception:
+            pass
+
+        if not pending:
+            return                      # 사용자가 아직 ON 을 안 눌렀다
+        kind, val = pending
+        if kind == "manual_on":
+            self.request_heater_target.emit(val)
+            self.request_heater_run.emit(True)
+            try:
+                btn = self.ui.heater_onoff_button
+                btn.setText("OFF")
+                btn.setEnabled(True)
+            except Exception:
+                pass
+        elif kind == "recipe_start":
+            if self.heater_recipe.start():
+                self._refresh_heater_progress()
+            else:
+                log_message_to_monitor("경고", "[히터] 레시피 시작에 실패했습니다.")
+                self.heater_atmosphere.release("레시피 시작 실패")
+
+    @Slot(str)
+    def _on_heater_atmosphere_failed(self, reason: str):
+        pending, self._heater_pending = self._heater_pending, None
+        if pending and pending[0] == "manual_on":
+            self._revert_heater_onoff()
+        elif pending and pending[0] == "recipe_start":
+            # 레시피는 로드된 채로 둔다 — 다시 [레시피]로 시작할 수 있다
+            self._sync_heater_recipe_buttons()
+        # 이미 운전 중이라면 히터는 건드리지 않는다. 가스 이탈은 경고 정책이다.
+        try:
+            log_message_to_monitor("경고", f"[히터] 가스·압력 준비 실패: {reason}")
+        except Exception:
+            pass
+        try:
+            if not self._is_closing:
+                QMessageBox.warning(self, "가스·압력 준비 실패", reason)
+        except Exception:
+            pass
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(f"⚠️ CHK 히터 가스·압력 준비 실패: {reason}")
+                self.chat_chk.flush()
+        except Exception:
+            pass
+
+    @Slot()
+    def _on_heater_atmosphere_released(self):
+        try:
+            self.ui.heater_gas_state_label.setText("대기")
         except Exception:
             pass
 
@@ -1944,6 +2179,30 @@ class MainDialog(QDialog):
         # --- PZ400 스타일 LCD 표시 ---
         self._update_heater_lcd(st)
 
+        # --- 히터 OFF → 가스 해제 ---
+        #     모든 OFF 경로(수동/레시피 종료/이상 정지)가 RUN 비트로 모인다.
+        #     각 경로에 따로 넣지 않는 이유다.
+        try:
+            _run = bool(st.get('run'))
+            if self._atm_run_prev and not _run:
+                if self.heater_atmosphere.is_active():
+                    self.heater_atmosphere.release("히터 OFF")
+            self._atm_run_prev = _run
+        except Exception:
+            pass
+
+        # --- 가스·압력 위젯 활성 ---
+        #     체크박스는 준비/해제 중에도 열어 둔다 — 해제 수단이기 때문이다.
+        try:
+            _run = bool(st.get('run'))
+            _idle = (self.heater_atmosphere.state() == "IDLE")
+            self.ui.heater_gas_check.setEnabled(not _run)
+            for _w in ("heater_ar_check", "heater_ar_flow_edit", "heater_o2_check",
+                       "heater_o2_flow_edit", "heater_wp_edit"):
+                getattr(self.ui, _w).setEnabled((not _run) and _idle)
+        except Exception:
+            pass
+
         # --- 이상 리셋 버튼: 이상일 때만, 레시피가 안 돌 때만 ---
         #     눌러야 할 이유가 없을 때 눌리면 안 된다.
         try:
@@ -2067,6 +2326,14 @@ class MainDialog(QDialog):
             QMessageBox.warning(self, "경고", "이미 공정이 진행 중입니다.")
             return
         
+        # 히터 전용 가스·압력이 MFC 를 쥐고 있으면 공정이 그 위에 겹칠 수 없다
+        if HEATER_ENABLED and self.heater_atmosphere.is_active():
+            QMessageBox.warning(
+                self, "공정 시작 불가",
+                "히터 가스·압력이 MFC를 사용 중입니다.\n"
+                "히터를 끄고 가스가 해제된 뒤 시작하세요.")
+            return
+
         # ★ 메인밸브 개방 확인: MV & MV_INTERLOCK 둘 다 ON일 때만 공정 시작 허용
         if not self._check_main_valve_open():
             return
@@ -3022,18 +3289,27 @@ class MainDialog(QDialog):
             self._cnt_wp += 1
 
     @Slot(str)
+    def _heater_atm_active(self) -> bool:
+        """히터 분위기 제어가 MFC 를 쥐고 있는가. 히터 비활성이면 항상 False."""
+        try:
+            return bool(HEATER_ENABLED and self.heater_atmosphere.is_active())
+        except Exception:
+            return False
+
     def _on_mfc_flow_alert(self, msg: str):
         log_message_to_monitor("MFC(경고)", msg)
-        if self.chat_chk and self.process_running:
-            name = self.current_process_name or "CHK"
+        if self.chat_chk and (self.process_running or self._heater_atm_active()):
+            name = self.current_process_name or (
+                "히터 분위기" if self._heater_atm_active() else "CHK")
             self.chat_chk.notify_text(f"⚠️ CHK 가스 유량 이상: {name} | {msg}")
             self.chat_chk.flush()
 
     @Slot(str)
     def _on_mfc_pressure_alert(self, msg: str):
         log_message_to_monitor("MFC(경고)", msg)
-        if self.chat_chk and self.process_running:
-            name = self.current_process_name or "CHK"
+        if self.chat_chk and (self.process_running or self._heater_atm_active()):
+            name = self.current_process_name or (
+                "히터 분위기" if self._heater_atm_active() else "CHK")
             self.chat_chk.notify_text(f"⚠️ CHK 압력 이상: {name} | {msg}")
             self.chat_chk.flush()
 
@@ -3156,6 +3432,12 @@ class MainDialog(QDialog):
         #     그쪽은 포트를 닫는 중이라 실패할 수 있어 여기서 한 번 더 끈다.
         #   - HEATER_RUN이 꺼지면 PLC 래더 H9가 DAC 출력을 0으로 강제한다.
         if HEATER_ENABLED:
+            try:
+                # 가스를 넣어 두었으면 먼저 되돌린다(기다리지는 않는다 — best effort)
+                if self.heater_atmosphere.is_active():
+                    self.heater_atmosphere.release("프로그램 종료")
+            except Exception:
+                pass
             try:
                 # 레시피가 돌고 있으면 먼저 멈춘다(내부에서 히터 OFF까지 처리한다)
                 self.heater_recipe.stop("프로그램 종료")

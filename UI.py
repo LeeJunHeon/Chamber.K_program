@@ -18,7 +18,7 @@ class Ui_Dialog(object):
     def setupUi(self, Dialog):
         if not Dialog.objectName():
             Dialog.setObjectName(u"Dialog")
-        Dialog.resize(1260, 609)
+        Dialog.resize(1260, 681)
         self.pushButton = QPushButton(Dialog)
         self.pushButton.setObjectName(u"pushButton")
         self.pushButton.setEnabled(False)
@@ -464,7 +464,7 @@ class Ui_Dialog(object):
 
         self.heater_group = QFrame(Dialog)
         self.heater_group.setObjectName(u"heater_group")
-        self.heater_group.setGeometry(QRect(1022, 20, 220, 403))
+        self.heater_group.setGeometry(QRect(1022, 20, 220, 475))
         self.heater_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.heater_group.setStyleSheet(
             u"QFrame#heater_group {background: #ffffff; "
@@ -621,15 +621,93 @@ class Ui_Dialog(object):
             u"QLabel {border: none; color: #666666; font-size: 8.5pt;}"
         )
 
+        # --- 가스·압력 (히터 전용 분위기 제어) ---
+        #  체크하면 히터를 켜기 전에 가스를 넣고 압력을 잡는다.
+        #  히터가 꺼지면 main.py 가 자동으로 해제한다.
+        self.heater_gas_check = QCheckBox(self.heater_group)
+        self.heater_gas_check.setObjectName(u"heater_gas_check")
+        self.heater_gas_check.setGeometry(QRect(10, 200, 96, 20))
+        self.heater_gas_check.setStyleSheet(
+            u"QCheckBox {border: none; color: #333333; font-size: 8.5pt;}"
+        )
+
+        self.heater_gas_state_label = QLabel(self.heater_group)
+        self.heater_gas_state_label.setObjectName(u"heater_gas_state_label")
+        self.heater_gas_state_label.setGeometry(QRect(110, 200, 100, 20))
+        self.heater_gas_state_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.heater_gas_state_label.setStyleSheet(
+            u"QLabel {border: none; color: #666666; font-size: 8.5pt;}"
+        )
+
+        self.heater_ar_check = QCheckBox(self.heater_group)
+        self.heater_ar_check.setObjectName(u"heater_ar_check")
+        self.heater_ar_check.setGeometry(QRect(10, 224, 42, 24))
+        self.heater_ar_check.setStyleSheet(
+            u"QCheckBox {border: none; color: #333333; font-size: 8.5pt;}"
+        )
+
+        self.heater_ar_flow_edit = QLineEdit(self.heater_group)
+        self.heater_ar_flow_edit.setObjectName(u"heater_ar_flow_edit")
+        self.heater_ar_flow_edit.setGeometry(QRect(52, 224, 46, 24))
+        self.heater_ar_flow_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.heater_ar_flow_edit.setMaxLength(6)
+        self.heater_ar_flow_edit.setStyleSheet(
+            u"QLineEdit {background: #ffffff; border: 1px solid #cccccc; "
+            u"border-radius: 3px; color: #333333;}"
+            u"QLineEdit:focus {border: 1px solid #4a90d9;}"
+        )
+
+        self.heater_o2_check = QCheckBox(self.heater_group)
+        self.heater_o2_check.setObjectName(u"heater_o2_check")
+        self.heater_o2_check.setGeometry(QRect(110, 224, 42, 24))
+        self.heater_o2_check.setStyleSheet(
+            u"QCheckBox {border: none; color: #333333; font-size: 8.5pt;}"
+        )
+
+        self.heater_o2_flow_edit = QLineEdit(self.heater_group)
+        self.heater_o2_flow_edit.setObjectName(u"heater_o2_flow_edit")
+        self.heater_o2_flow_edit.setGeometry(QRect(152, 224, 46, 24))
+        self.heater_o2_flow_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.heater_o2_flow_edit.setMaxLength(6)
+        self.heater_o2_flow_edit.setStyleSheet(
+            u"QLineEdit {background: #ffffff; border: 1px solid #cccccc; "
+            u"border-radius: 3px; color: #333333;}"
+            u"QLineEdit:focus {border: 1px solid #4a90d9;}"
+        )
+
+        self.heater_wp_title = QLabel(self.heater_group)
+        self.heater_wp_title.setObjectName(u"heater_wp_title")
+        self.heater_wp_title.setGeometry(QRect(10, 250, 34, 24))
+        self.heater_wp_title.setStyleSheet(u"QLabel {border: none; color: #333333;}")
+
+        self.heater_wp_edit = QLineEdit(self.heater_group)
+        self.heater_wp_edit.setObjectName(u"heater_wp_edit")
+        self.heater_wp_edit.setGeometry(QRect(48, 250, 60, 24))
+        self.heater_wp_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.heater_wp_edit.setMaxLength(6)
+        self.heater_wp_edit.setStyleSheet(
+            u"QLineEdit {background: #ffffff; border: 1px solid #cccccc; "
+            u"border-radius: 3px; color: #333333;}"
+            u"QLineEdit:focus {border: 1px solid #4a90d9;}"
+        )
+
+        self.heater_wp_unit = QLabel(self.heater_group)
+        self.heater_wp_unit.setObjectName(u"heater_wp_unit")
+        self.heater_wp_unit.setGeometry(QRect(112, 250, 60, 24))
+        self.heater_wp_unit.setStyleSheet(
+            u"QLabel {border: none; color: #666666; font-size: 8.5pt;}"
+        )
+
         # --- 수동 조작: 목표 온도 입력 + 적용 + ON ---
         self.heater_sv_title = QLabel(self.heater_group)
         self.heater_sv_title.setObjectName(u"heater_sv_title")
-        self.heater_sv_title.setGeometry(QRect(10, 218, 34, 26))
+        self.heater_sv_title.setGeometry(QRect(10, 290, 34, 26))
         self.heater_sv_title.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         self.heater_sv_edit = QLineEdit(self.heater_group)
         self.heater_sv_edit.setObjectName(u"heater_sv_edit")
-        self.heater_sv_edit.setGeometry(QRect(48, 218, 60, 26))
+        self.heater_sv_edit.setGeometry(QRect(48, 290, 60, 26))
         self.heater_sv_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.heater_sv_edit.setMaxLength(6)                          # "180.0" 정도면 충분
         self.heater_sv_edit.setStyleSheet(
@@ -641,7 +719,7 @@ class Ui_Dialog(object):
         # [적용] 목표 온도만 다시 전송. 운전 중에도 목표 변경 가능.
         self.heater_apply_button = QPushButton(self.heater_group)
         self.heater_apply_button.setObjectName(u"heater_apply_button")
-        self.heater_apply_button.setGeometry(QRect(114, 218, 44, 26))
+        self.heater_apply_button.setGeometry(QRect(114, 290, 44, 26))
         self.heater_apply_button.setStyleSheet(
             u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
             u"border-radius: 4px; border: 1px solid #cccccc;}"
@@ -651,7 +729,7 @@ class Ui_Dialog(object):
         # [ON] 체크 시 목표 전송 + HEATER_RUN ON. 체크색은 장비 버튼과 동일 규칙.
         self.heater_onoff_button = QPushButton(self.heater_group)
         self.heater_onoff_button.setObjectName(u"heater_onoff_button")
-        self.heater_onoff_button.setGeometry(QRect(164, 218, 46, 26))
+        self.heater_onoff_button.setGeometry(QRect(164, 290, 46, 26))
         self.heater_onoff_button.setCheckable(True)
         self.heater_onoff_button.setStyleSheet(
             u"QPushButton {background: #A0A0A0; color: white; font-weight: bold; "
@@ -663,14 +741,14 @@ class Ui_Dialog(object):
         # 상태 문구. 색상은 main.py의 update_heater_display()가 상황별로 덮어쓴다.
         self.heater_status_label = QLabel(self.heater_group)
         self.heater_status_label.setObjectName(u"heater_status_label")
-        self.heater_status_label.setGeometry(QRect(10, 252, 138, 20))
+        self.heater_status_label.setGeometry(QRect(10, 324, 138, 20))
         self.heater_status_label.setStyleSheet(u"QLabel {border: none; color: #333333;}")
 
         # PLC 에 래치된 히터 이상을 지운다(M00043). 이상일 때만 켜진다.
         #  정지(#b3261e/빨강)와 구분되는 주의색. 대비 5.98:1 (AA 통과).
         self.heater_reset_button = QPushButton(self.heater_group)
         self.heater_reset_button.setObjectName(u"heater_reset_button")
-        self.heater_reset_button.setGeometry(QRect(152, 250, 58, 24))
+        self.heater_reset_button.setGeometry(QRect(152, 322, 58, 24))
         self.heater_reset_button.setEnabled(False)
         self.heater_reset_button.setStyleSheet(
             u"QPushButton {background: #fff3e0; color: #9a4400; font-weight: bold; "
@@ -684,7 +762,7 @@ class Ui_Dialog(object):
         # DAC 출력 바. 텍스트(DAC 원본/출력%/추정전류)는 main.py 가 setFormat 으로 넣는다.
         self.heater_out_bar = QProgressBar(self.heater_group)
         self.heater_out_bar.setObjectName(u"heater_out_bar")
-        self.heater_out_bar.setGeometry(QRect(10, 274, 200, 20))
+        self.heater_out_bar.setGeometry(QRect(10, 346, 200, 20))
         self.heater_out_bar.setRange(0, 100)
         self.heater_out_bar.setValue(0)
         self.heater_out_bar.setTextVisible(True)
@@ -699,7 +777,7 @@ class Ui_Dialog(object):
         # --- 레시피 진행 조작 (실행 중에만 활성화된다) ---
         self.heater_hold_button = QPushButton(self.heater_group)
         self.heater_hold_button.setObjectName(u"heater_hold_button")
-        self.heater_hold_button.setGeometry(QRect(10, 302, 70, 28))
+        self.heater_hold_button.setGeometry(QRect(10, 374, 70, 28))
         self.heater_hold_button.setEnabled(False)
         self.heater_hold_button.setStyleSheet(
             u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
@@ -710,7 +788,7 @@ class Ui_Dialog(object):
 
         self.heater_skip_button = QPushButton(self.heater_group)
         self.heater_skip_button.setObjectName(u"heater_skip_button")
-        self.heater_skip_button.setGeometry(QRect(84, 302, 70, 28))
+        self.heater_skip_button.setGeometry(QRect(84, 374, 70, 28))
         self.heater_skip_button.setEnabled(False)
         self.heater_skip_button.setStyleSheet(
             u"QPushButton {background: #ebebe9; color: black; font-weight: bold; "
@@ -723,7 +801,7 @@ class Ui_Dialog(object):
         #  배경만 옅은 적색으로 구분한다(#b3261e on #fdecea = 5.72:1, WCAG AA).
         self.heater_stop_button = QPushButton(self.heater_group)
         self.heater_stop_button.setObjectName(u"heater_stop_button")
-        self.heater_stop_button.setGeometry(QRect(158, 302, 52, 28))
+        self.heater_stop_button.setGeometry(QRect(158, 374, 52, 28))
         self.heater_stop_button.setEnabled(False)
         self.heater_stop_button.setStyleSheet(
             u"QPushButton {background: #fdecea; color: #b3261e; font-weight: bold; "
@@ -735,7 +813,7 @@ class Ui_Dialog(object):
         # --- 스텝 목록 (현재 스텝을 main.py 가 강조한다) ---
         self.heater_step_list = QListWidget(self.heater_group)
         self.heater_step_list.setObjectName(u"heater_step_list")
-        self.heater_step_list.setGeometry(QRect(10, 338, 200, 55))
+        self.heater_step_list.setGeometry(QRect(10, 410, 200, 55))
         self.heater_step_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.heater_step_list.setSelectionMode(
             QAbstractItemView.SelectionMode.NoSelection)
@@ -755,7 +833,7 @@ class Ui_Dialog(object):
         # [구조] QFrame(ION_group)이 부모. 내부는 프레임 기준 상대 좌표.
         self.ION_group = QFrame(Dialog)
         self.ION_group.setObjectName(u"ION_group")
-        self.ION_group.setGeometry(QRect(1022, 433, 220, 160))
+        self.ION_group.setGeometry(QRect(1022, 505, 220, 160))
         self.ION_group.setFrameShape(QFrame.Shape.StyledPanel)
         self.ION_group.setStyleSheet(
             u"QFrame#ION_group {background: #ffffff; "
@@ -901,6 +979,18 @@ class Ui_Dialog(object):
         self.heater_title_label.setText(QCoreApplication.translate("Dialog", u"Heater [\u00b0C]", None))
         self.heater_pv_title.setText(QCoreApplication.translate("Dialog", u"PV", None))
         self.heater_sv_title.setText(QCoreApplication.translate("Dialog", u"\ubaa9\ud45c", None))
+        # --- 가스·압력 ---
+        self.heater_gas_check.setText(QCoreApplication.translate("Dialog", u"\uac00\uc2a4\u00b7\uc555\ub825", None))
+        self.heater_gas_state_label.setText(QCoreApplication.translate("Dialog", u"\ub300\uae30", None))
+        self.heater_ar_check.setText(QCoreApplication.translate("Dialog", u"Ar", None))
+        self.heater_o2_check.setText(QCoreApplication.translate("Dialog", u"O2", None))
+        self.heater_wp_title.setText(QCoreApplication.translate("Dialog", u"\uc555\ub825", None))
+        self.heater_wp_unit.setText(QCoreApplication.translate("Dialog", u"mTorr", None))
+        self.heater_ar_flow_edit.setText(QCoreApplication.translate("Dialog", u"5", None))
+        self.heater_o2_flow_edit.setText(QCoreApplication.translate("Dialog", u"", None))
+        self.heater_wp_edit.setText(QCoreApplication.translate("Dialog", u"2", None))
+        self.heater_ar_flow_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"sccm", None))
+        self.heater_o2_flow_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"sccm", None))
         # 초기 표시: 아직 PLC 연결 전이므로 '연결 대기' 상태임을 명시
         self.heater_status_label.setText(QCoreApplication.translate("Dialog", u"\uc5f0\uacb0 \ub300\uae30", None))
         self.heater_apply_button.setText(QCoreApplication.translate("Dialog", u"\uc801\uc6a9", None))
@@ -944,6 +1034,15 @@ class Ui_Dialog(object):
         self.heater_reset_button.setToolTip(QCoreApplication.translate("Dialog",
             u"PLC 에 래치된 히터 이상을 지웁니다.\n"
             u"원인을 먼저 확인한 뒤 누르세요.", None))
+        self.heater_gas_check.setToolTip(QCoreApplication.translate("Dialog",
+            u"히터를 켤 때 가스를 먼저 넣고 압력을 잡은 뒤 켭니다.\n"
+            u"히터가 꺼지면 가스도 해제됩니다.", None))
+        self.heater_ar_flow_edit.setToolTip(QCoreApplication.translate("Dialog",
+            u"Ar 유량 [sccm]", None))
+        self.heater_o2_flow_edit.setToolTip(QCoreApplication.translate("Dialog",
+            u"O2 유량 [sccm]", None))
+        self.heater_wp_edit.setToolTip(QCoreApplication.translate("Dialog",
+            u"목표 공정 압력 [mTorr]", None))
         self.heater_sv_big.setToolTip(QCoreApplication.translate("Dialog",
             u"PLC 가 지금 실제로 쫓고 있는 목표 온도(램프 중간 목표 포함)", None))
         self.heater_dev_label.setToolTip(QCoreApplication.translate("Dialog",
