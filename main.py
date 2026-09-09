@@ -1,4 +1,5 @@
 import sys
+import os as _os
 import threading
 import traceback
 from functools import partial
@@ -617,12 +618,24 @@ class MainDialog(QDialog):
                     ),
                     "csvRecipe": (
                         {
+                            "name": _os.path.basename(str(getattr(self, "csv_file_path", "") or "")) or None,
                             "stepNo": int(getattr(self, "csv_index", -1)) + 1,
                             "total": len(getattr(self, "csv_rows", []) or []),
                             "active": bool(getattr(self, "csv_mode", False)),
                             "steps": [
                                 str((r or {}).get("Process_name") or f"STEP{i+1}")
                                 for i, r in enumerate(getattr(self, "csv_rows", []) or [])
+                            ],
+                            # 웹 상세 표시용 스텝 파라미터(문자열 그대로, 검증은 장비가 한다)
+                            "rows": [
+                                {k: str((r or {}).get(k, "") or "") for k in (
+                                    "Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
+                                    "working_pressure", "process_time", "shutter_delay",
+                                    "use_rf_power", "rf_power", "use_dc_power", "dc_power",
+                                    "use_heater", "heater_temp", "heater_ramp",
+                                    "gun1", "gun2", "G1 Target", "G2 Target",
+                                )}
+                                for r in (getattr(self, "csv_rows", []) or [])
                             ],
                         }
                         if (getattr(self, "csv_rows", None) or None)
