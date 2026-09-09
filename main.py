@@ -321,6 +321,30 @@ class MainDialog(QDialog):
                             w.setPlainText(str(val))
                         else:
                             w.setText(str(val))
+                    # 가스·압력 입력이 함께 왔으면 히터 패널에 반영한다.
+                    # 키가 없으면 장비 패널의 현재 설정을 그대로 쓴다.
+                    def _set_chk(wn, v):
+                        w_ = getattr(self.ui, wn, None)
+                        if w_ is not None and v is not None:
+                            w_.setChecked(bool(v))
+
+                    def _set_txt(wn, v):
+                        w_ = getattr(self.ui, wn, None)
+                        if w_ is not None and v is not None:
+                            w_.setText(str(v))
+
+                    if "useAr" in args:
+                        _set_chk("heater_ar_check", args.get("useAr"))
+                        _set_txt("heater_ar_flow_edit", args.get("arFlow"))
+                    if "useO2" in args:
+                        _set_chk("heater_o2_check", args.get("useO2"))
+                        _set_txt("heater_o2_flow_edit", args.get("o2Flow"))
+                    if "wp" in args:
+                        _set_txt("heater_wp_edit", args.get("wp"))
+                    try:
+                        self._sync_heater_gas_inputs()
+                    except Exception:
+                        pass
                     # 사전 검증 — 실패하면 팝업 대신 예외로 웹에 사유를 보고한다
                     sv_txt = ""
                     try:
@@ -388,7 +412,8 @@ class MainDialog(QDialog):
                 if not rows:
                     raise RuntimeError("레시피 행이 없습니다")
                 cols = ["step", "target_c", "ramp_c_per_min", "ramp_min",
-                        "soak_min", "repeat"]
+                        "soak_min", "repeat",
+                        "use_ar", "ar_flow", "use_o2", "o2_flow", "wp_mtorr"]
                 d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
                 _os.makedirs(d, exist_ok=True)
                 path = _os.path.join(d, "heater_web.csv")
@@ -407,6 +432,22 @@ class MainDialog(QDialog):
                 if not getattr(self, "csv_rows", None):
                     raise RuntimeError("적재된 레시피가 없습니다. 먼저 레시피를 적재하세요.")
                 self._handle_start_process()
+
+            elif name == "HEATER_RESET":
+                # PLC 래치된 히터 이상(M00043) 해제. 확인은 웹이 이미 받았다.
+                st = getattr(self.plc_controller, "_heater_last", None) or {}
+                if not st.get("fault"):
+                    raise RuntimeError("히터 이상 상태가 아닙니다")
+                log_message_to_monitor("히터", "[원격] 히터 이상 리셋 요청")
+                self.request_heater_reset.emit()
+
+            elif name == "HEATER_GAS_RELEASE":
+                # 냉각 대기 중 유지되는 가스·압력을 지금 해제한다.
+                if not (HEATER_ENABLED and self.heater_atmosphere.is_active()):
+                    raise RuntimeError("유지 중인 가스·압력이 없습니다")
+                self._atm_hold = False
+                log_message_to_monitor("히터", "[원격] 가스·압력 해제")
+                self.heater_atmosphere.release("원격 해제")
 
             elif name == "RECIPE_HEATER_STOP":
                 self.heater_recipe.stop("원격 중단")
