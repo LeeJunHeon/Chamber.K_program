@@ -271,6 +271,21 @@ DC_FAIL_MAX_TICKS          = get('DC_FAIL_MAX_TICKS',          15)    # 램프�
 # 이 구간에서는 DC ±% 이탈 abort가 비활성. 저전류/램프업 보호는 그대로 동작.
 DC_POWER_DELAY_SEC = get('DC_POWER_DELAY_SEC', 300)   # 기본 5분
 
+# --- DC 파워 제어식 (lib/dc_control.py) ---
+# 서플라이는 정전류(CC) 모드라 전압 V 는 플라즈마(압력)가 정한다. P = V·I 이므로
+# 목표 파워를 맞추는 데 필요한 전류 변화량은  ΔI = (P_target − P_now) / V_now  로 바로 나온다.
+# 압력 단계 전환(SP4→SP3→SP2→SP1)마다 V 가 5~30% 뛰어도 그 비율만큼 즉시 따라가므로
+# 목표 파워·압력이 달라져도 값을 다시 맞출 필요가 없다. 아래는 안전용 상한/이득이다.
+#   2026-09-09 로그(Hf 250 W, WP 2 mTorr) 재현 결과: 기존 고정 스텝(0.001 A/s)은 SP1 후
+#   +11.5% 에서 정체 → 5회 이탈 중단. 새 식은 최대 편차 +6%(1초), 3초 안에 ±0.5% 복귀.
+DC_CONTROL_GAIN         = get('DC_CONTROL_GAIN',         1.0)    # ΔI 계수. 1.0 = 한 번에 맞춤
+DC_RAMP_STEP_A          = get('DC_RAMP_STEP_A',          0.010)  # 램프업 1초당 전류 상승 상한(A)
+DC_MAINTAIN_STEP_UP_A   = get('DC_MAINTAIN_STEP_UP_A',   0.020)  # 유지 중 1초당 상승 상한(A)
+DC_MAINTAIN_STEP_DOWN_A = get('DC_MAINTAIN_STEP_DOWN_A', 0.050)  # 1초당 하강 상한(A). 글리치 1회 영향 ≤ 약 6%
+# 램프업 중 전류/전압 상한에 걸린 채 목표 미달이 이 시간(초) 이어지면 유지 단계로 넘긴다.
+# (상한에서는 기다려도 파워가 안 오른다. 압력 step-down 이 진행되어야 V 가 올라 도달한다.)
+DC_LIMIT_STALL_SEC      = get('DC_LIMIT_STALL_SEC',      10)
+
 # ================================================================
 # RF Power 설정
 # ================================================================

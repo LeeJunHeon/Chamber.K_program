@@ -12,9 +12,12 @@ from lib.config import (
     DC_INITIAL_VOLTAGE, DC_INITIAL_CURRENT, DC_MAX_VOLTAGE,
     DC_MAX_CURRENT, DC_MAX_POWER, DC_TOLERANCE_WATT, DC_MAX_ERROR_COUNT,
     DC_MIN_CURRENT_ABORT, DC_FAIL_ISET_THRESHOLD, DC_FAIL_POWER_THRESHOLD,
-    DC_FAIL_MAX_TICKS, DC_POWER_ERROR_RATIO, DC_POWER_ERROR_MAX_COUNT,  
-    DC_MIN_CURRENT_ABORT_COUNT,      
+    DC_FAIL_MAX_TICKS, DC_POWER_ERROR_RATIO, DC_POWER_ERROR_MAX_COUNT,
+    DC_MIN_CURRENT_ABORT_COUNT,
+    DC_CONTROL_GAIN, DC_RAMP_STEP_A, DC_MAINTAIN_STEP_UP_A, DC_MAINTAIN_STEP_DOWN_A,
+    DC_LIMIT_STALL_SEC,
 )
+from lib.dc_control import power_step_current, is_at_current_cap
 
 class DCPowerController(QObject):
     update_dc_status_display = Signal(float, float, float)  # (P, V, I)
@@ -43,15 +46,13 @@ class DCPowerController(QObject):
         self.control_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.control_timer.timeout.connect(self._on_timer_tick)
 
-        # === 오버슈트 시 빠른 하강용 파라미터 ===
-        self.fast_overshoot_watt   = 5.0   # 목표보다 +5W 이상이면 "빠른 하강" 트리거
-        self.fast_overshoot_ratio  = 0.12  # 또는 목표의 +12% 초과 시 트리거
-        self.step_up               = 0.001 # 부족 시(+) 1초당 +3mA
-        self.step_down             = 0.001 # 과다 시(-) 1초당 -6mA
-        self.step_down_fast        = 0.005 # "빠른 하강"시 1초당 -40mA (공격적)
+        # 제어식은 lib/dc_control.py (ΔI = ΔP / V). 스텝 상한·이득은 lib/config.py 의 DC_* 상수.
+        #   기존 고정 스텝(±0.001 A/s, 과다 12% 이상일 때만 0.005 A/s)은 압력 단계 전환 때
+        #   V 가 20~30% 뛰는 것을 못 따라가 ±10% 이탈 감시에 걸렸다 (2026-09-09 로그).
 
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0   # ← 추가: 저전류 연속 카운터
+        self._limit_stall_ticks = 0         # 램프업 중 전류/전압 상한에 걸린 채 목표 미달인 연속 초
 
         # ▼ NEW: shutter delay 시작 시점에 True로 전환 → 이때부터 ±% 이탈 abort 활성화
         self._power_monitor_armed: bool = False
@@ -121,6 +122,7 @@ class DCPowerController(QObject):
         self.power_error_count = 0 # ★ 새 공정 시작 시 편차 카운터 초기화
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0
+        self._limit_stall_ticks = 0
         self._power_monitor_armed = False   # ▼ NEW: Shutter Delay 전까지 감시 비활성
 
         # 초기화: 전압·전류 동시 설정(APPLy) + 출력 ON
@@ -145,120 +147,183 @@ class DCPowerController(QObject):
             return
 
         diff = self.target_power - now_power         # +: 더 올려야 함,  -: 과다(오버슈트)
-        # 오버슈트(과다) 판정 기준: 'W 기준' 또는 '% 기준' 중 큰 쪽
-        overshoot_w = -diff
-        overshoot_trig = (overshoot_w > 0) and (
-            overshoot_w >= max(self.fast_overshoot_watt, self.fast_overshoot_ratio * max(self.target_power, 1.0))
-        )
 
         if self.state == "RAMPING_UP":
-            if abs(diff) <= DC_TOLERANCE_WATT:
-                self.state = "MAINTAINING"
-                self.status_message.emit("DCpower", f"{self.target_power:.1f}W 도달. 파워 유지 시작")
-                self.target_reached.emit()
-                return
-            
-            # --- 램프업 무응답 보호: 설정전류는 올렸는데 파워가 계속 '거의 0'이면 실패 ---
-            if diff > 0 and self.current_current >= DC_FAIL_ISET_THRESHOLD and now_power <= DC_FAIL_POWER_THRESHOLD:
-                self._fail_no_output_ticks += 1
-                if self._fail_no_output_ticks >= DC_FAIL_MAX_TICKS:
-                    self.status_message.emit(
-                        "재시작",
-                        (f"DC 램프업 실패: Iset≥{DC_FAIL_ISET_THRESHOLD}A인데 P≤{DC_FAIL_POWER_THRESHOLD}W가 "
-                        f"{DC_FAIL_MAX_TICKS}s 지속. 장비 OFF/인터락/부하/케이블 확인 필요. "
-                        f"(P={now_power:.2f}W, V={now_v:.2f}V, I={now_i:.4f}A, Iset={self.current_current:.4f}A)")
-                    )
-                    self.stop_process()
-                    return
-            else:
-                self._fail_no_output_ticks = 0
-
-            if now_v > 1.0:
-                # 기본 권장 변화량(dI ≈ dP/V)
-                di_prop = diff / now_v
-            else:
-                di_prop = 0.005
-
-            if overshoot_trig:
-                # ★ 오버슈트일 때: 빠르게 내리기
-                drop_i = overshoot_w / max(now_v, 1.0)       # 내려야 하는 대략적 dI
-                step_i = -min(self.step_down_fast, max(self.step_down, drop_i))
-                why = "FAST"
-            else:
-                # 일반 램핑: 너무 큰 스텝 방지 (대칭이지만 음수일 때는 더 크게 클램프해도 됨)
-                lo, hi = -0.010, 0.010
-                step_i = max(lo, min(hi, di_prop))
-                why = "NORM"
-
-            self.current_current = self._clamp_i(self.current_current + step_i)
-            self._send_noresp(f"CURR {self.current_current:.4f}")
-            self.status_message.emit("DCpower", f"Ramping({why}) P={now_power:.2f}W → diff={diff:+.2f}W, dI={step_i:+.4f}A, I={self.current_current:.4f}A")
-
+            self._tick_ramping_up(now_power, now_v, now_i, diff)
         elif self.state == "MAINTAINING":
-            # 변경 (10회 연속 카운트 후 중단)
-            if now_i <= DC_MIN_CURRENT_ABORT:
-                self._min_current_abort_count += 1
-                if self._min_current_abort_count >= DC_MIN_CURRENT_ABORT_COUNT:
-                    self.status_message.emit(
-                        "재시작",
-                        f"DC 전류(I={now_i:.4f}A)가 최소 허용값 "
-                        f"{DC_MIN_CURRENT_ABORT:.3f}A 이하가 "
-                        f"{DC_MIN_CURRENT_ABORT_COUNT}회 연속 감지되었습니다. 공정을 중단합니다."
-                    )
-                    self.stop_process()
-                    return
-            else:
-                self._min_current_abort_count = 0   # 복귀 시 리셋
+            self._tick_maintaining(now_power, now_v, now_i, diff)
 
-            # 파워 이탈 감시: 10% 초과 5회 연속 시 공정 중단
-            # ▼ NEW: Shutter Delay 시작 시점(arm_power_monitor)부터만 abort 활성
-            threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
-            if self._power_monitor_armed:
-                if abs(diff) > threshold_w:
-                    self.power_error_count += 1
-                    if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
-                        self.status_message.emit(
-                            "재시작",
-                            f"DC 파워가 목표 {self.target_power:.1f}W에서 "
-                            f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
-                            f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다. "
-                            f"(현재: {now_power:.2f}W)"
-                        )
-                        self.stop_process()
-                        return
-                else:
-                    self.power_error_count = 0
-            else:
-                # armed 전(SP step-down + DC Power Delay 구간): 카운터 누적 안 함
-                self.power_error_count = 0
-    
-            # 유지 구간에서는 setpoint 편차로 공정을 중단하지 않고,
-            # 목표 파워와의 차이가 DC_TOLERANCE_WATT 이하이면 그대로 유지.
-            if abs(diff) <= DC_TOLERANCE_WATT:
+    def _tick_ramping_up(self, now_power: float, now_v: float, now_i: float, diff: float) -> None:
+        """램프업 1초 처리: 목표까지 전류를 1초당 DC_RAMP_STEP_A 이내로 올린다.
+
+        전류 상한(DC_MAX_CURRENT) 또는 전압 상한(voltage_guard)에 걸리면 기다려도 파워는
+        안 오른다 — CC 모드에서 V 는 플라즈마(압력)가 정하기 때문이다. 그 상태가
+        DC_LIMIT_STALL_SEC 동안 이어지면 목표 미달인 채로 유지 단계로 넘겨 압력 step-down 을
+        진행시킨다 (압력이 내려가면 V 가 올라 파워가 따라 올라온다). 그래도 목표에 못 미치면
+        Shutter Delay 에서 ±% 이탈 감시가 잡는다. 2026-09-09 로그에서는 1.0 A 상한에서
+        248~249 W 로 2.5분을 허비했고, 목표가 조금만 더 높았으면 영원히 기다릴 뻔했다.
+        """
+        if abs(diff) <= DC_TOLERANCE_WATT:
+            self._enter_maintaining(f"{self.target_power:.1f}W 도달. 파워 유지 시작")
+            return
+
+        if self._ramp_no_output_abort(now_power, now_v, now_i, diff):
+            return
+
+        at_i_cap = is_at_current_cap(self.current_current, DC_MAX_CURRENT)
+        at_v_cap = now_v >= self.voltage_guard
+        if diff > 0 and (at_i_cap or at_v_cap):
+            self._limit_stall_ticks += 1
+            if self._limit_stall_ticks >= DC_LIMIT_STALL_SEC:
+                limit = (f"전류 상한 {DC_MAX_CURRENT:.2f}A" if at_i_cap
+                         else f"전압 상한 {self.voltage_guard:.0f}V")
+                short_pct = diff / max(self.target_power, 1.0) * 100.0
+                self._enter_maintaining(
+                    f"{limit}에 걸린 채 {DC_LIMIT_STALL_SEC}s 동안 목표 미달 "
+                    f"(P={now_power:.1f}W, 목표 {self.target_power:.1f}W 대비 -{short_pct:.1f}%). "
+                    f"이 압력에서는 더 못 올리므로 유지 단계로 진행 — 압력이 내려가면 V 가 올라 목표에 접근함"
+                )
                 return
+            if at_v_cap:
+                # CV 모드: 전류 설정을 올려도 파워는 안 오르고 설정값만 쌓인다(와인드업). 그대로 둔다.
+                self.status_message.emit(
+                    "DCpower",
+                    f"Ramping(V-LIMIT) V={now_v:.1f}V ≥ {self.voltage_guard:.0f}V → "
+                    f"전류 {self.current_current:.4f}A 유지 (P={now_power:.2f}W, diff={diff:+.2f}W)"
+                )
+                return
+        else:
+            self._limit_stall_ticks = 0
 
-            if overshoot_trig:
-                # 유지구간에서도 오버슈트면 강하게 끌어내림
-                drop_i = overshoot_w / max(now_v, 1.0)
-                step_i = -min(self.step_down_fast, max(self.step_down, drop_i))
-                why = "FAST"
-            else:
-                # 전압 가드 근처면 상승은 억제
-                if now_v >= self.voltage_guard and diff > 0:
-                    step_i = -self.step_down
-                    why = "V-GUARD"
-                else:
-                    # 부족(+): 조금씩 올림 / 과다(-): 조금 더 내림
-                    step_i = self.step_up if diff > 0 else -self.step_down
-                    why = "NORM"
+        step_i = power_step_current(diff, now_v, DC_CONTROL_GAIN, DC_RAMP_STEP_A, DC_MAINTAIN_STEP_DOWN_A)
+        self._apply_current_step("Ramping", step_i, now_power, now_v, diff)
 
-            self.current_current = self._clamp_i(self.current_current + step_i)
-            self._send_noresp(f"CURR {self.current_current:.4f}")
+    def _tick_maintaining(self, now_power: float, now_v: float, now_i: float, diff: float) -> None:
+        """유지 1초 처리: 측정 전압 기준으로 필요한 전류를 바로 계산해 목표 파워를 따라간다.
+
+        압력 단계 전환(SP4→SP3→SP2→SP1)마다 V 가 5~30% 뛰는데, ΔI = ΔP/V 로 계산하면
+        그 비율만큼 전류가 즉시 따라 내려가므로 목표 파워·압력이 달라도 파라미터를 다시 맞출
+        필요가 없다. 하강 스텝 상한(DC_MAINTAIN_STEP_DOWN_A)은 측정 글리치 한 번에 전류가
+        크게 튀는 것을 막는 안전장치다.
+        """
+        if self._min_current_abort(now_i):
+            return
+        if self._power_deviation_abort(now_power, diff):
+            return
+
+        # 목표 파워와의 차이가 DC_TOLERANCE_WATT 이하이면 그대로 유지.
+        if abs(diff) <= DC_TOLERANCE_WATT:
+            return
+
+        if diff > 0 and now_v >= self.voltage_guard:
+            # 서플라이가 전압 상한(CV)에 걸린 상태: 전류 설정을 올려도 파워는 안 오르고(설정값만
+            # 쌓여 압력 회복 시 오버슈트), 내리면 파워가 더 떨어진다(2026-05-15 사고). 그대로 둔다.
             self.status_message.emit(
                 "DCpower",
-                f"Maintain({why}) P={now_power:.2f}W → diff={diff:+.2f}W, "
-                f"dI={step_i:+.4f}A, I={self.current_current:.4f}A"
+                f"Maintain(V-LIMIT) V={now_v:.1f}V ≥ {self.voltage_guard:.0f}V → "
+                f"전류 {self.current_current:.4f}A 유지 (P={now_power:.2f}W, diff={diff:+.2f}W)"
             )
+            return
+
+        step_i = power_step_current(diff, now_v, DC_CONTROL_GAIN, DC_MAINTAIN_STEP_UP_A, DC_MAINTAIN_STEP_DOWN_A)
+        self._apply_current_step("Maintain", step_i, now_power, now_v, diff)
+
+    def _apply_current_step(self, phase: str, step_i: float, now_power: float, now_v: float, diff: float) -> None:
+        """전류 설정을 step_i 만큼 바꿔 서플라이에 보내고 로그를 남긴다.
+
+        로그 태그: PROP = 계산값 그대로 적용, LIM = 1초당 스텝 상한에 잘림.
+        """
+        raw_i = DC_CONTROL_GAIN * diff / max(now_v, 1.0)
+        why = "LIM" if abs(step_i) + 1e-9 < abs(raw_i) else "PROP"
+        new_i = self._clamp_i(self.current_current + step_i)
+        applied = new_i - self.current_current
+        self.current_current = new_i
+        self._send_noresp(f"CURR {self.current_current:.4f}")
+        self.status_message.emit(
+            "DCpower",
+            f"{phase}({why}) P={now_power:.2f}W → diff={diff:+.2f}W, "
+            f"dI={applied:+.4f}A, I={self.current_current:.4f}A"
+        )
+
+    def _enter_maintaining(self, message: str) -> None:
+        """RAMPING_UP → MAINTAINING 전환. 공정 컨트롤러(POWER_WAIT)에 target_reached 를 알린다."""
+        self.state = "MAINTAINING"
+        self._limit_stall_ticks = 0
+        self.status_message.emit("DCpower", message)
+        self.target_reached.emit()
+
+    def _ramp_no_output_abort(self, now_power: float, now_v: float, now_i: float, diff: float) -> bool:
+        """램프업 무응답 보호: 설정전류는 올렸는데 파워가 계속 '거의 0'이면 공정을 중단한다.
+
+        Returns:
+            True 면 중단했으므로 호출자는 더 진행하지 말 것.
+        """
+        if diff > 0 and self.current_current >= DC_FAIL_ISET_THRESHOLD and now_power <= DC_FAIL_POWER_THRESHOLD:
+            self._fail_no_output_ticks += 1
+            if self._fail_no_output_ticks >= DC_FAIL_MAX_TICKS:
+                self.status_message.emit(
+                    "재시작",
+                    (f"DC 램프업 실패: Iset≥{DC_FAIL_ISET_THRESHOLD}A인데 P≤{DC_FAIL_POWER_THRESHOLD}W가 "
+                     f"{DC_FAIL_MAX_TICKS}s 지속. 장비 OFF/인터락/부하/케이블 확인 필요. "
+                     f"(P={now_power:.2f}W, V={now_v:.2f}V, I={now_i:.4f}A, Iset={self.current_current:.4f}A)")
+                )
+                self.stop_process()
+                return True
+        else:
+            self._fail_no_output_ticks = 0
+        return False
+
+    def _min_current_abort(self, now_i: float) -> bool:
+        """유지 중 저전류(타겟/케이블/접촉 이상) 연속 감지 시 공정을 중단한다.
+
+        Returns:
+            True 면 중단했으므로 호출자는 더 진행하지 말 것.
+        """
+        if now_i <= DC_MIN_CURRENT_ABORT:
+            self._min_current_abort_count += 1
+            if self._min_current_abort_count >= DC_MIN_CURRENT_ABORT_COUNT:
+                self.status_message.emit(
+                    "재시작",
+                    f"DC 전류(I={now_i:.4f}A)가 최소 허용값 "
+                    f"{DC_MIN_CURRENT_ABORT:.3f}A 이하가 "
+                    f"{DC_MIN_CURRENT_ABORT_COUNT}회 연속 감지되었습니다. 공정을 중단합니다."
+                )
+                self.stop_process()
+                return True
+        else:
+            self._min_current_abort_count = 0   # 복귀 시 리셋
+        return False
+
+    def _power_deviation_abort(self, now_power: float, diff: float) -> bool:
+        """setpoint 이탈 감시: ±DC_POWER_ERROR_RATIO 를 DC_POWER_ERROR_MAX_COUNT 회 연속 벗어나면 중단.
+
+        Shutter Delay 시작 시점(arm_power_monitor)부터만 활성. 그 전(압력 step-down 구간)에는
+        카운터를 누적하지 않는다.
+
+        Returns:
+            True 면 중단했으므로 호출자는 더 진행하지 말 것.
+        """
+        if not self._power_monitor_armed:
+            self.power_error_count = 0
+            return False
+
+        threshold_w = max(DC_TOLERANCE_WATT, self.target_power * DC_POWER_ERROR_RATIO)
+        if abs(diff) <= threshold_w:
+            self.power_error_count = 0
+            return False
+
+        self.power_error_count += 1
+        if self.power_error_count >= DC_POWER_ERROR_MAX_COUNT:
+            self.status_message.emit(
+                "재시작",
+                f"DC 파워가 목표 {self.target_power:.1f}W에서 "
+                f"±{DC_POWER_ERROR_RATIO*100:.1f}% 이상 "
+                f"연속 {DC_POWER_ERROR_MAX_COUNT}회 벗어났습니다. 공정을 중단합니다. "
+                f"(현재: {now_power:.2f}W)"
+            )
+            self.stop_process()
+            return True
+        return False
 
     # ---------------- 초기화/종료 ----------------
     def _initialize_power_supply(self, voltage: float, current: float) -> bool:
@@ -288,6 +353,7 @@ class DCPowerController(QObject):
         self.power_error_count = 0
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0
+        self._limit_stall_ticks = 0
         self._power_monitor_armed = False   # ▼ NEW
 
         self._stop_control_timer()
@@ -316,6 +382,7 @@ class DCPowerController(QObject):
         self.power_error_count = 0
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0
+        self._limit_stall_ticks = 0
         self._power_monitor_armed = False   # ▼ NEW
 
         self._stop_control_timer()
