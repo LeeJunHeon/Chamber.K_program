@@ -10,13 +10,18 @@ from PyQt6.QtCore import (
     QObject, QTimer, QEventLoop, QMetaObject, QThread,
     pyqtSignal as Signal, pyqtSlot as Slot, Qt, QElapsedTimer
 )
-from lib.config import (DC_POWER_DELAY_SEC,
+from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
                         HEATER_WAIT_TIMEOUT_SEC)
 
 # 승온 예정시간에 더할 여유 / 상한. heater_recipe.py 와 같은 값이다.
 WAIT_TIMEOUT_MARGIN_SEC = 1800.0     # 30분
 WAIT_TIMEOUT_MAX_SEC    = 43200.0    # 12시간
+
+# STOP 시퀀스에서 MFC 응답을 기다리는 시간. MFC 가 실제로 확인까지 마치는 데
+# 걸리는 시간에 맞춘다 — 짧게 잡으면 정상 동작인데도 매번 타임아웃 경고가 찍힌다.
+STOP_FLOW_OFF_WAIT_MS   = 6000                      # READ R69 → L0 → VERIFY R69 (1초 간격) ≈ 3초 + 여유
+STOP_VALVE_OPEN_WAIT_MS = MFC_DELAY_MS_VALVE + 3000  # 밸브 이동 대기 5초 + 위치 확인 1초 + 여유
 
 # 래더 램프 목표(D00019)가 최종 목표에 닿았다고 볼 허용치.
 # D00019 는 0.1°C 단위 정수라 그만큼의 여유를 둔다.
@@ -1220,14 +1225,14 @@ class SputterProcessController(QObject):
                 self.command_requested.emit("FLOW_OFF", {'channel': ch})
                 self._exec_loop_with_timeout(
                     loop,
-                    3000,
+                    STOP_FLOW_OFF_WAIT_MS,
                     f"STOP 시퀀스: Ch{ch} FLOW_OFF 응답 타임아웃"
                 )
 
             self.command_requested.emit("VALVE_OPEN", {})
             self._exec_loop_with_timeout(
                 loop,
-                3000,
+                STOP_VALVE_OPEN_WAIT_MS,
                 "STOP 시퀀스: VALVE_OPEN 응답 타임아웃"
             )
 

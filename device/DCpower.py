@@ -231,12 +231,35 @@ class DCPowerController(QObject):
     def _apply_current_step(self, phase: str, step_i: float, now_power: float, now_v: float, diff: float) -> None:
         """전류 설정을 step_i 만큼 바꿔 서플라이에 보내고 로그를 남긴다.
 
-        로그 태그: PROP = 계산값 그대로 적용, LIM = 1초당 스텝 상한에 잘림.
+        로그 태그:
+          PROP = 계산값 그대로 적용, LIM = 1초당 스텝 상한에 잘림,
+          CAP  = 전류 상/하한에 붙어 설정이 안 움직임(전송 없음),
+          HOLD = 계산된 스텝 자체가 0(전송 없음).
+
+        상/하한에 붙었으면 CURR 를 다시 보내지 않는다. 예전에는 같은 값을 매초
+        재전송하면서 "dI=+0.0000A" 를 찍어, 로그만 보면 제어가 도는 것처럼 보였다
+        (2026-09-09 16:55:04~16:55:16, 1.0 A 상한에서 10초).
         """
         raw_i = DC_CONTROL_GAIN * diff / max(now_v, 1.0)
-        why = "LIM" if abs(step_i) + 1e-9 < abs(raw_i) else "PROP"
         new_i = self._clamp_i(self.current_current + step_i)
         applied = new_i - self.current_current
+
+        if abs(applied) < 1e-9:
+            # 설정이 안 바뀌면 보낼 것도 없다. 왜 안 움직이는지만 남긴다.
+            if abs(step_i) > 1e-9:
+                edge = "전류 상한, 더 못 올림" if step_i > 0 else "전류 하한, 더 못 내림"
+                why = "CAP"
+            else:
+                edge = "계산된 변화량 0"
+                why = "HOLD"
+            self.status_message.emit(
+                "DCpower",
+                f"{phase}({why}) P={now_power:.2f}W → diff={diff:+.2f}W, "
+                f"I={self.current_current:.4f}A — {edge}"
+            )
+            return
+
+        why = "LIM" if abs(step_i) + 1e-9 < abs(raw_i) else "PROP"
         self.current_current = new_i
         self._send_noresp(f"CURR {self.current_current:.4f}")
         self.status_message.emit(
