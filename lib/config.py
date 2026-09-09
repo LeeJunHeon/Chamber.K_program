@@ -282,6 +282,14 @@ DC_CONTROL_GAIN         = get('DC_CONTROL_GAIN',         1.0)    # ΔI 계수. 1
 DC_RAMP_STEP_A          = get('DC_RAMP_STEP_A',          0.010)  # 램프업 1초당 전류 상승 상한(A)
 DC_MAINTAIN_STEP_UP_A   = get('DC_MAINTAIN_STEP_UP_A',   0.020)  # 유지 중 1초당 상승 상한(A)
 DC_MAINTAIN_STEP_DOWN_A = get('DC_MAINTAIN_STEP_DOWN_A', 0.050)  # 1초당 하강 상한(A). 글리치 1회 영향 ≤ 약 6%
+# 유지 중 작은 오차는 플라즈마 노이즈일 수 있다. 매초 전량 보정하면 1초 주기로
+# 상승/하강을 번갈아 하며 스스로 흔든다(2026-09-09 17:00 로그: 편차 자기상관 -0.59,
+# 900초 중 473초 보정). 작은 오차 구간에서만 이득을 낮추면 전환 응답은 그대로 두고
+# 흔들림만 준다(재현: std 0.82 -> 0.62 W, 보정 478 -> 360회).
+DC_SMALL_ERROR_RATIO = get('DC_SMALL_ERROR_RATIO', 0.01)  # 목표의 이 비율 이하 오차는 "작은 오차"(노이즈 가능성) — 이득을 낮춰 반응
+DC_SMALL_ERROR_GAIN  = get('DC_SMALL_ERROR_GAIN',  0.5)   # 작은 오차 구간 이득. 1.0 이면 기존과 동일. 0.3~0.7 권장, 1 초과 금지(코드에서 0.1~1.0 클램프)
+DC_SMALL_ERROR_GAIN  = min(1.0, max(0.1, float(DC_SMALL_ERROR_GAIN)))
+DC_SMALL_ERROR_RATIO = max(0.0, float(DC_SMALL_ERROR_RATIO))
 # 램프업 중 전류/전압 상한에 걸린 채 목표 미달이 이 시간(초) 이어지면 유지 단계로 넘긴다.
 # (상한에서는 기다려도 파워가 안 오른다. 압력 step-down 이 진행되어야 V 가 올라 도달한다.)
 DC_LIMIT_STALL_SEC      = get('DC_LIMIT_STALL_SEC',      10)

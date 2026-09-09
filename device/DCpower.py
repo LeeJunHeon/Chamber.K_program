@@ -15,7 +15,7 @@ from lib.config import (
     DC_FAIL_MAX_TICKS, DC_POWER_ERROR_RATIO, DC_POWER_ERROR_MAX_COUNT,
     DC_MIN_CURRENT_ABORT_COUNT,
     DC_CONTROL_GAIN, DC_RAMP_STEP_A, DC_MAINTAIN_STEP_UP_A, DC_MAINTAIN_STEP_DOWN_A,
-    DC_LIMIT_STALL_SEC,
+    DC_LIMIT_STALL_SEC, DC_SMALL_ERROR_RATIO, DC_SMALL_ERROR_GAIN,
 )
 from lib.dc_control import power_step_current, is_at_current_cap
 
@@ -196,7 +196,7 @@ class DCPowerController(QObject):
             self._limit_stall_ticks = 0
 
         step_i = power_step_current(diff, now_v, DC_CONTROL_GAIN, DC_RAMP_STEP_A, DC_MAINTAIN_STEP_DOWN_A)
-        self._apply_current_step("Ramping", step_i, now_power, now_v, diff)
+        self._apply_current_step("Ramping", step_i, now_power, now_v, diff, DC_CONTROL_GAIN)
 
     def _tick_maintaining(self, now_power: float, now_v: float, now_i: float, diff: float) -> None:
         """유지 1초 처리: 측정 전압 기준으로 필요한 전류를 바로 계산해 목표 파워를 따라간다.
@@ -205,6 +205,11 @@ class DCPowerController(QObject):
         그 비율만큼 전류가 즉시 따라 내려가므로 목표 파워·압력이 달라도 파라미터를 다시 맞출
         필요가 없다. 하강 스텝 상한(DC_MAINTAIN_STEP_DOWN_A)은 측정 글리치 한 번에 전류가
         크게 튀는 것을 막는 안전장치다.
+
+        작은 오차(목표의 DC_SMALL_ERROR_RATIO 이내)는 플라즈마 노이즈일 수 있어 이득을
+        낮춘다. 매초 전량 보정하면 1초 주기로 상승/하강을 번갈아 하며 스스로 흔든다
+        (2026-09-09 17:00 로그: 자기상관 -0.59, 900초 중 473초 보정).
+        큰 오차 — 압력 단계 전환 같은 진짜 변화 — 는 기존대로 한 번에 따라간다.
         """
         if self._min_current_abort(now_i):
             return
@@ -225,11 +230,20 @@ class DCPowerController(QObject):
             )
             return
 
-        step_i = power_step_current(diff, now_v, DC_CONTROL_GAIN, DC_MAINTAIN_STEP_UP_A, DC_MAINTAIN_STEP_DOWN_A)
-        self._apply_current_step("Maintain", step_i, now_power, now_v, diff)
+        # 데드밴드 밖이지만 작은 오차면 절반만 따라간다. 경계는 최소 DC_TOLERANCE_WATT.
+        small_w = max(DC_TOLERANCE_WATT, DC_SMALL_ERROR_RATIO * self.target_power)
+        gain = DC_SMALL_ERROR_GAIN if abs(diff) <= small_w else DC_CONTROL_GAIN
 
-    def _apply_current_step(self, phase: str, step_i: float, now_power: float, now_v: float, diff: float) -> None:
+        step_i = power_step_current(diff, now_v, gain, DC_MAINTAIN_STEP_UP_A, DC_MAINTAIN_STEP_DOWN_A)
+        self._apply_current_step("Maintain", step_i, now_power, now_v, diff, gain)
+
+    def _apply_current_step(self, phase: str, step_i: float, now_power: float, now_v: float,
+                            diff: float, gain: float = DC_CONTROL_GAIN) -> None:
         """전류 설정을 step_i 만큼 바꿔 서플라이에 보내고 로그를 남긴다.
+
+        gain 은 step_i 를 만들 때 실제로 쓴 이득이다. LIM/PROP 판정이 같은 이득으로
+        계산한 값과 비교해야 하고, 1.0 이 아니면 로그에 남겨 왜 조금만 움직였는지
+        알 수 있게 한다(예: "Maintain(PROP g0.5)").
 
         로그 태그:
           PROP = 계산값 그대로 적용, LIM = 1초당 스텝 상한에 잘림,
@@ -240,7 +254,8 @@ class DCPowerController(QObject):
         재전송하면서 "dI=+0.0000A" 를 찍어, 로그만 보면 제어가 도는 것처럼 보였다
         (2026-09-09 16:55:04~16:55:16, 1.0 A 상한에서 10초).
         """
-        raw_i = DC_CONTROL_GAIN * diff / max(now_v, 1.0)
+        raw_i = gain * diff / max(now_v, 1.0)
+        gtag = "" if abs(gain - DC_CONTROL_GAIN) < 1e-9 else f" g{gain:g}"
         new_i = self._clamp_i(self.current_current + step_i)
         applied = new_i - self.current_current
 
@@ -254,7 +269,7 @@ class DCPowerController(QObject):
                 why = "HOLD"
             self.status_message.emit(
                 "DCpower",
-                f"{phase}({why}) P={now_power:.2f}W → diff={diff:+.2f}W, "
+                f"{phase}({why}{gtag}) P={now_power:.2f}W → diff={diff:+.2f}W, "
                 f"I={self.current_current:.4f}A — {edge}"
             )
             return
@@ -264,7 +279,7 @@ class DCPowerController(QObject):
         self._send_noresp(f"CURR {self.current_current:.4f}")
         self.status_message.emit(
             "DCpower",
-            f"{phase}({why}) P={now_power:.2f}W → diff={diff:+.2f}W, "
+            f"{phase}({why}{gtag}) P={now_power:.2f}W → diff={diff:+.2f}W, "
             f"dI={applied:+.4f}A, I={self.current_current:.4f}A"
         )
 
