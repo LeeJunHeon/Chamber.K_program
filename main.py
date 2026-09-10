@@ -40,9 +40,12 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
                         HEATER_GAS_HOLD_RELEASE_C,
+                        HEATER_APPROACH_ZONE_C,
+                        HEATER_APPROACH_MIN_RATE_C_PER_MIN,
                         heater_est_current)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
+from controller.heater_ramp import RampProfiler
 from controller.heater_atmosphere import HeaterAtmosphere
 from lib.heater_logger import HeaterCsvLogger
 
@@ -194,6 +197,9 @@ class MainDialog(QDialog):
         #  히터를 제어하는 주체는 한 번에 하나여야 한다 — 공정이 소유하면
         #  히터 레시피를 못 띄우고, 소유하지 않으면 둘이 함께 돌 수 있다.
         self._process_heater_claimed = False
+        # 공정 레시피가 HEATER_RAMP 로 지정한 램프 속도(°C/min).
+        #  HEATER_SET 이 왔을 때 감속 접근 램프에 그대로 넘긴다.
+        self._process_heater_rate_c = 0.0
         # 레시피 진행 표시는 1초 주기. PLC 폴링(200ms)에 얹지 않는다.
         self._heater_ui_timer = QTimer(self)
         self._heater_ui_timer.setInterval(1000)
@@ -794,6 +800,18 @@ class MainDialog(QDialog):
             self.ui.heater_apply_button.clicked.connect(self._on_heater_apply_clicked)
             self.ui.heater_onoff_button.toggled.connect(self._on_heater_onoff_toggled)
 
+            # (3-1) 감속 접근 램프 — 수동/공정 경로가 쓴다.
+            #   레시피 러너는 자기 안에 별도 프로파일러를 들고 자기 틱으로 돌린다.
+            self.heater_ramp = RampProfiler(self.plc_controller, self, autotick=True)
+            self.heater_ramp.request_target.connect(
+                self.plc_controller.set_heater_target)
+            self.heater_ramp.request_ramp.connect(
+                self.plc_controller.set_heater_ramp_rate)
+            self.heater_ramp.status_message.connect(self.on_status_message)
+            self.heater_ramp.finished.connect(
+                lambda: log_message_to_monitor(
+                    "히터", "[히터] 목표 도달 — 감속 접근 완료"))
+
             # (4) 히터 레시피 러너 (GUI 스레드 → PLC 스레드는 큐 연결)
             self.heater_recipe.status_message.connect(self.on_status_message)
             self.heater_recipe.request_target.connect(self.plc_controller.set_heater_target)
@@ -838,8 +856,13 @@ class MainDialog(QDialog):
             # (4) ★ ProcessController -> PLC : 레시피(CSV/단일 공정)에서
             #     HEATER_SET 스텝이 실행될 때 목표 온도와 운전을 PLC로 보낸다.
             #     이 연결이 없으면 레시피의 히터 스텝이 아무 동작도 하지 않는다.
-            self.process_controller.set_heater_target.connect(self.plc_controller.set_heater_target)
+            #   목표는 감속 접근 램프를 거친다(못 쓰면 그 안에서 직접 폴백한다).
+            self.process_controller.set_heater_target.connect(
+                self._on_process_heater_target)
+            self.process_controller.set_heater_ramp_c.connect(
+                self._on_process_heater_ramp_c)
             self.process_controller.set_heater_run.connect(self.plc_controller.set_heater_run)
+            self.process_controller.set_heater_run.connect(self._on_process_heater_run)
         else:
             # 히터 비활성(config_user.json의 HEATER_ENABLED=false) 시
             # 조작 위젯을 잠가 오조작을 막는다. 표시용 위젯은 그대로 둔다.
@@ -1076,12 +1099,49 @@ class MainDialog(QDialog):
             return None
         return v
 
+    # ---------- 감속 접근 램프 경로 ----------
+    def _on_process_heater_ramp_c(self, rate_c: float):
+        """공정 레시피 HEATER_RAMP — 이번 공정의 램프 속도를 기억해 둔다."""
+        try:
+            self._process_heater_rate_c = float(rate_c or 0.0)
+        except Exception:
+            self._process_heater_rate_c = 0.0
+
+    def _on_process_heater_target(self, t: float):
+        """공정 레시피 HEATER_SET — 감속 접근으로 올린다.
+
+        램프를 못 쓰는 상황(현재 온도 미상·하강)이면 예전처럼 목표만 쓴다.
+        """
+        rate = self._process_heater_rate_c or float(HEATER_RAMP_RATE_C_PER_MIN)
+        if not self.heater_ramp.start(float(t), rate, "공정"):
+            self.request_heater_target.emit(float(t))
+
+    def _on_process_heater_run(self, on: bool):
+        """공정이 히터를 끄면 램프도 같이 끊는다."""
+        if not on:
+            self.heater_ramp.stop(restore_rate=False)
+
+    def _heater_manual_go(self, v: float):
+        """수동 ON — 감속 접근으로 올리고 히터를 켠다."""
+        if not self.heater_ramp.start(v, float(HEATER_RAMP_RATE_C_PER_MIN), "수동"):
+            self.request_heater_target.emit(v)
+        self.request_heater_run.emit(True)
+
     @Slot()
     def _on_heater_apply_clicked(self):
         v = self._read_heater_sv_input()
         if v is None:
             return
-        self.request_heater_target.emit(v)
+        st = self.plc_controller._heater_last or {}
+        if st.get('run'):
+            # 운전 중 목표 변경 — 지금 램프를 끊고 새 목표로 다시 접근한다.
+            self.heater_ramp.stop(restore_rate=False)
+            if not self.heater_ramp.start(v, HEATER_RAMP_RATE_C_PER_MIN, "수동"):
+                self.request_heater_target.emit(v)
+        else:
+            # 꺼져 있으면 목표만 적어 둔다. 켤 때 _heater_manual_go 가 램프를 건다.
+            self.heater_ramp.stop()
+            self.request_heater_target.emit(v)
 
     @Slot(bool)
     def _on_heater_onoff_toggled(self, checked: bool):
@@ -1121,8 +1181,7 @@ class MainDialog(QDialog):
                 self._show_heater_pending_button()
                 self._sync_heater_gas_inputs()
                 return
-            self.request_heater_target.emit(v)
-            self.request_heater_run.emit(True)
+            self._heater_manual_go(v)
             self.ui.heater_onoff_button.setText("OFF")
         else:
             # 준비 중이면 [취소] 다. 히터는 아직 안 켜졌으니 OFF 를 보내지 않고
@@ -1138,6 +1197,7 @@ class MainDialog(QDialog):
                 self._sync_heater_recipe_buttons()
                 log_message_to_monitor("히터", "[히터] 가스·압력 준비 취소 — 해제합니다")
                 return
+            self.heater_ramp.stop()
             self.request_heater_run.emit(False)
             self.ui.heater_onoff_button.setText("ON")
 
@@ -1203,8 +1263,6 @@ class MainDialog(QDialog):
                     _tail = " (중단 시점)"
                 if pg:
                     seg = f"STEP {pg.get('stepNo', 0)}/{pg.get('total', 0)}"
-                    if int(pg.get("repeat", 1) or 1) > 1:
-                        seg += f" (\ubc18\ubcf5 {pg.get('cycle', 1)}/{pg.get('repeat', 1)})"
                     _el = int(pg.get("elapsedSec") or 0)
                     lines.append(
                         f"\ub808\uc2dc\ud53c: {seg} \u00b7 \uc804\uccb4 {pg.get('percent', 0):.0f}%"
@@ -1216,6 +1274,8 @@ class MainDialog(QDialog):
                 f"설정 : DAC상한 {_n('mv_limit', '{:.0f}')}"
                 f" \u00b7 램프 {_n('ramp_rate', '{:.0f}', _DEG + '/min')}"
                 f" \u00b7 홀드백 {_n('holdback', unit=_DEG)}"
+                f" \u00b7 접근 {HEATER_APPROACH_ZONE_C:g}\u00b0C\u2192"
+                f"{HEATER_APPROACH_MIN_RATE_C_PER_MIN:g}\u00b0C/min"
                 f" \u00b7 OT {_n('ot_limit', unit=_DEG)}")
             return "\n".join(lines)
         except Exception:
@@ -1498,8 +1558,6 @@ class MainDialog(QDialog):
             #  동작은 정상, 표시만 틀렸다).
             if rc.is_running():
                 name = rc.recipe_name() or "(이름 없음)"
-                rep = rc.repeat_count()
-                rep_txt = f" × {rep}회 반복" if rep > 1 else ""
                 est = ""
                 try:
                     total = int(rc.progress().get("totalEstSec") or 0)
@@ -1507,7 +1565,7 @@ class MainDialog(QDialog):
                         est = f" · 예상 {_fmt_hms_sec(total)}"
                 except Exception:
                     pass
-                _emit(f"레시피: {name} · {rc.total_steps()}스텝{rep_txt}{est}")
+                _emit(f"레시피: {name} · {rc.total_steps()}스텝{est}")
                 for st_ in rc.steps():
                     _emit(f"  {st_.index}. {st_.describe()}")
                 # 로그 파일은 PLC 가 run=True 를 읽은 뒤에야 열린다. 그래서
@@ -1573,6 +1631,8 @@ class MainDialog(QDialog):
                 _emit(f"설정: DAC상한 {_n('mv_limit', '{:.0f}')}"
                       f" · 램프 {_n('ramp_rate', '{:.0f}', '°C/min')}"
                       f" · 홀드백 {_n('holdback', unit='°C')}"
+                      f" · 접근 {HEATER_APPROACH_ZONE_C:g}°C→"
+                      f"{HEATER_APPROACH_MIN_RATE_C_PER_MIN:g}°C/min"
                       f" · OT {_n('ot_limit', unit='°C')}")
         except Exception:
             pass
@@ -1662,6 +1722,7 @@ class MainDialog(QDialog):
             self._show_heater_pending_button()
             self._sync_heater_recipe_buttons()
             return
+        self.heater_ramp.stop()          # 레시피 러너가 자기 램프를 쥔다
         if self.heater_recipe.start():
             self._refresh_heater_progress()   # 버튼 상태는 여기서 함께 맞춰진다
 
@@ -1930,15 +1991,13 @@ class MainDialog(QDialog):
 
             if running:
                 # 지금이 RAMP 인지 SOAK 인지 — 화면에 없던 정보다.
-                #  라벨 폭 120px. 실사용 범위(9스텝 × 9회)에서는 "STEP 9/9 ×9/9 SOAK"
-                #  이 104px 로 들어간다. 두 자리가 되면 넘치므로 그때만 "S" 로 줄인다.
+                #  라벨 폭 120px. 한 자리 스텝 수에서는 "STEP 9/9 SOAK" 가
+                #  여유롭게 들어간다. 스텝이 두 자리가 되면 넘치므로
+                #  그때만 "S" 로 줄인다.
                 #  (폰트 계산을 매초 하지 않고 이 규칙으로 가른다)
                 _tot = int(pg.get("total", 0) or 0)
-                _rep = int(pg.get("repeat", 1) or 1)
-                _head = "S" if (_tot >= 10 or _rep >= 10) else "STEP "
+                _head = "S" if _tot >= 10 else "STEP "
                 seg = f"{_head}{pg.get('stepNo', 0)}/{_tot}"
-                if _rep > 1:
-                    seg += f" ×{pg.get('cycle', 1)}/{_rep}"
                 _ph = HEATER_PHASE_TEXT.get(
                     str(pg.get("phase") or ""), "")
                 if _ph:
@@ -2140,7 +2199,13 @@ class MainDialog(QDialog):
         if not (self.process_running or self.csv_mode
                 or getattr(self, "_csv_delay_active", False)):
             try:
-                self.update_stage_monitor(f"[가스 {detail}]" if detail else f"[가스] {txt}")
+                # 해제가 끝나 IDLE 로 돌아오면 단계 표시를 비운다 —
+                #  가스 제어를 쓰기 전과 같은 모습이어야 한다.
+                if state == "IDLE":
+                    self.update_stage_monitor("")
+                else:
+                    self.update_stage_monitor(
+                        f"[가스 {detail}]" if detail else f"[가스] {txt}")
             except Exception:
                 pass
         self._sync_heater_gas_inputs()
@@ -2162,8 +2227,7 @@ class MainDialog(QDialog):
             return                      # 사용자가 아직 ON 을 안 눌렀다
         kind, val = pending
         if kind == "manual_on":
-            self.request_heater_target.emit(val)
-            self.request_heater_run.emit(True)
+            self._heater_manual_go(val)
             try:
                 btn = self.ui.heater_onoff_button
                 btn.setText("OFF")
@@ -2175,6 +2239,7 @@ class MainDialog(QDialog):
             # 준비 중 [취소] 로 쓰던 버튼을 원래대로 돌린다.
             #  실행이 시작되면 _refresh_heater_progress 가 다시 잠근다.
             self._revert_heater_onoff()
+            self.heater_ramp.stop()      # 레시피 러너가 자기 램프를 쥔다
             if self.heater_recipe.start():
                 self._refresh_heater_progress()
             else:
@@ -2299,7 +2364,7 @@ class MainDialog(QDialog):
 
     def _heater_recipe_stage_text(self, cur: int, total: int, desc: str) -> str:
         """진행률과 남은 시간까지 한 줄로 만든다.
-        예: 히터 레시피 2/3 (반복 1/2) · 610°C 유지 · 전체 43% · 남음 2:15:40
+        예: 히터 레시피 2/3 · 610°C 유지 · 전체 43% · 남음 2:15:40
         """
         base = f"히터 레시피 {cur}/{total} - {desc}"
         try:
@@ -3711,6 +3776,10 @@ class MainDialog(QDialog):
         #     그쪽은 포트를 닫는 중이라 실패할 수 있어 여기서 한 번 더 끈다.
         #   - HEATER_RUN이 꺼지면 PLC 래더 H9가 DAC 출력을 0으로 강제한다.
         if HEATER_ENABLED:
+            try:
+                self.heater_ramp.stop(restore_rate=False)
+            except Exception:
+                pass
             try:
                 # 가스를 넣어 두었으면 먼저 되돌린다(기다리지는 않는다 — best effort)
                 if self.heater_atmosphere.is_active():

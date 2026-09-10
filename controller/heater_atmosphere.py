@@ -48,6 +48,7 @@ WAIT_PRESSURE_MARGIN_SEC = 30.0
 # PLC 릴레이/실린더 여유 (공정 컨트롤러와 같은 값)
 PLC_SETTLE_MS = 800
 # 해제 시퀀스는 오래 붙잡지 않는다. 응답이 없어도 다음으로 넘어간다.
+#  밸브 Open 은 예외(MFC_VALVE_TIMEOUT_SEC) — 실제로 움직이는 시간이 필요하다.
 RELEASE_STEP_TIMEOUT_SEC = 3.0
 
 # 최종 압력(SP1) 도달 대기 한도
@@ -305,7 +306,10 @@ class HeaterAtmosphere(QObject):
 
     def _mfc_timeout(self, cmd: str, args: dict) -> float:
         if self._state == RELEASING:
-            return RELEASE_STEP_TIMEOUT_SEC
+            # 메인밸브 Open 은 MFC 가 MFC_DELAY_MS_VALVE(5초) 뒤에 위치를 확인하므로
+            #  3초로는 항상 '응답 없음'이 난다. 준비 시퀀스와 같은 밸브 타임아웃을
+            #  쓴다. 나머지 해제 단계는 짧게 끊어 해제가 멈추지 않게 한다.
+            return MFC_VALVE_TIMEOUT_SEC if cmd == "VALVE_OPEN" else RELEASE_STEP_TIMEOUT_SEC
         if cmd == "WAIT_PRESSURE":
             try:
                 return float(args.get("timeout_sec") or 0.0) + WAIT_PRESSURE_MARGIN_SEC

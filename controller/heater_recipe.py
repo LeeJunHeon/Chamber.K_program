@@ -4,9 +4,10 @@
 스퍼터 공정(controller/process_controller.py)과 완전히 독립이다.
 process_controller를 import하지 않으며, ActionType도 쓰지 않는다.
 
-[구조] RKC PZ400 프로그램 컨트롤러와 비슷한 '세그먼트 + 반복' 구조다.
+[구조] RKC PZ400 프로그램 컨트롤러와 비슷한 '세그먼트' 구조다.
   한 스텝(세그먼트) = RAMP(목표 + 속도 또는 소요 시간) → SOAK(유지 시간). 이 둘뿐이다.
-  전체 패턴을 repeat 회 반복할 수 있고, 실행 중 HOLD/STEP 조작이 가능하다.
+  반복 기능은 없다 — 반복할 스텝은 행을 복사해 적는다.
+  실행 중 HOLD/STEP 조작이 가능하다.
 
 [스레드]
   이 러너는 GUI 스레드에서 동작한다. 따라서 QEventLoop로 블로킹하면
@@ -33,13 +34,13 @@ from lib.config import (
     HEATER_MAX_TEMP,
     HEATER_RAMP_RATE_C_PER_MIN,
     HEATER_SOAK_TOLERANCE,
-    HEATER_SLOW_ZONE_C,
-    HEATER_SLOW_RATE_C_PER_MIN,
     HEATER_COOLDOWN_TARGET_C,
     HEATER_WAIT_TIMEOUT_SEC,
     HEATER_RECIPE_MAX_STEPS,
     HEATER_RECIPE_HOLD_AT_END,
 )
+from lib.heater_profile import ramp_minutes, solve_rate_for_minutes
+from controller.heater_ramp import RampProfiler
 
 
 # TC 이상(pv=None)이 이 시간 이상 계속되면 중단한다.
@@ -62,13 +63,10 @@ RAMP_DONE_TOL_C = 0.15
 RUN_OFF_LIMIT_SEC = 5.0
 
 # 래더 램프 생성기(H6a)는 D00023 카운트를 _T1S 마다 더하는 구조라
-# 최소 1카운트/초 = 6°C/min 이다. 이보다 느린 속도는 래더가 표현하지
-# 못하므로 파이썬이 SV(D00012)를 직접 밀어 올린다.
+# 최소 1카운트/초 = 6°C/min 이다. 이제는 모든 RAMP 를 파이썬(RampProfiler)이
+# SV(D00012)를 밀어 올려 만들고, 래더는 그보다 빠르게 열어 두기만 한다.
+# 이 상수는 '이 속도 미만은 래더 단독으로 표현되지 않는다'는 안내에만 쓴다.
 PLC_MIN_RAMP_C_PER_MIN = 6.0
-SLOW_RAMP_TICK_SEC     = 3.0   # 느린 램프에서 SV 를 갱신하는 주기
-
-# 반복 횟수 허용 범위
-REPEAT_MIN, REPEAT_MAX = 1, 99
 
 # 가스·압력 컬럼. 하나라도 헤더에 있으면 '가스를 아는 레시피'로 본다.
 GAS_COLUMNS = ("use_ar", "ar_flow", "use_o2", "o2_flow", "wp_mtorr")
@@ -163,18 +161,6 @@ class HeaterRecipeRunner(QObject):
         self._soak_deadline = 0.0
         self._soak_last_report = 0.0
 
-        # --- 반복(패턴) ---
-        self._repeat = 1
-        self._cycle = 0              # 0-based 현재 사이클
-
-        # --- 느린 램프(6°C/min 미만) ---
-        self._slow_ramp = False
-        self._slow_from = 0.0
-        self._slow_to = 0.0
-        self._slow_rate = 0.0        # °C/min
-        self._slow_t0 = 0.0
-        self._slow_last_push = 0.0
-
         # --- HOLD ---
         self._held = False
         self._held_at = 0.0          # 지금 정지 중이면 그 시작 시각(실시간), 아니면 0
@@ -195,6 +181,14 @@ class HeaterRecipeRunner(QObject):
         self._percent_max = 0.0      # 진행률은 뒤로 가지 않는다(단조 증가)
         self._start_pv = 0.0
 
+        # RAMP 생성기 — SV 를 밀어 올려 감속 접근 램프를 만든다.
+        #  러너의 1초 틱에서 tick() 을 부르므로 자체 타이머는 쓰지 않는다
+        #  (시계가 둘이면 HOLD 중에도 램프가 도는 사고가 난다).
+        self._ramp = RampProfiler(plc_controller, self)
+        self._ramp.request_target.connect(self.request_target)
+        self._ramp.request_ramp.connect(self.request_ramp)
+        self._ramp.status_message.connect(self.status_message)
+
         # 1초 틱 — 상태 시그널이 끊겨도 타임아웃은 돌아야 한다
         self._tick = QTimer(self)
         self._tick.setInterval(1000)
@@ -210,7 +204,7 @@ class HeaterRecipeRunner(QObject):
     def _now(self) -> float:
         """레시피 진행 시계. 일시정지 중에는 흐르지 않는다.
 
-        진행 타이머(_run_started / _step_started / _slow_t0 / _soak_deadline ...)는
+        진행 타이머(_run_started / _step_started / _soak_deadline ...)는
         전부 이 시계를 기준으로 둔다. 예전에는 타이머마다 정지 시간을 손으로
         밀어 줬는데, 타이머를 추가할 때마다 하나씩 빠뜨렸다.
         안전 타이머(_tc_bad_since / _out_dead_since / _run_off_since)는 정지 중에도
@@ -241,8 +235,6 @@ class HeaterRecipeRunner(QObject):
             self._last_snapshot = {
                 "stepNo": p.get("stepNo"),
                 "total": p.get("total"),
-                "cycle": p.get("cycle"),
-                "repeat": p.get("repeat"),
                 "percent": p.get("percent"),
                 "elapsedSec": p.get("elapsedSec"),
             }
@@ -282,9 +274,7 @@ class HeaterRecipeRunner(QObject):
         self._steps = []
         self._path = None
         self._gas = None
-        self._repeat = 1
         self._idx = -1
-        self._cycle = 0
         self._percent_max = 0.0
         self._total_est_sec = 0.0
         return True
@@ -324,13 +314,6 @@ class HeaterRecipeRunner(QObject):
     def total_steps(self) -> int:
         return len(self._steps)
 
-    def cycle_no(self) -> int:
-        """1-based 현재 반복 회차."""
-        return self._cycle + 1
-
-    def repeat_count(self) -> int:
-        return self._repeat
-
     def recipe_name(self) -> str:
         """불러온 레시피 파일 이름(로그 머리말용). 없으면 빈 문자열."""
         try:
@@ -362,21 +345,13 @@ class HeaterRecipeRunner(QObject):
     def _ramp_minutes(span: float, rate: float) -> float:
         """거리 span(°C)을 rate(°C/min)로 올리는 데 걸리는 시간(분).
 
-        래더(H6a)는 남은 거리가 HEATER_SLOW_ZONE_C 안에 들어오면 속도를
-        HEATER_SLOW_RATE_C_PER_MIN 으로 낮춘다(오버슈트 방지). 이 구간을 빼고
-        재면 예상이 계속 모자란다(12°C/min·575°C RAMP 에서 50초).
-        느린 램프(속도가 감속 구간 속도 이하)는 파이썬이 시계로 SV 를 밀어
-        올리므로 감속 구간이 걸리지 않는다 — 그때는 단순 나눗셈이다.
+        목표 직전 HEATER_APPROACH_ZONE_C 구간에서는 남은 거리에 비례해
+        속도가 HEATER_APPROACH_MIN_RATE_C_PER_MIN 까지 줄어든다. 그 감속을
+        시간 적분으로 반영한 값이다(lib/heater_profile 참조). 이 구간을 빼고
+        재면 예상이 계속 모자란다 — 12°C/min·zone 20·rmin 1 이면 접근 구간
+        에만 4.5분이 걸린다.
         """
-        span = abs(float(span))
-        rate = float(rate)
-        if rate <= 0 or span <= 0:
-            return 0.0
-        slow = float(HEATER_SLOW_RATE_C_PER_MIN)
-        if rate <= slow or slow <= 0:
-            return span / rate
-        zone = min(span, float(HEATER_SLOW_ZONE_C))
-        return (span - zone) / rate + zone / slow
+        return ramp_minutes(span, rate)
 
     def _step_minutes(self, s: HeaterRecipeStep, from_temp: float) -> float:
         """한 스텝의 예상 소요 시간(분) = RAMP + SOAK."""
@@ -384,15 +359,16 @@ class HeaterRecipeRunner(QObject):
             return float(s.soak_min)
         span = abs(float(s.target_c) - float(from_temp))
         if s.ramp_min:
-            # 시간 지정. 그 시간으로 환산한 속도가 래더 램프를 타면(6°C/min 이상)
-            #  감속 구간이 걸리므로 입력한 시간보다 길어진다.
-            rate = span / float(s.ramp_min) if s.ramp_min > 0 else 0.0
+            # 시간 지정. ramp_min 은 접근 감속까지 포함한 전체 시간이므로,
+            #  그 시간이 나오는 '본 구간' 속도를 역산해야 한다.
+            rate = (solve_rate_for_minutes(span, float(s.ramp_min))
+                    if s.ramp_min > 0 else 0.0)
         else:
             rate = s.ramp_c_per_min or float(HEATER_RAMP_RATE_C_PER_MIN)
         return self._ramp_minutes(span, rate) + float(s.soak_min)
 
-    def _cycle_minutes(self, from_temp: float) -> float:
-        """한 사이클(모든 스텝)의 예상 시간(분). 첫 스텝의 출발 온도를 받는다."""
+    def _all_steps_minutes(self, from_temp: float) -> float:
+        """모든 스텝의 예상 시간(분). 첫 스텝의 출발 온도를 받는다."""
         total = 0.0
         prev = float(from_temp)
         for s in self._steps:
@@ -401,18 +377,10 @@ class HeaterRecipeRunner(QObject):
         return total
 
     def _estimate_total_sec(self, start_pv: float) -> float:
-        """전체 예상 시간(초).
-
-        2회차 이후의 첫 스텝은 시작 PV 가 아니라 직전 회차 마지막 스텝의 목표에서
-        출발한다. 그걸 무시하면 반복 레시피의 예상 시간이 크게 부풀려진다
-        (예: 60°C 2스텝 × 2회에서 2회차 스텝1 은 RAMP 가 사실상 0인데
-         시작 PV 43°C 에서 올리는 시간으로 잡혔다).
-        """
+        """전체 예상 시간(초)."""
         if not self._steps:
             return 0.0
-        first = self._cycle_minutes(float(start_pv))
-        rest = self._cycle_minutes(float(self._steps[-1].target_c))
-        return (first + rest * max(0, self._repeat - 1)) * 60.0
+        return self._all_steps_minutes(float(start_pv)) * 60.0
 
     def _phase(self) -> str:
         """지금이 RAMP 인지 SOAK 인지. 이 둘뿐이다.
@@ -467,7 +435,7 @@ class HeaterRecipeRunner(QObject):
                 gap = float(s.target_c) - float(svr)
                 if gap <= 0:
                     return 0.0
-                # 남은 거리에도 감속 구간을 반영한다(_step_minutes 와 같은 규칙)
+                # 남은 거리에도 접근 감속을 반영한다(_step_minutes 와 같은 규칙)
                 return self._ramp_minutes(gap, rate) * 60.0
             return -1.0
         except Exception:
@@ -480,8 +448,7 @@ class HeaterRecipeRunner(QObject):
         시계 기준(totalEst − elapsed)과 섞으면 RAMP 가 늦을 때 전체가 스텝보다
         작아지는 역전이 난다(실기 280s < 247+60s).
           (a) 현재 스텝 남은 시간 + 남은 SOAK
-          (b) 같은 사이클의 이후 스텝들
-          (c) 남은 반복 회차 × 1사이클
+          (b) 이후 스텝들
         """
         try:
             cur = self._current_step()
@@ -494,19 +461,13 @@ class HeaterRecipeRunner(QObject):
             if cur is not None and not cur.is_cooldown and phase == "ramp":
                 total += float(cur.soak_min) * 60.0
 
-            # (b) 같은 사이클의 이후 스텝 (직전 스텝 목표에서 출발한다고 본다)
+            # (b) 이후 스텝 (직전 스텝 목표에서 출발한다고 본다)
             prev = float(cur.target_c) if cur is not None else 0.0
             for i, s_ in enumerate(self._steps):
                 if i > self._idx:
                     total += self._step_minutes(s_, prev) * 60.0
                 prev = s_.target_c
 
-            # (c) 남은 반복 회차 — 다음 회차의 첫 스텝은 이번 회차 마지막 스텝의
-            #     목표에서 출발한다(시작 PV 가 아니다)
-            left_cycles = max(0, self._repeat - (self._cycle + 1))
-            if left_cycles and self._steps:
-                total += (self._cycle_minutes(float(self._steps[-1].target_c))
-                          * 60.0 * left_cycles)
             return max(0.0, total)
         except Exception:
             return -1.0
@@ -577,8 +538,9 @@ class HeaterRecipeRunner(QObject):
             "remainSec": int(round(remain_sec)),
             "steps": steps,
             # --- 진행 표시용 추가 키 ---
-            "cycle": self.cycle_no(),
-            "repeat": self._repeat,
+            # ERP 웹 상태 페이로드 호환용 상수 — 웹에서 이 키를 걷어내면 같이 삭제
+            "cycle": 1,
+            "repeat": 1,
             "held": bool(self._held),
             "elapsedSec": int(elapsed),
             "totalEstSec": int(total_est),
@@ -616,10 +578,13 @@ class HeaterRecipeRunner(QObject):
         #  옛 형식이고, 패널의 가스·압력 설정을 그대로 쓴다.
         _head = {str(k).strip().lower() for k in (rows[0] or {}) if k is not None}
         has_gas_cols = any(c in _head for c in GAS_COLUMNS)
+        # 옛 파일과 ERP 웹 레시피 폼이 아직 repeat 컬럼을 보낸다. 컬럼 자체는
+        #  받아들이되 1(또는 빈 값)이 아니면 거부한다 — 조용히 한 번만 돌리면
+        #  사용자는 반복이 된 줄 안다.
+        has_repeat_col = 'repeat' in _head
 
         steps: List[HeaterRecipeStep] = []
-        repeat = 1
-        repeat_seen = False
+        first_row_seen = False
         gas: Optional[dict] = None
 
         for lineno, raw in enumerate(rows, start=2):
@@ -686,12 +651,12 @@ class HeaterRecipeRunner(QObject):
                         "히터(오류)", f"{lineno}행: ramp_c_per_min 은 0보다 커야 합니다.")
                     return False
                 if ramp < PLC_MIN_RAMP_C_PER_MIN:
-                    # 래더 램프 생성기의 최소는 1카운트/초 = 6°C/min 이다.
-                    #  더 느린 속도는 파이썬이 SV 를 밀어 올려서 만든다.
+                    # 래더 단독으로는 표현되지 않는 속도라는 안내일 뿐이다.
+                    #  RAMP 는 어차피 전부 파이썬이 만든다(특별 경로가 아니다).
                     self.status_message.emit(
                         "히터",
                         f"{lineno}행: 램프 {ramp:g}°C/min — "
-                        f"느린 램프(파이썬 SV 밀어올림)로 실행합니다")
+                        f"느린 램프 — 파이썬 램프로 그대로 실행합니다")
 
             soak_txt = row.get('soak_min') or "0"
             try:
@@ -705,26 +670,27 @@ class HeaterRecipeRunner(QObject):
                     "히터(오류)", f"{lineno}행: soak_min 은 음수일 수 없습니다.")
                 return False
 
-            # repeat 과 가스·압력은 전체 패턴에 걸리는 값이라 첫 데이터 행만 읽는다
-            if not repeat_seen:
-                repeat_seen = True
+            # 옛 repeat 컬럼 — 빈 값이나 1 만 통과시킨다
+            if has_repeat_col:
+                rep_txt = (row.get('repeat') or "").strip()
+                if rep_txt:
+                    try:
+                        _rep_ok = (float(rep_txt) == 1.0)
+                    except ValueError:
+                        _rep_ok = False
+                    if not _rep_ok:
+                        self.status_message.emit(
+                            "히터(오류)",
+                            f"{lineno}행: repeat 는 더 이상 지원하지 않습니다 — "
+                            f"반복할 스텝은 행을 복사해서 적으세요 (repeat={rep_txt})")
+                        return False
+
+            # 가스·압력은 전체 레시피에 걸리는 값이라 첫 데이터 행만 읽는다
+            if not first_row_seen:
+                first_row_seen = True
                 if has_gas_cols:
                     gas = self._parse_gas_row(row, lineno)
                     if gas is None:
-                        return False
-                rep_txt = row.get('repeat') or ""
-                if rep_txt:
-                    try:
-                        repeat = int(float(rep_txt))
-                    except ValueError:
-                        self.status_message.emit(
-                            "히터(오류)", f"{lineno}행: repeat 이 숫자가 아닙니다.")
-                        return False
-                    if not (REPEAT_MIN <= repeat <= REPEAT_MAX):
-                        self.status_message.emit(
-                            "히터(오류)",
-                            f"{lineno}행: repeat {repeat} 은 허용 범위"
-                            f"({REPEAT_MIN}~{REPEAT_MAX})를 벗어납니다.")
                         return False
 
             steps.append(HeaterRecipeStep(
@@ -751,11 +717,9 @@ class HeaterRecipeRunner(QObject):
 
         self._steps = steps
         self._path = p
-        self._repeat = repeat
         self._gas = gas
-        rep_txt = f" × {repeat}회 반복" if repeat > 1 else ""
         self.status_message.emit(
-            "히터", f"레시피 로드: {p.name} ({len(steps)}스텝{rep_txt})")
+            "히터", f"레시피 로드: {p.name} ({len(steps)}스텝)")
         if gas is not None:
             if gas.get("use_ar") or gas.get("use_o2"):
                 self.status_message.emit(
@@ -849,11 +813,9 @@ class HeaterRecipeRunner(QObject):
             return False
 
         self._idx = -1
-        self._cycle = 0
         self._state = IDLE
         self._stopped_by_user = False   # 지난 실행의 플래그를 물고 가지 않는다
         self._clear_hold()
-        self._slow_ramp = False
 
         pv = st.get('pv')
         self._start_pv = float(pv) if pv is not None else 0.0
@@ -865,10 +827,9 @@ class HeaterRecipeRunner(QObject):
         self._percent_max = 0.0
 
         self._tick.start()
-        rep_txt = f" × {self._repeat}회" if self._repeat > 1 else ""
         self.status_message.emit(
             "히터",
-            f"레시피 시작: {len(self._steps)}스텝{rep_txt}"
+            f"레시피 시작: {len(self._steps)}스텝"
             f" · 예상 {_fmt_hms(self._total_est_sec)}")
         self._advance()
         return True
@@ -886,7 +847,6 @@ class HeaterRecipeRunner(QObject):
         self._state = ABORTED
         self._out_dead_since = 0.0
         self._run_off_since = 0.0
-        self._slow_ramp = False
         self._clear_hold()
         self._tick.stop()
         self._safe_shutdown()
@@ -920,17 +880,23 @@ class HeaterRecipeRunner(QObject):
         pv_txt = f"{pv:.1f}" if pv is not None else "--.-"
 
         if self._state == RAMPING:
-            s = self._current_step()
-            # 원래 목표를 보관하고, 현재 램프 목표(D00019)에 SV를 고정한다.
-            self._held_target = float(s.target_c) if s is not None else None
-            try:
-                hold_at = (self._plc.get_heater_status() or {}).get('sv_ramp')
-            except Exception:
-                hold_at = None
-            if hold_at is None or float(hold_at) <= 0:
-                hold_at = pv if pv is not None else self._held_target
-            if hold_at is not None:
-                self.request_target.emit(float(hold_at))
+            if self._ramp.is_active():
+                # 프로파일러가 SV 를 쥐고 있다. 그쪽이 지금 자리에 세운다.
+                #  거리 기준이라 재개할 때 되돌릴 목표를 보관할 필요가 없다.
+                self._held_target = None
+                self._ramp.hold()
+            else:
+                s = self._current_step()
+                # 원래 목표를 보관하고, 현재 램프 목표(D00019)에 SV를 고정한다.
+                self._held_target = float(s.target_c) if s is not None else None
+                try:
+                    hold_at = (self._plc.get_heater_status() or {}).get('sv_ramp')
+                except Exception:
+                    hold_at = None
+                if hold_at is None or float(hold_at) <= 0:
+                    hold_at = pv if pv is not None else self._held_target
+                if hold_at is not None:
+                    self.request_target.emit(float(hold_at))
         # SOAKING 은 따로 할 일이 없다 — _soak_deadline 이 레시피 시계 기준이라
         # 정지 중에는 (deadline − _now()) 가 저절로 고정된다.
 
@@ -946,15 +912,12 @@ class HeaterRecipeRunner(QObject):
         self._held_target_saved = self._held_target   # _clear_hold 가 지우기 전에
 
         # 시계 보정은 _clear_hold() 가 한다. 타이머를 손으로 밀지 않는다.
-        _slow = self._slow_ramp
         self._clear_hold()
 
         if self._state == RAMPING:
-            if _slow:
-                # 느린 램프에 최종 목표를 보내면 1초 뒤 램프가 중간값으로 되돌린다.
-                #  (실기 로그 17:20:26~27) 대신 지금 있어야 할 값을 즉시 다시 민다.
-                self._slow_last_push = 0.0
-                self._push_slow_ramp(self._now())
+            if self._ramp.is_active():
+                # 거리 기준이라 멈춰 있던 시간을 보정할 것이 없다.
+                self._ramp.resume()
             elif self._held_target_saved is not None:
                 self.request_target.emit(float(self._held_target_saved))
         self.status_message.emit("히터", f"스텝 {self._idx + 1} 재개")
@@ -975,6 +938,7 @@ class HeaterRecipeRunner(QObject):
     # ==================== 내부 ====================
     def _safe_shutdown(self, keep_running: bool = False):
         """히터 정지 + 램프 속도 기본값 원복. 예외를 밖으로 내보내지 않는다."""
+        self._ramp.stop(restore_rate=False)   # 램프 속도는 아래에서 원복한다
         try:
             if not keep_running:
                 self.request_run.emit(False)
@@ -1001,7 +965,6 @@ class HeaterRecipeRunner(QObject):
         self._state = ABORTED
         self._out_dead_since = 0.0
         self._run_off_since = 0.0
-        self._slow_ramp = False
         self._clear_hold()
         self._tick.stop()
         self._safe_shutdown()
@@ -1009,9 +972,7 @@ class HeaterRecipeRunner(QObject):
         self.finished.emit(False, reason)
 
     def _step_desc(self, s: HeaterRecipeStep) -> str:
-        """반복 중이면 사이클 정보를 앞에 붙인다."""
-        if self._repeat > 1:
-            return f"(반복 {self._cycle + 1}/{self._repeat}) · {s.describe()}"
+        """스텝 한 줄 설명."""
         return s.describe()
 
     def _emit_step_changed(self):
@@ -1039,30 +1000,21 @@ class HeaterRecipeRunner(QObject):
                 rate = float(s._resolved_rate or 0.0)
                 if rate <= 0:
                     return base
-                need = abs(float(s.target_c) - from_temp) / rate * 60.0
+                need = ramp_minutes(
+                    abs(float(s.target_c) - from_temp), rate) * 60.0
             return min(max(base, need + WAIT_TIMEOUT_MARGIN_SEC), WAIT_TIMEOUT_MAX_SEC)
         except Exception:
             return base
 
     def _advance(self):
-        """다음 스텝으로 진입한다. 남은 스텝이 없으면 반복하거나 완료 처리."""
-        self._slow_ramp = False
+        """다음 스텝으로 진입한다. 남은 스텝이 없으면 완료 처리."""
         self._clear_hold()
+        # 지난 스텝의 램프를 확실히 끊는다. 래더 속도는 아래에서 다시 정하므로
+        #  여기서 되돌리지 않는다(되돌리면 곧바로 덮어쓰는 쓰기가 하나 더 난다).
+        self._ramp.stop(restore_rate=False)
         self._idx += 1
 
         if self._idx >= len(self._steps):
-            # 스텝이 하나도 없으면 반복 루프가 무한히 돌 수 있다
-            if not self._steps:
-                self._complete()
-                return
-            if self._cycle + 1 < self._repeat:
-                # 다음 사이클 — 히터를 끄지 않고 이어서 돈다
-                self._cycle += 1
-                self._idx = -1
-                self.status_message.emit(
-                    "히터", f"반복 {self._cycle + 1}/{self._repeat} 시작")
-                self._advance()
-                return
             self._complete()
             return
 
@@ -1092,11 +1044,12 @@ class HeaterRecipeRunner(QObject):
         # --- 실제 적용 속도 확정 ---
         if s.ramp_min:
             span = abs(s.target_c - float(from_temp))
-            s._resolved_rate = span / float(s.ramp_min) if s.ramp_min > 0 else 0.0
+            s._resolved_rate = (solve_rate_for_minutes(span, float(s.ramp_min))
+                                if s.ramp_min > 0 else 0.0)
             self.status_message.emit(
                 "히터",
                 f"스텝 {self._idx + 1}: {s.target_c:g}°C 까지 {s.ramp_min:g}분"
-                f" → {s._resolved_rate:.1f}°C/min 으로 RAMP")
+                f" → 본 구간 {s._resolved_rate:.1f}°C/min (접근 감속 포함)")
         else:
             s._resolved_rate = float(s.ramp_c_per_min)
 
@@ -1108,23 +1061,25 @@ class HeaterRecipeRunner(QObject):
             f"스텝 {self._idx + 1}: RAMP 타임아웃 {self._step_timeout_sec / 60:.0f}분")
 
         rate = s._resolved_rate
-        if rate >= PLC_MIN_RAMP_C_PER_MIN or s.is_cooldown or rate <= 0:
-            # 래더 램프 생성기가 표현할 수 있는 속도 — 지금까지와 동일
+        if s.is_cooldown or rate <= 0:
+            # 냉각/속도 없음 — 램프를 만들 것이 없다. 목표만 내려 둔다.
             self.request_ramp.emit(_ramp_raw(rate or HEATER_RAMP_RATE_C_PER_MIN))
             self.request_target.emit(float(s.target_c))
+        elif float(s.target_c) > float(from_temp) + 0.05:
+            # 승온 — 파이썬이 SV 를 밀어 올려 감속 접근 램프를 만든다.
+            if not self._ramp.start(float(s.target_c), rate,
+                                    label=f"스텝 {self._idx + 1}"):
+                # 현재 온도를 못 읽는 등으로 못 쓰면 래더 램프로 폴백한다.
+                self.status_message.emit(
+                    "히터(경고)",
+                    f"스텝 {self._idx + 1}: 감속 접근을 쓸 수 없어 "
+                    f"래더 램프로 진행합니다")
+                self.request_ramp.emit(_ramp_raw(rate))
+                self.request_target.emit(float(s.target_c))
         else:
-            # --- 느린 램프 모드 ---
-            #  래더는 최소 속도(6°C/min)로 두고 파이썬이 SV 를 조금씩 밀어 올린다.
-            #  파이썬이 미는 SV 가 래더 램프보다 항상 느리므로 둘이 싸우지 않는다.
-            #  래더 홀드백(D00021)도 그대로 살아 있어 PV 가 뒤처지면 알아서 멈춘다.
-            self._slow_ramp = True
-            self._slow_from = float(from_temp)
-            self._slow_to = float(s.target_c)
-            self._slow_rate = rate
-            self._slow_t0 = self._now()
-            self._slow_last_push = 0.0
-            self.request_ramp.emit(_ramp_raw(PLC_MIN_RAMP_C_PER_MIN))
-            self.request_target.emit(float(from_temp))
+            # 하강(또는 같은 온도) — 히터는 식는 속도를 못 만든다. 목표만 내린다.
+            self.request_ramp.emit(_ramp_raw(rate))
+            self.request_target.emit(float(s.target_c))
 
         self.request_run.emit(True)
 
@@ -1138,11 +1093,11 @@ class HeaterRecipeRunner(QObject):
             self._enter_soak(s)
 
     def _enter_soak(self, s: HeaterRecipeStep):
+        self._ramp.stop(restore_rate=False)
         self._state = SOAKING
-        self._slow_ramp = False
-        # 느린 램프는 파이썬이 SV를 밀어 올리는 방식이라, 여기서 밀어올림이 멈추면
+        # 파이썬이 SV를 밀어 올리는 방식이라, 여기서 밀어올림이 멈추면
         # SV가 중간값에 그대로 남는다(실제로 45°C 스텝이 43.8°C로 유지된 적이 있다).
-        # 래더 램프 경로에서는 이미 같은 값이 들어가 있어 무해하다.
+        # 그래서 SOAK 진입 때 최종 목표를 한 번 확실히 써 준다.
         try:
             self.request_target.emit(float(s.target_c))
         except Exception:
@@ -1161,13 +1116,12 @@ class HeaterRecipeRunner(QObject):
         self._state = DONE
         self._out_dead_since = 0.0
         self._run_off_since = 0.0
-        self._slow_ramp = False
         self._clear_hold()
         self._tick.stop()
         last = self._steps[-1] if self._steps else None
         hold = bool(HEATER_RECIPE_HOLD_AT_END) and (last is not None and not last.is_cooldown)
         if hold:
-            # 히터를 켠 채 끝낸다면 SV가 마지막 목표여야 한다. 느린 램프 도중에
+            # 히터를 켠 채 끝낸다면 SV가 마지막 목표여야 한다. 램프 도중에
             # skip_step 으로 빠져나오면 중간값이 남아 그 온도로 유지된다.
             try:
                 self.request_target.emit(float(last.target_c))
@@ -1254,19 +1208,6 @@ class HeaterRecipeRunner(QObject):
                 "히터", f"스텝 {self._idx + 1}: {s.target_c:g}°C RAMP 완료 (현재 {pv:.1f}°C)")
             self._enter_soak(s)
 
-    def _push_slow_ramp(self, now: float):
-        """느린 램프: 경과 시간만큼 SV를 밀어 올린다(냉각이면 내린다)."""
-        if (self._slow_last_push != 0.0
-                and now - self._slow_last_push < SLOW_RAMP_TICK_SEC):
-            return
-        self._slow_last_push = now
-        elapsed_min = (now - self._slow_t0) / 60.0
-        sign = 1.0 if self._slow_to >= self._slow_from else -1.0
-        target = self._slow_from + sign * self._slow_rate * elapsed_min
-        # 최종 목표를 넘지 않도록 클램프
-        target = min(target, self._slow_to) if sign > 0 else max(target, self._slow_to)
-        self.request_target.emit(float(target))
-
     def _on_tick(self):
         now = self._now()
 
@@ -1276,8 +1217,7 @@ class HeaterRecipeRunner(QObject):
             return
 
         if self._state == RAMPING:
-            if self._slow_ramp:
-                self._push_slow_ramp(now)
+            self._ramp.tick()
             _to = float(getattr(self, "_step_timeout_sec", HEATER_WAIT_TIMEOUT_SEC))
             if now - self._step_started > _to:
                 self._abort(

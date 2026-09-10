@@ -13,6 +13,7 @@ from PyQt6.QtCore import (
 from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
                         HEATER_WAIT_TIMEOUT_SEC)
+from lib.heater_profile import ramp_minutes
 
 # 승온 예정시간에 더할 여유 / 상한. heater_recipe.py 와 같은 값이다.
 WAIT_TIMEOUT_MARGIN_SEC = 1800.0     # 30분
@@ -277,6 +278,7 @@ class SputterProcessController(QObject):
     set_heater_target     = Signal(float)    # ★
     set_heater_run        = Signal(bool)     # ★
     set_heater_ramp       = Signal(int)      # ★ 램프 속도(counts/s, 1=6°C/min)
+    set_heater_ramp_c     = Signal(float)    # ★ 같은 값의 °C/min — 감속 접근 램프용
 
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
@@ -701,6 +703,9 @@ class SputterProcessController(QObject):
 
             elif step.action == ActionType.HEATER_RAMP:
                 rate = float(step.value or HEATER_RAMP_RATE_C_PER_MIN)
+                # 감속 접근 램프(main 의 RampProfiler)가 쓸 실제 속도.
+                #  래더 카운트로 반올림하기 전 값이어야 한다.
+                self.set_heater_ramp_c.emit(rate)
                 self.set_heater_ramp.emit(max(1, round(rate / 6.0)))
                 self.status_message.emit("히터", f"히터 램프 속도 {rate:.0f}°C/min 설정")
                 QTimer.singleShot(200, self._next_step)
@@ -834,7 +839,8 @@ class SputterProcessController(QObject):
                 _rate = float(getattr(self, "_heater_ramp_c_per_min", 0.0) or 0.0)
                 if _rate <= 0:
                     _rate = float(HEATER_RAMP_RATE_C_PER_MIN)
-                _need = abs(float(target_c) - float(_cur)) / _rate * 60.0
+                _need = ramp_minutes(
+                    abs(float(target_c) - float(_cur)), _rate) * 60.0
                 _timeout_sec = min(
                     max(float(HEATER_WAIT_TIMEOUT_SEC), _need + WAIT_TIMEOUT_MARGIN_SEC),
                     WAIT_TIMEOUT_MAX_SEC)

@@ -145,6 +145,15 @@ HEATER_COOLDOWN_TARGET_C   = get('HEATER_COOLDOWN_TARGET_C',   30.0)   # [°C]
 HEATER_SLOW_RATE_C_PER_MIN = get('HEATER_SLOW_RATE_C_PER_MIN', 6.0)    # D00028 [°C/min]
 HEATER_PUSH_CONFIG         = get('HEATER_PUSH_CONFIG',         True)   # False면 PLC 쓰기 생략
 
+# --- 감속 접근(approach) : 파이썬이 만드는 램프의 목표 직전 감속 ---
+#  래더 2단 감속(D00027/D00028)은 계단식이라 전환 지점에서 오버슈트가 남는다.
+#  대신 파이썬이 SV 를 밀어 올리면서 남은 거리에 비례해 속도를 줄여, 도착
+#  순간의 잉여 전력을 없앤다(2026-09-10 수동 100°C 테스트: 6°C/min 으로
+#  도착 → 19A 잔류 → +5°C 오버슈트).
+HEATER_APPROACH_ZONE_C           = get('HEATER_APPROACH_ZONE_C', 20.0)   # 목표 직전 감속 접근 구간 [°C]. 0 이면 감속 없음
+HEATER_APPROACH_MIN_RATE_C_PER_MIN = get('HEATER_APPROACH_MIN_RATE_C_PER_MIN', 1.0)  # 접근 구간 끝(도착) 속도 [°C/min]
+HEATER_APPROACH_LEAD_C           = get('HEATER_APPROACH_LEAD_C', 1.0)    # 파이썬 SV 가 래더 램프(D00019)보다 앞설 수 있는 최대 폭 [°C]
+
 # --- 히터 레시피 / 로깅 ---
 HEATER_RECIPE_DIR         = get('HEATER_RECIPE_DIR', '')        # 빈 문자열이면 프로그램 폴더
 HEATER_LOG_ENABLED        = get('HEATER_LOG_ENABLED', True)
@@ -158,6 +167,8 @@ def _validate_heater_config() -> None:
     예외는 던지지 않는다 — 설정이 틀려도 프로그램은 떠야 한다."""
     global HEATER_MV_LIMIT, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP
     global HEATER_RAMP_RATE_C_PER_MIN, HEATER_SLOW_RATE_C_PER_MIN
+    global HEATER_APPROACH_ZONE_C, HEATER_APPROACH_MIN_RATE_C_PER_MIN
+    global HEATER_APPROACH_LEAD_C
     global HEATER_LOG_PERIOD_MS
     global HEATER_CURRENT_SCALE, HEATER_CURRENT_MV_FULL, HEATER_CURRENT_MV_ZERO
 
@@ -188,6 +199,22 @@ def _validate_heater_config() -> None:
     if HEATER_SLOW_RATE_C_PER_MIN < 6.0:
         print(f"[Config] HEATER_SLOW_RATE_C_PER_MIN {HEATER_SLOW_RATE_C_PER_MIN} → 6.0 (최소 1카운트/초)")
         HEATER_SLOW_RATE_C_PER_MIN = 6.0
+
+    # 4-1) 감속 접근 — 구간은 음수 불가, 도착 속도는 래더 최소(6°C/min)를 넘으면
+    #      감속이 되지 않는다. 앞섬 폭이 너무 작으면 SV 가 래더를 못 끌고 간다.
+    if HEATER_APPROACH_ZONE_C < 0:
+        print(f"[Config] HEATER_APPROACH_ZONE_C {HEATER_APPROACH_ZONE_C} → 0 (음수 불가 — 감속 없음)")
+        HEATER_APPROACH_ZONE_C = 0.0
+    if HEATER_APPROACH_MIN_RATE_C_PER_MIN <= 0:
+        print(f"[Config] HEATER_APPROACH_MIN_RATE_C_PER_MIN {HEATER_APPROACH_MIN_RATE_C_PER_MIN} → 1.0 (0 이하 불가)")
+        HEATER_APPROACH_MIN_RATE_C_PER_MIN = 1.0
+    elif HEATER_APPROACH_MIN_RATE_C_PER_MIN > 6.0:
+        print(f"[Config] HEATER_APPROACH_MIN_RATE_C_PER_MIN {HEATER_APPROACH_MIN_RATE_C_PER_MIN} → 6.0 "
+              f"(래더 최소 램프 이상이면 감속 의미가 없다)")
+        HEATER_APPROACH_MIN_RATE_C_PER_MIN = 6.0
+    if HEATER_APPROACH_LEAD_C < 0.2:
+        print(f"[Config] HEATER_APPROACH_LEAD_C {HEATER_APPROACH_LEAD_C} → 0.2 (너무 작으면 SV 가 래더를 끌지 못한다)")
+        HEATER_APPROACH_LEAD_C = 0.2
 
     # 5) 로깅 주기: 너무 짧으면 NAS I/O 폭주, 너무 길면 RAMP 곡선이 뭉갠다
     if not (1000 <= HEATER_LOG_PERIOD_MS <= 60000):
