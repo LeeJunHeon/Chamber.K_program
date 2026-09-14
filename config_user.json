@@ -67,6 +67,17 @@
     "// RF Ref.P 대기 허용 시간 (초) - 이 시간 내 안정 안 되면 공정 중단": "",
     "RF_REFP_WAIT_SEC": 60,
 
+    "// --- RF Pulse (CESAR 1310, AE Bus RS-232) ---": "",
+    "// ★ 아래 포트는 임시값이다. 장비를 연결한 뒤 실제 COM 포트로 반드시 수정할 것": "",
+    "// (장치 관리자 > 포트(COM & LPT) 에서 확인. 예: COM5)": "",
+    "RFPULSE_PORT": "COM12",
+    "// 통신 속도. CESAR 기본값 9600 8N1": "",
+    "RFPULSE_BAUD": 9600,
+    "// AE Bus 장비 주소(0~31). 장비 전면 패널에서 확인": "",
+    "RFPULSE_ADDR": 1,
+    "// RF Pulse 장비 최대 출력(W). 레시피 입력 상한 확인용": "",
+    "RFPULSE_MAX_POWER": 600.0,
+
     "// ------- MFC 감시 설정 -------": "",
     "// 가스 유량 이탈 허용 비율 (0.10 = ±10%) - Process Time에서만 감시": "",
     "FLOW_ERROR_TOLERANCE": 0.10,

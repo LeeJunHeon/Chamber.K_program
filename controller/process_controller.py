@@ -46,6 +46,9 @@ class ActionType(str, Enum):
     DC_POWER_STOP = "DC_POWER_STOP"
     RF_POWER_SET  = "RF_POWER_SET"   # value: float (offset/param은 start에서 params로 받음)
     RF_POWER_STOP = "RF_POWER_STOP"
+    # RF Pulse(CESAR 1310) — PLC DAC RF Power 와 별개 장비다.
+    RF_PULSE_SET  = "RF_PULSE_SET"   # value: 파워(W), params=(freq_hz|None, duty%|None)
+    RF_PULSE_STOP = "RF_PULSE_STOP"
     HEATER_SET    = "HEATER_SET"     # value: 목표 온도(°C)
     HEATER_WAIT   = "HEATER_WAIT"    # value: 목표 온도(°C)
     HEATER_RAMP   = "HEATER_RAMP"    # value: 램프 속도(°C/min)
@@ -275,6 +278,8 @@ class SputterProcessController(QObject):
     stop_dc_power         = Signal()
     start_rf_power        = Signal(dict)       # {'target':W, 'offset':x, 'param':y}
     stop_rf_power         = Signal()
+    start_rf_pulse        = Signal(dict)       # {'target':W, 'freq_hz':Hz|None, 'duty':%|None}
+    stop_rf_pulse         = Signal()
     set_heater_target     = Signal(float)    # ★
     set_heater_run        = Signal(bool)     # ★
     set_heater_ramp       = Signal(int)      # ★ 램프 속도(counts/s, 1=6°C/min)
@@ -283,12 +288,15 @@ class SputterProcessController(QObject):
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
 
-    def __init__(self, mfc_controller, dc_controller, rf_controller, plc_controller):
+    def __init__(self, mfc_controller, dc_controller, rf_controller, plc_controller,
+                 rfpulse_controller=None):
         super().__init__()
         self.mfc: MFCController = mfc_controller
         self.dc:  DCPowerController = dc_controller
         self.rf:  RFPowerController = rf_controller
         self.plc: PLCController = plc_controller
+        # RF Pulse 는 선택 장비다. 없으면(None) 관련 스텝을 건너뛴다.
+        self.rfpulse = rfpulse_controller
 
         # 내부 상태
         self._steps: List[ProcessStep] = []
@@ -320,6 +328,7 @@ class SputterProcessController(QObject):
         #  이번 공정의 램프 속도(°C/min). _heater_wait 의 타임아웃 산정에 쓴다.
         self._heater_ramp_c_per_min = float(HEATER_RAMP_RATE_C_PER_MIN)
         self.is_rf_on = False
+        self.is_rfpulse_on = False
 
         self._stop_pending = False
         self._active_loops: list[tuple[str, QEventLoop]] = []
@@ -418,6 +427,9 @@ class SputterProcessController(QObject):
 
             self.is_dc_on = float(params.get('dc_power', 0) or 0) > 0
             self.is_rf_on = float(params.get('rf_power', 0) or 0) > 0
+            self.is_rfpulse_on = (bool(params.get('use_rf_pulse', False))
+                                  and float(params.get('rf_pulse_power', 0) or 0) > 0
+                                  and self.rfpulse is not None)
 
             # 스텝 구성
             self._steps = self._build_steps(params)
@@ -461,6 +473,8 @@ class SputterProcessController(QObject):
         # --- 2.5) 시작 전 안전 정리: Power OFF 먼저 (이전 공정 잔류 방지) ---
         steps.append(ProcessStep(ActionType.DC_POWER_STOP, "PRE: DC Power OFF"))
         steps.append(ProcessStep(ActionType.RF_POWER_STOP, "PRE: RF Power OFF"))
+        if self.rfpulse is not None:
+            steps.append(ProcessStep(ActionType.RF_PULSE_STOP, "PRE: RF Pulse OFF"))
         steps.append(ProcessStep(ActionType.DELAY, "PRE: Power OFF settle", duration_sec=1))
 
         # --- 3) 배기 개방: 각 채널 Flow OFF + MFC 메인 밸브 Open ---
@@ -701,6 +715,22 @@ class SputterProcessController(QObject):
                 self.stop_rf_power.emit()
                 QTimer.singleShot(100, self._next_step)
 
+            elif step.action == ActionType.RF_PULSE_SET:
+                if step.value is None:
+                    self._abort_with_error("RF_PULSE_SET 에는 value(파워)가 필요합니다.")
+                    return
+                _f = step.params[0] if step.params else None
+                _d = step.params[1] if (step.params and len(step.params) > 1) else None
+                self.start_rf_pulse.emit({
+                    'target': float(step.value or 0.0),
+                    'freq_hz': _f,
+                    'duty': _d,
+                })
+
+            elif step.action == ActionType.RF_PULSE_STOP:
+                self.stop_rf_pulse.emit()
+                QTimer.singleShot(100, self._next_step)
+
             elif step.action == ActionType.HEATER_RAMP:
                 rate = float(step.value or HEATER_RAMP_RATE_C_PER_MIN)
                 # 감속 접근 램프(main 의 RampProfiler)가 쓸 실제 속도.
@@ -775,6 +805,14 @@ class SputterProcessController(QObject):
         rf_offset = float(self.params.get('rf_offset', 0.0) or 0.0)
         rf_param  = float(self.params.get('rf_param', 1.0) or 1.0)
 
+        # RF Pulse — freq 는 UI/레시피에서 kHz 로 받아 장비에는 Hz 로 보낸다.
+        rf_pulse_power = (float(self.params.get('rf_pulse_power', 0.0) or 0.0)
+                          if self.params.get('use_rf_pulse', False) else 0.0)
+        _fk = self.params.get('rf_pulse_freq', None)
+        rf_pulse_freq_hz = int(round(float(_fk) * 1000.0)) if _fk not in (None, "") else None
+        _du = self.params.get('rf_pulse_duty', None)
+        rf_pulse_duty = int(_du) if _du not in (None, "") else None
+
         loops: List[Tuple[str, QEventLoop]] = []
 
         if dc_power > 0.0:
@@ -788,6 +826,16 @@ class SputterProcessController(QObject):
             self.rf.target_reached.connect(rf_loop.quit)
             loops.append(("rf", rf_loop))
             self.start_rf_power.emit({'target': rf_power, 'offset': rf_offset, 'param': rf_param})
+
+        if rf_pulse_power > 0.0 and self.rfpulse is not None:
+            rfp_loop = QEventLoop()
+            self.rfpulse.target_reached.connect(rfp_loop.quit)
+            loops.append(("rfpulse", rfp_loop))
+            self.start_rf_pulse.emit({
+                'target': rf_pulse_power,
+                'freq_hz': rf_pulse_freq_hz,
+                'duty': rf_pulse_duty,
+            })
 
         if not loops:
             self._next_step()
@@ -807,6 +855,8 @@ class SputterProcessController(QObject):
             try:
                 if name == "dc":
                     self.dc.target_reached.disconnect(lp.quit)
+                elif name == "rfpulse":
+                    self.rfpulse.target_reached.disconnect(lp.quit)
                 else:
                     self.rf.target_reached.disconnect(lp.quit)
             except Exception:
@@ -1210,6 +1260,26 @@ class SputterProcessController(QObject):
                 except Exception:
                     pass
                 self._rfdown_wait = None
+
+            if self.is_rfpulse_on and self.rfpulse is not None:
+                # 펄스는 램프다운이 없다. RF OFF 를 보내고 완료만 짧게 기다린다.
+                #  응답이 없어도 종료 시퀀스가 여기서 멈춰서는 안 되므로 30초에서 끊는다.
+                self.status_message.emit("RFPulse", "RF Pulse OFF")
+                _rfp_loop = QEventLoop()
+                try:
+                    self.rfpulse.power_off_finished.connect(
+                        _rfp_loop.quit, type=Qt.ConnectionType.QueuedConnection)
+                except TypeError:
+                    self.rfpulse.power_off_finished.connect(_rfp_loop.quit)
+
+                self.stop_rf_pulse.emit()
+                self._exec_loop_with_timeout(
+                    _rfp_loop, 30_000,
+                    "RF Pulse OFF 응답이 30초 안에 오지 않았습니다 — 다음 단계로 진행합니다.")
+                try:
+                    self.rfpulse.power_off_finished.disconnect(_rfp_loop.quit)
+                except Exception:
+                    pass
 
             # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리
             channels = getattr(self, "_active_channels", None)

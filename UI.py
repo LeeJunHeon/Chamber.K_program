@@ -347,11 +347,16 @@ class Ui_Dialog(object):
         # --- Power (RF, DC) ---
         self.rf_power_checkbox = QCheckBox(Dialog)
         self.rf_power_checkbox.setObjectName(u"rf_power_checkbox")
-        self.rf_power_checkbox.setGeometry(QRect(735, 245, 131, 20))
+        self.rf_power_checkbox.setGeometry(QRect(735, 245, 89, 20))
+
+        # RF Pulse(CESAR) — RF power 와 배타. 같은 줄, DC power(x=875) 앞에 둔다.
+        self.rf_pulse_checkbox = QCheckBox(Dialog)
+        self.rf_pulse_checkbox.setObjectName(u"rf_pulse_checkbox")
+        self.rf_pulse_checkbox.setGeometry(QRect(828, 245, 62, 20))
 
         self.dc_power_checkbox = QCheckBox(Dialog)
         self.dc_power_checkbox.setObjectName(u"dc_power_checkbox")
-        self.dc_power_checkbox.setGeometry(QRect(875, 245, 131, 20))
+        self.dc_power_checkbox.setGeometry(QRect(912, 245, 94, 20))
 
         self.RF_power_edit = QPlainTextEdit(Dialog)
         self.RF_power_edit.setObjectName(u"RF_power_edit")
@@ -396,10 +401,10 @@ class Ui_Dialog(object):
         self.ref_p_label.setGeometry(QRect(805, 410, 50, 20))
         self.offset_label = QLabel(Dialog)
         self.offset_label.setObjectName(u"offset_label")
-        self.offset_label.setGeometry(QRect(875, 410, 50, 20))
+        self.offset_label.setGeometry(QRect(875, 410, 68, 20))
         self.param_label = QLabel(Dialog)
         self.param_label.setObjectName(u"param_label")
-        self.param_label.setGeometry(QRect(945, 410, 50, 20))
+        self.param_label.setGeometry(QRect(945, 410, 60, 20))
 
         self.for_p_edit = QPlainTextEdit(Dialog)
         self.for_p_edit.setObjectName(u"for_p_edit")
@@ -1125,6 +1130,9 @@ class Ui_Dialog(object):
         # ▶ RF/DC 텍스트도 체크박스에 표시
         self.rf_power_checkbox.setText(
             QCoreApplication.translate("Dialog", u"RF power", None)
+        )
+        self.rf_pulse_checkbox.setText(
+            QCoreApplication.translate("Dialog", u"Pulse", None)
         )
         self.dc_power_checkbox.setText(
             QCoreApplication.translate("Dialog", u"DC power", None)

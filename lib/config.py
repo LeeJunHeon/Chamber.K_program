@@ -345,6 +345,40 @@ RF_REFP_ABORT_THRESHOLD = get('RF_REFP_ABORT_THRESHOLD', 20.0)  # Ref.P 대기 �
 RF_REFP_WAIT_SEC        = get('RF_REFP_WAIT_SEC',        15)    # Ref.P 대기 허용 시간(초)
 
 # ================================================================
+# RF Pulse 설정 (CESAR 1310, AE Bus RS-232)
+# ================================================================
+# PLC DAC 로 제어하는 위 RF Power 와는 완전히 별개인 장비다.
+#  시리얼 직결(COM)만 지원한다. 화면의 for.P/ref.P 칸만 공유한다.
+
+# config_user.json에서 변경 가능
+# ★ RFPULSE_PORT 는 실제 포트가 아직 확정되지 않았다.
+#    장비를 연결한 뒤 config_user.json 에서 반드시 실제 COM 포트로 고칠 것.
+RFPULSE_PORT      = get('RFPULSE_PORT',      "COM12")
+RFPULSE_BAUD      = get('RFPULSE_BAUD',      9600)
+RFPULSE_ADDR      = get('RFPULSE_ADDR',      1)       # AE Bus 주소 0~31
+RFPULSE_MAX_POWER = get('RFPULSE_MAX_POWER', 600.0)   # 장비 최대값(W)
+
+# 고정값 — 원본(Chamber.Total_program) 값을 그대로 옮겼다. 바꾸지 말 것.
+RFPULSE_ACK_TIMEOUT_MS        = 2000   # 쓰기(exec) CSR 대기
+RFPULSE_QUERY_TIMEOUT_MS      = 4500   # 읽기(query) 데이터 프레임 대기
+RFPULSE_RECV_FRAME_TIMEOUT_MS = 4000
+RFPULSE_CMD_GAP_MS            = 1500   # 인터커맨드 최소 간격
+RFPULSE_POST_WRITE_DELAY_MS   = 1500
+RFPULSE_ACK_FOLLOWUP_GRACE_MS = 500
+RFPULSE_POLL_INTERVAL_MS      = 5000   # 폴링 주기(STATUS→FWD→REF 한 바퀴)
+RFPULSE_POLL_QUERY_TIMEOUT_MS = 9000
+RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS = 800
+RFPULSE_WATCHDOG_INTERVAL_MS       = 3000
+RFPULSE_RECONNECT_BACKOFF_START_MS = 2000
+RFPULSE_RECONNECT_BACKOFF_MAX_MS   = 30000
+
+# 파워 감시 — 원본 값 그대로
+RFPULSE_FORP_TOLERANCE_PERCENT = 5.0   # setpoint 대비 허용 오차(%)
+RFPULSE_FORP_CONSECUTIVE_LIMIT = 3     # 3회 연속 이탈이면 공정 중단
+RFPULSE_REFP_LIMIT_WATTS       = 20.0  # 반사파 허용 상한(W)
+RFPULSE_REFP_CONSECUTIVE_LIMIT = 3     # 3회 연속 초과면 공정 중단
+
+# ================================================================
 # MFC 설정
 # ================================================================
 # config_user.json에서 변경 가능

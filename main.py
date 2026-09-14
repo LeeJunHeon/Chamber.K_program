@@ -34,6 +34,7 @@ from device.PLC import PLCController
 from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
+from device.RFpulse import RFPulseController
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
@@ -166,14 +167,22 @@ class MainDialog(QDialog):
         # [추가] PLC가 RF 컨트롤러의 현재 PWM 값을 알 수 있도록 참조를 전달
         self.plc_controller.set_rf_controller(self.rfpower_controller) 
         
+        # 4-1. RF Pulse 컨트롤러 설정 (CESAR 1310, AE Bus RS-232)
+        #   PLC DAC 로 도는 위 RF Power 와 완전히 별개 장비다. 시리얼 직결.
+        self.rfpulse_thread = QThread()
+        self.rfpulse_thread.setObjectName("RFPulseThread")
+        self.rfpulse_controller = RFPulseController()
+        self.rfpulse_controller.moveToThread(self.rfpulse_thread)
+
         # 5. Process 컨트롤러 설정
         self.process_thread = QThread()
         self.process_thread.setObjectName("ProcessThread")
         self.process_controller = SputterProcessController(
-            mfc_controller=self.mfc_controller, 
-            dc_controller=self.dcpower_controller, 
+            mfc_controller=self.mfc_controller,
+            dc_controller=self.dcpower_controller,
             rf_controller=self.rfpower_controller,
-            plc_controller=self.plc_controller
+            plc_controller=self.plc_controller,
+            rfpulse_controller=self.rfpulse_controller
         )
         self.process_controller.moveToThread(self.process_thread)
 
@@ -239,7 +248,13 @@ class MainDialog(QDialog):
         self.mfc_thread.start()
         self.dcpower_thread.start()
         self.rfpower_thread.start()
+        self.rfpulse_thread.start()
         self.process_thread.start()
+
+        # RF Pulse 포트는 스레드가 뜬 뒤 그 스레드 안에서 연다(타이머/시리얼 소유권).
+        #  하드웨어가 없어도 예외를 올리지 않고 경고만 남긴다.
+        QMetaObject.invokeMethod(
+            self.rfpulse_controller, "connect_device", Qt.ConnectionType.QueuedConnection)
 
         self.process_running = False
         self.ui.Sputter_Stop_Button.setEnabled(False)
@@ -291,6 +306,15 @@ class MainDialog(QDialog):
                     _set_text("working_pressure_edit", args.get("workingPressure"))
                     _set_check("rf_power_checkbox", args.get("useRf"))
                     _set_text("RF_power_edit", args.get("rfPower"))
+                    # RF Pulse — 웹 폼이 안 보내면 키가 없어 미사용으로 떨어진다
+                    if args.get("useRfPulse") is not None:
+                        _set_check("rf_pulse_checkbox", args.get("useRfPulse"))
+                        if args.get("rfPulsePower") is not None:
+                            _set_text("RF_power_edit", args.get("rfPulsePower"))
+                        if args.get("rfPulseFreq") is not None:
+                            _set_text("offset_edit", args.get("rfPulseFreq"))
+                        if args.get("rfPulseDuty") is not None:
+                            _set_text("param_edit", args.get("rfPulseDuty"))
                     _set_check("dc_power_checkbox", args.get("useDc"))
                     _set_text("DC_power_edit", args.get("dcPower"))
                     _set_check("dc_delay_checkbox", args.get("dcDelay"))
@@ -386,6 +410,7 @@ class MainDialog(QDialog):
                 cols = ["Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
                         "working_pressure", "process_time", "shutter_delay",
                         "use_rf_power", "rf_power", "use_dc_power", "dc_power",
+                        "use_rf_pulse", "rf_pulse_power", "rf_pulse_freq", "rf_pulse_duty",
                         "use_dc_delay", "use_heater", "heater_temp", "heater_ramp",
                         "gun1", "gun2", "G1 Target", "G2 Target"]
                 d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
@@ -554,6 +579,12 @@ class MainDialog(QDialog):
                 def _pv(name: str):
                     return _w(name) if running else ""
 
+                # RF power / RF Pulse 중 어느 모드인가 — offset/param 칸의 뜻이 달라진다
+                try:
+                    _pulse_mode = bool(self.ui.rf_pulse_checkbox.isChecked())
+                except Exception:
+                    _pulse_mode = False
+
                 # 계측 그룹 — value=계측값(PV), setpoint=설정값(SV)
                 groups = [
                     {"label": "전원", "items": [
@@ -562,13 +593,18 @@ class MainDialog(QDialog):
                         {"label": "Voltage", "value": _pv("Voltage_edit"), "unit": "V"},
                         {"label": "Current", "value": _pv("Current_edit"), "unit": "A"},
                     ]},
-                    {"label": "RF", "items": [
+                    {"label": "RF", "items": ([
                         {"label": "for.P", "value": _pv("for_p_edit"),
                          "setpoint": _w("RF_power_edit"), "unit": "W"},
                         {"label": "ref.P", "value": _pv("ref_p_edit"), "unit": "W"},
+                    ] + ([
+                        # 펄스 모드에서는 같은 칸이 Freq/Duty 다
+                        {"label": "Freq / Duty",
+                         "value": f'{_w("offset_edit")} kHz / {_w("param_edit")} %'},
+                    ] if _pulse_mode else [
                         {"label": "offset / param",
                          "value": f'{_w("offset_edit")} / {_w("param_edit")}'},
-                    ]},
+                    ]))},
                     {"label": "가스", "items": [
                         {"label": "Ar", "value": _flow.get("Ar"),
                          "setpoint": _w("Ar_flow_edit"), "unit": "sccm"},
@@ -638,6 +674,8 @@ class MainDialog(QDialog):
                                     "Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
                                     "working_pressure", "process_time", "shutter_delay",
                                     "use_rf_power", "rf_power", "use_dc_power", "dc_power",
+                                    "use_rf_pulse", "rf_pulse_power",
+                                    "rf_pulse_freq", "rf_pulse_duty",
                                     "use_heater", "heater_temp", "heater_ramp",
                                     "gun1", "gun2", "G1 Target", "G2 Target",
                                 )}
@@ -738,6 +776,17 @@ class MainDialog(QDialog):
         self.process_controller.stop_dc_power.connect(self.dcpower_controller.stop_process)
         self.process_controller.start_rf_power.connect(self.rfpower_controller.start_process)
         self.process_controller.stop_rf_power.connect(self.rfpower_controller.stop_process)
+
+        # --- RF Pulse (CESAR) ---
+        self.process_controller.start_rf_pulse.connect(self.rfpulse_controller.start_process)
+        self.process_controller.stop_rf_pulse.connect(self.rfpulse_controller.stop_process)
+        self.rfpulse_controller.update_rfpulse_status_display.connect(
+            self.update_rfpulse_status_display)
+        self.rfpulse_controller.status_message.connect(self.on_status_message)
+
+        # RF power / RF Pulse 는 같은 입력칸을 공유하므로 화면에서 배타로 둔다.
+        self.ui.rf_power_checkbox.toggled.connect(self._on_rf_power_checkbox_toggled)
+        self.ui.rf_pulse_checkbox.toggled.connect(self._on_rf_pulse_checkbox_toggled)
         
         # ProcessController -> MFC (명령 라우팅)
         self.process_controller.command_requested.connect(self.mfc_controller.handle_command)
@@ -918,12 +967,29 @@ class MainDialog(QDialog):
         except Exception:
             rf = 0
 
+        try:
+            rfp = float(p.get("rf_pulse_power", 0) or 0)
+        except Exception:
+            rfp = 0
+
         p["use_dc_power"] = dc > 0
         p["use_rf_power"] = rf > 0
+        p["use_rf_pulse"] = rfp > 0
         if dc <= 0:
             p.pop("dc_power", None)
         if rf <= 0:
             p.pop("rf_power", None)
+        if rfp <= 0:
+            # 펄스 미사용이면 관련 키를 통째로 뺀다(0W/None 표기 방지)
+            p.pop("rf_pulse_power", None)
+            p.pop("rf_pulse_freq", None)
+            p.pop("rf_pulse_duty", None)
+            p.pop("use_rf_pulse", None)
+        else:
+            if p.get("rf_pulse_freq") in (None, ""):
+                p.pop("rf_pulse_freq", None)
+            if p.get("rf_pulse_duty") in (None, ""):
+                p.pop("rf_pulse_duty", None)
 
         return p
 
@@ -2720,6 +2786,21 @@ class MainDialog(QDialog):
                 if not param_text:
                     raise ValueError("RF 파워의 Param 값을 입력해야 합니다.")
 
+            # --- RF Pulse: 파워는 필수, freq/duty 는 빈 칸 허용(=장비 현재값 유지) ---
+            use_rf_pulse = self.ui.rf_pulse_checkbox.isChecked()
+            rf_pulse_power = 0.0
+            rf_pulse_freq = None
+            rf_pulse_duty = None
+            if use_rf_pulse:
+                _rp = self.ui.RF_power_edit.toPlainText().strip()
+                if not _rp or float(_rp) <= 0:
+                    raise ValueError("RF Pulse 파워를 입력해야 합니다.")
+                rf_pulse_power = float(_rp)
+                if offset_text:
+                    rf_pulse_freq = float(offset_text)      # kHz
+                if param_text:
+                    rf_pulse_duty = int(float(param_text))  # %
+
             # --- selected_gas / mfc_flow는 기존 코드 호환용으로 유지 ---
             if use_ar and not use_o2:
                 selected_gas = "Ar"
@@ -2755,8 +2836,14 @@ class MainDialog(QDialog):
                 "rf_power": float(self.ui.RF_power_edit.toPlainText().strip() or 0) if self.ui.rf_power_checkbox.isChecked() else 0,
                 "shutter_delay": float(self.ui.Shutter_delay_edit.toPlainText().strip()),
                 "process_time": float(self.ui.process_time_edit.toPlainText().strip()),
-                "rf_offset": float(offset_text or 6.79),
-                "rf_param": float(param_text or 1.0395),
+                "rf_offset": float(offset_text or 6.79) if not use_rf_pulse else 6.79,
+                "rf_param": float(param_text or 1.0395) if not use_rf_pulse else 1.0395,
+
+                # ▼ RF Pulse (CESAR). freq 는 kHz, duty 는 %. None = 장비 현재값 유지
+                "use_rf_pulse": bool(use_rf_pulse),
+                "rf_pulse_power": float(rf_pulse_power),
+                "rf_pulse_freq": rf_pulse_freq,
+                "rf_pulse_duty": rf_pulse_duty,
                 "use_g1": self.ui.G1_checkbox.isChecked(),
                 "use_g2": self.ui.G2_checkbox.isChecked(),
 
@@ -2781,8 +2868,9 @@ class MainDialog(QDialog):
                 "g2_target_name": g2_target_name,
             }
 
-            if not (params['dc_power'] > 0 or params['rf_power'] > 0):
-                raise ValueError("RF 또는 DC 파워 중 하나 이상을 입력해야 합니다.")
+            if not (params['dc_power'] > 0 or params['rf_power'] > 0
+                    or params['rf_pulse_power'] > 0):
+                raise ValueError("RF / RF Pulse / DC 파워 중 하나 이상을 입력해야 합니다.")
             
             # Shutter Delay / Process Time 정책:
             #   - 둘 다 0 이상
@@ -3125,7 +3213,10 @@ class MainDialog(QDialog):
         o2_flow   = _avg(self._sum_o2,  self._cnt_o2,  params.get("o2_flow"))
         work_p    = _avg(self._sum_wp,  self._cnt_wp,  params.get("sp1_set"))
 
-        rf_for_p  = _avg(self._sum_rf_for, self._cnt_rf, params.get("rf_power"))
+        # 펄스 fwd/ref 도 같은 누적기에 들어간다(update_rfpulse_status_display).
+        #  설정값 폴백만 펄스 파워까지 본다. CHK_CSV_COLUMNS 는 바꾸지 않는다.
+        rf_for_p  = _avg(self._sum_rf_for, self._cnt_rf,
+                         params.get("rf_power") or params.get("rf_pulse_power"))
         rf_ref_p  = _avg(self._sum_rf_ref, self._cnt_rf, 0.0)
 
         dc_p      = _avg(self._sum_dc_p, self._cnt_dc, params.get("dc_power"))
@@ -3198,6 +3289,7 @@ class MainDialog(QDialog):
 
         # --- Power setpoint + 체크박스 (UI.py 기본값) ---
         self.ui.rf_power_checkbox.setChecked(False)
+        self.ui.rf_pulse_checkbox.setChecked(False)
         self.ui.dc_power_checkbox.setChecked(False)
         self.ui.dc_delay_checkbox.setChecked(False)
         self.ui.RF_power_edit.setPlainText("200")
@@ -3214,8 +3306,13 @@ class MainDialog(QDialog):
         self.ui.G2_edit.clear()
 
         # --- RF 보정값 (UI.py 기본값) ---
+        #  라벨/툴팁도 RF power 모드로 되돌린다(펄스 모드면 Freq/Duty 로 바뀌어 있다).
         self.ui.offset_edit.setPlainText("6.79")
         self.ui.param_edit.setPlainText("1.0395")
+        try:
+            self._apply_rf_mode_ui()
+        except Exception:
+            pass
 
         # --- 측정값(파워/전압/전류/for/ref)은 0으로 초기화 ---
         self.ui.Power_edit.setPlainText("0.0")
@@ -3671,6 +3768,92 @@ class MainDialog(QDialog):
             self._sum_dc_i += current
             self._cnt_dc += 1
 
+    # ---------- RF power / RF Pulse 배타 + 입력칸 전환 ----------
+    @Slot(bool)
+    def _on_rf_power_checkbox_toggled(self, checked: bool):
+        if checked and self.ui.rf_pulse_checkbox.isChecked():
+            self.ui.rf_pulse_checkbox.blockSignals(True)
+            self.ui.rf_pulse_checkbox.setChecked(False)
+            self.ui.rf_pulse_checkbox.blockSignals(False)
+        self._apply_rf_mode_ui()
+
+    @Slot(bool)
+    def _on_rf_pulse_checkbox_toggled(self, checked: bool):
+        if checked and self.ui.rf_power_checkbox.isChecked():
+            self.ui.rf_power_checkbox.blockSignals(True)
+            self.ui.rf_power_checkbox.setChecked(False)
+            self.ui.rf_power_checkbox.blockSignals(False)
+        self._apply_rf_mode_ui()
+
+    def _apply_rf_mode_ui(self):
+        """offset/param 칸은 모드에 따라 뜻이 달라진다.
+
+        RF power  : offset / param      (센서 보정 계수)
+        RF Pulse  : Freq[kHz] / Duty[%] (빈 칸이면 장비 현재값 유지)
+        두 칸의 의미가 화면만 봐서는 구분되지 않으므로 툴팁으로 현재 뜻을 적는다.
+        """
+        try:
+            pulse = self.ui.rf_pulse_checkbox.isChecked()
+        except Exception:
+            return
+
+        if pulse:
+            self.ui.offset_label.setText("Freq[kHz]")
+            self.ui.param_label.setText("Duty[%]")
+            # 보정계수(6.79/1.0395)가 그대로 남아 주파수로 읽히면 안 된다.
+            if self.ui.offset_edit.toPlainText().strip() in ("6.79", ""):
+                self.ui.offset_edit.setPlainText("")
+            if self.ui.param_edit.toPlainText().strip() in ("1.0395", ""):
+                self.ui.param_edit.setPlainText("")
+            self.ui.offset_edit.setPlaceholderText("비우면 장비 현재값 유지")
+            self.ui.param_edit.setPlaceholderText("비우면 장비 현재값 유지")
+            self.ui.offset_edit.setToolTip(
+                "RF Pulse 주파수 [kHz]. 비우면 장비의 현재 설정을 그대로 씁니다.")
+            self.ui.param_edit.setToolTip(
+                "RF Pulse 듀티 [%]. 비우면 장비의 현재 설정을 그대로 씁니다.")
+            self.ui.RF_power_edit.setToolTip("RF Pulse 목표 파워 [W]")
+        else:
+            self.ui.offset_label.setText("offset")
+            self.ui.param_label.setText("param")
+            self.ui.offset_edit.setPlaceholderText("")
+            self.ui.param_edit.setPlaceholderText("")
+            if not self.ui.offset_edit.toPlainText().strip():
+                self.ui.offset_edit.setPlainText("6.79")
+            if not self.ui.param_edit.toPlainText().strip():
+                self.ui.param_edit.setPlainText("1.0395")
+            self.ui.offset_edit.setToolTip("RF for.P 센서 보정 offset")
+            self.ui.param_edit.setToolTip("RF for.P 센서 보정 param")
+            self.ui.RF_power_edit.setToolTip("RF 목표 파워 [W]")
+
+    @Slot(float, float)
+    def update_rfpulse_status_display(self, forward_power, reflected_power):
+        """RF Pulse 계측값 — RF power 와 같은 칸/같은 누적을 쓴다.
+
+        NAS 공유 CSV 스키마(CHK_CSV_COLUMNS)는 바꾸지 않는다. 펄스 fwd/ref 도
+        "RF: For.P" / "RF: Ref. P" 컬럼으로 나가야 하므로 같은 누적기에 더한다.
+        """
+        if not getattr(self, "process_running", False):
+            return
+        try:
+            if not self.ui.rf_pulse_checkbox.isChecked():
+                return                      # 펄스 모드일 때만 화면에 반영
+        except Exception:
+            pass
+
+        self.ui.for_p_edit.setPlainText(f"{forward_power:.2f}")
+        self.ui.ref_p_edit.setPlainText(f"{reflected_power:.2f}")
+
+        try:
+            log_message_to_file(
+                "RFPulse", f"MEAS For={forward_power:.2f}W, Ref={reflected_power:.2f}W")
+        except Exception:
+            pass
+
+        if getattr(self, "_chk_sampling_enabled", False):
+            self._sum_rf_for += forward_power
+            self._sum_rf_ref += reflected_power
+            self._cnt_rf += 1
+
     def update_rf_status_display(self, forward_power, reflected_power):
         if not getattr(self, "process_running", False):
             return
@@ -3814,6 +3997,7 @@ class MainDialog(QDialog):
         self._invoke_worker_blocking(self.mfc_controller, "cleanup")
         self._invoke_worker_blocking(self.dcpower_controller, "close_connection")
         self._invoke_worker_blocking(self.rfpower_controller, "close_connection")
+        self._invoke_worker_blocking(self.rfpulse_controller, "cleanup")
 
         threads = [
             self.process_thread,
@@ -3821,6 +4005,7 @@ class MainDialog(QDialog):
             self.mfc_thread,
             self.dcpower_thread,
             self.rfpower_thread,
+            self.rfpulse_thread,
         ]
 
         for thread in threads:
@@ -3919,6 +4104,8 @@ class MainDialog(QDialog):
         # ---- 파워(선택) : use_*가 비어있으면 OFF로 간주 ----
         use_dc = _b("use_dc_power", False)
         use_rf = _b("use_rf_power", False)
+        # ---- RF Pulse(선택) : 컬럼이 아예 없는 기존 레시피는 자동 OFF (하위 호환) ----
+        use_rf_pulse = _b("use_rf_pulse", False)
 
         # ---- 히터(선택) : 컬럼이 없으면 자동 OFF → 기존 CSV 하위 호환 ----
         use_heater  = _b("use_heater", False)
@@ -3995,6 +4182,22 @@ class MainDialog(QDialog):
         rf_offset = _float_ui(offset_text or 6.79, 6.79)
         rf_param  = _float_ui(param_text  or 1.0395, 1.0395)
 
+        # RF Pulse 값 — 파워는 사용 시 필수, freq/duty 는 비어 있으면 None(장비 현재값 유지)
+        rf_pulse_power = 0.0
+        rf_pulse_freq = None
+        rf_pulse_duty = None
+        if use_rf_pulse:
+            _v = _f("rf_pulse_power", required=False, default=0.0) or 0.0
+            if _v <= 0:
+                raise ValueError(
+                    f"[{process_name or 'STEP'}] use_rf_pulse=ON 인데 "
+                    f"rf_pulse_power가 비어있거나 0 이하입니다.")
+            rf_pulse_power = float(_v)
+            _fq = _f("rf_pulse_freq", required=False, default=None)
+            _dt = _f("rf_pulse_duty", required=False, default=None)
+            rf_pulse_freq = float(_fq) if _fq not in (None, "") else None
+            rf_pulse_duty = int(float(_dt)) if _dt not in (None, "") else None
+
         return {
             "use_ar_gas": use_ar_gas,
             "use_o2_gas": use_o2_gas,
@@ -4013,6 +4216,12 @@ class MainDialog(QDialog):
 
             "rf_offset": float(rf_offset),
             "rf_param": float(rf_param),
+
+            # ▼ RF Pulse — 컬럼이 없으면 전부 미사용으로 떨어진다
+            "use_rf_pulse": bool(use_rf_pulse),
+            "rf_pulse_power": float(rf_pulse_power),
+            "rf_pulse_freq": rf_pulse_freq,
+            "rf_pulse_duty": rf_pulse_duty,
 
             "use_g1": bool(use_g1),
             "use_g2": bool(use_g2),
@@ -4077,12 +4286,23 @@ class MainDialog(QDialog):
 
         # RF 파워
         rf_power = float(params.get("rf_power") or 0.0)
+        rf_pulse_power = float(params.get("rf_pulse_power") or 0.0)
+        use_rf_pulse = bool(params.get("use_rf_pulse")) and rf_pulse_power > 0
         try:
             self.ui.rf_power_checkbox.blockSignals(True)
-            self.ui.rf_power_checkbox.setChecked(rf_power > 0)
+            self.ui.rf_pulse_checkbox.blockSignals(True)
+            self.ui.rf_power_checkbox.setChecked(rf_power > 0 and not use_rf_pulse)
+            self.ui.rf_pulse_checkbox.setChecked(use_rf_pulse)
         finally:
             self.ui.rf_power_checkbox.blockSignals(False)
-        self.ui.RF_power_edit.setPlainText(f"{rf_power:.1f}" if rf_power > 0 else "0")
+            self.ui.rf_pulse_checkbox.blockSignals(False)
+        # RF_power_edit 는 두 모드가 공유한다
+        _shown = rf_pulse_power if use_rf_pulse else rf_power
+        self.ui.RF_power_edit.setPlainText(f"{_shown:.1f}" if _shown > 0 else "0")
+        try:
+            self._apply_rf_mode_ui()
+        except Exception:
+            pass
 
         # Shutter delay / process time (분 단위)
         sh_delay = params.get("shutter_delay")
@@ -4093,12 +4313,19 @@ class MainDialog(QDialog):
             self.ui.process_time_edit.setPlainText(str(proc_time))
 
         # RF 보정값
-        rf_offset = params.get("rf_offset")
-        rf_param  = params.get("rf_param")
-        if rf_offset is not None:
-            self.ui.offset_edit.setPlainText(str(rf_offset))
-        if rf_param is not None:
-            self.ui.param_edit.setPlainText(str(rf_param))
+        if use_rf_pulse:
+            # 펄스 모드에서는 같은 칸이 Freq[kHz]/Duty[%] 다.
+            _fq = params.get("rf_pulse_freq")
+            _dt = params.get("rf_pulse_duty")
+            self.ui.offset_edit.setPlainText("" if _fq in (None, "") else str(_fq))
+            self.ui.param_edit.setPlainText("" if _dt in (None, "") else str(_dt))
+        else:
+            rf_offset = params.get("rf_offset")
+            rf_param  = params.get("rf_param")
+            if rf_offset is not None:
+                self.ui.offset_edit.setPlainText(str(rf_offset))
+            if rf_param is not None:
+                self.ui.param_edit.setPlainText(str(rf_param))
 
         # Gun 선택
         use_g1 = params.get("use_g1")
