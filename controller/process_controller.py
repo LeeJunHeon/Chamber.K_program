@@ -813,6 +813,17 @@ class SputterProcessController(QObject):
         _du = self.params.get('rf_pulse_duty', None)
         rf_pulse_duty = int(_du) if _du not in (None, "") else None
 
+        # ★ RF power(PLC DAC)와 RF Pulse(CESAR)는 서로 다른 장비인데 화면의
+        #   for.P/ref.P 칸을 공유한다. 둘 다 켜면 어느 쪽 값인지 알 수 없고
+        #   CSV 평균도 섞인다. 앞단(UI/레시피/수동 시작)에서 이미 막지만,
+        #   여기까지 들어왔다면 조용히 둘 다 켜지 말고 펄스를 우선한다.
+        if rf_power > 0.0 and rf_pulse_power > 0.0:
+            self.status_message.emit(
+                "경고",
+                f"RF power({rf_power:g}W)와 RF Pulse({rf_pulse_power:g}W)가 동시에 "
+                f"지정되었습니다 — RF Pulse 를 쓰고 아날로그 RF 는 건너뜁니다.")
+            rf_power = 0.0
+
         loops: List[Tuple[str, QEventLoop]] = []
 
         if dc_power > 0.0:

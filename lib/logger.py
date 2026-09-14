@@ -224,6 +224,39 @@ def log_message_to_file(level, message):
         # 정말 쓸 수 있는 데가 없으면 조용히 무시
         pass
 
+# ChK CSV 헤더 불일치 경고는 파일(use_path)별로 실행당 1회만 남긴다.
+#  NAS 와 로컬 폴백은 서로 다른 파일이므로 경로별로 잡는다.
+_chk_header_warned: set = set()
+
+
+def _read_csv_header(path: Path):
+    """CSV 첫 줄을 컬럼 목록으로 읽는다. 실패하면 None(기존 동작으로 폴백)."""
+    try:
+        with path.open("r", newline="", encoding="utf-8") as f:
+            head = next(csv.reader(f), None)
+        if not head:
+            return None
+        # UTF-8 BOM 이 붙어 있으면 첫 컬럼명에서 떼어 낸다
+        head[0] = head[0].lstrip("﻿")
+        return head
+    except Exception:
+        return None
+
+
+def _warn_legacy_chk_header_once(path: Path) -> None:
+    key = str(path)
+    if key in _chk_header_warned:
+        return
+    _chk_header_warned.add(key)
+    try:
+        log_message_to_monitor(
+            "경고",
+            "ChK_log.csv 헤더가 구버전입니다 — tools/migrate_chk_csv.py 를 "
+            "실행하면 RF Pulse Freq/Duty 컬럼이 기록됩니다")
+    except Exception:
+        pass
+
+
 def append_chk_csv_row(row: dict) -> bool:
     """
     Chamber-K 공정 요약 데이터를 CSV(ChK_log.csv)에 한 줄 append.
@@ -246,11 +279,24 @@ def append_chk_csv_row(row: dict) -> bool:
 
         first = not use_path.exists()
 
+        # ★ 이미 있는 파일의 헤더가 CHK_CSV_COLUMNS 와 다를 수 있다.
+        #   컬럼을 늘렸는데 NAS 파일에는 옛 헤더가 박혀 있으면, 새 행만 필드가
+        #   많아져 헤더와 어긋난다(pandas 가 "Expected 16 fields, saw 18" 로 터진다).
+        #   그래서 어긋난 행을 절대 만들지 않는다 — 파일의 실제 헤더를 따르고,
+        #   목록에 없는 값은 버린다(extrasaction="ignore").
+        #   컬럼을 실제로 늘리려면 tools/migrate_chk_csv.py 를 사람이 직접 돌린다.
+        fieldnames = CHK_CSV_COLUMNS
+        if not first:
+            existing = _read_csv_header(use_path)
+            if existing and existing != list(CHK_CSV_COLUMNS):
+                fieldnames = existing
+                _warn_legacy_chk_header_once(use_path)
+
         with use_path.open("a", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=CHK_CSV_COLUMNS)
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
             if first:
                 writer.writeheader()
-            writer.writerow({k: row.get(k, "") for k in CHK_CSV_COLUMNS})
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
 
         return True
 

@@ -372,11 +372,43 @@ RFPULSE_WATCHDOG_INTERVAL_MS       = 3000
 RFPULSE_RECONNECT_BACKOFF_START_MS = 2000
 RFPULSE_RECONNECT_BACKOFF_MAX_MS   = 30000
 
-# 파워 감시 — 원본 값 그대로
-RFPULSE_FORP_TOLERANCE_PERCENT = 5.0   # setpoint 대비 허용 오차(%)
-RFPULSE_FORP_CONSECUTIVE_LIMIT = 3     # 3회 연속 이탈이면 공정 중단
-RFPULSE_REFP_LIMIT_WATTS       = 20.0  # 반사파 허용 상한(W)
-RFPULSE_REFP_CONSECUTIVE_LIMIT = 3     # 3회 연속 초과면 공정 중단
+# 파워 감시 — 기본값은 원본과 같고, 현장에서 조정할 수 있게 config_user.json 경유다.
+#  (타이밍/백오프는 프로토콜 타이밍이라 위처럼 고정값으로 둔다)
+RFPULSE_FORP_TOLERANCE_PERCENT = get('RFPULSE_FORP_TOLERANCE_PERCENT', 5.0)   # setpoint 대비 허용 오차(%)
+RFPULSE_FORP_CONSECUTIVE_LIMIT = get('RFPULSE_FORP_CONSECUTIVE_LIMIT', 3)     # 연속 이탈 허용 횟수
+RFPULSE_REFP_LIMIT_WATTS       = get('RFPULSE_REFP_LIMIT_WATTS',       20.0)  # 반사파 허용 상한(W)
+RFPULSE_REFP_CONSECUTIVE_LIMIT = get('RFPULSE_REFP_CONSECUTIVE_LIMIT', 3)     # 연속 초과 허용 횟수
+
+
+def _validate_rfpulse_config() -> None:
+    """감시 임계값이 말이 안 되면 안전한 쪽으로 클램프한다.
+    예외는 던지지 않는다 — 설정이 틀려도 프로그램은 떠야 한다."""
+    global RFPULSE_FORP_TOLERANCE_PERCENT, RFPULSE_FORP_CONSECUTIVE_LIMIT
+    global RFPULSE_REFP_LIMIT_WATTS, RFPULSE_REFP_CONSECUTIVE_LIMIT
+    global RFPULSE_MAX_POWER
+
+    if not (RFPULSE_FORP_TOLERANCE_PERCENT > 0):
+        print(f"[Config] RFPULSE_FORP_TOLERANCE_PERCENT {RFPULSE_FORP_TOLERANCE_PERCENT} → 5.0 (0 이하 불가)")
+        RFPULSE_FORP_TOLERANCE_PERCENT = 5.0
+    if not (RFPULSE_REFP_LIMIT_WATTS > 0):
+        print(f"[Config] RFPULSE_REFP_LIMIT_WATTS {RFPULSE_REFP_LIMIT_WATTS} → 20.0 (0 이하 불가)")
+        RFPULSE_REFP_LIMIT_WATTS = 20.0
+    for _n in ("RFPULSE_FORP_CONSECUTIVE_LIMIT", "RFPULSE_REFP_CONSECUTIVE_LIMIT"):
+        _v = globals()[_n]
+        try:
+            _iv = int(_v)
+        except Exception:
+            _iv = 0
+        if _iv < 1:
+            print(f"[Config] {_n} {_v} → 3 (1 이상의 정수여야 한다)")
+            _iv = 3
+        globals()[_n] = _iv
+    if not (RFPULSE_MAX_POWER > 0):
+        print(f"[Config] RFPULSE_MAX_POWER {RFPULSE_MAX_POWER} → 600.0 (0 이하 불가)")
+        RFPULSE_MAX_POWER = 600.0
+
+
+_validate_rfpulse_config()
 
 # ================================================================
 # MFC 설정
@@ -455,4 +487,8 @@ CHK_CSV_COLUMNS = [
     "DC: V",
     "DC: I",
     "DC: P",
+    # ↓ RF Pulse 설정값(계측값이 아니므로 평균 내지 않는다). 반드시 맨 끝에 붙일 것 —
+    #   중간에 끼우면 기존 ChK_log.csv 의 열 순서와 어긋난다.
+    "RF Pulse: Freq[kHz]",
+    "RF Pulse: Duty[%]",
 ]

@@ -36,7 +36,7 @@ from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, p
 from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.config import (
-    RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR,
+    RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, RFPULSE_MAX_POWER,
     RFPULSE_ACK_TIMEOUT_MS, RFPULSE_QUERY_TIMEOUT_MS, RFPULSE_CMD_GAP_MS,
     RFPULSE_POLL_INTERVAL_MS, RFPULSE_POLL_QUERY_TIMEOUT_MS,
     RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS,
@@ -176,6 +176,9 @@ class RFPulseController(QObject):
     status_message                = Signal(str, str)
     target_reached                = Signal()               # RF ON 완료
     power_off_finished            = Signal()               # RF OFF 완료
+    # START 완료 직후 장비에서 되읽은 실제 펄스 설정 (freq kHz, duty %)
+    #  freq/duty 를 비워 두면(=장비 현재값 유지) 기록할 값이 없어서 되읽는다.
+    pulse_config_readback         = Signal(float, int)
 
     _RX_MAX = 4096         # 수신 버퍼 상한(바이트)
 
@@ -187,6 +190,7 @@ class RFPulseController(QObject):
         self.serial_rfp: Optional[QSerialPort] = None
         self._rx = bytearray()
         self._overflow_count = 0
+        self._cs_bad_count = 0          # 체크섬 불일치 누적(로그 솎아내기용)
 
         # 명령 큐 / 인플라이트
         self._cmd_q: Deque[RfCommand] = deque()
@@ -450,10 +454,18 @@ class RFPulseController(QObject):
             for x in pkt[:-1]:
                 cs ^= x
             if (cs ^ pkt[-1]) != 0:
-                self.status_message.emit(
-                    "RFPulse",
-                    "[RX] 체크섬 불일치 프레임 폐기 raw="
-                    + " ".join(f"{x:02X}" for x in pkt))
+                # ★ total 바이트를 통째로 버리면 노이즈 1바이트 때문에 뒤에 붙은
+                #   정상 프레임까지 먹는다. 선두 1바이트만 버리고 다시 맞춰 본다.
+                #   (원본은 통째로 버린다 — 의도적으로 달라진 부분)
+                self._rx[:0] = pkt          # 되돌려 놓고
+                del self._rx[:1]            # 선두 1바이트만 버린다
+                self._cs_bad_count += 1
+                if self._cs_bad_count % 20 == 1:
+                    self.status_message.emit(
+                        "RFPulse",
+                        f"[RX] 체크섬 불일치 — 1바이트 버리고 재동기화 "
+                        f"(누적 {self._cs_bad_count}회) raw="
+                        + " ".join(f"{x:02X}" for x in pkt[:8]))
                 continue
 
             out.append(("FRAME", pkt))
@@ -690,12 +702,25 @@ class RFPulseController(QObject):
         duty = params.get('duty')
 
         self._stop_requested = False
+        # ★ purge 보다 먼저 이전 시퀀스를 내린다. 순서가 바뀌면 _purge_pending 이
+        #   이전 시퀀스의 콜백을 None 으로 불러 '재시작'(START 실패)이 허위로 뜬다.
+        self._seq_running = False
+        self._seq = []
+        self._seq_idx = -1
         self.set_process_status(False)
 
         # 감시용 setpoint/카운터 초기화
         self._target_setpoint_w = target_w
         self._forp_out_of_range_count = 0
         self._refp_over_limit_count = 0
+
+        # 최후 방어선 — UI/레시피에서 이미 막지만 원격 경로가 뚫릴 수 있다.
+        if target_w > float(RFPULSE_MAX_POWER):
+            self.status_message.emit(
+                "재시작",
+                f"RF Pulse 목표 {target_w:g}W 가 장비 상한 "
+                f"{float(RFPULSE_MAX_POWER):g}W(RFPULSE_MAX_POWER)를 넘습니다 — 시작 불가")
+            return
 
         if not (self.serial_rfp and self.serial_rfp.isOpen()):
             # 포트가 없으면 시퀀스를 시작조차 하지 않는다. 공정은 중단된다.
@@ -765,6 +790,7 @@ class RFPulseController(QObject):
             self.set_process_status(True)
             self.status_message.emit("RFPulse", "RF Pulse ON 완료 — 폴링 시작")
             self.target_reached.emit()
+            self._readback_pulse_config()
             return
 
         # ("exec", cmd, data, tag, timeout, fail_why)
@@ -784,6 +810,44 @@ class RFPulseController(QObject):
             self._seq_next()
 
         self._enqueue_exec(cmd, data, tag=tag, timeout_ms=timeout_ms, callback=_cb)
+
+    def _readback_pulse_config(self):
+        """START 직후 1회, 장비에 실제로 걸린 펄스 설정을 되읽는다.
+
+        freq/duty 를 비워 두면 '장비 현재값 유지'라서 기록할 값이 없다.
+        CSV/로그에 실제 값을 남기려고 읽는 것뿐이므로, 실패해도 경고만 남기고
+        공정은 계속한다(부가 정보다).
+        """
+        state = {'freq_khz': None, 'duty': None}
+
+        def _emit_if_ready():
+            if state['freq_khz'] is None or state['duty'] is None:
+                return
+            self.status_message.emit(
+                "RFPulse",
+                f"펄스 설정 리드백: {state['freq_khz']:g} kHz · {state['duty']}%")
+            self.pulse_config_readback.emit(
+                float(state['freq_khz']), int(state['duty']))
+
+        def on_duty(res):
+            if res is None or len(res) < 2:
+                self.status_message.emit("RFPulse", "펄스 duty 리드백 실패(무시)")
+                return
+            state['duty'] = int(_u16le(res, 0))
+            _emit_if_ready()
+
+        def on_freq(res):
+            if res is None or len(res) < 3:
+                self.status_message.emit("RFPulse", "펄스 주파수 리드백 실패(무시)")
+            else:
+                # 193 은 3바이트 LE(Hz). 화면/CSV 단위는 kHz 다.
+                hz = res[0] | (res[1] << 8) | (res[2] << 16)
+                state['freq_khz'] = hz / 1000.0
+            self._enqueue_query(CMD_REPORT_PULSE_DUTY, b"", tag="[READBACK DUTY]",
+                                retries=1, callback=on_duty)
+
+        self._enqueue_query(CMD_REPORT_PULSE_FREQ, b"", tag="[READBACK FREQ]",
+                            retries=1, callback=on_freq)
 
     # ==================== STOP ====================
     @Slot()
@@ -824,8 +888,13 @@ class RFPulseController(QObject):
                 self._poll_busy = False
                 self._poll_timer.start()
             return
+        # ★ 폴링을 끌 때는 대기 중인 폴링 쿼리까지 반드시 버린다.
+        #   안 버리면 STOP 의 RF OFF 가 남은 쿼리(각 최대 9초 + gap 1.5초) 뒤에
+        #   줄을 서서 최악 ~30초 걸리고, _stop_impl 의 30초 타임아웃에 걸려
+        #   RF 가 켜진 채 종료 시퀀스가 진행된다.
         if self._poll_timer:
             self._poll_timer.stop()
+        self._purge_pending("polling off")
         self._poll_busy = False
 
     def _poll_cycle(self):
