@@ -487,8 +487,12 @@ CHK_CSV_COLUMNS = [
     "DC: V",
     "DC: I",
     "DC: P",
-    # ↓ RF Pulse 설정값(계측값이 아니므로 평균 내지 않는다). 반드시 맨 끝에 붙일 것 —
-    #   중간에 끼우면 기존 ChK_log.csv 의 열 순서와 어긋난다.
-    "RF Pulse: Freq[kHz]",
-    "RF Pulse: Duty[%]",
+    # ↓ RF Pulse 전용 컬럼. 반드시 맨 끝에 붙일 것 — 중간에 끼우면 기존
+    #   ChK_log.csv 의 열 순서와 어긋난다(옛 파일은 tools/migrate_chk_csv.py 로 옮긴다).
+    #   위 "RF: For.P"/"RF: Ref. P" 는 PLC DAC RF power 전용이다. 두 장비를 나란히
+    #   비교할 수 있게 펄스는 자기 컬럼을 따로 갖는다.
+    "RF Pulse: Freq[kHz]",   # 설정값(평균 아님). 빈 칸이면 장비 리드백값
+    "RF Pulse: Duty[%]",     # 설정값(평균 아님). 빈 칸이면 장비 리드백값
+    "RF Pulse: For.P",       # 계측 평균
+    "RF Pulse: Ref. P",      # 계측 평균
 ]

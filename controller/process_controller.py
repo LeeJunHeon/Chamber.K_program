@@ -813,17 +813,8 @@ class SputterProcessController(QObject):
         _du = self.params.get('rf_pulse_duty', None)
         rf_pulse_duty = int(_du) if _du not in (None, "") else None
 
-        # ★ RF power(PLC DAC)와 RF Pulse(CESAR)는 서로 다른 장비인데 화면의
-        #   for.P/ref.P 칸을 공유한다. 둘 다 켜면 어느 쪽 값인지 알 수 없고
-        #   CSV 평균도 섞인다. 앞단(UI/레시피/수동 시작)에서 이미 막지만,
-        #   여기까지 들어왔다면 조용히 둘 다 켜지 말고 펄스를 우선한다.
-        if rf_power > 0.0 and rf_pulse_power > 0.0:
-            self.status_message.emit(
-                "경고",
-                f"RF power({rf_power:g}W)와 RF Pulse({rf_pulse_power:g}W)가 동시에 "
-                f"지정되었습니다 — RF Pulse 를 쓰고 아날로그 RF 는 건너뜁니다.")
-            rf_power = 0.0
-
+        # RF power(PLC DAC) / RF Pulse(CESAR) / DC power 는 서로 독립이다.
+        #  셋을 동시에 켜는 것이 정상이며, 각자 자기 루프로 목표 도달을 기다린다.
         loops: List[Tuple[str, QEventLoop]] = []
 
         if dc_power > 0.0:
@@ -1284,6 +1275,10 @@ class SputterProcessController(QObject):
                     self.rfpulse.power_off_finished.connect(_rfp_loop.quit)
 
                 self.stop_rf_pulse.emit()
+                # RF 램프다운(≤120초) 뒤에 오는 순차 대기다. RF power 와 RF Pulse 를
+                #  둘 다 켠 공정이면 STOP 최대 소요가 150초까지 갈 수 있다.
+                #  순서는 바꾸지 않는다 — 아날로그 RF 는 램프다운이 필요하고,
+                #  펄스는 RF OFF 즉시 끝난다.
                 self._exec_loop_with_timeout(
                     _rfp_loop, 30_000,
                     "RF Pulse OFF 응답이 30초 안에 오지 않았습니다 — 다음 단계로 진행합니다.")
