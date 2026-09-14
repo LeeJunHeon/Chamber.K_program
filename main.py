@@ -513,6 +513,15 @@ class MainDialog(QDialog):
 
         def _erp_drain_commands():
             try:
+                # ERP 는 장비당 한 인스턴스만 받는다. 다른 챔버K 가 이미 붙어 있으면
+                #  리포터가 409 를 받고 스스로 보고를 멈춘다 — 사용자에게 1회만 알린다.
+                if getattr(self.erp, "rejected", False) and not getattr(self, "_erp_rejected_shown", False):
+                    self._erp_rejected_shown = True
+                    log_message_to_monitor(
+                        "ERROR",
+                        "[ERP] 다른 챔버K 프로그램이 이미 ERP 에 연결되어 있습니다. "
+                        "이 프로그램은 상태 보고와 원격 제어를 중단했습니다.")
+
                 cmds = self.erp.pop_commands()
                 if not cmds:
                     return

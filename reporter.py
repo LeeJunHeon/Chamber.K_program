@@ -7,6 +7,7 @@ import queue
 import uuid
 import threading
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,10 @@ class ErpReporter:
         self._cmd_q: "queue.Queue[dict]" = queue.Queue(maxsize=100)
         self._seen_cmds: set[int] = set()
         self._stop = threading.Event()
+        # 프로세스 1회 기동 = 1 ID. ERP 는 장비당 한 인스턴스만 받아들이고,
+        #  다른 인스턴스가 이미 붙어 있으면 409 를 돌려준다.
+        self.instance_id = uuid.uuid4().hex
+        self._rejected = False                # 서버가 다른 인스턴스로 판단해 거부함
         self._thread = threading.Thread(
             target=self._loop, name="ErpReporter", daemon=True
         )
@@ -38,6 +43,10 @@ class ErpReporter:
     @property
     def enabled(self) -> bool:
         return bool(self._url and self._token)
+
+    @property
+    def rejected(self) -> bool:
+        return self._rejected
 
     def start(self):
         if self.enabled:
@@ -151,9 +160,11 @@ class ErpReporter:
 
     def _post(self, messages: list[dict]) -> bool:
         try:
-            body = json.dumps(
-                {"equipment": self._equipment, "messages": messages}
-            ).encode("utf-8")
+            body = json.dumps({
+                "equipment": self._equipment,
+                "instance": self.instance_id,
+                "messages": messages,
+            }).encode("utf-8")
             req = urllib.request.Request(
                 self._url, data=body, method="POST",
                 headers={
@@ -175,6 +186,12 @@ class ErpReporter:
                     except Exception:
                         pass
                 return ok
+        except urllib.error.HTTPError as e:
+            if e.code == 409:
+                # 다른 챔버K 인스턴스가 이미 ERP 에 연결되어 있다. 보고를 멈춘다.
+                self._rejected = True
+                self._stop.set()
+            return False
         except Exception:
             return False
 
