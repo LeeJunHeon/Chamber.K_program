@@ -1,0 +1,15 @@
+# 저장소와 작업 트리의 개행을 LF 로 통일한다.
+#  core.autocrlf=true 로 두면 커밋할 때만 LF 로 바꾸고 체크아웃하면 다시 CRLF 가 되어,
+#  같은 파일이 윈도우/리눅스에서 바이트가 달라지고 "재클론하면 CRLF" 경고가 계속 났다.
+#  윈도우 파이썬은 LF 파일을 그대로 읽으므로 작업 트리를 LF 로 두어도 문제가 없다.
+* text=auto eol=lf
+
+# 아래는 절대 변환하지 않는다.
+#  xlsx 는 zip 컨테이너라 개행 변환이 들어가면 파일이 깨진다.
+#  지금까지는 git 이 NUL 바이트를 보고 알아서 바이너리로 판정해 무사했을 뿐,
+#  명시해 두지 않으면 위 text=auto 규칙에 걸릴 위험이 있다.
+*.xlsx binary
+*.xls  binary
+*.pdf  binary
+*.png  binary
+*.jpg  binary
