@@ -36,6 +36,8 @@ class ErpReporter:
         #  다른 인스턴스가 이미 붙어 있으면 409 를 돌려준다.
         self.instance_id = uuid.uuid4().hex
         self._rejected = False                # 서버가 다른 인스턴스로 판단해 거부함
+        self._reject_until = 0.0      # 이 시각까지 전송을 쉰다(monotonic)
+        self._reject_logged = False   # 거부 알림 1회만
         self._thread = threading.Thread(
             target=self._loop, name="ErpReporter", daemon=True
         )
@@ -143,10 +145,25 @@ class ErpReporter:
                     batch.append(self._snapshot_msg())
                     self._last_state_ts = now
 
+                if self._rejected:
+                    if time.monotonic() < self._reject_until:
+                        batch.clear()          # 쌓아두지 않고 버린다(상태는 최신만 의미 있음)
+                        continue
+                    # 대기 종료 — hello 를 다시 보내 인수를 시도한다
+                    self._rejected = False
+                    batch.insert(0, {
+                        "id": uuid.uuid4().hex,
+                        "type": "hello",
+                        "data": {"program": "Chamber.K", "reclaim": True},
+                    })
+
                 if not batch:
                     continue
 
                 if self._post(batch):
+                    if self._reject_logged:
+                        self._reject_logged = False
+                        print("[ERP] 보고를 재개했습니다.")
                     self._flush_spool()
                 else:
                     self._to_spool(batch)
@@ -188,9 +205,13 @@ class ErpReporter:
                 return ok
         except urllib.error.HTTPError as e:
             if e.code == 409:
-                # 다른 챔버K 인스턴스가 이미 ERP 에 연결되어 있다. 보고를 멈춘다.
+                # 다른 인스턴스가 붙어 있다. 스레드는 유지하고 60초 뒤 재시도한다.
+                # (상대가 사라지면 자동 복구되어야 한다)
                 self._rejected = True
-                self._stop.set()
+                self._reject_until = time.monotonic() + 60.0
+                if not self._reject_logged:
+                    self._reject_logged = True
+                    print("[ERP] 다른 인스턴스가 연결되어 있어 보고를 잠시 멈춥니다(60초 후 재시도).")
             return False
         except Exception:
             return False
