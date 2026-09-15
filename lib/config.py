@@ -379,12 +379,16 @@ RFPULSE_FORP_CONSECUTIVE_LIMIT = get('RFPULSE_FORP_CONSECUTIVE_LIMIT', 3)     # 
 RFPULSE_REFP_LIMIT_WATTS       = get('RFPULSE_REFP_LIMIT_WATTS',       20.0)  # 반사파 허용 상한(W)
 RFPULSE_REFP_CONSECUTIVE_LIMIT = get('RFPULSE_REFP_CONSECUTIVE_LIMIT', 3)     # 연속 초과 허용 횟수
 
-# ── 파워 목표 도달 대기 절대 타임아웃 [초] ──
+# ── 파워 목표 도달 대기 타임아웃 [초] — "최소값" ──
 #  process_controller._power_wait 이 DC / RF / RF Pulse 의 target_reached 를 기다리는
-#  최대 시간. 드라이버가 아무 신호도 못 내는 경로(펄스 포트 닫힘, 시리얼 오류 무한
-#  재연결 등)가 실재하므로, DC/RF 자체의 램프업 무응답 보호(DC_FAIL_MAX_TICKS /
-#  RF_FAIL_MAX_TICKS) 위에 덮는 마지막 그물이다. 초과 시 "재시작" 으로 공정을 중단한다.
-POWER_WAIT_TIMEOUT_SEC = get('POWER_WAIT_TIMEOUT_SEC', 600)   # 기본 10분
+#  시간의 하한. 실제 타임아웃은 이번 공정의 목표값으로 산정한 예상 램프 시간
+#  (RF 1 W/s 실측, DC 전류 램프, 펄스 START 시퀀스)의 1.5배 + 120초와 이 값 중 큰 쪽이다.
+#  고정값으로 두면 RF 600W(램프만 600초) 같은 정상 공정이 타임아웃에 걸린다.
+#  드라이버가 아무 신호도 못 내는 경로(펄스 포트 닫힘, 시리얼 오류 무한 재연결 등)가
+#  실재하므로, DC/RF 자체의 램프업 무응답 보호(DC_FAIL_MAX_TICKS / RF_FAIL_MAX_TICKS)
+#  위에 덮는 마지막 그물이다. 초과 시 "재시작" 으로 공정을 중단한다.
+POWER_WAIT_TIMEOUT_SEC     = get('POWER_WAIT_TIMEOUT_SEC', 600)   # 최소 10분
+POWER_WAIT_TIMEOUT_MAX_SEC = 7200                                # 산정 결과 상한(2시간)
 
 
 def _validate_power_wait_config() -> None:

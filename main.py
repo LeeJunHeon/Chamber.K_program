@@ -106,6 +106,7 @@ class MainDialog(QDialog):
 
         # 공정 알림 상태
         self._chat_user_stopped: bool = False
+        self._chat_emergency_stopped: bool = False
         self._chat_errors: list[str] = []
         self._chat_fail_notified: bool = False   # ✅ 실패 원인 일반채팅 중복 방지
         # 설비 이상 상세 카드는 공정 1회당 1장만. 같은 이상이 PLC fault 와
@@ -936,6 +937,7 @@ class MainDialog(QDialog):
     # ==================== Google Chat 알림 헬퍼 (CH.K) ====================
     def _chat_reset_run_state(self):
         self._chat_user_stopped = False
+        self._chat_emergency_stopped = False   # ALL STOP(비상 정지)으로 끝남 — 사용자 STOP 과 구분
         self._chat_errors = []
         self._chat_fail_notified = False
         self._chat_fault_detail_sent = False
@@ -1081,7 +1083,7 @@ class MainDialog(QDialog):
         detail = {
             "process_name": name,
             "stopped": bool(self._chat_user_stopped),
-            "aborting": False,
+            "aborting": bool(getattr(self, "_chat_emergency_stopped", False)),
             "errors": list(self._chat_errors) if not ok else [],
         }
 
@@ -1490,10 +1492,35 @@ class MainDialog(QDialog):
         except Exception:
             pass
         # 공정 상태머신도 세운다 — PLC 비상정지만으로는 컨트롤러가 다음 스텝을 계속 밟는다.
-        try:
-            self.request_process_stop.emit()
-        except Exception:
-            pass
+        #  ★ 비상정지로 끝난 공정은 '실패'로 기록되어야 한다. 그냥 request_process_stop 만
+        #    보내면 _chk_process_ok 가 True 로 남아 구글챗에 "정상 종료" 카드가 나가고
+        #    ChK_log.csv 에도 정상 공정으로 기록됐다. 사용자 STOP(_chat_user_stopped)과는
+        #    구분해야 하므로 그 플래그는 건드리지 않고 별도 플래그로 "긴급 중단" 카드를 낸다.
+        _proc_active = bool(getattr(self, "process_running", False))
+        _csv_active = bool(getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None))
+        _csv_delay = bool(getattr(self, "_csv_delay_active", False))
+        if _proc_active or _csv_active or _csv_delay:
+            try:
+                self._chk_process_ok = False
+                self._chat_emergency_stopped = True
+                self._chat_notify_failed_now("ALL STOP(비상 정지)으로 중단", send_text=False)
+            except Exception:
+                pass
+            # CSV 리스트면 뒤 STEP 을 모두 막는다("재시작" 경로와 같은 처리)
+            try:
+                if _csv_active:
+                    self.csv_cancelled = True
+                    if _csv_delay or not _proc_active:
+                        self._cancel_csv_list_now("CSV 공정 취소", reason="ALL STOP(비상 정지)으로 중단")
+            except Exception:
+                pass
+        # 공정이 돌고 있을 때만 컨트롤러를 세운다. 안 돌고 있는데 보내면 컨트롤러가
+        #  '이미 정지' 로 finished 를 내고 엉뚱한 종료 카드가 나간다.
+        if _proc_active:
+            try:
+                self.request_process_stop.emit()
+            except Exception:
+                pass
         # CESAR(RF Pulse)는 PLC 를 거치지 않는 직결 시리얼이라 비상정지로 안 꺼진다.
         #  공정이 안 돌고 있어도 펄스가 켜져 있을 수 있으니 드라이버를 직접 한 번 더 끈다.
         #  ※ DC 도 직결이라 동일한 보완이 필요하다(다음 작업에서 다룬다).

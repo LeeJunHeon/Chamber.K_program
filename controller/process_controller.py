@@ -12,7 +12,9 @@ from PyQt6.QtCore import (
 )
 from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
-                        HEATER_WAIT_TIMEOUT_SEC, POWER_WAIT_TIMEOUT_SEC)
+                        HEATER_WAIT_TIMEOUT_SEC, POWER_WAIT_TIMEOUT_SEC,
+                        POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
+                        DC_RAMP_STEP_A)
 from lib.heater_profile import ramp_minutes
 
 # 승온 예정시간에 더할 여유 / 상한. heater_recipe.py 와 같은 값이다.
@@ -880,11 +882,21 @@ class SputterProcessController(QObject):
 
         # 절대 타임아웃 — 드라이버가 아무 신호도 못 내는 경로(포트 닫힘, 시리얼 오류
         #  무한 재연결 등)가 실재한다. DC/RF 자체의 램프업 무응답 보호 위에 덮는
-        #  마지막 그물이다.
+        #  마지막 그물이다. 값은 이번 공정의 목표로 산정한다(_heater_wait 과 같은 방식).
+        _timeout_sec, _est = self._power_wait_timeout_sec(
+            dc_power if "dc" in targets else 0.0,
+            rf_power if "rf" in targets else 0.0,
+            rf_pulse_power if "rfpulse" in targets else 0.0)
+        self.status_message.emit(
+            "정보",
+            "파워 대기 타임아웃 "
+            + ", ".join(f"{n} 예상 {v:.0f}s" for n, v in _est.items())
+            + f" → 채택 {_timeout_sec:.0f}s (최소 {float(POWER_WAIT_TIMEOUT_SEC):.0f}s, "
+              f"예상 최대×1.5+120, 상한 {float(POWER_WAIT_TIMEOUT_MAX_SEC):.0f}s)")
         timed_out = False
         if pending and self._running and not self._stop_pending:
             timed_out = not self._exec_loop_with_timeout(
-                loop, int(POWER_WAIT_TIMEOUT_SEC * 1000))
+                loop, int(_timeout_sec * 1000))
 
         # disconnect — 조기 종료(STOP)에서도 반드시 전부 끊는다
         for _name, sig, slot in conns:
@@ -901,13 +913,48 @@ class SputterProcessController(QObject):
             _miss = ", ".join(f"{n}(목표 {targets.get(n, '?')})" for n in sorted(pending))
             self.status_message.emit(
                 "재시작",
-                f"파워 목표 도달 대기 timeout({int(POWER_WAIT_TIMEOUT_SEC)}s) — "
+                f"파워 목표 도달 대기 timeout({int(_timeout_sec)}s) — "
                 f"미도달: {_miss} / 전체 목표: "
                 + ", ".join(f"{n}={v}" for n, v in targets.items()))
             return
 
         self.status_message.emit("정보", "파워 안정화 완료.")
         self._next_step()
+
+    # DC 램프 시간 추정에 쓰는 대표 전압 [V]. 램프 초기엔 전류가 작아 전압이 높지만
+    #  플라즈마가 붙으면 300~400V 대로 내려온다(ChK_log 실측 314.8 / 410.1 V).
+    #  전압이 낮을수록 같은 파워에 전류가 더 필요해 램프가 길어지므로 낮은 쪽으로 잡는다.
+    DC_EST_VOLTAGE_V = 300.0
+    # RF Pulse 는 램프가 없다. START 시퀀스(설정 쓰기 + RF ON, 명령당 gap 1.5s) +
+    #  POLL_START_DELAY 0.8s + 첫 STATUS 폴링까지 실측 ~4초. 20초면 충분하다.
+    RFPULSE_EST_SEC = 20.0
+
+    def _power_wait_timeout_sec(self, dc_power: float, rf_power: float,
+                                rf_pulse_power: float) -> Tuple[float, Dict[str, float]]:
+        """이번 공정 목표값으로 파워 대기 타임아웃을 산정한다.
+
+        - RF(아날로그): RFpower 는 1초 틱마다 RF_RAMP_STEP(=1 W) 씩 올린다 → rf_power/RF_RAMP_STEP 초
+          (2026-09-15 로그 실측: 50 W 도달 50초). 램프 중 반사파가 RF_REFP_ABORT_THRESHOLD 를
+          넘으면 최대 RF_REFP_WAIT_SEC 씩 멈추므로 그 3회분을 여유로 더한다.
+        - DC: DCpower 는 1초 틱마다 전류를 DC_RAMP_STEP_A 이내로 올린다 → (P/V)/DC_RAMP_STEP_A 초.
+          V 는 DC_EST_VOLTAGE_V(보수적 300 V). 예: 500 W → 1.67 A → 167초.
+        - RF Pulse: 램프 없음. RFPULSE_EST_SEC.
+        최종 = clamp(max(POWER_WAIT_TIMEOUT_SEC, max(예상)×1.5 + 120), ≤ POWER_WAIT_TIMEOUT_MAX_SEC).
+        (POWER_WAIT_TIMEOUT_SEC 는 '최소값'이다 — 작은 목표에서는 그대로 쓰인다)
+        """
+        est: Dict[str, float] = {}
+        if dc_power > 0.0:
+            _step = max(float(DC_RAMP_STEP_A), 1e-6)
+            est["dc"] = (float(dc_power) / self.DC_EST_VOLTAGE_V) / _step
+        if rf_power > 0.0:
+            _step = max(float(RF_RAMP_STEP), 1e-6)
+            est["rf"] = float(rf_power) / _step + 3.0 * float(RF_REFP_WAIT_SEC)
+        if rf_pulse_power > 0.0:
+            est["rfpulse"] = self.RFPULSE_EST_SEC
+        _need = (max(est.values()) * 1.5 + 120.0) if est else 0.0
+        _sec = max(float(POWER_WAIT_TIMEOUT_SEC), _need)
+        _sec = min(_sec, float(POWER_WAIT_TIMEOUT_MAX_SEC))
+        return _sec, est
 
     # ==================== 히터 온도 도달 대기 ====================
     def _heater_wait(self, target_c: float):

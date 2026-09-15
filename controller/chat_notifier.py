@@ -401,8 +401,14 @@ class ChatNotifier(QObject):
                 subtitle = "사용자 Stop으로 종료"
                 fields = {"공정 이름": name}
             elif aborting:
+                # ALL STOP 등 긴급 중단. 사유가 있으면 "원인" 칸에 남긴다.
                 subtitle = "긴급 중단으로 종료"
                 fields = {"공정 이름": name}
+                if errs:
+                    preview = " • " + "\n • ".join(errs[:3])
+                    if len(errs) > 3:
+                        preview += f"\n(+{len(errs)-3}건 더)"
+                    fields["원인"] = preview
             else:
                 subtitle = "오류로 종료"
                 if errs:
