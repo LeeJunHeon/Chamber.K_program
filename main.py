@@ -107,6 +107,8 @@ class MainDialog(QDialog):
         # 공정 알림 상태
         self._chat_user_stopped: bool = False
         self._chat_emergency_stopped: bool = False
+        # 이번 공정의 종료 처리(카드 + CSV 판정)를 이미 했는가. 시작한 적이 없으면 True.
+        self._finish_handled: bool = True
         self._chat_errors: list[str] = []
         self._chat_fail_notified: bool = False   # ✅ 실패 원인 일반채팅 중복 방지
         # 설비 이상 상세 카드는 공정 1회당 1장만. 같은 이상이 PLC fault 와
@@ -938,6 +940,7 @@ class MainDialog(QDialog):
     def _chat_reset_run_state(self):
         self._chat_user_stopped = False
         self._chat_emergency_stopped = False   # ALL STOP(비상 정지)으로 끝남 — 사용자 STOP 과 구분
+        self._finish_handled = False           # 새 공정(수동 / CSV STEP 마다) — 종료 처리 아직 안 함
         self._chat_errors = []
         self._chat_fail_notified = False
         self._chat_fault_detail_sent = False
@@ -1499,6 +1502,7 @@ class MainDialog(QDialog):
         _proc_active = bool(getattr(self, "process_running", False))
         _csv_active = bool(getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None))
         _csv_delay = bool(getattr(self, "_csv_delay_active", False))
+        _handled_by_cancel = False
         if _proc_active or _csv_active or _csv_delay:
             try:
                 self._chk_process_ok = False
@@ -1510,13 +1514,19 @@ class MainDialog(QDialog):
             try:
                 if _csv_active:
                     self.csv_cancelled = True
+                    # 딜레이 스텝은 process_running=True 로 두지만 컨트롤러는 안 돈다.
+                    #  여기서 리스트를 정리하면 종료 카드가 이미 나가므로, 뒤의
+                    #  request_process_stop 은 보내지 않는다("재시작" 경로의 return 과 같다).
+                    #  보내면 _stop_impl 의 '이미 정지' 분기가 finished 를 한 번 더 내서
+                    #  카드가 2장 나간다.
                     if _csv_delay or not _proc_active:
                         self._cancel_csv_list_now("CSV 공정 취소", reason="ALL STOP(비상 정지)으로 중단")
+                        _handled_by_cancel = True
             except Exception:
                 pass
-        # 공정이 돌고 있을 때만 컨트롤러를 세운다. 안 돌고 있는데 보내면 컨트롤러가
-        #  '이미 정지' 로 finished 를 내고 엉뚱한 종료 카드가 나간다.
-        if _proc_active:
+        # 실제 공정 스텝이 돌고 있을 때만 컨트롤러를 세운다. 안 돌고 있는데 보내면
+        #  컨트롤러가 '이미 정지' 로 finished 를 내고 엉뚱한 종료 카드가 나간다.
+        if _proc_active and not _handled_by_cancel:
             try:
                 self.request_process_stop.emit()
             except Exception:
@@ -3493,6 +3503,8 @@ class MainDialog(QDialog):
 
                 # 종료 카드 + (실패면) 일반챗 1줄(단, STOP이면 일반챗 추가 전송 안 함)
                 self._chat_notify_finished(False)
+                # 이 공정의 종료 처리는 여기서 끝났다 — 뒤늦게 finished 가 와도 카드를 또 내지 않는다
+                self._finish_handled = True
             except Exception:
                 pass
 
@@ -3612,6 +3624,23 @@ class MainDialog(QDialog):
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
+        # ★ 중복/헛호출 가드. 컨트롤러 _stop_impl 의 '이미 정지' 분기는 request_stop 을
+        #   부르는 어느 경로에서든 finished 를 낼 수 있어, 호출부 하나를 막아도 다른
+        #   경로에서 종료 카드 2장 / 엉뚱한 카드가 재발한다. 여기서 뿌리를 막는다.
+        #   플래그는 _chat_reset_run_state(수동 시작 / CSV STEP 시작마다)에서 False 가 된다 —
+        #   스텝 시작에서 리셋되지 않으면 2번째 STEP 부터 종료 처리가 통째로 사라지므로
+        #   리셋 위치를 옮기지 말 것.
+        if getattr(self, "_finish_handled", False):
+            _alive = (bool(getattr(self, "process_running", False))
+                      or bool(getattr(self, "csv_mode", False))
+                      or bool(getattr(self, "_csv_delay_active", False)))
+            log_message_to_monitor(
+                "정보",
+                "finished 무시 — 이번 공정의 종료 처리는 이미 끝났음"
+                + ("" if _alive else " (시작된 공정 없음)"))
+            return
+        self._finish_handled = True
+
         self.on_status_message("정보", "프로세스 종료중.")
         # 히터 소유권 해제 — 다음 공정/레시피 판정에 남지 않게 한다
         self._process_heater_claimed = False
