@@ -46,6 +46,15 @@ import sys
 import tempfile
 from pathlib import Path
 
+# 한국어 윈도우 콘솔(cp949)은 아래 메시지의 '—'/'→'/'★' 를 못 찍어 UnicodeEncodeError 로
+# 죽는다(실제로 --selftest 가 통과 직전에 죽었다). 출력만 UTF-8 로 바꾸고, 그것도 안 되면
+# 못 찍는 글자만 '?' 로 대체해 스크립트 자체는 끝까지 돌게 한다.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 # 프로젝트 루트를 import 경로에 넣는다(tools/ 에서 직접 실행할 수 있게)
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
