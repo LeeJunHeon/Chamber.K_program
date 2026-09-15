@@ -178,7 +178,9 @@ class RFPulseController(QObject):
     power_off_finished            = Signal()               # RF OFF 완료
     # START 완료 직후 장비에서 되읽은 실제 펄스 설정 (freq kHz, duty %)
     #  freq/duty 를 비워 두면(=장비 현재값 유지) 기록할 값이 없어서 되읽는다.
-    pulse_config_readback         = Signal(float, int)
+    # {'freq_khz': float|None, 'duty': int|None} — 한쪽만 실패해도 있는 쪽은 올린다.
+    #  (예전 Signal(float, int) 은 둘 다 있어야 emit 해서 freq 실패에 duty 까지 버려졌다)
+    pulse_config_readback         = Signal(object)
 
     _RX_MAX = 4096         # 수신 버퍼 상한(바이트)
 
@@ -820,21 +822,22 @@ class RFPulseController(QObject):
         """
         state = {'freq_khz': None, 'duty': None}
 
-        def _emit_if_ready():
-            if state['freq_khz'] is None or state['duty'] is None:
+        def _emit_final():
+            # duty 콜백이 끝난 시점에 한 번만. 없는 쪽은 None 으로 올리고,
+            #  둘 다 실패면 올리지 않는다(기록할 것이 없다).
+            if state['freq_khz'] is None and state['duty'] is None:
                 return
-            self.status_message.emit(
-                "RFPulse",
-                f"펄스 설정 리드백: {state['freq_khz']:g} kHz · {state['duty']}%")
-            self.pulse_config_readback.emit(
-                float(state['freq_khz']), int(state['duty']))
+            _f = "?" if state['freq_khz'] is None else f"{state['freq_khz']:g}"
+            _d = "?" if state['duty'] is None else str(state['duty'])
+            self.status_message.emit("RFPulse", f"펄스 설정 리드백: {_f} kHz · {_d}%")
+            self.pulse_config_readback.emit(dict(state))
 
         def on_duty(res):
             if res is None or len(res) < 2:
                 self.status_message.emit("RFPulse", "펄스 duty 리드백 실패(무시)")
-                return
-            state['duty'] = int(_u16le(res, 0))
-            _emit_if_ready()
+            else:
+                state['duty'] = int(_u16le(res, 0))
+            _emit_final()
 
         def on_freq(res):
             if res is None or len(res) < 3:
@@ -978,6 +981,12 @@ class RFPulseController(QObject):
                 f"목표 {self._target_setpoint_w:.1f}W, "
                 f"허용오차 ±{RFPULSE_FORP_TOLERANCE_PERCENT:.1f}% "
                 f"(±{tol:.1f}W), 편차 {diff:.1f}W — {n}회 연속")
+            # RFpower.py 와 같은 관례 — 알리기만 하지 않고 드라이버가 스스로 끈다.
+            #  상위의 "재시작" 처리가 늦거나 없어도 RF 는 꺼져야 한다.
+            #  (이때 나가는 power_off_finished 는 아직 아무도 기다리지 않으므로 그냥
+            #   버려지고, 뒤이어 오는 _stop_impl 의 stop_process 가 RF OFF 를 한 번 더
+            #   보내 자기 완료 신호를 받는다. 중복 stop 은 무해하다)
+            self.stop_process()
             return
 
         # 2) REFP: 임계값 이상
@@ -993,6 +1002,7 @@ class RFPulseController(QObject):
                 "재시작",
                 f"RF Pulse REFP 과다 반사: 측정 {self._last_reflected_w:.1f}W, "
                 f"한계 {RFPULSE_REFP_LIMIT_WATTS:.1f}W — {n}회 연속")
+            self.stop_process()
 
     # ==================== 파싱/검증/유틸 ====================
     def _frame_match(self, payload: bytes, expected_cmd: int) -> bool:

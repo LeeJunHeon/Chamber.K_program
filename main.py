@@ -1479,12 +1479,29 @@ class MainDialog(QDialog):
         살아 있으면 다음 스텝에서 히터를 다시 켜 버린다.
         (공정 STOP(정상 종료)에서는 레시피를 건드리지 않는다)
         """
+        # ALL STOP 은 어떤 예외에도 멈추지 않아야 한다 — 단계마다 따로 감싼다.
         try:
             if HEATER_ENABLED and self.heater_recipe.is_running():
                 self.heater_recipe.stop("비상 정지")
         except Exception:
             pass
-        self.request_plc_emergency_stop.emit()
+        try:
+            self.request_plc_emergency_stop.emit()
+        except Exception:
+            pass
+        # 공정 상태머신도 세운다 — PLC 비상정지만으로는 컨트롤러가 다음 스텝을 계속 밟는다.
+        try:
+            self.request_process_stop.emit()
+        except Exception:
+            pass
+        # CESAR(RF Pulse)는 PLC 를 거치지 않는 직결 시리얼이라 비상정지로 안 꺼진다.
+        #  공정이 안 돌고 있어도 펄스가 켜져 있을 수 있으니 드라이버를 직접 한 번 더 끈다.
+        #  ※ DC 도 직결이라 동일한 보완이 필요하다(다음 작업에서 다룬다).
+        try:
+            QMetaObject.invokeMethod(
+                self.rfpulse_controller, "stop_process", Qt.ConnectionType.QueuedConnection)
+        except Exception:
+            pass
 
     def _log_heater_header(self, params: dict):
         """공정 로그 머리말에 히터 설정 한 줄. 히터를 안 쓰면 '미사용'."""
@@ -3856,15 +3873,22 @@ class MainDialog(QDialog):
             except Exception:
                 pass
 
-    @Slot(float, int)
-    def _on_rfpulse_config_readback(self, freq_khz: float, duty: int):
+    @Slot(object)
+    def _on_rfpulse_config_readback(self, rb):
         """장비에서 되읽은 실제 펄스 설정. CSV/로그에 남길 값으로 보관한다.
 
         freq/duty 를 비워 두면(=장비 현재값 유지) 입력값이 없어 기록할 게 없다.
-        그때 이 값으로 채운다.
+        그때 이 값으로 채운다. rb 는 {'freq_khz': float|None, 'duty': int|None} —
+        한쪽만 실패하면 그쪽만 None 이고, _build_chk_csv_row 에서 빈 문자열이 된다.
         """
-        self._chk_rfpulse_freq_khz = float(freq_khz)
-        self._chk_rfpulse_duty = int(duty)
+        try:
+            rb = dict(rb or {})
+        except Exception:
+            return
+        _f = rb.get('freq_khz')
+        _d = rb.get('duty')
+        self._chk_rfpulse_freq_khz = None if _f is None else float(_f)
+        self._chk_rfpulse_duty = None if _d is None else int(_d)
 
     @Slot(float, float)
     def update_rfpulse_status_display(self, forward_power, reflected_power):

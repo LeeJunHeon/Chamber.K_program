@@ -12,7 +12,7 @@ from PyQt6.QtCore import (
 )
 from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
-                        HEATER_WAIT_TIMEOUT_SEC)
+                        HEATER_WAIT_TIMEOUT_SEC, POWER_WAIT_TIMEOUT_SEC)
 from lib.heater_profile import ramp_minutes
 
 # 승온 예정시간에 더할 여유 / 상한. heater_recipe.py 와 같은 값이다.
@@ -814,58 +814,96 @@ class SputterProcessController(QObject):
         rf_pulse_duty = int(_du) if _du not in (None, "") else None
 
         # RF power(PLC DAC) / RF Pulse(CESAR) / DC power 는 서로 독립이다.
-        #  셋을 동시에 켜는 것이 정상이며, 각자 자기 루프로 목표 도달을 기다린다.
-        loops: List[Tuple[str, QEventLoop]] = []
+        #  셋을 동시에 켜는 것이 정상이며, 셋 모두 목표에 도달할 때까지 기다린다.
+        #
+        # ★ 루프는 하나만 쓴다 — 장비마다 QEventLoop 을 만들어 리스트 순서대로 exec() 하면
+        #   안 된다. QEventLoop::exec() 은 진입할 때 exit 플래그를 지우므로, 그 루프의
+        #   exec() 이전에 도착한 quit() 은 소실되고 exec() 은 영구히 반환되지 않는다.
+        #   실제 램프 시간(펄스 START ~4초 / DC ~39초 / RF ~200초)에서는 펄스가 항상
+        #   먼저 도달하는데 리스트 맨 뒤에 있어, DC+펄스 / RF+펄스 공정은
+        #   "파워 목표치 도달 대기중..." 에서 가스·파워를 켠 채 영구 정지했다.
+        #   DC+RF 가 지금까지 무사했던 것은 RF 램프가 항상 더 느려서 리스트 순서와
+        #   도달 순서가 우연히 일치했기 때문이다. 순차 exec 로 되돌리지 말 것.
+        #
+        #   상태는 슬롯이 아니라 pending 집합이 들고 있다. 어느 장비가 먼저 도달하든
+        #   집합에서 빠지고, 집합이 비는 순간 quit 한다. 도달 신호가 exec() 진입 전에
+        #   와도 exec 직전 검사에서 걸러 exec 을 건너뛴다(_heater_wait 과 같은 패턴).
+        pending: set = set()
+        targets: Dict[str, str] = {}
+        loop = QEventLoop()
+
+        def _on_reached(name: str):
+            pending.discard(name)
+            if not pending and loop.isRunning():
+                loop.quit()
+
+        # (이름, 시그널, 슬롯) — 조기 종료(STOP)에서도 전부 끊기 위해 보관한다.
+        #  슬롯은 람다 기본인자로 이름을 묶어 늦은 바인딩 사고를 막는다.
+        conns: List[Tuple[str, Any, Any]] = []
 
         if dc_power > 0.0:
-            dc_loop = QEventLoop()
-            self.dc.target_reached.connect(dc_loop.quit)
-            loops.append(("dc", dc_loop))
-            self.start_dc_power.emit(dc_power)
+            _slot = lambda *_a, _n="dc": _on_reached(_n)          # noqa: E731
+            self.dc.target_reached.connect(_slot)
+            conns.append(("dc", self.dc.target_reached, _slot))
+            pending.add("dc"); targets["dc"] = f"{dc_power:g}W"
 
         if rf_power > 0.0:
-            rf_loop = QEventLoop()
-            self.rf.target_reached.connect(rf_loop.quit)
-            loops.append(("rf", rf_loop))
-            self.start_rf_power.emit({'target': rf_power, 'offset': rf_offset, 'param': rf_param})
+            _slot = lambda *_a, _n="rf": _on_reached(_n)          # noqa: E731
+            self.rf.target_reached.connect(_slot)
+            conns.append(("rf", self.rf.target_reached, _slot))
+            pending.add("rf"); targets["rf"] = f"{rf_power:g}W"
 
         if rf_pulse_power > 0.0 and self.rfpulse is not None:
-            rfp_loop = QEventLoop()
-            self.rfpulse.target_reached.connect(rfp_loop.quit)
-            loops.append(("rfpulse", rfp_loop))
+            _slot = lambda *_a, _n="rfpulse": _on_reached(_n)     # noqa: E731
+            self.rfpulse.target_reached.connect(_slot)
+            conns.append(("rfpulse", self.rfpulse.target_reached, _slot))
+            pending.add("rfpulse"); targets["rfpulse"] = f"{rf_pulse_power:g}W"
+
+        if not conns:
+            self._next_step()
+            return
+
+        # 장비 시동 — connect 를 모두 마친 뒤에 emit 해야 도달 신호를 놓치지 않는다.
+        if "dc" in pending:
+            self.start_dc_power.emit(dc_power)
+        if "rf" in pending:
+            self.start_rf_power.emit({'target': rf_power, 'offset': rf_offset, 'param': rf_param})
+        if "rfpulse" in pending:
             self.start_rf_pulse.emit({
                 'target': rf_pulse_power,
                 'freq_hz': rf_pulse_freq_hz,
                 'duty': rf_pulse_duty,
             })
 
-        if not loops:
-            self._next_step()
-            return
-
-        self._active_loops = loops  # ★ STOP에서 끊어낼 수 있도록 보관
+        self._active_loops = [("power", loop)]  # ★ STOP에서 끊어낼 수 있도록 보관
         self.status_message.emit("정보", "파워 목표치 도달 대기중...")
 
-        for _name, lp in loops:
-            # STOP 눌렀으면 더 기다리지 않음
-            if not self._running or self._stop_pending:
-                break
-            lp.exec()
+        # 절대 타임아웃 — 드라이버가 아무 신호도 못 내는 경로(포트 닫힘, 시리얼 오류
+        #  무한 재연결 등)가 실재한다. DC/RF 자체의 램프업 무응답 보호 위에 덮는
+        #  마지막 그물이다.
+        timed_out = False
+        if pending and self._running and not self._stop_pending:
+            timed_out = not self._exec_loop_with_timeout(
+                loop, int(POWER_WAIT_TIMEOUT_SEC * 1000))
 
-        # disconnect
-        for name, lp in loops:
+        # disconnect — 조기 종료(STOP)에서도 반드시 전부 끊는다
+        for _name, sig, slot in conns:
             try:
-                if name == "dc":
-                    self.dc.target_reached.disconnect(lp.quit)
-                elif name == "rfpulse":
-                    self.rfpulse.target_reached.disconnect(lp.quit)
-                else:
-                    self.rf.target_reached.disconnect(lp.quit)
+                sig.disconnect(slot)
             except Exception:
                 pass
         self._active_loops = []
 
         if not self._running:   # STOP 중이면 여기서 종료
+            return
+
+        if timed_out and pending:
+            _miss = ", ".join(f"{n}(목표 {targets.get(n, '?')})" for n in sorted(pending))
+            self.status_message.emit(
+                "재시작",
+                f"파워 목표 도달 대기 timeout({int(POWER_WAIT_TIMEOUT_SEC)}s) — "
+                f"미도달: {_miss} / 전체 목표: "
+                + ", ".join(f"{n}={v}" for n, v in targets.items()))
             return
 
         self.status_message.emit("정보", "파워 안정화 완료.")
@@ -1230,62 +1268,17 @@ class SputterProcessController(QObject):
             # 여기서 예외가 나도 나머지 종료 시퀀스는 계속되어야 한다.
             self._heater_off("공정 종료")
 
-            # 파워 끄기
-            if self.is_dc_on:
-                self.status_message.emit("DCpower", "DC 파워 OFF")
-                self.stop_dc_power.emit()
-
-            if self.is_rf_on:
-                self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
-
-                self._rfdown_wait = QEventLoop()
-
-                try:
-                    self.rf.ramp_down_finished.connect(
-                        self._on_rf_rampdown_finished,
-                        type=Qt.ConnectionType.QueuedConnection
-                    )
-                except TypeError:
-                    self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
-
+            # 파워 끄기 — 이 구간 전체는 자체 try/except 로 감싼다.
+            #  여기서 예외(예: connect 의 RuntimeError "wrapped C/C++ object deleted")가
+            #  새어 나가면 아래 MFC/가스 차단이 통째로 건너뛰어져 Ar/O2 가 흐르고
+            #  밸브가 열린 채 공정이 "종료" 로 보고된다. 가스 차단은 어떤 예외에도 실행된다.
+            try:
+                self._power_off_sequence()
+            except Exception as e:
+                self.status_message.emit(
+                    "경고", f"파워 OFF 구간 예외 — 가스 차단은 계속 진행합니다: {e!r}")
                 self._stop_rfdown_timeout_timer()
-                if self._rfdown_timeout_timer:
-                    self._rfdown_timeout_timer.start()
-
-                self.stop_rf_power.emit()
-                self._rfdown_wait.exec()
-
-                self._stop_rfdown_timeout_timer()
-
-                try:
-                    self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
-                except Exception:
-                    pass
                 self._rfdown_wait = None
-
-            if self.is_rfpulse_on and self.rfpulse is not None:
-                # 펄스는 램프다운이 없다. RF OFF 를 보내고 완료만 짧게 기다린다.
-                #  응답이 없어도 종료 시퀀스가 여기서 멈춰서는 안 되므로 30초에서 끊는다.
-                self.status_message.emit("RFPulse", "RF Pulse OFF")
-                _rfp_loop = QEventLoop()
-                try:
-                    self.rfpulse.power_off_finished.connect(
-                        _rfp_loop.quit, type=Qt.ConnectionType.QueuedConnection)
-                except TypeError:
-                    self.rfpulse.power_off_finished.connect(_rfp_loop.quit)
-
-                self.stop_rf_pulse.emit()
-                # RF 램프다운(≤120초) 뒤에 오는 순차 대기다. RF power 와 RF Pulse 를
-                #  둘 다 켠 공정이면 STOP 최대 소요가 150초까지 갈 수 있다.
-                #  순서는 바꾸지 않는다 — 아날로그 RF 는 램프다운이 필요하고,
-                #  펄스는 RF OFF 즉시 끝난다.
-                self._exec_loop_with_timeout(
-                    _rfp_loop, 30_000,
-                    "RF Pulse OFF 응답이 30초 안에 오지 않았습니다 — 다음 단계로 진행합니다.")
-                try:
-                    self.rfpulse.power_off_finished.disconnect(_rfp_loop.quit)
-                except Exception:
-                    pass
 
             # MFC 종료 루틴 (FLOW_OFF, VALVE_OPEN) — 다중 채널 처리
             channels = getattr(self, "_active_channels", None)
@@ -1353,6 +1346,83 @@ class SputterProcessController(QObject):
             self._stop_pending = False
             try:
                 self.finished.emit()
+            except Exception:
+                pass
+
+    def _power_off_sequence(self):
+        """STOP 시퀀스의 파워 OFF 구간. _stop_impl 에서만 부른다.
+
+        OFF 명령은 즉시, 완료 대기만 뒤에서 —
+          1) DC OFF 와 펄스 RF OFF 는 램프다운이 없으므로 맨 먼저 보낸다.
+             (예전에는 펄스 OFF 가 아날로그 RF 램프다운(≤120초) 뒤에 있어서
+              RF+펄스 공정에서 CESAR 가 최대 120초 더 설정 파워를 냈다)
+          2) 아날로그 RF 는 램프다운이 필요하므로 그 완료를 기다린다(≤120초).
+          3) 펄스 power_off_finished 완료 대기(≤30초)는 그 뒤에 한다. 신호가 RF
+             램프다운 중에 이미 왔을 수 있으므로 플래그로 받아 두고 exec 을 건너뛴다.
+        RF power + RF Pulse 를 둘 다 켠 공정의 STOP 최대 소요(실측 기준 산정):
+          120초(RF 램프다운) + 30초(펄스 OFF 대기) + 2×6초(FLOW_OFF 2채널)
+          + 8초(VALVE_OPEN) + 0.8초(마감) ≒ 171초
+        """
+        if self.is_dc_on:
+            self.status_message.emit("DCpower", "DC 파워 OFF")
+            self.stop_dc_power.emit()
+
+        # 펄스 RF OFF — connect 는 emit 보다 먼저 해야 신호를 놓치지 않는다.
+        _rfp_state = {'done': False}
+        _rfp_loop: Optional[QEventLoop] = None
+
+        def _on_rfp_off(*_a):
+            _rfp_state['done'] = True
+            if _rfp_loop is not None and _rfp_loop.isRunning():
+                _rfp_loop.quit()
+
+        if self.is_rfpulse_on and self.rfpulse is not None:
+            self.status_message.emit("RFPulse", "RF Pulse OFF")
+            _rfp_loop = QEventLoop()
+            try:
+                self.rfpulse.power_off_finished.connect(
+                    _on_rfp_off, type=Qt.ConnectionType.QueuedConnection)
+            except TypeError:
+                self.rfpulse.power_off_finished.connect(_on_rfp_off)
+            self.stop_rf_pulse.emit()
+
+        if self.is_rf_on:
+            self.status_message.emit("RFpower", "RF 파워 OFF (ramp-down)")
+
+            self._rfdown_wait = QEventLoop()
+
+            try:
+                self.rf.ramp_down_finished.connect(
+                    self._on_rf_rampdown_finished,
+                    type=Qt.ConnectionType.QueuedConnection
+                )
+            except TypeError:
+                self.rf.ramp_down_finished.connect(self._on_rf_rampdown_finished)
+
+            self._stop_rfdown_timeout_timer()
+            if self._rfdown_timeout_timer:
+                self._rfdown_timeout_timer.start()
+
+            self.stop_rf_power.emit()
+            self._rfdown_wait.exec()
+
+            self._stop_rfdown_timeout_timer()
+
+            try:
+                self.rf.ramp_down_finished.disconnect(self._on_rf_rampdown_finished)
+            except Exception:
+                pass
+            self._rfdown_wait = None
+
+        if _rfp_loop is not None:
+            # 펄스는 램프다운이 없다. OFF 는 위에서 이미 보냈고 여기서는 완료만 짧게
+            #  기다린다. 응답이 없어도 종료 시퀀스가 멈춰서는 안 되므로 30초에서 끊는다.
+            if not _rfp_state['done']:
+                self._exec_loop_with_timeout(
+                    _rfp_loop, 30_000,
+                    "RF Pulse OFF 응답이 30초 안에 오지 않았습니다 — 다음 단계로 진행합니다.")
+            try:
+                self.rfpulse.power_off_finished.disconnect(_on_rfp_off)
             except Exception:
                 pass
 

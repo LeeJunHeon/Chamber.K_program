@@ -379,6 +379,31 @@ RFPULSE_FORP_CONSECUTIVE_LIMIT = get('RFPULSE_FORP_CONSECUTIVE_LIMIT', 3)     # 
 RFPULSE_REFP_LIMIT_WATTS       = get('RFPULSE_REFP_LIMIT_WATTS',       20.0)  # 반사파 허용 상한(W)
 RFPULSE_REFP_CONSECUTIVE_LIMIT = get('RFPULSE_REFP_CONSECUTIVE_LIMIT', 3)     # 연속 초과 허용 횟수
 
+# ── 파워 목표 도달 대기 절대 타임아웃 [초] ──
+#  process_controller._power_wait 이 DC / RF / RF Pulse 의 target_reached 를 기다리는
+#  최대 시간. 드라이버가 아무 신호도 못 내는 경로(펄스 포트 닫힘, 시리얼 오류 무한
+#  재연결 등)가 실재하므로, DC/RF 자체의 램프업 무응답 보호(DC_FAIL_MAX_TICKS /
+#  RF_FAIL_MAX_TICKS) 위에 덮는 마지막 그물이다. 초과 시 "재시작" 으로 공정을 중단한다.
+POWER_WAIT_TIMEOUT_SEC = get('POWER_WAIT_TIMEOUT_SEC', 600)   # 기본 10분
+
+
+def _validate_power_wait_config() -> None:
+    """60초 미만이면 RF 램프(~200초)도 못 기다리고, 2시간을 넘기면 그물 구실을 못 한다.
+    예외는 던지지 않는다 — 설정이 틀려도 프로그램은 떠야 한다."""
+    global POWER_WAIT_TIMEOUT_SEC
+    try:
+        _v = float(POWER_WAIT_TIMEOUT_SEC)
+    except Exception:
+        print(f"[Config] POWER_WAIT_TIMEOUT_SEC {POWER_WAIT_TIMEOUT_SEC!r} → 600 (숫자가 아님)")
+        _v = 600.0
+    _c = min(max(_v, 60.0), 7200.0)
+    if _c != _v:
+        print(f"[Config] POWER_WAIT_TIMEOUT_SEC {_v:g} → {_c:g} 로 클램프 (허용 60~7200초)")
+    POWER_WAIT_TIMEOUT_SEC = _c
+
+
+_validate_power_wait_config()
+
 
 def _validate_rfpulse_config() -> None:
     """감시 임계값이 말이 안 되면 안전한 쪽으로 클램프한다.
