@@ -4168,7 +4168,7 @@ class MainDialog(QDialog):
             if not (_lo <= _hz <= _hi):
                 raise ValueError(
                     f"[{where}] RF Pulse 주파수 {float(freq_khz):g}kHz 가 장비 범위 "
-                    f"{_lo / 1000.0:g}~{_hi / 1000.0:g}kHz(CESAR 1310, RFPULSE_PULSE_FREQ_MAX_HZ)를 넘습니다.")
+                    f"{_lo / 1000.0:g}~{_hi / 1000.0:g}kHz(CESAR 1310, RFPULSE_PULSE_FREQ_MAX_HZ)를 벗어납니다.")
         if duty is not None:
             _d = int(duty)
             if not (int(RFPULSE_DUTY_MIN) <= _d <= int(RFPULSE_DUTY_MAX)):
