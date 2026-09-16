@@ -90,6 +90,42 @@ def _validate_plc_comm_config() -> None:
 
 _validate_plc_comm_config()
 
+# ── 목표 온도 도달 후 DAC 출력 상한(D00018)을 그 시점 출력으로 고정 ──
+#  2026-09-15 사고: 메인 셔터가 열릴 때 지그 TC 가 실제보다 낮게 읽혀 PID 가 DAC 를
+#  최대(1200 ≒143A)로 45분간 밀어붙였다. 파이썬은 D00041(DAC 값)을 직접 쓸 수 없다
+#  (래더가 매 스캔 덮어씀) → PID 출력 상한 D00018 로 막는다. 내리는 방향은 막지 않는다.
+HEATER_HOLD_MV_AFTER_REACH = get('HEATER_HOLD_MV_AFTER_REACH', False)   # 기능 on/off
+HEATER_HOLD_MV_ENTER_TOL_C = get('HEATER_HOLD_MV_ENTER_TOL_C', 3.0)     # |PV-SV| 허용 오차 [°C]
+HEATER_HOLD_MV_ENTER_SEC   = get('HEATER_HOLD_MV_ENTER_SEC',   60)      # 이만큼 연속 안정돼야 캡처 [초]
+
+
+def _validate_heater_hold_config() -> None:
+    """설정이 틀려도 프로그램은 떠야 한다 — 클램프/끄기만 하고 예외는 던지지 않는다."""
+    global HEATER_HOLD_MV_AFTER_REACH, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC
+    v = HEATER_HOLD_MV_AFTER_REACH
+    if isinstance(v, str):
+        v = v.strip().lower() in ("1", "t", "true", "y", "yes", "on")
+    HEATER_HOLD_MV_AFTER_REACH = bool(v)
+    try:
+        t = float(HEATER_HOLD_MV_ENTER_TOL_C)
+    except Exception:
+        print(f"[Config] HEATER_HOLD_MV_ENTER_TOL_C {HEATER_HOLD_MV_ENTER_TOL_C!r} → 3.0"); t = 3.0
+    tc = min(max(t, 0.5), 20.0)
+    if tc != t:
+        print(f"[Config] HEATER_HOLD_MV_ENTER_TOL_C {t:g} → {tc:g} 로 클램프 (허용 0.5~20)")
+    HEATER_HOLD_MV_ENTER_TOL_C = tc
+    try:
+        s = float(HEATER_HOLD_MV_ENTER_SEC)
+    except Exception:
+        print(f"[Config] HEATER_HOLD_MV_ENTER_SEC {HEATER_HOLD_MV_ENTER_SEC!r} → 60"); s = 60.0
+    sc = min(max(s, 10.0), 600.0)
+    if sc != s:
+        print(f"[Config] HEATER_HOLD_MV_ENTER_SEC {s:g} → {sc:g} 로 클램프 (허용 10~600)")
+    HEATER_HOLD_MV_ENTER_SEC = sc
+
+
+_validate_heater_hold_config()
+
 # 인터락 기준값/공정 파라미터 등
 INTERLOCK_CHECK_INTERVAL = 0.2  # sec
 

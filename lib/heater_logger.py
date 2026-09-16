@@ -28,6 +28,7 @@ COLUMNS = [
     "ramp_rate_c_per_min", "holdback_c",
     "run", "itl", "fault", "ot", "tc_err", "wd_err",
     "note",
+    "hold", "hold_mv",        # 목표 도달 후 DAC 상한 고정 상태(0/1) / 고정값
 ]
 
 
@@ -91,7 +92,7 @@ class HeaterCsvLogger:
         self._warned = False
         return path
 
-    def write_row(self, st: dict, note: str = ""):
+    def write_row(self, st: dict, note: str = "", hold=None):
         """한 행 기록 후 즉시 flush. 프로그램이 죽어도 데이터는 남는다."""
         if self._fp is None or self._writer is None:
             return
@@ -122,6 +123,8 @@ class HeaterCsvLogger:
                 _b('run'), _b('itl'), _b('fault'),
                 _b('ot'), _b('tc_err'), _b('wd_err'),
                 note,
+                (1 if (hold and hold[0]) else 0),
+                ("" if (not hold or hold[1] is None) else int(hold[1])),
             ])
             self._fp.flush()
         except Exception as e:

@@ -40,6 +40,7 @@ from device.RFpulse import RFPulseController
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
+                        HEATER_HOLD_MV_AFTER_REACH, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
                         HEATER_GAS_HOLD_RELEASE_C,
@@ -74,6 +75,7 @@ class MainDialog(QDialog):
     request_plc_emergency_stop = Signal()
     request_heater_target = Signal(float)   # ★
     request_heater_run    = Signal(bool)    # ★
+    request_heater_mv_limit = Signal(int)   # 목표 도달 후 DAC 상한 고정/원복 (→ PLC 스레드, Queued)
     request_heater_reset  = Signal()        # ★
     clear_plc_fault = Signal()  # 새 공정 시작 시 PLC 통신 실패 래치 해제
 
@@ -198,6 +200,8 @@ class MainDialog(QDialog):
         self._heater_logger = HeaterCsvLogger()
         self._heater_log_last_ms = 0.0
         self._heater_run_prev = False
+        # 목표 도달 후 DAC 상한 고정 상태기 (_heater_mv_hold_tick)
+        self._mvhold = {'state': 'idle', 'samples': [], 't0': 0.0, 'sv': None, 'value': None, 'last_push': 0.0}
         # 가스·압력 준비가 끝나면 무엇을 이어서 할지. ("manual_on", 목표온도) 또는
         #  ("recipe_start", None). 준비 중이 아니면 None.
         self._heater_pending = None
@@ -868,6 +872,8 @@ class MainDialog(QDialog):
             #     파이썬은 '목표 온도'와 '운전 요구'만 전달한다.
             self.request_heater_target.connect(self.plc_controller.set_heater_target)
             self.request_heater_run.connect(self.plc_controller.set_heater_run)
+            self.request_heater_mv_limit.connect(
+                self.plc_controller.set_heater_mv_limit, Qt.ConnectionType.QueuedConnection)
             self.request_heater_reset.connect(self.plc_controller.reset_heater_fault)
 
             # (2) PLC -> UI : 200ms 폴링으로 올라오는 히터 상태를 화면에 반영
@@ -1772,6 +1778,116 @@ class MainDialog(QDialog):
             pass
         return "HEATER"
 
+    # ==================== 목표 도달 후 DAC 상한 고정 ====================
+    def _mvhold_log_tuple(self):
+        h = getattr(self, "_mvhold", None) or {}
+        return (1 if h.get('state') == 'holding' else 0, h.get('value'))
+
+    def _mvhold_release(self, st: dict, why: str) -> None:
+        """D00018 을 HEATER_MV_LIMIT 로 원복하고 idle 로. holding 이었을 때만 구글챗 1줄."""
+        h = self._mvhold
+        was_holding = (h['state'] == 'holding')
+        if was_holding:
+            self.request_heater_mv_limit.emit(int(HEATER_MV_LIMIT))
+            log_message_to_monitor("히터", f"DAC 상한 고정 해제 → {int(HEATER_MV_LIMIT)} 원복 ({why})")
+            try:
+                if self.chat_chk:
+                    self.chat_chk.notify_text(f"🔓 CHK 히터 DAC 상한 고정 해제 → {int(HEATER_MV_LIMIT)} ({why})")
+                    self.chat_chk.flush()
+            except Exception:
+                pass
+        elif h['samples']:
+            log_message_to_monitor("히터", f"DAC 상한 고정 대기 취소 ({why})")
+        h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)
+
+    def _heater_mv_hold_tick(self, st: dict):
+        """목표 온도 도달 후 DAC 출력 상한(D00018)을 그 시점 출력(평균)으로 고정한다.
+
+        2026-09-15 사고: 메인 셔터가 열릴 때 지그 TC 가 실제보다 낮게 읽혀 PID 가 DAC 를
+        최대(1200 ≒143A)로 45분간 밀어붙였다. 도달 뒤에는 그 이상의 출력이 필요할 이유가 없다.
+        내리는 방향은 막지 않는다. update_heater_display 에서 200ms 마다 호출된다.
+        """
+        try:
+            h = self._mvhold
+            if not HEATER_HOLD_MV_AFTER_REACH:
+                if h['state'] == 'holding':
+                    self._mvhold_release(st, "기능 꺼짐")
+                elif h['state'] != 'idle' or h['samples']:
+                    h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)
+                return
+
+            run = bool(st.get('run')); fault = bool(st.get('fault'))
+            sv = st.get('sv'); pv = st.get('pv'); svr = st.get('sv_ramp'); mv = st.get('mv')
+            now = time.monotonic()
+
+            # ── 해제 조건 ──
+            if not run:
+                if h['state'] != 'idle' or h['samples']:
+                    self._mvhold_release(st, "운전 OFF")
+                return
+            if fault:
+                if h['state'] != 'idle' or h['samples']:
+                    self._mvhold_release(st, "히터 이상")
+                return
+            if h['state'] == 'holding':
+                if sv is None or h['sv'] is None or abs(float(sv) - float(h['sv'])) > 0.05:
+                    self._mvhold_release(st, f"목표 변경 {h['sv']} → {sv}")
+                    return
+                # 유지 중 재적용 — PLC 재기동 등으로 D00018 이 되돌아간 경우(5초 간격)
+                try:
+                    cur_lim = int(st.get('mv_limit')) if st.get('mv_limit') is not None else None
+                except Exception:
+                    cur_lim = None
+                if cur_lim is not None and cur_lim != int(h['value']) and (now - h['last_push']) >= 5.0:
+                    h['last_push'] = now
+                    self.request_heater_mv_limit.emit(int(h['value']))
+                    log_message_to_monitor("히터", f"DAC 상한 재적용 {h['value']} (읽힌 D00018={cur_lim})")
+                return
+
+            # ── 진입 조건(전부 만족해야 카운트) ──
+            ok = (bool(st.get('ok')) and pv is not None and sv is not None and svr is not None and mv is not None
+                  and float(sv) > 0
+                  and abs(float(svr) - float(sv)) <= 0.05
+                  and abs(float(pv) - float(sv)) <= float(HEATER_HOLD_MV_ENTER_TOL_C))
+            if not ok:
+                if h['samples']:
+                    h['samples'] = []; h['t0'] = 0.0; h['state'] = 'idle'
+                h['limit_warned'] = False
+                return
+            if not h['samples']:
+                h['t0'] = now; h['state'] = 'arming'
+            h['samples'].append(float(mv))
+            if (now - h['t0']) < float(HEATER_HOLD_MV_ENTER_SEC):
+                return
+            value = int(round(sum(h['samples']) / len(h['samples'])))
+            if value >= int(HEATER_MV_LIMIT):
+                # 평형에 못 닿은 것 — 고정하지 않는다. 같은 안정 구간에서 60초마다 반복 경고하지 않게
+                #  1회만 남기고, 조건이 깨져 samples 가 비면(위 not ok 분기) 다시 경고할 수 있다.
+                if not h.get('limit_warned'):
+                    h['limit_warned'] = True
+                    log_message_to_monitor(
+                        "히터(경고)",
+                        f"경고: 도달 시점 출력이 상한과 같아 고정하지 않음 (평균 MV {value} ≥ {int(HEATER_MV_LIMIT)})")
+                h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)
+                return
+            h['limit_warned'] = False
+            h.update(state='holding', sv=float(sv), value=value, last_push=now, samples=[], t0=0.0)
+            self.request_heater_mv_limit.emit(value)
+            amps = heater_est_current(value)
+            msg = f"히터 DAC 상한 {value} 고정 (≒{amps:.0f}A, PV {float(pv):.1f} / SV {float(sv):.1f})"
+            log_message_to_monitor("히터", msg)
+            try:
+                if self.chat_chk:
+                    self.chat_chk.notify_text(f"🔒 CHK {msg}")
+                    self.chat_chk.flush()
+            except Exception:
+                pass
+        except Exception as e:
+            try:
+                log_message_to_monitor("경고", f"DAC 상한 고정 처리 예외: {e!r}")
+            except Exception:
+                pass
+
     def _heater_log_tick(self, st: dict):
         """히터 운전 구간 동안만 CSV를 남긴다. 화면 갱신 로직과는 독립."""
         if not HEATER_LOG_ENABLED:
@@ -1799,11 +1915,11 @@ class MainDialog(QDialog):
             if run and (self._heater_log_last_ms == 0.0
                         or now - self._heater_log_last_ms >= HEATER_LOG_PERIOD_MS):
                 self._heater_log_last_ms = now
-                self._heater_logger.write_row(st, self._heater_log_note())
+                self._heater_logger.write_row(st, self._heater_log_note(), self._mvhold_log_tuple())
 
             if (not run) and self._heater_run_prev:
                 # 정지 직후 마지막 한 행을 남기고 파일을 닫는다
-                self._heater_logger.write_row(st, self._heater_log_note())
+                self._heater_logger.write_row(st, self._heater_log_note(), self._mvhold_log_tuple())
                 self._heater_logger.stop()
                 try:
                     clear_heater_log_file()
@@ -2145,6 +2261,8 @@ class MainDialog(QDialog):
         if state == "RELEASING":
             return "가스 해제중", "#616161"
         if st.get('run'):
+            if getattr(self, "_mvhold", {}).get('state') == 'holding':
+                return "운전 중 · 출력 고정", "#2e7d32"
             return "운전 중", "#2e7d32"
         if self._atm_hold and state == "READY":
             return "가스 유지 · 냉각 중", "#1565c0"
@@ -2803,6 +2921,9 @@ class MainDialog(QDialog):
             self.ui.heater_out_bar.setFormat(self._heater_output_text(st))
         except Exception:
             pass
+
+        # --- 목표 도달 후 DAC 상한 고정 (레시피/수동/공정 어느 경로든 여기서 동일하게) ---
+        self._heater_mv_hold_tick(st)
 
         # --- CSV 로깅 (운전 중에만, HEATER_LOG_PERIOD_MS 주기) ---
         #     폴링은 200ms이므로 반드시 시각 비교로 솎아낸다.

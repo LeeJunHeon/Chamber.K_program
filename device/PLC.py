@@ -957,6 +957,26 @@ class PLCController(QObject):
             self._busy = False
             self._mutex.unlock()
 
+    @Slot(int)
+    def set_heater_mv_limit(self, counts: int):
+        """런타임 DAC 출력 상한(D00018) 변경 — 목표 도달 후 출력 고정용.
+        설정된 운전 상한(HEATER_MV_LIMIT)보다 위로는 절대 못 쓴다. 실패해도 예외를 밖으로 내보내지 않는다."""
+        if self.instrument is None:
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            lo = int(HEATER_MV_MIN) + 20
+            hi = int(HEATER_MV_LIMIT)
+            v = max(lo, min(hi, int(counts)))
+            self._mb("히터 DAC상한", self.instrument.write_register, HEATER_REG_MV_LIMIT, v, functioncode=6)
+            self.status_message.emit("히터", f"DAC 상한 {v} 설정 (≒{heater_est_current(v):.0f}A)")
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"히터 DAC 상한 쓰기 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
     @Slot(bool)
     def set_heater_run(self, on: bool):
         if self.instrument is None:
