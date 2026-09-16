@@ -2867,7 +2867,7 @@ class MainDialog(QDialog):
                     _rf_big = self.ui.RF_power_edit.toPlainText().strip()
                     if (not _rp) and _rf_big and not self.ui.rf_power_checkbox.isChecked():
                         raise ValueError(
-                            "RF Pulse 파워는 Pulse 체크박스 바로 아래 칸에 입력하세요. "
+                            "RF Pulse 파워는 RF Pulse 체크박스 바로 아래 칸에 입력하세요. "
                             "왼쪽 칸은 RF power(아날로그) 전용입니다.")
                     raise ValueError("RF Pulse 파워를 입력해야 합니다.")
                 rf_pulse_power = float(_rp)
@@ -3914,8 +3914,10 @@ class MainDialog(QDialog):
     # ---------- RF Pulse 입력칸 활성/비활성 ----------
     @Slot(bool)
     def _on_rf_pulse_checkbox_toggled(self, checked: bool):
-        """RF Pulse 를 안 쓰면 입력칸을 회색으로 잠근다.
+        """RF Pulse 를 안 쓰면 freq/duty 입력칸을 회색으로 잠근다.
 
+        파워 칸(rfp_power_edit)은 RF/DC 파워 칸처럼 항상 활성이다 — 체크 안 하면 값이
+        무시될 뿐이다(use_rf_pulse 일 때만 읽는다). freq/duty 만 체크에 따라 잠근다.
         RF power / DC power 와는 완전히 독립이다 — 서로 끄지 않는다.
         표시칸(rfp_for_p/rfp_ref_p)은 항상 ReadOnly 이므로 잠그지 않는다.
         """
@@ -3927,7 +3929,8 @@ class MainDialog(QDialog):
                 enabled = self.ui.rf_pulse_checkbox.isChecked()
             except Exception:
                 return
-        for name in ("rfp_power_edit", "rfp_freq_edit", "rfp_duty_edit"):
+        # 파워 칸은 항상 활성(RF/DC 칸과 동일). freq/duty 만 체크에 따라 잠금.
+        for name in ("rfp_freq_edit", "rfp_duty_edit"):
             w = getattr(self.ui, name, None)
             if w is None:
                 continue

@@ -357,7 +357,7 @@ class Ui_Dialog(object):
         # RF Pulse(CESAR) — RF power 와 독립. 파워 칸은 바로 아래 rfp_power_edit, freq/duty 는 아래 줄.
         self.rf_pulse_checkbox = QCheckBox(Dialog)
         self.rf_pulse_checkbox.setObjectName(u"rf_pulse_checkbox")
-        self.rf_pulse_checkbox.setGeometry(QRect(828, 245, 62, 20))
+        self.rf_pulse_checkbox.setGeometry(QRect(828, 245, 92, 20))   # "RF Pulse" sizeHint 83, 우측 919 < DC 921
 
         self.dc_power_checkbox = QCheckBox(Dialog)
         self.dc_power_checkbox.setObjectName(u"dc_power_checkbox")
@@ -373,7 +373,6 @@ class Ui_Dialog(object):
         self.rfp_power_edit.setObjectName(u"rfp_power_edit")
         self.rfp_power_edit.setGeometry(QRect(828, 265, 84, 31))
         self.rfp_power_edit.setToolTip(u"RF Pulse 목표 파워 [W]. 상한은 config_user.json 의 RFPULSE_MAX_POWER")
-        self.rfp_power_edit.setPlaceholderText(u"펄스 W")   # 84px 이라 기본 폰트(RF/DC 칸과 동일)로 들어간다
 
         self.DC_power_edit = QPlainTextEdit(Dialog)
         self.DC_power_edit.setObjectName(u"DC_power_edit")
@@ -455,13 +454,13 @@ class Ui_Dialog(object):
 
         # --- RF Pulse 전용 줄: freq / duty 입력 + for.P / ref.P 표시 (파워 칸은 위 y=265 줄) ---
         #   바로 위 for.P/ref.P/Offset/Param 줄(y=410/430)과 같은 격자 x=735/805/875/945, 폭 60.
-        #   라벨 y=520(h=20) / 칸 y=542(h=31). 라벨 "Freq kHz"(60px) / "Duty %"(50px) 실측.
+        #   라벨 y=520(h=20, 폭 70 — "Freq [kHz]" sizeHint 70 실측) / 칸 y=542(h=31, 폭 60).
         self.rfp_freq_label = QLabel(Dialog)
         self.rfp_freq_label.setObjectName(u"rfp_freq_label")
-        self.rfp_freq_label.setGeometry(QRect(735, 520, 60, 20))
+        self.rfp_freq_label.setGeometry(QRect(735, 520, 70, 20))
         self.rfp_duty_label = QLabel(Dialog)
         self.rfp_duty_label.setObjectName(u"rfp_duty_label")
-        self.rfp_duty_label.setGeometry(QRect(805, 520, 60, 20))
+        self.rfp_duty_label.setGeometry(QRect(805, 520, 70, 20))
         self.rfp_for_p_label = QLabel(Dialog)
         self.rfp_for_p_label.setObjectName(u"rfp_for_p_label")
         self.rfp_for_p_label.setGeometry(QRect(875, 520, 60, 20))
@@ -473,17 +472,10 @@ class Ui_Dialog(object):
         self.rfp_freq_edit.setObjectName(u"rfp_freq_edit")
         self.rfp_freq_edit.setGeometry(QRect(735, 542, 60, 31))
         self.rfp_freq_edit.setToolTip(u"RF Pulse 주파수 [kHz]. 비우면 장비의 현재 설정을 그대로 씁니다")
-        self.rfp_freq_edit.setPlaceholderText(u"kHz")
         self.rfp_duty_edit = QPlainTextEdit(Dialog)
         self.rfp_duty_edit.setObjectName(u"rfp_duty_edit")
         self.rfp_duty_edit.setGeometry(QRect(805, 542, 60, 31))
         self.rfp_duty_edit.setToolTip(u"RF Pulse 듀티 [%]. 비우면 장비의 현재 설정을 그대로 씁니다")
-        self.rfp_duty_edit.setPlaceholderText(u"%·유지")
-        # 좁은 칸이라 placeholder 가 잘리지 않게 10pt + 문서 여백 1px ("빈칸=유지" 의미는 툴팁)
-        _rfp_font = QFont(); _rfp_font.setFamilies([u"맑은 고딕"]); _rfp_font.setPointSize(10)
-        for _e in (self.rfp_freq_edit, self.rfp_duty_edit):
-            _e.setFont(_rfp_font)
-            _e.document().setDocumentMargin(1)
         self.rfp_for_p_edit = QPlainTextEdit(Dialog)
         self.rfp_for_p_edit.setObjectName(u"rfp_for_p_edit")
         self.rfp_for_p_edit.setGeometry(QRect(875, 542, 60, 31))
@@ -1186,7 +1178,7 @@ class Ui_Dialog(object):
             QCoreApplication.translate("Dialog", u"RF power", None)
         )
         self.rf_pulse_checkbox.setText(
-            QCoreApplication.translate("Dialog", u"Pulse", None)
+            QCoreApplication.translate("Dialog", u"RF Pulse", None)
         )
         self.dc_power_checkbox.setText(
             QCoreApplication.translate("Dialog", u"DC power", None)
@@ -1200,8 +1192,8 @@ class Ui_Dialog(object):
         self.for_p_label.setText(QCoreApplication.translate("Dialog", u"for.P", None))
         self.ref_p_label.setText(QCoreApplication.translate("Dialog", u"ref.P", None))
         self.offset_label.setText(QCoreApplication.translate("Dialog", u"offset", None))
-        self.rfp_freq_label.setText(QCoreApplication.translate("Dialog", u"Freq kHz", None))
-        self.rfp_duty_label.setText(QCoreApplication.translate("Dialog", u"Duty %", None))
+        self.rfp_freq_label.setText(QCoreApplication.translate("Dialog", u"Freq [kHz]", None))
+        self.rfp_duty_label.setText(QCoreApplication.translate("Dialog", u"Duty [%]", None))
         self.rfp_for_p_label.setText(QCoreApplication.translate("Dialog", u"p.for", None))
         self.rfp_ref_p_label.setText(QCoreApplication.translate("Dialog", u"p.ref", None))
         self.param_label.setText(QCoreApplication.translate("Dialog", u"param", None))
