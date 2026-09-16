@@ -731,17 +731,36 @@ class RFPulseController(QObject):
         self._safe_callback(cmd.callback, None)
         self._schedule_next(cmd.gap_ms)
 
+    @staticmethod
+    def _is_rf_off_cmd(c: "RfCommand") -> bool:
+        """종료용 RF OFF(allow_when_closing) — 폐기하면 안 되는 명령."""
+        return c is not None and c.cmd == CMD_RF_OFF and bool(c.allow_when_closing)
+
     def _purge_pending(self, reason: str = "") -> int:
+        """대기·인플라이트 명령을 버린다. 단 종료용 RF OFF 는 남긴다.
+
+        ★ 감시 트립/리드백 불일치로 드라이버가 스스로 stop_process() 한 직후 상위 종료
+          시퀀스가 stop_rf_pulse 로 한 번 더 부르면, 두 번째 호출의 purge 가 gap 타이머
+          (1.5초) 때문에 아직 큐에 있던 첫 RF OFF 를 꺼내 콜백 _done(None) 을 불렀다 →
+          전송되지 않은 RF OFF 에 "OFF 완료"/power_off_finished 가 나갔다. RF OFF 는
+          실제로 전송된 뒤에만 완료가 나가야 한다(두 번 전송은 무해 — CESAR 는 CSR=0 을
+          두 번 돌려줄 뿐이다).
+        """
         purged = 0
-        if self._inflight is not None:
+        if self._inflight is not None and not self._is_rf_off_cmd(self._inflight):
             cmd = self._inflight
             self._inflight = None
             purged += 1
             self._safe_callback(cmd.callback, None)
+        kept = []
         while self._cmd_q:
             c = self._cmd_q.popleft()
+            if self._is_rf_off_cmd(c):
+                kept.append(c)              # 순서 유지한 채 남긴다
+                continue
             purged += 1
             self._safe_callback(c.callback, None)
+        self._cmd_q.extend(kept)
         if reason and purged:
             self.status_message.emit("RFPulse", f"대기 중 명령 {purged}개 폐기 ({reason})")
         return purged
@@ -898,8 +917,16 @@ class RFPulseController(QObject):
                     bad.append("듀티")
             if not bad:
                 return
-            _rq = (f"{req_f / 1000.0:g}kHz" if req_f is not None else "유지") + "·" +                   (f"{req_d}%" if req_d is not None else "유지")
-            _rb = ("?" if state['freq_khz'] is None else f"{state['freq_khz']:g}kHz") + "·" +                   ("?" if state['duty'] is None else f"{state['duty']}%")
+            _rq = (
+                (f"{req_f / 1000.0:g}kHz" if req_f is not None else "유지")
+                + "·"
+                + (f"{req_d}%" if req_d is not None else "유지")
+            )
+            _rb = (
+                ("?" if state['freq_khz'] is None else f"{state['freq_khz']:g}kHz")
+                + "·"
+                + ("?" if state['duty'] is None else f"{state['duty']}%")
+            )
             _msg = f"RF Pulse 설정 불일치({', '.join(bad)}): 요청 {_rq} / 장비 {_rb}"
             if RFPULSE_VERIFY_PULSE_CONFIG:
                 self.status_message.emit("재시작", _msg + " — 공정 중단")
@@ -934,6 +961,10 @@ class RFPulseController(QObject):
                 # 193 은 3바이트 LE(Hz). 화면/CSV 단위는 kHz 다.
                 hz = res[0] | (res[1] << 8) | (res[2] << 16)
                 state['freq_khz'] = hz / 1000.0
+            if self._stop_requested:
+                # 정지 중이면 DUTY 쿼리를 넣지 않는다 — 다음 전송이 RF OFF 여야 한다.
+                _emit_final()
+                return
             self._enqueue_query(CMD_REPORT_PULSE_DUTY, b"", tag="[READBACK DUTY]",
                                 retries=1, callback=on_duty)
 
