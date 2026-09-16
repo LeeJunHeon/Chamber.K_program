@@ -26,6 +26,8 @@ from lib.logger import (
     clear_heater_log_file,
     log_message_to_file,
     append_chk_csv_row,
+    append_plc_event,
+    write_plc_blackbox,
 )
 from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
@@ -840,6 +842,12 @@ class MainDialog(QDialog):
         self.plc_controller.status_message.connect(self.on_status_message)
         self.plc_controller.plc_disconnected.connect(self._on_plc_disconnected)
         self.plc_controller.plc_reconnected.connect(self._on_plc_reconnected)
+        # ── 2026-09-16 PLC CPU 정지 사고 대응: 이벤트 기록·블랙박스·재기동 감지·복구 후 안전 상태 ──
+        #    (PLC 스레드는 파일을 쓰지 않는다 — 여기서 main 스레드가 lib.logger 로 기록한다)
+        self.plc_controller.plc_event.connect(self._on_plc_event)
+        self.plc_controller.plc_blackbox.connect(self._on_plc_blackbox)
+        self.plc_controller.plc_restarted.connect(self._on_plc_restarted)
+        self.plc_controller.plc_recovered.connect(self._on_plc_recovered)
         self.mfc_controller.status_message.connect(self.on_status_message)
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
@@ -1156,6 +1164,90 @@ class MainDialog(QDialog):
             )
         except Exception:
             pass
+    # ==================== PLC 이벤트 기록 / 블랙박스 / 재기동 / 복구 후 안전 상태 (2026-09-16 사고 대응) ====================
+    def _plc_current_process_name(self) -> str:
+        try:
+            return (self.current_process_name or "").strip()
+        except Exception:
+            return ""
+
+    @Slot(dict)
+    def _on_plc_event(self, row: dict):
+        """PLC 컨트롤러가 보낸 이벤트 1행을 PLC_events.csv 에 남긴다(공정명은 여기서 채운다)."""
+        try:
+            r = dict(row or {})
+            r["공정명"] = self._plc_current_process_name()
+            append_plc_event(r)
+        except Exception:
+            pass
+
+    @Slot(list)
+    def _on_plc_blackbox(self, rows: list):
+        try:
+            path = write_plc_blackbox(list(rows or []))
+            if path is not None:
+                log_message_to_monitor("정보", f"PLC 블랙박스 저장: {path} ({len(rows or [])}행)")
+        except Exception:
+            pass
+
+    @Slot(str)
+    def _on_plc_restarted(self, why: str):
+        """마커 불일치 = PLC 재기동/메모리 초기화. 히터 설정은 PLC 컨트롤러가 이미 재적용했다."""
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(f"⚠️ CHK PLC 재기동/메모리 초기화 감지 — 히터 설정 재적용 | {why}")
+                self.chat_chk.flush()
+        except Exception:
+            pass
+        _active = (bool(getattr(self, "process_running", False))
+                   or bool(getattr(self, "csv_mode", False))
+                   or bool(getattr(self, "_csv_delay_active", False)))
+        if _active:
+            # 펌프·밸브 출력이 초기화됐으므로 공정은 "재시작" 경로로 중단한다
+            self.on_status_message("재시작", "PLC 재기동 감지 — 펌프·밸브 출력이 초기화되어 공정을 중단합니다")
+
+    @Slot(float)
+    def _on_plc_recovered(self, lost: float):
+        """PLC 통신 복구. 이번 단절로 공정이 중단됐고(_outage_abort) 지금 공정이 돌지 않으면
+        안전 상태를 한 번 다시 보낸다 — 단절 중엔 종료 시퀀스의 PLC 쓰기가 전부 실패했기 때문."""
+        plc = getattr(self, "plc_controller", None)
+        if plc is None or not bool(getattr(plc, "_outage_abort", False)):
+            return          # 짧은 단절(중단 아님) — 아무것도 하지 않는다
+        _active = (bool(getattr(self, "process_running", False))
+                   or bool(getattr(self, "csv_mode", False))
+                   or bool(getattr(self, "_csv_delay_active", False)))
+        if _active:
+            log_message_to_monitor("정보", f"PLC 통신 복구({lost:.0f}초) — 공정 진행 중이라 안전 상태 재적용 생략")
+            plc._outage_abort = False
+            return
+        try:
+            plc.send_rfpower_command(0)                       # RF DAC 0 (RFpower 가 쓰는 기존 경로)
+        except Exception:
+            pass
+        try:
+            self.request_heater_run.emit(False)               # 히터 OFF (기존 시그널)
+        except Exception:
+            pass
+        try:
+            self.request_plc_port_update.emit("Ar_button", False)
+            self.request_plc_port_update.emit("O2_button", False)
+        except Exception:
+            pass
+        msg = f"PLC 통신 복구({lost:.0f}초) → 안전 상태 재적용: RF DAC 0 · 히터 OFF · Ar/O2 CLOSE"
+        log_message_to_monitor("정보", msg)
+        try:
+            append_plc_event({**plc.make_event_row("안전상태재적용", msg, lost=lost),
+                              "공정명": self._plc_current_process_name()})
+        except Exception:
+            pass
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(f"🔁 CHK {msg}")
+                self.chat_chk.flush()
+        except Exception:
+            pass
+        plc._outage_abort = False
+
     # ==================== PLC 연결 끊김/복구 알림 (CH.K) ====================
 
     # ==================== 히터 ====================

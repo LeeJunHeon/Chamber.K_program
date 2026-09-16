@@ -5,10 +5,15 @@ from typing import Dict, List, Tuple
 from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer, QMutex
 import minimalmodbus
 import time
+import random
+import datetime
+import collections
 
 from lib.config import (
     PLC_PORT, PLC_SLAVE_ID, PLC_BAUD,
     PLC_TIMEOUT, PLC_COIL_MAP,
+    PLC_RETRY_COUNT, PLC_RETRY_DELAY_MS, PLC_COMM_REOPEN_SEC, PLC_COMM_LOSS_ABORT_SEC,
+    PLC_SESSION_MARK_REG,
     PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR,
     RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
     RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0,
@@ -110,6 +115,11 @@ class PLCController(QObject):
     plc_reconnected = Signal()       # ★ 추가
     update_heater_status = Signal(dict)    # ★ 히터 상태 일괄 전달
     heater_fault        = Signal(str)      # ★ 히터 이상 (원인 문자열)
+    # ── 2026-09-16 CPU 정지 사고 대응 ──
+    plc_recovered = Signal(float)   # 단절 뒤 첫 성공 (단절 초). main 이 안전 상태 재적용 여부를 판단
+    plc_event     = Signal(dict)    # PLC_events.csv 1행 (파일 I/O 는 main 스레드의 lib.logger 가 한다)
+    plc_blackbox  = Signal(list)    # 최근 ≈60초 폴링 스냅샷 덤프 요청
+    plc_restarted = Signal(str)     # 마커 불일치 = PLC 재기동/메모리 초기화 감지 (사유)
 
     def __init__(self):
         super().__init__()
@@ -126,7 +136,26 @@ class PLCController(QObject):
         self._last_button_states: Dict[str, bool] = {}
 
         self._coil_read_fail_latched = False
-        
+
+        # ★ 통신 내성 상태 (A2/A3)
+        self._comm_last_ok: float = time.monotonic()   # 마지막 성공 트랜잭션 시각
+        self._comm_fail_streak: int = 0                 # 재시도까지 전부 실패한 트랜잭션 연속 수
+        self._comm_last_err: str = ""
+        self._comm_last_fail_log_t: float = 0.0         # "통신 실패" 경고 솎음(1초)
+        self._comm_last_retry_log_t: float = 0.0        # "재시도성공" 이벤트 솎음(1초)
+        self._comm_last_reopen_t: float = 0.0           # 마지막 포트 재오픈 시도 시각
+        self._outage_abort: bool = False                # 이번 단절로 공정을 중단했는가(복구 후 안전 상태 재적용 판단)
+        # ★ 블랙박스 링버퍼 — 성공한 폴링마다 스냅샷(200ms × 300 ≈ 60초)
+        self._blackbox: collections.deque = collections.deque(maxlen=300)
+        self._blackbox_dumped: bool = False             # 같은 단절에서 1회만 덤프
+        self._sensor_last: Dict[str, bool] = {}
+        self._coils_last: Dict[str, bool] = {}
+        # ★ 재기동 감지 마커 (B3)
+        self._marker: int | None = None
+        self._marker_poll_cnt: int = 0
+        self._marker_mismatch: int = 0
+        self._marker_last_read: int | None = None
+
         # ★ 추가: PLC 끊김 60초 감지 (알림 1회용)
         self._disconnect_since = None      # 폴링 실패가 처음 감지된 시각(monotonic)
         self._disconnect_notified = False  # 끊김 알림을 이미 보냈는지
@@ -159,8 +188,13 @@ class PLCController(QObject):
 
     @Slot()
     def clear_fault_latch(self):
-        """새 공정 시작 전에 PLC 코일 읽기 실패 래치를 해제."""
+        """새 공정 시작 전에 PLC 코일 읽기 실패 래치를 해제.
+        단절 예산도 새로 잰다 — 직전 단절의 누적 시간이 새 공정의 첫 실패를 즉시 중단으로 몰지 않게."""
         self._coil_read_fail_latched = False
+        self._comm_last_ok = time.monotonic()
+        self._comm_fail_streak = 0
+        self._outage_abort = False
+        self._blackbox_dumped = False
 
     # ============== 연결/해제 =================
     @Slot()
@@ -182,6 +216,8 @@ class PLCController(QObject):
             self.instrument.handle_local_echo = False
 
             self._is_running = True
+            self._comm_last_ok = time.monotonic()
+            self._comm_fail_streak = 0
             # 재연결 후 첫 목표 설정은 반드시 로그되게 초기화한다
             self._heater_sv_log_last_c = None
             self._heater_sv_log_last_t = 0.0
@@ -196,7 +232,14 @@ class PLCController(QObject):
             except Exception as ex:
                 self.status_message.emit("히터(경고)", f"설정 적용 중 예외: {ex}")
 
+            # 재기동 감지 마커 (B3) — 설정 푸시 직후 난수를 써 둔다
+            try:
+                self._write_marker()
+            except Exception as ex:
+                self.status_message.emit("PLC(경고)", f"세션 마커 쓰기 실패: {ex}")
+
             self.status_message.emit("PLC", f"연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID}")
+            self._emit_event("연결", f"{PLC_PORT} ID={PLC_SLAVE_ID}")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"연결 실패: {e}")
 
@@ -219,6 +262,227 @@ class PLCController(QObject):
             pass
         self.instrument = None
         self.status_message.emit("PLC", "포트를 안전하게 닫았습니다.")
+
+    # ============== 통신 내성 (2026-09-16 사고 대응) =================
+    def _mb(self, what: str, fn, *args, **kw):
+        """Modbus 트랜잭션 래퍼 — 실패하면 입력 버퍼를 비우고 짧게 기다린 뒤 재시도(총 1+PLC_RETRY_COUNT 회).
+
+        적용 대상 FC1/3/5/6/15 는 모두 멱등이라 재전송이 안전하다.
+        성공: _comm_last_ok 갱신. 재시도 끝에 성공이면 "재시도성공"(1초 1건), 단절(streak>0) 뒤
+              첫 성공이면 "복구" 로그·이벤트 + plc_recovered(단절 초) (+ 60초 알림을 보냈으면 plc_reconnected).
+        전부 실패: streak+1, 마지막 예외를 그대로 raise (호출부의 기존 except 흐름 유지).
+        """
+        last_ex = None
+        attempts = 1 + max(0, int(PLC_RETRY_COUNT))
+        for attempt in range(attempts):
+            try:
+                r = fn(*args, **kw)
+            except Exception as ex:
+                last_ex = ex
+                try:
+                    if self.instrument is not None and self.instrument.serial is not None:
+                        self.instrument.serial.reset_input_buffer()
+                except Exception:
+                    pass
+                if attempt < attempts - 1:
+                    time.sleep(max(0, int(PLC_RETRY_DELAY_MS)) / 1000.0)
+                continue
+            now = time.monotonic()
+            if self._comm_fail_streak > 0:
+                lost = now - self._comm_last_ok
+                n = self._comm_fail_streak
+                self._comm_fail_streak = 0
+                self.status_message.emit(
+                    "PLC", f"PLC 통신 복구 (단절 {lost:.1f}초, 실패 {n}회) — {what}")
+                self._emit_event("복구", f"{what}, 실패 {n}회", lost=lost)
+                if self._disconnect_notified:
+                    self._disconnect_notified = False
+                    self._disconnect_since = None
+                    self.plc_reconnected.emit()
+                self._blackbox_dumped = False
+                self.plc_recovered.emit(float(lost))
+            elif attempt > 0 and (now - self._comm_last_retry_log_t) >= 1.0:
+                self._comm_last_retry_log_t = now
+                self._emit_event("재시도성공", f"{what} {attempt}회 재시도 후 성공: {last_ex}")
+            self._comm_last_ok = now
+            return r
+        self._comm_fail_streak += 1
+        self._comm_last_err = str(last_ex)
+        raise last_ex
+
+    def _comm_note_failure(self, ex: Exception, what: str) -> None:
+        """코일 읽기 실패(재시도 포함 전부 실패) 뒤 단절 예산에 따라 경고 / 포트 재오픈 / 중단을 결정한다.
+        호출자(_poll_status)가 _mutex 를 잡고 있고 트랜잭션은 끝난 상태다."""
+        now = time.monotonic()
+        lost = now - self._comm_last_ok
+        streak = self._comm_fail_streak
+
+        if self._coil_read_fail_latched:
+            # 이미 중단 트리거가 걸린 상태면 경고만 남김 — 1초 1줄(장기 두절에서 로그 스팸 방지)
+            if (now - self._comm_last_fail_log_t) >= 1.0:
+                self._comm_last_fail_log_t = now
+                self.status_message.emit(
+                    "PLC(경고)", f"Coils 읽기 실패(반복) {what}: {ex} (단절 {lost:.1f}s, 연속 {streak}회)")
+        elif lost >= float(PLC_COMM_LOSS_ABORT_SEC):
+            self._coil_read_fail_latched = True
+            self._outage_abort = True
+            self.status_message.emit(
+                "재시작",
+                f"PLC Coils 읽기 실패 {what} — PLC 통신 두절 {lost:.1f}초 "
+                f"(연속 실패 {streak}회, 마지막 오류: {ex}) → 공정을 중단합니다. "
+                f"PLC 측 출력은 PC 가 끌 수 없으므로 RF DAC·밸브 상태를 직접 확인하세요"
+                f"(히터는 PLC 워치독이 10초 후 차단).")
+            self._emit_event("두절중단", f"{what}: {ex}", lost=lost)
+            self._dump_blackbox()
+        else:
+            if (now - self._comm_last_fail_log_t) >= 1.0:
+                self._comm_last_fail_log_t = now
+                self.status_message.emit(
+                    "PLC(경고)",
+                    f"통신 실패 {what}: {ex} (단절 {lost:.1f}s, 연속 {streak}회)")
+                self._emit_event("실패", f"{what}: {ex}", lost=lost)
+
+        if (lost >= float(PLC_COMM_REOPEN_SEC)
+                and (now - self._comm_last_reopen_t) >= float(PLC_COMM_REOPEN_SEC)):
+            self._comm_last_reopen_t = now
+            self._reopen_port()
+
+    def _reopen_port(self) -> bool:
+        """시리얼 포트 close→open. _mutex 안, 트랜잭션 밖에서만 부른다."""
+        if self.instrument is None or self.instrument.serial is None:
+            return False
+        ser = self.instrument.serial
+        try:
+            try:
+                ser.close()
+            except Exception:
+                pass
+            ser.open()
+            self.status_message.emit("PLC", f"PLC 포트 재오픈({PLC_PORT})")
+            self._emit_event("재오픈", f"{PLC_PORT} 성공")
+            return True
+        except Exception as ex:
+            self.status_message.emit("PLC(경고)", f"포트 재오픈 실패: {ex}")
+            self._emit_event("재오픈", f"{PLC_PORT} 실패: {ex}")
+            return False
+
+    # ── 이벤트/블랙박스 (파일 I/O 는 main 스레드의 lib.logger 가 한다) ──
+    def _heater_flags_str(self) -> str:
+        h = self._heater_last or {}
+        def b(k):
+            return "1" if h.get(k) else "0"
+        return (f"run={b('run')} itl={b('itl')} fault={b('fault')} "
+                f"ot={b('ot')} tc={b('tc_err')} wd={b('wd_err')}")
+
+    def _coil_bits_str(self) -> str:
+        return "".join("1" if self._coils_last.get(n) else "0" for n in PLC_COIL_MAP.keys())
+
+    def _sensor_bits_str(self) -> str:
+        return "".join("1" if self._sensor_last.get(n) else "0" for n in PLC_SENSOR_BITS.keys())
+
+    def _heater_num(self, key: str):
+        v = (self._heater_last or {}).get(key)
+        if v is None:
+            return ""
+        try:
+            return int(v) if key == 'mv' else f"{float(v):.1f}"
+        except Exception:
+            return v
+
+    def make_event_row(self, kind: str, detail: str, lost=None) -> dict:
+        """PLC_events.csv 1행. main 도 (안전상태재적용 등) 같은 형식으로 쓸 수 있게 공개한다."""
+        return {
+            "시각": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "종류": kind,
+            "상세": detail,
+            "단절초": ("" if lost is None else f"{float(lost):.1f}"),
+            "연속실패": self._comm_fail_streak,
+            "공정명": "",
+            "PV": self._heater_num('pv'),
+            "SV": self._heater_num('sv'),
+            "MV": self._heater_num('mv'),
+            "히터플래그": self._heater_flags_str(),
+            "코일비트": self._coil_bits_str(),
+        }
+
+    def _emit_event(self, kind: str, detail: str, lost=None) -> None:
+        try:
+            self.plc_event.emit(self.make_event_row(kind, detail, lost))
+        except Exception:
+            pass
+
+    def _snapshot(self) -> None:
+        now = time.monotonic()
+        self._blackbox.append({
+            "시각": datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3],
+            "경과ms": int(now * 1000),
+            "PV": self._heater_num('pv'),
+            "SV": self._heater_num('sv'),
+            "MV": self._heater_num('mv'),
+            "히터플래그": self._heater_flags_str(),
+            "코일비트": self._coil_bits_str(),
+            "센서비트": self._sensor_bits_str(),
+        })
+
+    def _dump_blackbox(self) -> None:
+        """같은 단절에서 1회만."""
+        if self._blackbox_dumped:
+            return
+        self._blackbox_dumped = True
+        rows = [dict(r) for r in self._blackbox]
+        if rows:
+            base = rows[0]["경과ms"]
+            for r in rows:
+                r["경과ms"] = r["경과ms"] - base
+        self.plc_blackbox.emit(rows)
+
+    # ── 재기동 감지 마커 (B3) ──
+    def _write_marker(self) -> None:
+        if not PLC_SESSION_MARK_REG or self.instrument is None:
+            return
+        self._marker = random.randint(0x1000, 0xFFFE)
+        self._marker_mismatch = 0
+        self._marker_poll_cnt = 0
+        self._mb(f"마커 쓰기 D{PLC_SESSION_MARK_REG:05d}",
+                 self.instrument.write_register, PLC_SESSION_MARK_REG, self._marker, functioncode=6)
+
+    def _check_marker(self) -> None:
+        """폴링 5회(≈1초)마다 마커를 되읽어 두 번 연속 다르면 재기동으로 본다. _mutex 안에서 부른다."""
+        if not PLC_SESSION_MARK_REG or self._marker is None or self.instrument is None:
+            return
+        self._marker_poll_cnt += 1
+        if self._marker_poll_cnt < 5:
+            return
+        self._marker_poll_cnt = 0
+        v = int(self._mb(f"마커 읽기 D{PLC_SESSION_MARK_REG:05d}",
+                         self.instrument.read_register, PLC_SESSION_MARK_REG, 0, functioncode=3, signed=False))
+        self._marker_last_read = v
+        if v == self._marker:
+            self._marker_mismatch = 0
+            return
+        self._marker_mismatch += 1
+        if self._marker_mismatch < 2:
+            return
+        expected = self._marker
+        self._marker = None            # 처리 중 재판정 방지
+        self._marker_mismatch = 0
+        why = (f"PLC 재기동/메모리 초기화 감지 — 세션 마커 D{PLC_SESSION_MARK_REG:05d} "
+               f"기대 0x{expected:04X}, 읽은 값 0x{v:04X} (2회 연속)")
+        self.status_message.emit("PLC(경고)", why + " → 히터 설정 재적용")
+        self._emit_event("재기동감지", f"기대 0x{expected:04X} / 읽음 0x{v:04X}")
+        # _push_heater_config 는 _mutex 를 잡으므로 폴링이 끝난 뒤 같은 스레드에서 실행한다
+        QTimer.singleShot(0, lambda: self._after_restart_detected(why))
+
+    def _after_restart_detected(self, why: str) -> None:
+        try:
+            self._push_heater_config()
+        except Exception as ex:
+            self.status_message.emit("히터(경고)", f"재기동 후 설정 재적용 예외: {ex}")
+        try:
+            self._write_marker()
+        except Exception as ex:
+            self.status_message.emit("PLC(경고)", f"세션 마커 재기록 실패: {ex}")
+        self.plc_restarted.emit(why)
 
     # ============== 내부 유틸 =================
     def _read_coils_grouped(self, addrs: List[int]) -> Dict[int, bool]:
@@ -244,27 +508,26 @@ class PLCController(QObject):
         for (s, e) in ranges:
             count = (e - s) + 1
             try:
-                bits = self.instrument.read_bits(s, count, functioncode=1)  # Coils
+                bits = self._mb(f"Coils[{s}..{e}]", self.instrument.read_bits, s, count, functioncode=1)  # Coils
                 for i, b in enumerate(bits):
                     result[s + i] = bool(b)
             except Exception as ex:
-                # 코일 읽기 실패는 PLC 통신 이상으로 간주 → 공정 중단(재시작) 트리거
-                if not getattr(self, "_coil_read_fail_latched", False):
-                    self._coil_read_fail_latched = True
-                    self.status_message.emit("재시작", f"PLC Coils 읽기 실패 [{s}..{e}]: {ex} → 공정을 중단합니다.")
-                else:
-                    # 이미 중단 트리거가 걸린 상태면 경고만 남김(로그 스팸 방지)
-                    self.status_message.emit("PLC(경고)", f"Coils 읽기 실패(반복) [{s}..{e}]: {ex}")
+                # ★ 한 프레임 손실로 공정을 죽이지 않는다 — 재시도 뒤에도 실패면 단절 예산으로 판단
+                #   (경고 → 3초 포트 재오픈 → 10초 "재시작"). 2026-09-16 사고 대응.
+                self._comm_note_failure(ex, f"[{s}..{e}]")
 
         return result
 
     def _safe_read_discrete_inputs(self, start_addr: int, count: int) -> List[bool]:
         assert self.instrument is not None
-        return self.instrument.read_bits(start_addr, count, functioncode=1)
+        return self._mb(f"DI[{start_addr}+{count}]", self.instrument.read_bits, start_addr, count, functioncode=1)
 
     # ============== 폴링 ======================
     @Slot()
     def _poll_status(self):
+        # ★ 단절 중에는 폴링 1회가 (PLC_TIMEOUT 0.5초 × 3회 × 트랜잭션 수)만큼 길어진다.
+        #   타이머는 _busy 로 건너뛰므로 허용한다. 그동안 워치독 kick 이 못 나가면 PLC 가
+        #   10초에 히터를 끄는데, 그것이 의도된 안전 동작이다(PLC_COMM_LOSS_ABORT_SEC 와 같은 예산).
         if not self._is_running or self._busy:
             return
         if self.instrument is None:
@@ -283,6 +546,7 @@ class PLCController(QObject):
 
             for btn_name, addr in PLC_COIL_MAP.items():
                 val = bool(addr_to_state.get(addr, False))
+                self._coils_last[btn_name] = val
                 if self._last_button_states.get(btn_name) != val:
                     self._last_button_states[btn_name] = val
                     self.update_button_display.emit(btn_name, val)
@@ -301,13 +565,19 @@ class PLCController(QObject):
                     coil_addrs = list(PLC_SENSOR_BITS.values())               # [256,257,258,259,260]
                     addr_to_state = self._read_coils_grouped(coil_addrs)      # FC=1로 그룹 폴링 (이미 구현됨)
                     for name, addr in PLC_SENSOR_BITS.items():
-                        self.update_sensor_display.emit(name, bool(addr_to_state.get(addr, False)))
+                        _sv = bool(addr_to_state.get(addr, False))
+                        self._sensor_last[name] = _sv
+                        self.update_sensor_display.emit(name, _sv)
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"센서(코일) 읽기 실패: {ex}")
 
             # 3) ★ 히터 상태 읽기
             if HEATER_ENABLED:
                 self._poll_heater()
+
+            # 4) ★ 재기동 감지 마커(≈1초마다) + 블랙박스 스냅샷
+            self._check_marker()
+            self._snapshot()
 
             # ★ 폴링 성공 → 끊김 알림을 보낸 적 있으면 재연결 알림 1회
             if self._disconnect_notified:
@@ -334,6 +604,8 @@ class PLCController(QObject):
                 and (now - self._disconnect_since) >= self._DISCONNECT_GRACE_S):
             self._disconnect_notified = True
             self.plc_disconnected.emit(int(now - self._disconnect_since))
+            self._emit_event("끊김알림", f"{int(now - self._disconnect_since)}초", lost=now - self._comm_last_ok)
+            self._dump_blackbox()
 
     # ============== 쓰기(버튼 클릭 반영) =========
     @Slot(str, bool)
@@ -355,8 +627,8 @@ class PLCController(QObject):
                     self.status_message.emit("PLC(오류)", "Door up/down 주소가 설정되지 않았습니다.")
                     return
 
-                self.instrument.write_bit(up_addr, int(state), functioncode=5)
-                self.instrument.write_bit(dn_addr, int(not state), functioncode=5)
+                self._mb("Door up", self.instrument.write_bit, up_addr, int(state), functioncode=5)
+                self._mb("Door dn", self.instrument.write_bit, dn_addr, int(not state), functioncode=5)
 
                 # UI 동기화 (Door_Button은 Up 상태를 표시)
                 self.update_button_display.emit("Door_Button", state)
@@ -378,18 +650,18 @@ class PLCController(QObject):
 
                 if btn_name == "Doorup_button":
                     # Up = state, Down은 동시에 켜지지 않도록
-                    self.instrument.write_bit(up_addr, int(state), functioncode=5)
+                    self._mb("Doorup", self.instrument.write_bit, up_addr, int(state), functioncode=5)
                     if state:
-                        self.instrument.write_bit(dn_addr, 0, functioncode=5)
+                        self._mb("Doordn=0", self.instrument.write_bit, dn_addr, 0, functioncode=5)
                     # Door_Button은 Up 기준 표시
                     self.update_button_display.emit("Door_Button", state)
                     self._last_button_states["Door_Button"] = state
                     self.update_button_display.emit("Doordn_button", False if state else self._last_button_states.get("Doordn_button", False))
                 else:
                     # Down = state, Up은 동시에 켜지지 않도록
-                    self.instrument.write_bit(dn_addr, int(state), functioncode=5)
+                    self._mb("Doordn", self.instrument.write_bit, dn_addr, int(state), functioncode=5)
                     if state:
-                        self.instrument.write_bit(up_addr, 0, functioncode=5)
+                        self._mb("Doorup=0", self.instrument.write_bit, up_addr, 0, functioncode=5)
                     # Door_Button은 Up 기준 표시 → Down이 True면 Door_Button은 False
                     self.update_button_display.emit("Door_Button", not state if state else self._last_button_states.get("Door_Button", False))
                     self._last_button_states["Door_Button"] = (not state) if state else self._last_button_states.get("Door_Button", False)
@@ -405,7 +677,7 @@ class PLCController(QObject):
             if addr is None:
                 self.status_message.emit("PLC(오류)", f"알 수 없는 버튼: {btn_name}")
                 return
-            self.instrument.write_bit(addr, int(state), functioncode=5)
+            self._mb(f"코일 {btn_name}", self.instrument.write_bit, addr, int(state), functioncode=5)
             self.update_button_display.emit(btn_name, state)
             self._last_button_states[btn_name] = state
 
@@ -458,7 +730,7 @@ class PLCController(QObject):
             failed = []
             for addr, raw, name, _disp in items:
                 try:
-                    self.instrument.write_register(addr, raw, functioncode=6)
+                    self._mb(f"히터설정 {name}", self.instrument.write_register, addr, raw, functioncode=6)
                 except Exception as ex:
                     failed.append(f"{name}(D{addr:05d}: {ex})")
 
@@ -470,7 +742,7 @@ class PLCController(QObject):
             try:
                 lo = min(a for a, *_ in items)
                 hi = max(a for a, *_ in items)
-                back = self.instrument.read_registers(lo, hi - lo + 1, functioncode=3)
+                back = self._mb("히터설정 되읽기", self.instrument.read_registers, lo, hi - lo + 1, functioncode=3)
                 mismatch = [f"{name} 요청 {raw} → 실제 {back[addr - lo]}"
                             for addr, raw, name, _d in items
                             if back[addr - lo] != raw]
@@ -498,10 +770,10 @@ class PLCController(QObject):
         """D00010~D00028 + D00041 + 코일 64~73 을 읽어 update_heater_status로 발행.
         주의: 호출자(_poll_status)가 이미 _mutex를 잡고 있으므로 여기서 잠그지 않는다."""
         try:
-            blk  = self.instrument.read_registers(
-                HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT, functioncode=3)
-            mv   = self.instrument.read_register(HEATER_REG_MV, 0, functioncode=3, signed=False)
-            bits = self.instrument.read_bits(HEATER_COIL_BASE, HEATER_COIL_COUNT, functioncode=1)
+            blk  = self._mb("히터 D블록", self.instrument.read_registers,
+                            HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT, functioncode=3)
+            mv   = self._mb("히터 MV", self.instrument.read_register, HEATER_REG_MV, 0, functioncode=3, signed=False)
+            bits = self._mb("히터 코일", self.instrument.read_bits, HEATER_COIL_BASE, HEATER_COIL_COUNT, functioncode=1)
         except Exception as ex:
             self.status_message.emit("PLC(경고)", f"히터 읽기 실패: {ex}")
             return
@@ -633,7 +905,7 @@ class PLCController(QObject):
         self._mutex.lock()
         try:
             self._heater_wd = (self._heater_wd + 1) & 0x7FFF
-            self.instrument.write_register(HEATER_REG_WD, self._heater_wd, functioncode=6)
+            self._mb("워치독", self.instrument.write_register, HEATER_REG_WD, self._heater_wd, functioncode=6)
         except Exception:
             pass          # 실패해도 조용히 — 다음 주기에 재시도, PLC가 알아서 트립
         finally:
@@ -651,7 +923,7 @@ class PLCController(QObject):
         try:
             raw = int(round(float(temp_c) / HEATER_TEMP_SCALE))
             raw = max(0, min(32767, raw))
-            self.instrument.write_register(HEATER_REG_SV, raw, functioncode=6)
+            self._mb("히터 SV", self.instrument.write_register, HEATER_REG_SV, raw, functioncode=6)
             # 쓰기는 매번, 로그만 솎아낸다.
             #  스텝이 바뀌며 목표가 점프하면 |Δ| 조건에 걸려 반드시 남는다.
             _now = time.monotonic()
@@ -677,7 +949,7 @@ class PLCController(QObject):
         self._mutex.lock()
         try:
             v = max(1, min(100, int(counts_per_sec)))
-            self.instrument.write_register(HEATER_REG_RAMP_RATE, v, functioncode=6)
+            self._mb("히터 램프", self.instrument.write_register, HEATER_REG_RAMP_RATE, v, functioncode=6)
             self.status_message.emit("히터", f"램프 속도 {v * 6}°C/min 설정 (raw={v})")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"히터 램프 속도 쓰기 실패: {e}")
@@ -692,7 +964,7 @@ class PLCController(QObject):
         self._busy = True
         self._mutex.lock()
         try:
-            self.instrument.write_bit(HEATER_COIL_RUN, int(bool(on)), functioncode=5)
+            self._mb("히터 RUN", self.instrument.write_bit, HEATER_COIL_RUN, int(bool(on)), functioncode=5)
             self.status_message.emit("히터", f"운전 {'ON' if on else 'OFF'}")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"히터 운전 쓰기 실패: {e}")
@@ -708,7 +980,7 @@ class PLCController(QObject):
         self._busy = True
         self._mutex.lock()
         try:
-            self.instrument.write_bit(HEATER_COIL_RST, 1, functioncode=5)
+            self._mb("히터 RST", self.instrument.write_bit, HEATER_COIL_RST, 1, functioncode=5)
             self.status_message.emit("히터", "이상 리셋 요청")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"히터 리셋 실패: {e}")
@@ -729,10 +1001,10 @@ class PLCController(QObject):
         self._mutex.lock()
         try:
             if COIL_ENABLE_DAC_CH0 is not None:
-                self.instrument.write_bit(COIL_ENABLE_DAC_CH0, 1, functioncode=5)
-            self.instrument.write_register(RF_DAC_ADDR_CH0, int(pwm_value), functioncode=6)
+                self._mb("DAC enable", self.instrument.write_bit, COIL_ENABLE_DAC_CH0, 1, functioncode=5)
+            self._mb("DAC 쓰기", self.instrument.write_register, RF_DAC_ADDR_CH0, int(pwm_value), functioncode=6)
             try:
-                echo = self.instrument.read_register(RF_DAC_ADDR_CH0, 0, functioncode=3, signed=False)
+                echo = self._mb("DAC echo", self.instrument.read_register, RF_DAC_ADDR_CH0, 0, functioncode=3, signed=False)
                 self.status_message.emit("PLC > 확인", f"DAC echo={echo}")
             except Exception as _:
                 pass
@@ -749,8 +1021,8 @@ class PLCController(QObject):
         self._busy = True
         self._mutex.lock()
         try:
-            f_raw = self.instrument.read_register(RF_ADC_FORWARD_ADDR, 0, functioncode=3, signed=False)
-            r_raw = self.instrument.read_register(RF_ADC_REFLECT_ADDR, 0, functioncode=3, signed=False)
+            f_raw = self._mb("RF ADC fwd", self.instrument.read_register, RF_ADC_FORWARD_ADDR, 0, functioncode=3, signed=False)
+            r_raw = self._mb("RF ADC ref", self.instrument.read_register, RF_ADC_REFLECT_ADDR, 0, functioncode=3, signed=False)
             forward_watt   = (f_raw / RF_ADC_MAX_COUNT) * RF_FORWARD_SCALING_MAX_WATT
             reflected_watt = (r_raw / RF_ADC_MAX_COUNT) * RF_REFLECTED_SCALING_MAX_WATT
             return forward_watt, reflected_watt
@@ -771,8 +1043,8 @@ class PLCController(QObject):
         self._busy = True
         self._mutex.lock()
         try:
-            mv  = bool(self.instrument.read_bit(PLC_MV_COIL,          functioncode=1))
-            itl = bool(self.instrument.read_bit(PLC_MV_INTERLOCK_COIL, functioncode=1))
+            mv  = bool(self._mb("MV 코일", self.instrument.read_bit, PLC_MV_COIL, functioncode=1))
+            itl = bool(self._mb("MV 인터록", self.instrument.read_bit, PLC_MV_INTERLOCK_COIL, functioncode=1))
             return mv, itl
         except Exception as e:
             self.status_message.emit("PLC(경고)", f"메인밸브 상태 읽기 실패: {e}")
@@ -806,15 +1078,15 @@ class PLCController(QObject):
                 for (s, e) in ranges:
                     try:
                         if s == e:
-                            self.instrument.write_bit(s, 0, functioncode=5)
+                            self._mb(f"비상 코일 {s}", self.instrument.write_bit, s, 0, functioncode=5)
                         else:
                             count = (e - s) + 1
-                            self.instrument.write_bits(s, [0] * count)  # FC=15
+                            self._mb(f"비상 코일 [{s}..{e}]", self.instrument.write_bits, s, [0] * count)  # FC=15
                     except Exception:
                         # 범용 폴백
                         for a in range(s, e + 1):
                             try:
-                                self.instrument.write_bit(a, 0, functioncode=5)
+                                self._mb(f"비상 코일 {a}", self.instrument.write_bit, a, 0, functioncode=5)
                             except Exception:
                                 pass
 
@@ -828,14 +1100,14 @@ class PLCController(QObject):
             # ★ 히터 정지
             if HEATER_ENABLED:
                 try:
-                    self.instrument.write_bit(HEATER_COIL_RUN, 0, functioncode=5)
+                    self._mb("비상 히터 RUN=0", self.instrument.write_bit, HEATER_COIL_RUN, 0, functioncode=5)
                 except Exception:
                     pass
 
             # DAC OFF
             if COIL_ENABLE_DAC_CH0 is not None:
                 try:
-                    self.instrument.write_bit(COIL_ENABLE_DAC_CH0, 0, functioncode=5)
+                    self._mb("비상 DAC disable", self.instrument.write_bit, COIL_ENABLE_DAC_CH0, 0, functioncode=5)
                 except Exception:
                     pass
 

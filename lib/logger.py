@@ -30,6 +30,7 @@ NAS_LOG_DIR = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK")
 #  log.txt(어디에도 속하지 않는 로그)는 지금처럼 CHK 루트에 그대로 둔다.
 NAS_PROCESS_LOG_DIR = NAS_LOG_DIR / "process"
 NAS_HEATER_LOG_DIR  = NAS_LOG_DIR / "heater"
+NAS_PLC_LOG_DIR     = NAS_LOG_DIR / "plc"        # PLC 이벤트·블랙박스(2026-09-16 CPU 정지 사고 대응)
 
 # NAS 폴백 경고는 프로그램 실행당 1회만. 공정마다 반복되면 로그가 지저분해진다.
 _nas_fallback_warned: bool = False
@@ -40,6 +41,77 @@ def set_monitor_widget(widget):
     """메인 코드에서 로그창 위젯을 한번 등록"""
     global _monitor_widget
     _monitor_widget = widget
+
+# ───────────── PLC 이벤트 로그 / 블랙박스 ─────────────
+#  PLC 는 자기 정지를 기록하지 못하므로(RTC 없음, 슈퍼커패시터 백업) PC 가 블랙박스를 가진다.
+#  PLC 스레드(device/PLC.py)는 파일 I/O 를 하지 않고 시그널로 넘기며, 여기서 main 스레드가 쓴다.
+PLC_EVENT_COLUMNS = ["시각", "종류", "상세", "단절초", "연속실패", "공정명",
+                     "PV", "SV", "MV", "히터플래그", "코일비트"]
+PLC_BLACKBOX_COLUMNS = ["시각", "경과ms", "PV", "SV", "MV", "히터플래그", "코일비트", "센서비트"]
+_plc_dir_fallback_warned: bool = False
+
+
+def _plc_log_dir() -> Path:
+    """NAS_PLC_LOG_DIR, 안 되면 ./Logs/plc (경고는 실행당 1회)."""
+    global _plc_dir_fallback_warned
+    base = NAS_PLC_LOG_DIR
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    except Exception:
+        tried = base
+        base = Path.cwd() / "Logs" / "plc"
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        if not _plc_dir_fallback_warned:
+            _plc_dir_fallback_warned = True
+            try:
+                log_message_to_monitor(
+                    "경고", f"NAS PLC 로그 폴더를 만들 수 없어 로컬로 저장합니다. 시도={tried} → 사용={base}")
+            except Exception:
+                pass
+        return base
+
+
+def append_plc_event(row: dict) -> bool:
+    """PLC_events.csv 에 1행 추가(없으면 헤더 생성, utf-8-sig). 실패해도 예외를 내보내지 않는다."""
+    try:
+        path = _plc_log_dir() / "PLC_events.csv"
+        new = not path.exists() or path.stat().st_size == 0
+        with open(path, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            if new:
+                w.writerow(PLC_EVENT_COLUMNS)
+            w.writerow([("" if row.get(c) is None else row.get(c)) for c in PLC_EVENT_COLUMNS])
+        return True
+    except Exception as e:
+        try:
+            log_message_to_monitor("경고", f"PLC 이벤트 기록 실패: {e!r}")
+        except Exception:
+            pass
+        return False
+
+
+def write_plc_blackbox(rows: list) -> Optional[Path]:
+    """최근 폴링 스냅샷을 PLC_blackbox_YYYYMMDD_HHMMSS.csv 로 저장하고 경로를 돌려준다."""
+    try:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = _plc_log_dir() / f"PLC_blackbox_{ts}.csv"
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.writer(f)
+            w.writerow(PLC_BLACKBOX_COLUMNS)
+            for r in rows or []:
+                w.writerow([("" if r.get(c) is None else r.get(c)) for c in PLC_BLACKBOX_COLUMNS])
+        return path
+    except Exception as e:
+        try:
+            log_message_to_monitor("경고", f"PLC 블랙박스 저장 실패: {e!r}")
+        except Exception:
+            pass
+        return None
+
 
 def set_process_log_file(prefix: str = "CHK") -> Path:
     r"""

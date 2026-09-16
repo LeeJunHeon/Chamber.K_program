@@ -25,6 +25,62 @@ PLC_BAUD     = 115200
 PLC_SLAVE_ID = 1
 PLC_TIMEOUT  = 0.5   # 초
 
+# ── PLC 통신 내성 — 한 프레임 손실로 공정이 죽지 않게 ──
+#  PLC 는 래더 인터락·히터 워치독(TON 10초)으로 자체 보호되므로 짧은 단절은 견딘다.
+#  2026-09-16 사고: 코일 읽기 1회 타임아웃에 즉시 "재시작" 으로 중단됐고 재시도·포트
+#  재오픈이 없었다(그 뒤 PLC CPU 자체가 정지한 것으로 판명).
+PLC_RETRY_COUNT         = get('PLC_RETRY_COUNT',         2)     # 트랜잭션 실패 시 재시도 횟수(총 1+N 회)
+PLC_RETRY_DELAY_MS      = get('PLC_RETRY_DELAY_MS',      30)    # 재시도 사이 대기(ms)
+PLC_COMM_REOPEN_SEC     = get('PLC_COMM_REOPEN_SEC',     3.0)   # 이만큼 단절이면 포트 close→open 시도(그 뒤 같은 주기로 반복)
+PLC_COMM_LOSS_ABORT_SEC = get('PLC_COMM_LOSS_ABORT_SEC', 10.0)  # 이만큼 단절이면 공정 중단 — PLC 히터 워치독 TON 10초와 같게
+
+# ── PLC 콜드 스타트(재기동/메모리 초기화) 감지용 예비 D레지스터 ──
+#  접속 시 난수 마커를 써 두고 ≈1초마다 되읽는다. 값이 바뀌면 PLC 가 재기동(D영역 초기화)된
+#  것이라 히터 설정을 다시 밀어 넣고 상위에 알린다. 래더가 쓰지 않는 주소여야 한다 —
+#  XG5000 편집→디바이스 사용 검색으로 확인. 0 이면 기능 끔.
+PLC_SESSION_MARK_REG    = get('PLC_SESSION_MARK_REG',    60)    # D00060
+
+
+def _validate_plc_comm_config() -> None:
+    """설정이 틀려도 프로그램은 떠야 한다 — 클램프/끄기만 하고 예외는 던지지 않는다."""
+    global PLC_RETRY_COUNT, PLC_RETRY_DELAY_MS, PLC_COMM_REOPEN_SEC, PLC_COMM_LOSS_ABORT_SEC
+    global PLC_SESSION_MARK_REG
+    try:
+        PLC_RETRY_COUNT = max(0, min(5, int(PLC_RETRY_COUNT)))
+    except Exception:
+        print(f"[Config] PLC_RETRY_COUNT {PLC_RETRY_COUNT!r} → 2"); PLC_RETRY_COUNT = 2
+    try:
+        PLC_RETRY_DELAY_MS = max(0, min(1000, int(PLC_RETRY_DELAY_MS)))
+    except Exception:
+        print(f"[Config] PLC_RETRY_DELAY_MS {PLC_RETRY_DELAY_MS!r} → 30"); PLC_RETRY_DELAY_MS = 30
+    try:
+        PLC_COMM_REOPEN_SEC = max(0.5, float(PLC_COMM_REOPEN_SEC))
+    except Exception:
+        print(f"[Config] PLC_COMM_REOPEN_SEC {PLC_COMM_REOPEN_SEC!r} → 3.0"); PLC_COMM_REOPEN_SEC = 3.0
+    try:
+        PLC_COMM_LOSS_ABORT_SEC = max(1.0, float(PLC_COMM_LOSS_ABORT_SEC))
+    except Exception:
+        print(f"[Config] PLC_COMM_LOSS_ABORT_SEC {PLC_COMM_LOSS_ABORT_SEC!r} → 10.0"); PLC_COMM_LOSS_ABORT_SEC = 10.0
+    if PLC_COMM_LOSS_ABORT_SEC < PLC_COMM_REOPEN_SEC:
+        print(f"[Config] PLC_COMM_LOSS_ABORT_SEC {PLC_COMM_LOSS_ABORT_SEC:g} < REOPEN {PLC_COMM_REOPEN_SEC:g} → REOPEN 으로 상향")
+        PLC_COMM_LOSS_ABORT_SEC = PLC_COMM_REOPEN_SEC
+    # 마커 레지스터가 사용 중인 D 주소와 겹치면 기능을 끈다
+    #  D00000~3 ADC, D00010~28 히터, D00029~32 예약, D00040~43 DAC
+    _used = set(range(0, 4)) | set(range(10, 29)) | set(range(29, 33)) | set(range(40, 44))
+    try:
+        _m = int(PLC_SESSION_MARK_REG)
+    except Exception:
+        print(f"[Config] PLC_SESSION_MARK_REG {PLC_SESSION_MARK_REG!r} → 0(기능 끔)"); _m = 0
+    if _m < 0:
+        _m = 0
+    if _m in _used:
+        print(f"[Config] PLC_SESSION_MARK_REG D{_m:05d} 는 사용 중인 주소(ADC/히터/DAC/예약)와 겹침 → 0(기능 끔)")
+        _m = 0
+    PLC_SESSION_MARK_REG = _m
+
+
+_validate_plc_comm_config()
+
 # 인터락 기준값/공정 파라미터 등
 INTERLOCK_CHECK_INTERVAL = 0.2  # sec
 
