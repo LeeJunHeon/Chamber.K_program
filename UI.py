@@ -10,7 +10,7 @@
 
 from PyQt6.QtCore import (QCoreApplication, QMetaObject, QRect, Qt)
 from PyQt6.QtGui import (QFont)
-from PyQt6.QtWidgets import (QComboBox, QFrame, QLabel, QCheckBox, QWidget,
+from PyQt6.QtWidgets import (QComboBox, QFrame, QLabel, QCheckBox,
     QLineEdit, QPlainTextEdit, QPushButton, QTextEdit,
     QProgressBar, QListWidget, QListWidgetItem, QAbstractItemView)
 
@@ -345,13 +345,11 @@ class Ui_Dialog(object):
         self.working_pressure_edit.setPlainText("2")
 
         # --- Power (RF / RF Pulse / DC) — 3열. "체크박스 바로 아래가 그 파워 칸" 규칙 ---
-        #   컬럼 폭 271(x 735~1006)을 칸 사이 9px 로 3등분. 오른쪽 열은 "DC power" 체크박스
-        #   sizeHint(94px)가 잘리지 않도록 x=912 부터 94 로 잡고, 나머지 159 를 80/79 로 나눈다.
-        #     열1 RF power : x=735 w=80  (735~814)
-        #     열2 RF Pulse : x=824 w=79  (824~902)
-        #     열3 DC power : x=912 w=94  (912~1005)
-        #   체크박스 폭은 실제 폰트 sizeHint(89 / 62 / 94). RF power 체크박스(→823)는 열2
-        #   시작(824)과 겹치지 않는다.
+        #   컬럼 폭 271(x 735~1006)을 칸 사이 9px 로 3등분: 84 + 9 + 84 + 9 + 85.
+        #     열1 RF power : x=735 w=84  (735~818)
+        #     열2 RF Pulse : x=828 w=84  (828~911)
+        #     열3 DC power : x=921 w=85  (921~1005)
+        #   setTabOrder 는 쓰지 않는다 — 생성 순서가 탭 순서다(RF_power_edit → rfp_power_edit → DC_power_edit).
         self.rf_power_checkbox = QCheckBox(Dialog)
         self.rf_power_checkbox.setObjectName(u"rf_power_checkbox")
         self.rf_power_checkbox.setGeometry(QRect(735, 245, 89, 20))
@@ -359,34 +357,33 @@ class Ui_Dialog(object):
         # RF Pulse(CESAR) — RF power 와 독립. 파워 칸은 바로 아래 rfp_power_edit, freq/duty 는 아래 줄.
         self.rf_pulse_checkbox = QCheckBox(Dialog)
         self.rf_pulse_checkbox.setObjectName(u"rf_pulse_checkbox")
-        self.rf_pulse_checkbox.setGeometry(QRect(824, 245, 62, 20))
+        self.rf_pulse_checkbox.setGeometry(QRect(828, 245, 62, 20))
 
         self.dc_power_checkbox = QCheckBox(Dialog)
         self.dc_power_checkbox.setObjectName(u"dc_power_checkbox")
-        self.dc_power_checkbox.setGeometry(QRect(912, 245, 94, 20))
+        # 폭은 sizeHint 94 — 85 로 두면 "DC powe" 로 잘린다(실측). 우측 1014 는 heater_group(1022) 앞 빈 공간.
+        self.dc_power_checkbox.setGeometry(QRect(921, 245, 94, 20))
 
         self.RF_power_edit = QPlainTextEdit(Dialog)
         self.RF_power_edit.setObjectName(u"RF_power_edit")
-        self.RF_power_edit.setGeometry(QRect(735, 265, 80, 31))
+        self.RF_power_edit.setGeometry(QRect(735, 265, 84, 31))
         self.RF_power_edit.setPlainText("200")
 
         self.rfp_power_edit = QPlainTextEdit(Dialog)
         self.rfp_power_edit.setObjectName(u"rfp_power_edit")
-        self.rfp_power_edit.setGeometry(QRect(824, 265, 79, 31))
+        self.rfp_power_edit.setGeometry(QRect(828, 265, 84, 31))
         self.rfp_power_edit.setToolTip(u"RF Pulse 목표 파워 [W]. 상한은 config_user.json 의 RFPULSE_MAX_POWER")
-        self.rfp_power_edit.setPlaceholderText(u"W")
+        self.rfp_power_edit.setPlaceholderText(u"펄스 W")   # 84px 이라 기본 폰트(RF/DC 칸과 동일)로 들어간다
 
         self.DC_power_edit = QPlainTextEdit(Dialog)
         self.DC_power_edit.setObjectName(u"DC_power_edit")
-        self.DC_power_edit.setGeometry(QRect(912, 265, 94, 31))
+        self.DC_power_edit.setGeometry(QRect(921, 265, 85, 31))
         self.DC_power_edit.setPlainText("200")
 
-        # --- DC Power 안정화 대기 사용 여부 (기본 OFF) ---
-        #   DC 열(x=912) 아래에 둔다. 폭은 sizeHint(107)로 "DC stabilize" 가 잘리지 않게 —
-        #   우측 끝 1018 은 heater_group(x=1022) 앞이라 겹치지 않는다.
+        # --- DC Power 안정화 대기 사용 여부 (기본 OFF) — 오른쪽 끝 1006 정렬, DC 칸 아래 ---
         self.dc_delay_checkbox = QCheckBox(Dialog)
         self.dc_delay_checkbox.setObjectName(u"dc_delay_checkbox")
-        self.dc_delay_checkbox.setGeometry(QRect(912, 298, 107, 22))
+        self.dc_delay_checkbox.setGeometry(QRect(876, 298, 130, 22))
         self.dc_delay_checkbox.setChecked(False)
 
         # --- Shutter Delay ---
@@ -457,29 +454,29 @@ class Ui_Dialog(object):
         self.Current_edit.setGeometry(QRect(925, 485, 81, 31))
 
         # --- RF Pulse 전용 줄: freq / duty 입력 + for.P / ref.P 표시 (파워 칸은 위 y=265 줄) ---
-        #   라벨 y=520(h=20) / 칸 y=542(h=31). 271px 을 4칸: x=735/805/875/945, 폭 61, 간격 9.
-        #   라벨 폭 61 안에 "Freq kHz"(60px) / "Duty %"(50px) / "p.for" / "p.ref" 가 들어간다(실측).
+        #   바로 위 for.P/ref.P/Offset/Param 줄(y=410/430)과 같은 격자 x=735/805/875/945, 폭 60.
+        #   라벨 y=520(h=20) / 칸 y=542(h=31). 라벨 "Freq kHz"(60px) / "Duty %"(50px) 실측.
         self.rfp_freq_label = QLabel(Dialog)
         self.rfp_freq_label.setObjectName(u"rfp_freq_label")
-        self.rfp_freq_label.setGeometry(QRect(735, 520, 61, 20))
+        self.rfp_freq_label.setGeometry(QRect(735, 520, 60, 20))
         self.rfp_duty_label = QLabel(Dialog)
         self.rfp_duty_label.setObjectName(u"rfp_duty_label")
-        self.rfp_duty_label.setGeometry(QRect(805, 520, 61, 20))
+        self.rfp_duty_label.setGeometry(QRect(805, 520, 60, 20))
         self.rfp_for_p_label = QLabel(Dialog)
         self.rfp_for_p_label.setObjectName(u"rfp_for_p_label")
-        self.rfp_for_p_label.setGeometry(QRect(875, 520, 61, 20))
+        self.rfp_for_p_label.setGeometry(QRect(875, 520, 60, 20))
         self.rfp_ref_p_label = QLabel(Dialog)
         self.rfp_ref_p_label.setObjectName(u"rfp_ref_p_label")
-        self.rfp_ref_p_label.setGeometry(QRect(945, 520, 61, 20))
+        self.rfp_ref_p_label.setGeometry(QRect(945, 520, 60, 20))
 
         self.rfp_freq_edit = QPlainTextEdit(Dialog)
         self.rfp_freq_edit.setObjectName(u"rfp_freq_edit")
-        self.rfp_freq_edit.setGeometry(QRect(735, 542, 61, 31))
+        self.rfp_freq_edit.setGeometry(QRect(735, 542, 60, 31))
         self.rfp_freq_edit.setToolTip(u"RF Pulse 주파수 [kHz]. 비우면 장비의 현재 설정을 그대로 씁니다")
         self.rfp_freq_edit.setPlaceholderText(u"kHz")
         self.rfp_duty_edit = QPlainTextEdit(Dialog)
         self.rfp_duty_edit.setObjectName(u"rfp_duty_edit")
-        self.rfp_duty_edit.setGeometry(QRect(805, 542, 61, 31))
+        self.rfp_duty_edit.setGeometry(QRect(805, 542, 60, 31))
         self.rfp_duty_edit.setToolTip(u"RF Pulse 듀티 [%]. 비우면 장비의 현재 설정을 그대로 씁니다")
         self.rfp_duty_edit.setPlaceholderText(u"%·유지")
         # 좁은 칸이라 placeholder 가 잘리지 않게 10pt + 문서 여백 1px ("빈칸=유지" 의미는 툴팁)
@@ -489,12 +486,12 @@ class Ui_Dialog(object):
             _e.document().setDocumentMargin(1)
         self.rfp_for_p_edit = QPlainTextEdit(Dialog)
         self.rfp_for_p_edit.setObjectName(u"rfp_for_p_edit")
-        self.rfp_for_p_edit.setGeometry(QRect(875, 542, 61, 31))
+        self.rfp_for_p_edit.setGeometry(QRect(875, 542, 60, 31))
         self.rfp_for_p_edit.setReadOnly(True)
         self.rfp_for_p_edit.setToolTip(u"RF Pulse 진행파 for.P [W] (장비 계측값, 표시 전용)")
         self.rfp_ref_p_edit = QPlainTextEdit(Dialog)
         self.rfp_ref_p_edit.setObjectName(u"rfp_ref_p_edit")
-        self.rfp_ref_p_edit.setGeometry(QRect(945, 542, 61, 31))
+        self.rfp_ref_p_edit.setGeometry(QRect(945, 542, 60, 31))
         self.rfp_ref_p_edit.setReadOnly(True)
         self.rfp_ref_p_edit.setToolTip(u"RF Pulse 반사파 ref.P [W] (장비 계측값, 표시 전용)")
 
@@ -1024,15 +1021,6 @@ class Ui_Dialog(object):
             self.pushButton_11, self.pushButton_12, self.pushButton_13
         ]:
             btn.lower()
-
-        # 탭 순서: 파워 3열은 "체크박스 → 그 아래 칸" 순으로, 펄스 줄은 freq → duty
-        QWidget.setTabOrder(self.rf_power_checkbox, self.RF_power_edit)
-        QWidget.setTabOrder(self.RF_power_edit, self.rf_pulse_checkbox)
-        QWidget.setTabOrder(self.rf_pulse_checkbox, self.rfp_power_edit)
-        QWidget.setTabOrder(self.rfp_power_edit, self.dc_power_checkbox)
-        QWidget.setTabOrder(self.dc_power_checkbox, self.DC_power_edit)
-        QWidget.setTabOrder(self.DC_power_edit, self.dc_delay_checkbox)
-        QWidget.setTabOrder(self.rfp_freq_edit, self.rfp_duty_edit)
 
         self.retranslateUi(Dialog)
         # --- 인디케이터 모두 OFF(빨강)로 초기화 ---

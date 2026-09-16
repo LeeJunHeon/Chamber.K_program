@@ -43,7 +43,8 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_GAS_HOLD_RELEASE_C,
                         HEATER_APPROACH_ZONE_C,
                         HEATER_APPROACH_MIN_RATE_C_PER_MIN,
-                        RFPULSE_MAX_POWER,
+                        RFPULSE_MAX_POWER, RFPULSE_PULSE_FREQ_MAX_HZ, RFPULSE_PULSE_FREQ_MIN_HZ,
+                        RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
                         heater_est_current)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
@@ -2866,8 +2867,8 @@ class MainDialog(QDialog):
                     _rf_big = self.ui.RF_power_edit.toPlainText().strip()
                     if (not _rp) and _rf_big and not self.ui.rf_power_checkbox.isChecked():
                         raise ValueError(
-                            "Pulse 체크박스 바로 아래 칸에 RF Pulse 파워를 입력하세요. "
-                            "RF power 체크박스 아래 칸은 RF power(아날로그) 전용입니다.")
+                            "RF Pulse 파워는 Pulse 체크박스 바로 아래 칸에 입력하세요. "
+                            "왼쪽 칸은 RF power(아날로그) 전용입니다.")
                     raise ValueError("RF Pulse 파워를 입력해야 합니다.")
                 rf_pulse_power = float(_rp)
                 _fq = self.ui.rfp_freq_edit.toPlainText().strip()
@@ -2876,6 +2877,7 @@ class MainDialog(QDialog):
                     rf_pulse_freq = float(_fq)          # kHz
                 if _dt:
                     rf_pulse_duty = int(float(_dt))     # %
+                self._check_rfpulse_pulse_range(rf_pulse_freq, rf_pulse_duty, "수동 시작")
 
             # --- selected_gas / mfc_flow는 기존 코드 호환용으로 유지 ---
             if use_ar and not use_o2:
@@ -4152,6 +4154,28 @@ class MainDialog(QDialog):
         event.accept()
 
     # ============= csv 공정 =============
+    @staticmethod
+    def _check_rfpulse_pulse_range(freq_khz, duty, where: str) -> None:
+        """펄스 주파수/듀티가 장비 범위 안인지 시작 전에 확인한다. None 은 통과(장비 현재값 유지).
+
+        CESAR 1310 매뉴얼: 펄스 주파수 1 Hz~30 kHz, 듀티 1~99 %. 주파수에 따른 듀티 축소
+        (30 kHz 에서 40~60 %)는 여기서 막지 않는다 — 장비가 CSR 51 로 알려 준다.
+        """
+        if freq_khz is not None:
+            _hz = float(freq_khz) * 1000.0
+            _lo = float(RFPULSE_PULSE_FREQ_MIN_HZ)
+            _hi = float(RFPULSE_PULSE_FREQ_MAX_HZ)
+            if not (_lo <= _hz <= _hi):
+                raise ValueError(
+                    f"[{where}] RF Pulse 주파수 {float(freq_khz):g}kHz 가 장비 범위 "
+                    f"{_lo / 1000.0:g}~{_hi / 1000.0:g}kHz(CESAR 1310, RFPULSE_PULSE_FREQ_MAX_HZ)를 넘습니다.")
+        if duty is not None:
+            _d = int(duty)
+            if not (int(RFPULSE_DUTY_MIN) <= _d <= int(RFPULSE_DUTY_MAX)):
+                raise ValueError(
+                    f"[{where}] RF Pulse 듀티 {_d}% 가 범위 "
+                    f"{int(RFPULSE_DUTY_MIN)}~{int(RFPULSE_DUTY_MAX)}% 를 벗어납니다.")
+
     def _build_params_from_csv_row(self, row: dict) -> dict:
         """
         ✅ 변경(중요)
@@ -4327,6 +4351,7 @@ class MainDialog(QDialog):
             _dt = _f("rf_pulse_duty", required=False, default=None)
             rf_pulse_freq = float(_fq) if _fq not in (None, "") else None
             rf_pulse_duty = int(float(_dt)) if _dt not in (None, "") else None
+            self._check_rfpulse_pulse_range(rf_pulse_freq, rf_pulse_duty, process_name or "STEP")
 
         return {
             "use_ar_gas": use_ar_gas,

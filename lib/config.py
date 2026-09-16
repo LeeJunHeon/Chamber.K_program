@@ -375,6 +375,13 @@ def _validate_rfpulse_parity() -> None:
 
 _validate_rfpulse_parity()
 RFPULSE_MAX_POWER = get('RFPULSE_MAX_POWER', 600.0)   # 장비 최대값(W)
+# 펄스 주파수/듀티 시작 전 범위 검증 — CESAR 1310 매뉴얼: 펄스 주파수 1 Hz~30 kHz(3-5, 5-44),
+#  듀티 1~99 %(4-75). 30 kHz 에서는 40~60 % 로 좁아지는데(5-33) 그건 막지 않는다 —
+#  장비가 CSR 51 로 알려 주고 드라이버의 CSR 50/51 처리가 최후 방어선이다.
+RFPULSE_PULSE_FREQ_MAX_HZ = get('RFPULSE_PULSE_FREQ_MAX_HZ', 30000)   # 다른 모델이면 config 에서 수정
+RFPULSE_PULSE_FREQ_MIN_HZ = 1
+RFPULSE_DUTY_MIN = 1
+RFPULSE_DUTY_MAX = 99
 
 # 고정값 — 원본(Chamber.Total_program) 값을 그대로 옮겼다. 바꾸지 말 것.
 RFPULSE_ACK_TIMEOUT_MS        = 2000   # 쓰기(exec) CSR 대기
