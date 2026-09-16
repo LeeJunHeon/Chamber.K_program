@@ -388,8 +388,9 @@ class ChatNotifier(QObject):
         와 완전히 독립 — 읽지도 쓰지도 않는다. urgent=True 여야 한다: notify_process_started() 가
         self._buffer.clear() 를 하므로 버퍼에 실으면 공정 시작 순간 조용히 사라진다.
         호출부는 flush() 를 부르지 않는다(flush 는 _upsert_error_card 도 함께 돌린다)."""
+        # 아이콘 구분: 시작 ℹ️(INFO) / 종료 ❌(FAIL) — 공정 카드의 종료(Stop/오류)=FAIL 규칙과 같은 매핑을 쓴다
         self._post_card("히터 시작" if started else "히터 종료", subtitle=subtitle,
-                        status="INFO", fields=dict(fields or {}), urgent=True)
+                        status=("INFO" if started else "FAIL"), fields=dict(fields or {}), urgent=True)
 
     @Slot(bool, dict)
     def notify_process_finished_detail(self, ok: bool, detail: dict):
