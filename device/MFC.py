@@ -52,6 +52,7 @@ class MFCController(QObject):
     # (호환성) 혹시 메인에서 self-loop 연결을 했다면 깨지지 않게 유지
     command_requested  = Signal(str, dict)
     flow_alert     = Signal(str)   # ← 추가: 유량 이탈 경고 (공정 유지, 채팅 알림용)
+    mfc_comm_event = Signal(dict)  # COMM_events.csv 1행(재연결 시도/성공/실패, 명령 최종 실패). 로직 변경 없음
     pressure_alert = Signal(str)   # ← 추가: 압력 이탈 경고 (공정 유지, 채팅 알림용)
 
     def __init__(self, parent=None):
@@ -184,6 +185,17 @@ class MFCController(QObject):
         self.status_message.emit("MFC", f"{MFC_PORT} 연결 성공 (PyQt6 QSerialPort)")
         return True
 
+    def _emit_comm_event(self, kind: str, detail: str) -> None:
+        """통신 이벤트 기록용(파일 I/O 는 main 스레드의 lib.logger). 로직에는 영향 없음."""
+        try:
+            import datetime as _dt
+            self.mfc_comm_event.emit({
+                "시각": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "종류": kind, "상세": detail, "단절초": "", "연속실패": "",
+            })
+        except Exception:
+            pass
+
     def _watch_connection(self):
         if (not self._want_connected) or (self.serial_mfc and self.serial_mfc.isOpen()):
             return
@@ -191,6 +203,7 @@ class MFCController(QObject):
             return
         self._reconnect_pending = True
         self.status_message.emit("MFC", f"재연결 시도... ({self._reconnect_backoff_ms} ms)")
+        self._emit_comm_event("재연결시도", f"{self._reconnect_backoff_ms} ms 뒤")
         QTimer.singleShot(self._reconnect_backoff_ms, self._try_reconnect)
 
     def _try_reconnect(self):
@@ -199,9 +212,11 @@ class MFCController(QObject):
             return
         if self._open_port():
             self.status_message.emit("MFC", "재연결 성공. 대기 중 명령 재개.")
+            self._emit_comm_event("재연결", "성공")
             QTimer.singleShot(0, self._dequeue_and_send)
             self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
         else:
+            self._emit_comm_event("재연결", f"실패 (다음 백오프 {min(self._reconnect_backoff_ms * 2, MFC_RECONNECT_BACKOFF_MAX_MS)} ms)")
             self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
 
     @Slot()
@@ -431,6 +446,7 @@ class MFCController(QObject):
                     self.serial_mfc.close()
                 self._try_reconnect()
                 return
+            self._emit_comm_event("명령최종실패", f"{cmd.tag or cmd.cmd_str} (응답 없음, 재시도 소진)")
             self._safe_callback(cmd.callback, None)
             if self._gap_timer:
                 self._gap_timer.start(cmd.gap_ms)

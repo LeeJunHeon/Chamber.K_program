@@ -34,6 +34,8 @@ QSerialPort + QTimer 로 교체했다. CHK 안에는 asyncio 이벤트 루프를
 
 from __future__ import annotations
 
+import time
+import datetime
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Callable, Deque, Optional, Tuple
@@ -49,6 +51,7 @@ from lib.config import (
     RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS,
     RFPULSE_WATCHDOG_INTERVAL_MS,
     RFPULSE_RECONNECT_BACKOFF_START_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS,
+    RFPULSE_COMM_LOSS_ABORT_SEC, RFPULSE_COMM_REOPEN_SEC,
     RFPULSE_FORP_TOLERANCE_PERCENT, RFPULSE_FORP_CONSECUTIVE_LIMIT,
     RFPULSE_REFP_LIMIT_WATTS, RFPULSE_REFP_CONSECUTIVE_LIMIT,
 )
@@ -179,6 +182,9 @@ class RfCommand:
     callback: Callable[[Optional[bytes]], None]
     # exec 실패 시 상위에 CSR 을 알려 주기 위한 자리
     last_csr: Optional[int] = field(default=None)
+    # allow_no_reply 이더라도 CSR 응답을 timeout_ms 까지 기다린다(확인형 RF OFF).
+    #  응답이 없으면 실패로 처리해 재시도/확인 실패 경로를 탄다.
+    confirm: bool = field(default=False)
 
 
 # config RFPULSE_PARITY → QSerialPort. 데이터 8비트 / 스톱 1비트는 매뉴얼대로 고정.
@@ -202,6 +208,9 @@ class RFPulseController(QObject):
     # {'freq_khz': float|None, 'duty': int|None} — 한쪽만 실패해도 있는 쪽은 올린다.
     #  (예전 Signal(float, int) 은 둘 다 있어야 emit 해서 freq 실패에 duty 까지 버려졌다)
     pulse_config_readback         = Signal(object)
+    # ── 시리얼 장비 공통 통신 두절 정책 ──
+    comm_event        = Signal(dict)    # COMM_events.csv 1행 (파일 I/O 는 main 스레드의 lib.logger)
+    rfpulse_recovered = Signal(float)   # 단절 뒤 첫 성공 (단절 초) — main 이 안전 상태 재적용 여부 판단
 
     _RX_MAX = 4096         # 수신 버퍼 상한(바이트)
 
@@ -246,6 +255,15 @@ class RFPulseController(QObject):
         self._target_setpoint_w: float = 0.0
         self._req_freq_hz: Optional[int] = None    # 이번 공정이 요청한 펄스 주파수(None=유지)
         self._req_duty: Optional[int] = None       # 이번 공정이 요청한 듀티(None=유지)
+        # ── 통신 두절 정책 상태 ──
+        self._comm_last_ok: float = time.monotonic()   # 마지막으로 응답을 받은 시각
+        self._comm_fail_streak: int = 0                 # 연속 최종 실패(재시도 소진) 수
+        self._outage_abort: bool = False                # 이번 단절로 공정을 중단했는가
+        self._comm_last_reopen_t: float = 0.0           # 무응답 중 마지막 포트 재오픈 시각
+        # 두절 중단 뒤에는 폴링이 꺼져 쿼리가 없다 → 2초마다 STATUS 프로브로 복구를 감지한다
+        self._outage_probe: Optional[QTimer] = None
+        # 폴링 중 1초마다 통신 예산을 본다(폴링 주기 5초로는 10초 예산을 최대 5초 늦게 잡는다)
+        self._budget_timer: Optional[QTimer] = None
         self._forp_out_of_range_count: int = 0
         self._refp_over_limit_count: int = 0
 
@@ -602,7 +620,7 @@ class RFPulseController(QObject):
     def _make_cmd(self, kind: str, cmd: int, data: bytes, *, tag: str = "",
                   timeout_ms: Optional[int] = None, gap_ms: Optional[int] = None,
                   retries: int = 3, allow_no_reply: bool = False,
-                  allow_when_closing: bool = False,
+                  allow_when_closing: bool = False, confirm: bool = False,
                   callback: Optional[Callable[[Optional[bytes]], None]] = None) -> RfCommand:
         if timeout_ms is None:
             timeout_ms = RFPULSE_ACK_TIMEOUT_MS if kind == "exec" else RFPULSE_QUERY_TIMEOUT_MS
@@ -610,7 +628,7 @@ class RFPulseController(QObject):
             kind=kind, cmd=cmd, data=data, timeout_ms=int(timeout_ms),
             gap_ms=int(RFPULSE_CMD_GAP_MS if gap_ms is None else gap_ms),
             tag=tag, retries_left=int(retries), allow_no_reply=bool(allow_no_reply),
-            allow_when_closing=bool(allow_when_closing),
+            allow_when_closing=bool(allow_when_closing), confirm=bool(confirm),
             callback=callback or (lambda _b: None))
 
     def _enqueue(self, c: RfCommand):
@@ -668,7 +686,7 @@ class RFPulseController(QObject):
                 _tx = f"{cmd.tag} {self._cmd_label(cmd.cmd)} data={_data_s}".strip()
             self.status_message.emit("RFPulse > 전송", _tx)
 
-            if cmd.allow_no_reply and cmd.kind == "exec":
+            if cmd.allow_no_reply and cmd.kind == "exec" and not cmd.confirm:
                 # 응답을 기다리지 않는다(종료 중 RF OFF 등)
                 QTimer.singleShot(0, lambda: self._finish_inflight(b""))
             elif self._cmd_timer:
@@ -706,6 +724,8 @@ class RFPulseController(QObject):
         if self._cmd_timer:
             self._cmd_timer.stop()
         self._inflight = None
+        if data is not None:
+            self._comm_ok(f"{cmd.tag} {self._cmd_label(cmd.cmd)}".strip())
         self._safe_callback(cmd.callback, data if data is not None else b"")
         self._schedule_next(cmd.gap_ms)
 
@@ -728,8 +748,96 @@ class RFPulseController(QObject):
 
         self.status_message.emit(
             "RFPulse", f"[FAIL] {cmd.tag} {self._cmd_label(cmd.cmd)} ({reason})")
+        if reason in ("timeout", "NAK"):
+            self._comm_fail_streak += 1
+            self._emit_event("실패", f"{cmd.tag} {self._cmd_label(cmd.cmd)} ({reason})",
+                             lost=time.monotonic() - self._comm_last_ok)
         self._safe_callback(cmd.callback, None)
         self._schedule_next(cmd.gap_ms)
+
+    # ==================== 통신 두절 정책 (시리얼 장비 공통) ====================
+    def _emit_event(self, kind: str, detail: str, lost=None) -> None:
+        try:
+            self.comm_event.emit({
+                "시각": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "종류": kind, "상세": detail,
+                "단절초": ("" if lost is None else f"{float(lost):.1f}"),
+                "연속실패": self._comm_fail_streak,
+            })
+        except Exception:
+            pass
+
+    def _comm_ok(self, what: str) -> None:
+        now = time.monotonic()
+        if self._comm_fail_streak > 0:
+            lost = now - self._comm_last_ok
+            n = self._comm_fail_streak
+            self._comm_fail_streak = 0
+            self.status_message.emit("RFPulse", f"RF Pulse 통신 복구 (단절 {lost:.1f}초, 실패 {n}회) — {what}")
+            self._emit_event("복구", f"{what}, 실패 {n}회", lost=lost)
+            self.rfpulse_recovered.emit(float(lost))
+        self._comm_last_ok = now
+
+    def _check_comm_budget(self) -> None:
+        """폴링 중 호출. RFPULSE_COMM_LOSS_ABORT_SEC 이상 응답이 없으면 1회만 "재시작".
+        무응답이 RFPULSE_COMM_REOPEN_SEC 이상이면 그 주기로 포트를 닫고 다시 연다(USB 재열거 대응).
+        포트가 열린 채 무응답인 경우를 잡는 것이 목적 — _watch_connection 은 포트가 닫혔을 때만 동작한다."""
+        if self._stop_requested:
+            return
+        now = time.monotonic()
+        lost = now - self._comm_last_ok
+        if lost >= float(RFPULSE_COMM_REOPEN_SEC) and (now - self._comm_last_reopen_t) >= float(RFPULSE_COMM_REOPEN_SEC):
+            self._comm_last_reopen_t = now
+            if self.serial_rfp and self.serial_rfp.isOpen():
+                self.status_message.emit("RFPulse(경고)", f"무응답 {lost:.1f}초 — 포트를 닫고 다시 엽니다")
+                try:
+                    self.serial_rfp.close()
+                except Exception:
+                    pass
+                self._rx.clear()
+            self._emit_event("재오픈", f"무응답 {lost:.1f}초", lost=lost)
+            self._try_reconnect()
+        if (not self._outage_abort) and lost >= float(RFPULSE_COMM_LOSS_ABORT_SEC):
+            self._outage_abort = True
+            self.status_message.emit(
+                "재시작",
+                f"RF Pulse 통신 두절 {lost:.1f}초 → 공정을 중단합니다. "
+                f"CESAR 출력은 PC 가 끌 수 없으므로 장비 전면에서 RF OFF 를 확인하세요.")
+            self._emit_event("두절중단", f"연속 실패 {self._comm_fail_streak}회", lost=lost)
+            self._start_outage_probe()
+
+    def _start_outage_probe(self) -> None:
+        if self._outage_probe is None:
+            self._outage_probe = QTimer(self)
+            self._outage_probe.setInterval(2000)
+            self._outage_probe.timeout.connect(self._outage_probe_tick)
+        if not self._outage_probe.isActive():
+            self._outage_probe.start()
+
+    def _outage_probe_tick(self) -> None:
+        """두절 중단 상태에서만 돈다. 폴링이 꺼진 뒤에도 3초마다 재오픈을 시도하고 STATUS 를 한 번 물어
+        응답이 오면 _comm_ok → rfpulse_recovered → main 이 safe_off 를 부른다."""
+        if not self._outage_abort:
+            if self._outage_probe:
+                self._outage_probe.stop()
+            return
+        if self._poll_timer and self._poll_timer.isActive():
+            return          # 폴링이 다시 돌면 그쪽 쿼리가 대신한다
+        now = time.monotonic()
+        if (now - self._comm_last_reopen_t) >= float(RFPULSE_COMM_REOPEN_SEC):
+            self._comm_last_reopen_t = now
+            if self.serial_rfp and self.serial_rfp.isOpen():
+                try:
+                    self.serial_rfp.close()
+                except Exception:
+                    pass
+                self._rx.clear()
+            self._emit_event("재오픈", f"두절 중 프로브 (단절 {now - self._comm_last_ok:.1f}초)")
+            self._try_reconnect()
+        if self._inflight is None and not self._cmd_q and self.serial_rfp and self.serial_rfp.isOpen():
+            self._enqueue_query(CMD_REPORT_STATUS, b"", tag="[OUTAGE PROBE]",
+                                timeout_ms=RFPULSE_POLL_QUERY_TIMEOUT_MS, retries=0,
+                                callback=lambda _r: None)
 
     @staticmethod
     def _is_rf_off_cmd(c: "RfCommand") -> bool:
@@ -985,22 +1093,44 @@ class RFPulseController(QObject):
         self._seq_idx = -1
         self.set_process_status(False)
 
-        def _done(_res):
-            self.status_message.emit("RFPulse", "RF Pulse OFF 완료")
+        self._enqueue_rf_off_confirmed("[RF OFF]", "stop_process")
+
+    def _enqueue_rf_off_confirmed(self, tag: str, where: str) -> None:
+        """확인형 RF OFF — CSR 응답을 최대 2.5초 기다려 CSR=0 이면 "OFF 완료(확인)".
+        NAK/무응답/CSR≠0 이면 한 번 재전송, 그래도 안 되면 "RF OFF 확인 실패 — 출력 상태 미확인"
+        을 로그·이벤트로 남기고 power_off_finished 를 낸다(종료 시퀀스는 계속)."""
+        def _done(res):
+            if res is not None:
+                self.status_message.emit("RFPulse", "RF Pulse OFF 완료(확인)")
+                self._emit_event("OFF확인", where)
+            else:
+                self.status_message.emit(
+                    "RFPulse(경고)", f"RF OFF 확인 실패 — 출력 상태 미확인 ({where}). 장비 전면에서 RF OFF 를 확인하세요.")
+                self._emit_event("OFF미확인", where)
             self.power_off_finished.emit()
 
         if not (self.serial_rfp and self.serial_rfp.isOpen()):
             # 포트가 없으면 보낼 수 없다. 그래도 상위가 기다리지 않도록 즉시 알린다.
             self.status_message.emit(
-                "RFPulse", "포트가 닫혀 있어 RF OFF 를 보내지 못했습니다(완료로 처리).")
+                "RFPulse(경고)", f"포트가 닫혀 있어 RF OFF 전송 불가 — 출력 상태 미확인 ({where})")
+            self._emit_event("OFF미확인", f"{where}: 포트 닫힘")
             QTimer.singleShot(0, lambda: self.power_off_finished.emit())
             return
 
         self._enqueue(self._make_cmd(
-            "exec", CMD_RF_OFF, b"", tag="[RF OFF]",
+            "exec", CMD_RF_OFF, b"", tag=tag,
             timeout_ms=max(RFPULSE_ACK_TIMEOUT_MS, 2500),
-            allow_no_reply=True, allow_when_closing=True, retries=0,
+            allow_no_reply=True, allow_when_closing=True, retries=1, confirm=True,
             callback=_done))
+
+    @Slot()
+    def safe_off(self):
+        """복구 후 안전 상태 재적용 — 공정이 돌지 않을 때 main 이 부른다. 확인형 RF OFF 1회."""
+        self._emit_event("안전상태재적용", "RF OFF(확인형)")
+        self._enqueue_rf_off_confirmed("[SAFE OFF]", "복구 후 안전 상태")
+        self._outage_abort = False
+        if self._outage_probe:
+            self._outage_probe.stop()
 
     # ==================== 폴링 ====================
     @Slot(bool)
@@ -1008,8 +1138,17 @@ class RFPulseController(QObject):
         if should_poll:
             if self._poll_timer and not self._poll_timer.isActive():
                 self._poll_busy = False
+                self._comm_last_ok = time.monotonic()      # 예산은 폴링 시작부터 잰다
+                self._comm_last_reopen_t = 0.0
                 self._poll_timer.start()
+                if self._budget_timer is None:
+                    self._budget_timer = QTimer(self)
+                    self._budget_timer.setInterval(1000)
+                    self._budget_timer.timeout.connect(self._check_comm_budget)
+                self._budget_timer.start()
             return
+        if self._budget_timer:
+            self._budget_timer.stop()
         # ★ 폴링을 끌 때는 대기 중인 폴링 쿼리까지 반드시 버린다.
         #   안 버리면 STOP 의 RF OFF 가 남은 쿼리(각 최대 9초 + gap 1.5초) 뒤에
         #   줄을 서서 최악 ~30초 걸리고, _stop_impl 의 30초 타임아웃에 걸려
@@ -1021,6 +1160,9 @@ class RFPulseController(QObject):
 
     def _poll_cycle(self):
         """1주기: REPORT_STATUS → REPORT_FORWARD → REPORT_REFLECTED. 중첩 금지."""
+        # 통신 예산은 busy 여부와 무관하게 매 주기 본다 — 무응답이면 쿼리가 인플라이트에 걸려
+        #  _poll_busy 가 계속 True 이기 때문이다.
+        self._check_comm_budget()
         if self._poll_busy:
             return
         if not (self.serial_rfp and self.serial_rfp.isOpen()):

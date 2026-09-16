@@ -40,6 +40,15 @@ PLC_COMM_LOSS_ABORT_SEC = get('PLC_COMM_LOSS_ABORT_SEC', 10.0)  # 이만큼 단�
 #  XG5000 편집→디바이스 사용 검색으로 확인. 0 이면 기능 끔.
 PLC_SESSION_MARK_REG    = get('PLC_SESSION_MARK_REG',    60)    # D00060
 
+# ── 시리얼 장비 공통 통신 두절 정책(DC 파워 / RF 펄스) ──
+#  "끊기면 재연결 시도, 예산 안에 복구 안 되면 안전정지 + 구글챗, 복구되면 OFF 재적용".
+#  MFC 는 이미 백오프 재연결이 있어 이벤트 기록만 붙인다.
+DC_COMM_LOSS_ABORT_SEC       = get('DC_COMM_LOSS_ABORT_SEC',       10.0)  # 공정 중 이만큼 응답이 없으면 "재시작"
+DC_RECONNECT_BACKOFF_START_MS = get('DC_RECONNECT_BACKOFF_START_MS', 500)
+DC_RECONNECT_BACKOFF_MAX_MS   = get('DC_RECONNECT_BACKOFF_MAX_MS',  8000)
+RFPULSE_COMM_LOSS_ABORT_SEC  = get('RFPULSE_COMM_LOSS_ABORT_SEC',  10.0)  # 폴링 중 이만큼 응답이 없으면 "재시작"
+RFPULSE_COMM_REOPEN_SEC      = 3.0      # 무응답이 이만큼 이어지면 포트를 닫고 다시 연다(USB 재열거 대응)
+
 
 def _validate_plc_comm_config() -> None:
     """설정이 틀려도 프로그램은 떠야 한다 — 클램프/끄기만 하고 예외는 던지지 않는다."""

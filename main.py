@@ -26,7 +26,7 @@ from lib.logger import (
     clear_heater_log_file,
     log_message_to_file,
     append_chk_csv_row,
-    append_plc_event,
+    append_comm_event,
     write_plc_blackbox,
 )
 from reporter import ErpReporter
@@ -848,6 +848,12 @@ class MainDialog(QDialog):
         self.plc_controller.plc_blackbox.connect(self._on_plc_blackbox)
         self.plc_controller.plc_restarted.connect(self._on_plc_restarted)
         self.plc_controller.plc_recovered.connect(self._on_plc_recovered)
+        # 시리얼 장비 공통 통신 두절 정책 — DC / RF 펄스 / MFC 이벤트 기록 + 복구 후 안전 상태
+        self.dcpower_controller.comm_event.connect(lambda r: self._on_comm_event("DC", r))
+        self.dcpower_controller.dc_recovered.connect(self._on_dc_recovered)
+        self.rfpulse_controller.comm_event.connect(lambda r: self._on_comm_event("RFPulse", r))
+        self.rfpulse_controller.rfpulse_recovered.connect(self._on_rfpulse_recovered)
+        self.mfc_controller.mfc_comm_event.connect(lambda r: self._on_comm_event("MFC", r))
         self.mfc_controller.status_message.connect(self.on_status_message)
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
@@ -1173,11 +1179,60 @@ class MainDialog(QDialog):
 
     @Slot(dict)
     def _on_plc_event(self, row: dict):
-        """PLC 컨트롤러가 보낸 이벤트 1행을 PLC_events.csv 에 남긴다(공정명은 여기서 채운다)."""
+        """PLC 컨트롤러가 보낸 이벤트 1행을 COMM_events.csv(장비=PLC)에 남긴다(공정명은 여기서 채운다)."""
+        self._on_comm_event("PLC", row)
+
+    def _on_comm_event(self, device: str, row: dict):
+        """시리얼 장비 공통 통신 이벤트 → COMM_events.csv (장비 스레드는 파일을 쓰지 않는다)."""
         try:
             r = dict(row or {})
             r["공정명"] = self._plc_current_process_name()
-            append_plc_event(r)
+            append_comm_event(device, r)
+        except Exception:
+            pass
+
+    def _process_active(self) -> bool:
+        return (bool(getattr(self, "process_running", False))
+                or bool(getattr(self, "csv_mode", False))
+                or bool(getattr(self, "_csv_delay_active", False)))
+
+    @Slot(float)
+    def _on_dc_recovered(self, lost: float):
+        """DC 파워 통신 복구. 이번 단절로 공정이 중단됐고 공정이 돌지 않으면 OUTP OFF 1회(확인형)."""
+        dc = getattr(self, "dcpower_controller", None)
+        if dc is None or not bool(getattr(dc, "_outage_abort", False)):
+            return
+        if self._process_active():
+            log_message_to_monitor("정보", f"DC 파워 통신 복구({lost:.0f}초) — 공정 진행 중이라 안전 상태 재적용 생략")
+            dc._outage_abort = False
+            return
+        QMetaObject.invokeMethod(dc, "safe_off", Qt.ConnectionType.QueuedConnection)
+        msg = f"DC 파워 통신 복구({lost:.0f}초) → 안전 상태 재적용: OUTP OFF"
+        log_message_to_monitor("정보", msg)
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(f"🔁 CHK {msg}")
+                self.chat_chk.flush()
+        except Exception:
+            pass
+
+    @Slot(float)
+    def _on_rfpulse_recovered(self, lost: float):
+        """RF 펄스 통신 복구. 이번 단절로 공정이 중단됐고 공정이 돌지 않으면 확인형 RF OFF 1회."""
+        rfp = getattr(self, "rfpulse_controller", None)
+        if rfp is None or not bool(getattr(rfp, "_outage_abort", False)):
+            return
+        if self._process_active():
+            log_message_to_monitor("정보", f"RF Pulse 통신 복구({lost:.0f}초) — 공정 진행 중이라 안전 상태 재적용 생략")
+            rfp._outage_abort = False
+            return
+        QMetaObject.invokeMethod(rfp, "safe_off", Qt.ConnectionType.QueuedConnection)
+        msg = f"RF Pulse 통신 복구({lost:.0f}초) → 안전 상태 재적용: RF OFF(확인형)"
+        log_message_to_monitor("정보", msg)
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(f"🔁 CHK {msg}")
+                self.chat_chk.flush()
         except Exception:
             pass
 
@@ -1236,8 +1291,8 @@ class MainDialog(QDialog):
         msg = f"PLC 통신 복구({lost:.0f}초) → 안전 상태 재적용: RF DAC 0 · 히터 OFF · Ar/O2 CLOSE"
         log_message_to_monitor("정보", msg)
         try:
-            append_plc_event({**plc.make_event_row("안전상태재적용", msg, lost=lost),
-                              "공정명": self._plc_current_process_name()})
+            append_comm_event("PLC", {**plc.make_event_row("안전상태재적용", msg, lost=lost),
+                                      "공정명": self._plc_current_process_name()})
         except Exception:
             pass
         try:
