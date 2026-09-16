@@ -79,7 +79,8 @@ class RampProfiler(QObject):
         return bool(self._active)
 
     def target(self):
-        return self._target
+        """활성 램프의 최종 목표 [°C]. 활성이 아니면 None (히터 시작 카드의 '목표' 표시용)."""
+        return self._target if self._active else None
 
     def rate(self) -> float:
         return float(self._rate)

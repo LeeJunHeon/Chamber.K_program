@@ -97,6 +97,13 @@ _validate_plc_comm_config()
 HEATER_HOLD_MV_AFTER_REACH = get('HEATER_HOLD_MV_AFTER_REACH', False)   # 기능 on/off
 HEATER_HOLD_MV_ENTER_TOL_C = get('HEATER_HOLD_MV_ENTER_TOL_C', 3.0)     # |PV-SV| 허용 오차 [°C]
 HEATER_HOLD_MV_ENTER_SEC   = get('HEATER_HOLD_MV_ENTER_SEC',   60)      # 이만큼 연속 안정돼야 캡처 [초]
+# 진입 조건 보강 (2026-09-16 실측 실패 3건)
+#  A: 이제 막 가열을 시작한 과도 상태(PV 하강·MV 상승)를 |PV-SV|≤3 만으로 잡아 467 을 고정 → 8분간 식음
+#  B: PV 가 분당 5.6°C 로 목표를 스쳐 지나가는 구간에서 582 를 고정(실제 유지 430~460)
+#  C: MV 가 최소치(400)에 붙어 있을 때 캡처되면 D00018=420 이 박혀 히터가 죽는다
+HEATER_HOLD_MV_ARRIVE_TOL_C = get('HEATER_HOLD_MV_ARRIVE_TOL_C', 1.0)   # 이 안에 한 번은 들어와야 고정을 잰다 [°C]
+HEATER_HOLD_MV_DRIFT_PV_C   = get('HEATER_HOLD_MV_DRIFT_PV_C',   0.5)   # 창 후반부 평균 PV − 전반부 평균 PV 허용 [°C]
+HEATER_HOLD_MV_DRIFT_MV     = get('HEATER_HOLD_MV_DRIFT_MV',     15)    # 창 후반부 평균 MV − 전반부 평균 MV 허용 [카운트]
 
 
 def _validate_heater_hold_config() -> None:
@@ -122,6 +129,19 @@ def _validate_heater_hold_config() -> None:
     if sc != s:
         print(f"[Config] HEATER_HOLD_MV_ENTER_SEC {s:g} → {sc:g} 로 클램프 (허용 10~600)")
     HEATER_HOLD_MV_ENTER_SEC = sc
+    global HEATER_HOLD_MV_ARRIVE_TOL_C, HEATER_HOLD_MV_DRIFT_PV_C, HEATER_HOLD_MV_DRIFT_MV
+    for _name, _lo, _hi, _def in (("HEATER_HOLD_MV_ARRIVE_TOL_C", 0.2, 10.0, 1.0),
+                                  ("HEATER_HOLD_MV_DRIFT_PV_C", 0.1, 10.0, 0.5),
+                                  ("HEATER_HOLD_MV_DRIFT_MV", 3.0, 200.0, 15.0)):
+        _raw = globals()[_name]
+        try:
+            _v = float(_raw)
+        except Exception:
+            print(f"[Config] {_name} {_raw!r} → {_def:g}"); _v = _def
+        _c = min(max(_v, _lo), _hi)
+        if _c != _v:
+            print(f"[Config] {_name} {_v:g} → {_c:g} 로 클램프 (허용 {_lo:g}~{_hi:g})")
+        globals()[_name] = _c
 
 
 _validate_heater_hold_config()

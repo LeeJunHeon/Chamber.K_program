@@ -176,6 +176,12 @@
     "HEATER_HOLD_MV_AFTER_REACH": true,
     "HEATER_HOLD_MV_ENTER_TOL_C": 3.0,
     "HEATER_HOLD_MV_ENTER_SEC": 60,
+    "// 진입 조건 보강(2026-09-16 실측): |PV-SV| 가 ARRIVE_TOL_C 안에 한 번은 들어와야 잰다(과도 상태 차단).": "",
+    "// 측정 창 후반부 평균 − 전반부 평균이 DRIFT_PV_C(°C) / DRIFT_MV(카운트) 를 넘으면 정착 전으로 보고 다시 잰다.": "",
+    "// 평균 MV 가 최소치(HEATER_MV_MIN+20) 이하면 고정하지 않는다(히터가 죽는 값).": "",
+    "HEATER_HOLD_MV_ARRIVE_TOL_C": 1.0,
+    "HEATER_HOLD_MV_DRIFT_PV_C": 0.5,
+    "HEATER_HOLD_MV_DRIFT_MV": 15,
 
     "// → D00013. PLC 쪽 목표 온도 소프트 상한(°C). HEATER_MAX_TEMP 이상일 것": "",
     "HEATER_SV_LIMIT_C": 630.0,
