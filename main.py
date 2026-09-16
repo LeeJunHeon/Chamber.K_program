@@ -1811,7 +1811,7 @@ class MainDialog(QDialog):
         start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
         path, _ = QFileDialog.getOpenFileName(
             self, "히터 레시피 파일 선택", start_dir,
-            "CSV Files (*.csv);;All Files (*)")
+            "레시피 파일 (*.xlsx *.xlsm *.csv *.tsv);;Excel (*.xlsx *.xlsm);;CSV (*.csv *.tsv);;All Files (*)")
         if not path:
             return
         if not self.heater_recipe.load(path):
@@ -3093,7 +3093,7 @@ class MainDialog(QDialog):
                 self,
                 "공정 리스트 파일 선택",
                 "",
-                "CSV Files (*.csv);;All Files (*)"
+                "레시피 파일 (*.xlsx *.xlsm *.csv *.tsv);;Excel (*.xlsx *.xlsm);;CSV (*.csv *.tsv);;All Files (*)"
             )
         finally:
             self._csv_dialog_open = False
