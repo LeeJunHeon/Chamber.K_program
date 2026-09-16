@@ -1798,7 +1798,8 @@ class MainDialog(QDialog):
                 pass
         elif h['samples']:
             log_message_to_monitor("히터", f"DAC 상한 고정 대기 취소 ({why})")
-        h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)
+        h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0,
+                 limit_warned=False)     # 해제 뒤 다시 운전하면 '상한과 같음' 경고를 다시 낼 수 있어야 한다
 
     def _heater_mv_hold_tick(self, st: dict):
         """목표 온도 도달 후 DAC 출력 상한(D00018)을 그 시점 출력(평균)으로 고정한다.
@@ -1813,7 +1814,8 @@ class MainDialog(QDialog):
                 if h['state'] == 'holding':
                     self._mvhold_release(st, "기능 꺼짐")
                 elif h['state'] != 'idle' or h['samples']:
-                    h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)
+                    h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0,
+                             limit_warned=False)
                 return
 
             run = bool(st.get('run')); fault = bool(st.get('fault'))
@@ -1871,6 +1873,13 @@ class MainDialog(QDialog):
                 h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)
                 return
             h['limit_warned'] = False
+            # ★ PLC.set_heater_mv_limit 과 같은 식으로 클램프해서 저장한다. 안 맞추면 D00018 에 실제로
+            #   써진 값(클램프됨)과 h['value'] 가 영원히 달라 5초마다 재적용이 반복된다.
+            #   (상한 비교는 위에서 원래 평균으로 했으므로 여기서는 하한만 실질적으로 걸린다)
+            raw_value = value
+            value = max(int(HEATER_MV_MIN) + 20, min(int(HEATER_MV_LIMIT), value))
+            if value != raw_value:
+                log_message_to_monitor("히터", f"DAC 상한 고정값 클램프 {raw_value} → {value} (PLC 하한 HEATER_MV_MIN+20)")
             h.update(state='holding', sv=float(sv), value=value, last_push=now, samples=[], t0=0.0)
             self.request_heater_mv_limit.emit(value)
             amps = heater_est_current(value)
