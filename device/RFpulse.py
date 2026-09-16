@@ -44,6 +44,7 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 from lib.config import (
     RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, RFPULSE_PARITY, RFPULSE_MAX_POWER,
     RFPULSE_ACK_TIMEOUT_MS, RFPULSE_QUERY_TIMEOUT_MS, RFPULSE_CMD_GAP_MS,
+    RFPULSE_RAW_LOG,
     RFPULSE_POLL_INTERVAL_MS, RFPULSE_POLL_QUERY_TIMEOUT_MS,
     RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS,
     RFPULSE_WATCHDOG_INTERVAL_MS,
@@ -142,6 +143,11 @@ def _u16le(buf: bytes, i: int = 0) -> int:
 
 
 # ===== 프레임 빌더 (원본 그대로) =====
+def _hex(b: bytes) -> str:
+    """로그용 16진 표기: b'	' → '09 0E 02 05'."""
+    return ' '.join(f'{x:02X}' for x in (b or b''))
+
+
 def _build_packet(addr: int, cmd: int, data: bytes = b"") -> bytes:
     if not (0 <= addr <= 31):
         raise ValueError("addr 0..31")
@@ -499,30 +505,49 @@ class RFPulseController(QObject):
         return out
 
     # ==================== 토큰 → 인플라이트 판정 ====================
+    def _rx_log(self, text: str):
+        """수신 프레임 로그(챔버2 원본 [RFP][RAW][RX] 수준). RFPULSE_RAW_LOG 로 on/off."""
+        if RFPULSE_RAW_LOG:
+            self.status_message.emit("RFPulse < 수신", text)
+
     def _handle_token(self, kind: str, payload: Optional[bytes]):
         cmd = self._inflight
         if cmd is None:
-            return                      # 지연 도착/예상 밖 토큰은 버린다
+            # 지연 도착/예상 밖 토큰은 버린다 — 로그만 남긴다
+            if kind == "ACK":
+                self._rx_log("ACK(06) (대기 명령 없음)")
+            elif kind == "NAK":
+                self._rx_log("NAK(15) (대기 명령 없음)")
+            else:
+                self._rx_log(f"(대기 명령 없음) raw={_hex(payload or b'')}")
+            return
 
+        _who = f"{cmd.tag} {self._cmd_label(cmd.cmd)}".strip()
         if kind == "ACK":
             # ACK 은 참고용 신호일 뿐, 성공 판정에 쓰지 않는다(원본과 동일).
+            self._rx_log("ACK(06)")
             return
         if kind == "NAK":
+            self._rx_log(f"NAK(15) ← {_who}")
             self._fail_inflight("NAK")
             return
         if kind != "FRAME" or not payload:
             return
         if not self._frame_match(payload, cmd.cmd):
+            self._rx_log(f"FRAME raw={_hex(payload)} (다른 명령의 프레임 — 무시) ← {_who}")
             return                      # 다른 명령의 프레임 — 무시
 
         data = self._extract_data(payload)
 
         if cmd.kind == "exec":
             if not data or len(data) < 1:
+                self._rx_log(f"FRAME raw={_hex(payload)} CSR 없음 ← {_who}")
                 self._fail_inflight("CSR 없음")
                 return
             csr = data[0]
             cmd.last_csr = csr
+            self._rx_log(
+                f"FRAME raw={_hex(payload)} CSR={csr}({CSR_CODES.get(csr, 'Unknown')}) ← {_who}")
             if csr != 0:
                 self.status_message.emit(
                     "RFPulse",
@@ -533,6 +558,7 @@ class RFPulseController(QObject):
                 return
             self._finish_inflight(data)
         else:
+            self._rx_log(f"FRAME raw={_hex(payload)} data={_hex(data) or '(없음)'} ← {_who}")
             self._finish_inflight(data)
 
     def _try_csr_recovery(self, cmd: RfCommand, csr: int) -> bool:
@@ -632,10 +658,13 @@ class RFPulseController(QObject):
                     raise IOError(f"partial write: {n + max(0, m)}/{len(pkt)}")
             self.serial_rfp.flush()
 
-            self.status_message.emit(
-                "RFPulse > 전송",
-                f"{cmd.tag} {self._cmd_label(cmd.cmd)} "
-                f"data={' '.join(f'{x:02X}' for x in (cmd.data or b''))}".strip())
+            _data_s = _hex(cmd.data)
+            if RFPULSE_RAW_LOG:
+                # 챔버2 원본 [RFP][RAW][TX] 수준 — 실제 프레임 바이트열까지 남긴다
+                _tx = f"{cmd.tag} {self._cmd_label(cmd.cmd)} data={_data_s or '(없음)'} raw={_hex(pkt)}"
+            else:
+                _tx = f"{cmd.tag} {self._cmd_label(cmd.cmd)} data={_data_s}".strip()
+            self.status_message.emit("RFPulse > 전송", _tx)
 
             if cmd.allow_no_reply and cmd.kind == "exec":
                 # 응답을 기다리지 않는다(종료 중 RF OFF 등)

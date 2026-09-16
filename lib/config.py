@@ -383,6 +383,10 @@ RFPULSE_PULSE_FREQ_MIN_HZ = 1
 RFPULSE_DUTY_MIN = 1
 RFPULSE_DUTY_MAX = 99
 
+# 프레임 단위 송수신 로그(챔버2 원본의 [RFP][RAW][TX]/[RX] 수준). 통신 문제 추적용.
+#  False 면 전송 줄의 raw= 와 수신 줄 전체를 생략하고 기존 로그만 남긴다.
+RFPULSE_RAW_LOG = get('RFPULSE_RAW_LOG', True)
+
 # 고정값 — 원본(Chamber.Total_program) 값을 그대로 옮겼다. 바꾸지 말 것.
 RFPULSE_ACK_TIMEOUT_MS        = 2000   # 쓰기(exec) CSR 대기
 RFPULSE_QUERY_TIMEOUT_MS      = 4500   # 읽기(query) 데이터 프레임 대기
