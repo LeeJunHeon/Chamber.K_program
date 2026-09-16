@@ -1,6 +1,12 @@
 # device/RFpulse.py
 # -*- coding: utf-8 -*-
-"""RF Pulse (CESAR 1310, AE Bus RS-232) 컨트롤러 — Chamber-K.
+"""RF Pulse (CESAR 1310, AE Bus RS-232, 9600 8O1) 컨트롤러 — Chamber-K.
+
+[시리얼 규격 — 매뉴얼 그대로]
+  CESAR 매뉴얼 RS-232: "Odd parity, one start bit, eight data bits, one stop bit".
+  즉 9600 8O1 이다. 8N1 로 열면 패킷 바이트가 정확해도 수신기 쪽에서 패리티 오류로
+  깨져 SET_ACTIVE_CTRL 부터 NAK 만 돌아온다(2026-09-15 22:21 실기 로그).
+  패리티는 config RFPULSE_PARITY 로 두되 데이터 8비트 / 스톱 1비트는 고정이다.
 
 원본은 챔버1,2 프로그램(Chamber.Total_program)의 device/rf_pulse.py 다.
 AE Bus 프로토콜 로직(프레임 빌더·커맨드 번호·CSR·STATUS 비트·시퀀스 순서·
@@ -36,7 +42,7 @@ from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, p
 from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.config import (
-    RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, RFPULSE_MAX_POWER,
+    RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, RFPULSE_PARITY, RFPULSE_MAX_POWER,
     RFPULSE_ACK_TIMEOUT_MS, RFPULSE_QUERY_TIMEOUT_MS, RFPULSE_CMD_GAP_MS,
     RFPULSE_POLL_INTERVAL_MS, RFPULSE_POLL_QUERY_TIMEOUT_MS,
     RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS,
@@ -169,6 +175,15 @@ class RfCommand:
     last_csr: Optional[int] = field(default=None)
 
 
+# config RFPULSE_PARITY → QSerialPort. 데이터 8비트 / 스톱 1비트는 매뉴얼대로 고정.
+_PARITY_MAP = {
+    'none': QSerialPort.Parity.NoParity,
+    'odd':  QSerialPort.Parity.OddParity,
+    'even': QSerialPort.Parity.EvenParity,
+}
+_PARITY_NAME = {v: k for k, v in _PARITY_MAP.items()}
+
+
 class RFPulseController(QObject):
     """CESAR 1310 RF Pulse 제너레이터 — AE Bus over RS-232."""
 
@@ -233,7 +248,8 @@ class RFPulseController(QObject):
         self.serial_rfp = QSerialPort(self)
         self.serial_rfp.setBaudRate(int(RFPULSE_BAUD))
         self.serial_rfp.setDataBits(QSerialPort.DataBits.Data8)
-        self.serial_rfp.setParity(QSerialPort.Parity.NoParity)
+        # ★ CESAR 는 홀수 패리티(8O1). NoParity 로 열면 NAK 만 돌아온다 — config 참조.
+        self.serial_rfp.setParity(_PARITY_MAP.get(RFPULSE_PARITY, QSerialPort.Parity.OddParity))
         self.serial_rfp.setStopBits(QSerialPort.StopBits.OneStop)
         self.serial_rfp.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
         self.serial_rfp.readyRead.connect(self._on_ready_read)
@@ -294,6 +310,15 @@ class RFPulseController(QObject):
         self.serial_rfp.setRequestToSend(False)
         self.serial_rfp.clear(QSerialPort.Direction.AllDirections)
         self._rx.clear()
+
+        # 실제 적용된 포트 설정을 남긴다 — 다음에 NAK 이 나면 로그만 보고 잡을 수 있게.
+        self.status_message.emit(
+            "RFPulse",
+            f"{RFPULSE_PORT} 열림: {int(self.serial_rfp.baudRate())} bps, "
+            f"data {int(self.serial_rfp.dataBits().value)}, "
+            f"parity {_PARITY_NAME.get(self.serial_rfp.parity(), str(self.serial_rfp.parity()))}, "
+            f"stop {int(self.serial_rfp.stopBits().value)} "
+            f"(CESAR 규격 9600 8O1)")
 
         self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
         self._reconnect_pending = False

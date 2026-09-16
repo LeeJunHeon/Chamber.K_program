@@ -349,7 +349,7 @@ class Ui_Dialog(object):
         self.rf_power_checkbox.setObjectName(u"rf_power_checkbox")
         self.rf_power_checkbox.setGeometry(QRect(735, 245, 89, 20))
 
-        # RF Pulse(CESAR) — RF power 와 배타. 같은 줄, DC power(x=875) 앞에 둔다.
+        # RF Pulse(CESAR) — RF power 와 독립. 입력칸은 아래 줄 rfp_* 다. 같은 줄, DC power(x=875) 앞에 둔다.
         self.rf_pulse_checkbox = QCheckBox(Dialog)
         self.rf_pulse_checkbox.setObjectName(u"rf_pulse_checkbox")
         self.rf_pulse_checkbox.setGeometry(QRect(828, 245, 62, 20))
@@ -464,14 +464,24 @@ class Ui_Dialog(object):
         self.rfp_power_edit.setObjectName(u"rfp_power_edit")
         self.rfp_power_edit.setGeometry(QRect(735, 542, 50, 31))
         self.rfp_power_edit.setToolTip(u"RF Pulse 목표 파워 [W]. 상한은 config_user.json 의 RFPULSE_MAX_POWER")
+        # 50px 칸의 실제 글자 폭은 40px(프레임 1 + 문서 여백 4×2)라 11pt "펄스 W"(49px)가 잘린다.
+        #  입력칸 3개만 10pt + 문서 여백 1px 로 두어 46px 을 확보한다("펄스 W" 43px).
+        #  "빈칸=유지" 의미는 툴팁에 있다.
+        self.rfp_power_edit.setPlaceholderText(u"펄스 W")
         self.rfp_freq_edit = QPlainTextEdit(Dialog)
         self.rfp_freq_edit.setObjectName(u"rfp_freq_edit")
         self.rfp_freq_edit.setGeometry(QRect(790, 542, 50, 31))
         self.rfp_freq_edit.setToolTip(u"RF Pulse 주파수 [kHz]. 비우면 장비의 현재 설정을 그대로 씁니다")
+        self.rfp_freq_edit.setPlaceholderText(u"kHz")
         self.rfp_duty_edit = QPlainTextEdit(Dialog)
         self.rfp_duty_edit.setObjectName(u"rfp_duty_edit")
         self.rfp_duty_edit.setGeometry(QRect(845, 542, 50, 31))
         self.rfp_duty_edit.setToolTip(u"RF Pulse 듀티 [%]. 비우면 장비의 현재 설정을 그대로 씁니다")
+        self.rfp_duty_edit.setPlaceholderText(u"%·유지")
+        _rfp_font = QFont(); _rfp_font.setFamilies([u"맑은 고딕"]); _rfp_font.setPointSize(10)
+        for _e in (self.rfp_power_edit, self.rfp_freq_edit, self.rfp_duty_edit):
+            _e.setFont(_rfp_font)
+            _e.document().setDocumentMargin(1)
         self.rfp_for_p_edit = QPlainTextEdit(Dialog)
         self.rfp_for_p_edit.setObjectName(u"rfp_for_p_edit")
         self.rfp_for_p_edit.setGeometry(QRect(900, 542, 50, 31))

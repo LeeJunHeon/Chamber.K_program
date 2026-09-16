@@ -2861,6 +2861,13 @@ class MainDialog(QDialog):
             if use_rf_pulse:
                 _rp = self.ui.rfp_power_edit.toPlainText().strip()
                 if not _rp or float(_rp) <= 0:
+                    # 흔한 실수: Pulse 체크박스 바로 아래 큰 칸(RF_power_edit)에 펄스 파워를
+                    #  넣는다. 그 칸은 아날로그 RF 전용이라 펄스 파워는 비어 있다.
+                    _rf_big = self.ui.RF_power_edit.toPlainText().strip()
+                    if (not _rp) and _rf_big and not self.ui.rf_power_checkbox.isChecked():
+                        raise ValueError(
+                            "RF Pulse 파워는 아래 줄 'P[W]' 칸에 입력하세요. "
+                            "Pulse 체크박스 아래 큰 칸은 RF power(아날로그) 전용입니다.")
                     raise ValueError("RF Pulse 파워를 입력해야 합니다.")
                 rf_pulse_power = float(_rp)
                 _fq = self.ui.rfp_freq_edit.toPlainText().strip()

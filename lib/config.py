@@ -356,6 +356,24 @@ RF_REFP_WAIT_SEC        = get('RF_REFP_WAIT_SEC',        15)    # Ref.P 대기 �
 RFPULSE_PORT      = get('RFPULSE_PORT',      "COM12")
 RFPULSE_BAUD      = get('RFPULSE_BAUD',      9600)
 RFPULSE_ADDR      = get('RFPULSE_ADDR',      1)       # AE Bus 주소 0~31
+# ★ CESAR 매뉴얼 RS-232 규격: "Odd parity, one start bit, eight data bits, one stop bit"
+#   = 9600 8O1. 2026-09-15 22:21 실기에서 8N1 로 열었더니 SET_ACTIVE_CTRL 이 4회 연속
+#   즉시 NAK(체크섬 불일치) — 홀수 패리티 수신기에 패리티 없는 프레임을 보내면 1의 개수가
+#   홀수인 바이트(0E, 02)가 매번 패리티 오류로 깨진다. 챔버2 는 TCP→시리얼 컨버터가
+#   패리티를 담당해서 코드에 드러나지 않았다. 허용값 none / odd / even.
+RFPULSE_PARITY    = get('RFPULSE_PARITY',    'odd')
+
+
+def _validate_rfpulse_parity() -> None:
+    global RFPULSE_PARITY
+    _v = str(RFPULSE_PARITY or '').strip().lower()
+    if _v not in ('none', 'odd', 'even'):
+        print(f"[Config] RFPULSE_PARITY {RFPULSE_PARITY!r} → 'odd' (허용값 none/odd/even, CESAR 규격은 odd)")
+        _v = 'odd'
+    RFPULSE_PARITY = _v
+
+
+_validate_rfpulse_parity()
 RFPULSE_MAX_POWER = get('RFPULSE_MAX_POWER', 600.0)   # 장비 최대값(W)
 
 # 고정값 — 원본(Chamber.Total_program) 값을 그대로 옮겼다. 바꾸지 말 것.
