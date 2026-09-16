@@ -173,7 +173,7 @@
     "// PID 가 출력을 더 올리지 못한다. 내리는 방향은 막지 않는다(위험하지 않음).": "",
     "// |PV-SV| 가 ENTER_TOL_C 안에서 ENTER_SEC 동안 연속 안정되면 그 구간 MV 평균으로 D00018 을 고정.": "",
     "// SV 변경·RUN OFF·이상 발생이면 HEATER_MV_LIMIT 로 원복. 2026-09-15 45분 과출력 사고 대응": "",
-    "HEATER_HOLD_MV_AFTER_REACH": false,
+    "HEATER_HOLD_MV_AFTER_REACH": true,
     "HEATER_HOLD_MV_ENTER_TOL_C": 3.0,
     "HEATER_HOLD_MV_ENTER_SEC": 60,
 
