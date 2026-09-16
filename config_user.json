@@ -97,6 +97,8 @@
     "RFPULSE_REFP_CONSECUTIVE_LIMIT": 3,
     "// RF Pulse 프레임 단위 송수신 로그. 통신 문제 추적용. 평소엔 true 여도 폴링 5초당 6줄 정도": "",
     "RFPULSE_RAW_LOG": true,
+    "// START 후 리드백이 요청한 freq/duty 와 다르면 공정 중단. false 면 경고만": "",
+    "RFPULSE_VERIFY_PULSE_CONFIG": true,
 
     "// ------- MFC 감시 설정 -------": "",
     "// 가스 유량 이탈 허용 비율 (0.10 = ±10%) - Process Time에서만 감시": "",

@@ -44,7 +44,7 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 from lib.config import (
     RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, RFPULSE_PARITY, RFPULSE_MAX_POWER,
     RFPULSE_ACK_TIMEOUT_MS, RFPULSE_QUERY_TIMEOUT_MS, RFPULSE_CMD_GAP_MS,
-    RFPULSE_RAW_LOG,
+    RFPULSE_RAW_LOG, RFPULSE_VERIFY_PULSE_CONFIG,
     RFPULSE_POLL_INTERVAL_MS, RFPULSE_POLL_QUERY_TIMEOUT_MS,
     RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS,
     RFPULSE_WATCHDOG_INTERVAL_MS,
@@ -244,6 +244,8 @@ class RFPulseController(QObject):
         # 감시
         self._stop_requested = False
         self._target_setpoint_w: float = 0.0
+        self._req_freq_hz: Optional[int] = None    # 이번 공정이 요청한 펄스 주파수(None=유지)
+        self._req_duty: Optional[int] = None       # 이번 공정이 요청한 듀티(None=유지)
         self._forp_out_of_range_count: int = 0
         self._refp_over_limit_count: int = 0
 
@@ -765,8 +767,10 @@ class RFPulseController(QObject):
         self._seq_idx = -1
         self.set_process_status(False)
 
-        # 감시용 setpoint/카운터 초기화
+        # 감시용 setpoint/카운터 초기화 + 리드백 검증용 요청값 보관
         self._target_setpoint_w = target_w
+        self._req_freq_hz = int(freq_hz) if freq_hz is not None else None
+        self._req_duty = int(duty) if duty is not None else None
         self._forp_out_of_range_count = 0
         self._refp_over_limit_count = 0
 
@@ -870,32 +874,62 @@ class RFPulseController(QObject):
     def _readback_pulse_config(self):
         """START 직후 1회, 장비에 실제로 걸린 펄스 설정을 되읽는다.
 
-        freq/duty 를 비워 두면 '장비 현재값 유지'라서 기록할 값이 없다.
-        CSV/로그에 실제 값을 남기려고 읽는 것뿐이므로, 실패해도 경고만 남기고
-        공정은 계속한다(부가 정보다).
+        - 공정이 freq/duty 를 지정했으면 검증이다: 리드백이 요청값과 다르거나 실패하면
+          "재시작" 으로 공정을 중단하고 스스로 RF OFF 한다(_check_power_monitors 트립과
+          같은 관례). RFPULSE_VERIFY_PULSE_CONFIG=False 면 경고만.
+        - 비워 둔(장비 현재값 유지) 항목은 기록용이다 — 실패해도 경고만 남기고 계속한다.
         """
         state = {'freq_khz': None, 'duty': None}
+        req_f, req_d = self._req_freq_hz, self._req_duty
+
+        def _verify():
+            if self._stop_requested:           # 외부 stop 중이면 검증하지 않는다
+                return
+            bad = []
+            if req_f is not None:
+                if state['freq_khz'] is None:
+                    bad.append("주파수 리드백 실패")
+                elif abs(round(state['freq_khz'] * 1000.0) - req_f) > 1:
+                    bad.append("주파수")
+            if req_d is not None:
+                if state['duty'] is None:
+                    bad.append("듀티 리드백 실패")
+                elif int(state['duty']) != req_d:
+                    bad.append("듀티")
+            if not bad:
+                return
+            _rq = (f"{req_f / 1000.0:g}kHz" if req_f is not None else "유지") + "·" +                   (f"{req_d}%" if req_d is not None else "유지")
+            _rb = ("?" if state['freq_khz'] is None else f"{state['freq_khz']:g}kHz") + "·" +                   ("?" if state['duty'] is None else f"{state['duty']}%")
+            _msg = f"RF Pulse 설정 불일치({', '.join(bad)}): 요청 {_rq} / 장비 {_rb}"
+            if RFPULSE_VERIFY_PULSE_CONFIG:
+                self.status_message.emit("재시작", _msg + " — 공정 중단")
+                self.stop_process()
+            else:
+                self.status_message.emit(
+                    "RFPulse", _msg + " — 경고만(RFPULSE_VERIFY_PULSE_CONFIG=false)")
 
         def _emit_final():
             # duty 콜백이 끝난 시점에 한 번만. 없는 쪽은 None 으로 올리고,
-            #  둘 다 실패면 올리지 않는다(기록할 것이 없다).
-            if state['freq_khz'] is None and state['duty'] is None:
-                return
-            _f = "?" if state['freq_khz'] is None else f"{state['freq_khz']:g}"
-            _d = "?" if state['duty'] is None else str(state['duty'])
-            self.status_message.emit("RFPulse", f"펄스 설정 리드백: {_f} kHz · {_d}%")
-            self.pulse_config_readback.emit(dict(state))
+            #  둘 다 실패면 올리지 않는다(기록할 것이 없다). 그 뒤에 검증한다.
+            if state['freq_khz'] is not None or state['duty'] is not None:
+                _f = "?" if state['freq_khz'] is None else f"{state['freq_khz']:g}"
+                _d = "?" if state['duty'] is None else str(state['duty'])
+                self.status_message.emit("RFPulse", f"펄스 설정 리드백: {_f} kHz · {_d}%")
+                self.pulse_config_readback.emit(dict(state))
+            _verify()
 
         def on_duty(res):
             if res is None or len(res) < 2:
-                self.status_message.emit("RFPulse", "펄스 duty 리드백 실패(무시)")
+                self.status_message.emit(
+                    "RFPulse", "펄스 duty 리드백 실패" + ("(무시)" if req_d is None else ""))
             else:
                 state['duty'] = int(_u16le(res, 0))
             _emit_final()
 
         def on_freq(res):
             if res is None or len(res) < 3:
-                self.status_message.emit("RFPulse", "펄스 주파수 리드백 실패(무시)")
+                self.status_message.emit(
+                    "RFPulse", "펄스 주파수 리드백 실패" + ("(무시)" if req_f is None else ""))
             else:
                 # 193 은 3바이트 LE(Hz). 화면/CSV 단위는 kHz 다.
                 hz = res[0] | (res[1] << 8) | (res[2] << 16)

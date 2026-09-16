@@ -386,6 +386,10 @@ RFPULSE_DUTY_MAX = 99
 # 프레임 단위 송수신 로그(챔버2 원본의 [RFP][RAW][TX]/[RX] 수준). 통신 문제 추적용.
 #  False 면 전송 줄의 raw= 와 수신 줄 전체를 생략하고 기존 로그만 남긴다.
 RFPULSE_RAW_LOG = get('RFPULSE_RAW_LOG', True)
+# START 후 1회 리드백(193 주파수 / 196 듀티)이 공정이 요청한 freq/duty 와 다르거나 실패하면
+#  "재시작" 으로 공정을 중단하고 드라이버가 스스로 RF OFF 한다. False 면 경고만 남긴다.
+#  비워 둔(장비값 유지) 항목은 검증하지 않는다. 주파수 허용 오차 1 Hz(정수라 사실상 일치).
+RFPULSE_VERIFY_PULSE_CONFIG = get('RFPULSE_VERIFY_PULSE_CONFIG', True)
 
 # 고정값 — 원본(Chamber.Total_program) 값을 그대로 옮겼다. 바꾸지 말 것.
 RFPULSE_ACK_TIMEOUT_MS        = 2000   # 쓰기(exec) CSR 대기
