@@ -1284,8 +1284,8 @@ class MainDialog(QDialog):
         except Exception:
             pass
         try:
-            self.request_plc_port_update.emit("Ar_button", False)
-            self.request_plc_port_update.emit("O2_button", False)
+            self.request_plc_port_update.emit("Ar_Button", False)   # PLC_COIL_MAP 키(M00007)
+            self.request_plc_port_update.emit("O2_Button", False)   # PLC_COIL_MAP 키(M00008)
         except Exception:
             pass
         msg = f"PLC 통신 복구({lost:.0f}초) → 안전 상태 재적용: RF DAC 0 · 히터 OFF · Ar/O2 CLOSE"
