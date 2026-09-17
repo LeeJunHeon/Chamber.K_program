@@ -286,6 +286,7 @@ class SputterProcessController(QObject):
     set_heater_run        = Signal(bool)     # ★
     set_heater_ramp       = Signal(int)      # ★ 램프 속도(counts/s, 1=6°C/min)
     set_heater_ramp_c     = Signal(float)    # ★ 같은 값의 °C/min — 감속 접근 램프용
+    heater_reached        = Signal(dict)     # 공정 소유 히터의 승온 대기 통과 {"pv","target","took_sec","next"} → 챗 카드
 
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
@@ -1075,6 +1076,11 @@ class SputterProcessController(QObject):
             "히터",
             f"히터 도달 — {('%.1f' % _pv) if _pv is not None else '--.-'}°C, "
             f"승온 소요 {_took // 60}분 {_took % 60}초")
+        try:
+            _nxt = self._steps[self._idx + 1].message if 0 <= self._idx + 1 < len(self._steps) else ""
+        except Exception:
+            _nxt = ""
+        self.heater_reached.emit({"pv": _pv, "target": float(target_c), "took_sec": _took, "next": _nxt})
         self._next_step()
 
     def _exec_loop_with_timeout(

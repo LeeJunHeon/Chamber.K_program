@@ -1000,6 +1000,7 @@ class MainDialog(QDialog):
             #   RUN 도 목표와 같이 main 큐를 거쳐 PLC 로 간다(_on_process_heater_run 안에서 emit)
             #   → 발행 순서 = 도착 순서(목표 → RUN)가 보장된다. PLC 직결은 두지 않는다.
             self.process_controller.set_heater_run.connect(self._on_process_heater_run)
+            self.process_controller.heater_reached.connect(self._on_process_heater_reached)
         else:
             # 히터 비활성(config_user.json의 HEATER_ENABLED=false) 시
             # 조작 위젯을 잠가 오조작을 막는다. 표시용 위젯은 그대로 둔다.
@@ -1842,7 +1843,22 @@ class MainDialog(QDialog):
             pass
         return "HEATER"
 
-    # ==================== 히터 시작/종료 구글챗 카드 ====================
+    # ==================== 히터 시작/종료/도달 구글챗 카드 ====================
+    @Slot(dict)
+    def _on_process_heater_reached(self, d: dict) -> None:
+        """공정 소유 히터의 승온 대기 통과 → "히터 도달" 카드 1장(수동 히터·히터 레시피는 이 경로가 없다)."""
+        if not self.chat_chk:
+            return
+        try:
+            pv = d.get("pv"); tgt = d.get("target"); took = int(d.get("took_sec") or 0)
+            fields = {"목표": ("--.-" if tgt is None else f"{float(tgt):.1f}°C"),
+                      "도달 온도": ("--.-" if pv is None else f"{float(pv):.1f}°C"),
+                      "승온 소요": f"{took // 60}분 {took % 60}초",
+                      "다음 단계": (d.get("next") or "-")}
+            self.chat_chk.notify_heater_reached(self._heater_run_context(), fields)
+        except Exception as e:
+            log_message_to_monitor("경고", f"히터 도달 카드 실패: {e!r}")
+
     def _heater_run_context(self) -> str:
         """_heater_log_note / _heater_log_prefix 와 같은 판정 — 레시피 > 공정 > 수동."""
         try:

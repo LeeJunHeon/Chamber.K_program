@@ -177,3 +177,26 @@ def test_T47_gas_hold_tick_noop_during_process(fresh, monkeypatch):
         assert w.heater_atmosphere.release.call_count == 0
     finally:
         w.process_running = False
+
+
+# ───────────────────────── 히터 도달 카드 ─────────────────────────
+def test_T48_heater_reached_card_once_from_process_path(fresh):
+    w = fresh
+    w.process_running = True; w.current_process_name = "CeO2 #1"
+    try:
+        w.process_controller.heater_reached.emit({"pv": 599.6, "target": 600.0, "took_sec": 3725, "next": "압력 안정화 대기"})
+        spin(50)
+        assert w.chat_chk.notify_heater_reached.call_count == 1
+        sub, fields = w.chat_chk.notify_heater_reached.call_args.args
+        assert sub == '공정 "CeO2 #1"'
+        assert fields == {"목표": "600.0°C", "도달 온도": "599.6°C", "승온 소요": "62분 5초", "다음 단계": "압력 안정화 대기"}
+        assert w.chat_chk.notify_heater_run.call_count == 0
+    finally:
+        w.process_running = False
+    # 발행 지점은 _heater_wait 의 "히터 온도 도달 완료" 통과 지점 하나뿐(수동 히터·히터 레시피는 이 경로가 없다)
+    import inspect, controller.process_controller as PC
+    src = inspect.getsource(PC.SputterProcessController)
+    assert src.count("self.heater_reached.emit(") == 1
+    body = src.split("def _heater_wait(")[1].split("\n    def ")[0]
+    assert "히터 온도 도달 완료" in body and "self.heater_reached.emit(" in body
+    assert body.index("self.heater_reached.emit(") < body.rindex("self._next_step()")
