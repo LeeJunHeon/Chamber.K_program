@@ -22,7 +22,7 @@ from PyQt6.QtCore import QObject, pyqtSignal as Signal
 
 from lib.config import heater_est_current
 
-ENGAGE_TIMEOUT_SEC = 5.0     # engaging 각 단계 대기 상한
+ENGAGE_TIMEOUT_SEC = 5.0     # engaging 각 단계 대기 상한  # 미확인: M0004A ON 뒤 래더가 M0004B 를 올리기까지의 스캔 지연(5초면 충분하다고 가정)
 REAPPLY_SEC        = 5.0     # 유지 중 값이 되돌아가 있으면 이만큼 지난 뒤 재적용
 TC1_DEV_WARN_C     = 20.0    # tc2 유지 중 TC1 편차 안내 임계
 TC1_DEV_WARN_SEC   = 300.0
@@ -289,6 +289,7 @@ class HeaterHold(QObject):
         sv2 = round(min(avg2, cap), 1)
         if avg2 > cap:
             self._msg("히터", f"TC2 목표를 OT2−마진으로 제한 {avg2:.1f} → {sv2:.1f}°C")
+        # 미확인: D00035 는 RUN 중에도 언제든 써도 되는지(래더가 M0004B 일 때만 읽는다고 가정), D00036 클램프는 래더가 한다
         h.update(state='engaging_sv2', kind='tc2', sv2=sv2, final=final, value=None,
                  engage_t0=now, samples=[], t0=0.0)
         self.request_sv2.emit(float(sv2))

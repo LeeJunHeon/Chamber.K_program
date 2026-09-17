@@ -943,7 +943,7 @@ class PLCController(QObject):
             'holdback':  _reg(HEATER_REG_HOLDBACK)  * HEATER_TEMP_SCALE,
             'ot_limit':  _reg(HEATER_REG_OT_LIMIT)  * HEATER_TEMP_SCALE,
             'pv2':       None if raw_pv2 == -1 else raw_pv2 * HEATER_TEMP_SCALE,
-            'pv_ctrl':   _signed(_reg(HEATER_REG_PV_CTRL)) * HEATER_TEMP_SCALE,
+            'pv_ctrl':   _signed(_reg(HEATER_REG_PV_CTRL)) * HEATER_TEMP_SCALE,   # 미확인: D00033 이 TC 이상 시 -1(hFFFF)을 그대로 비추는지 — signed 로 읽는다
             'ot2_limit': _reg(HEATER_REG_OT2_LIMIT) * HEATER_TEMP_SCALE,
             'sv2':       _reg(HEATER_REG_SV2)       * HEATER_TEMP_SCALE,
             'sv2_max':   _reg(HEATER_REG_SV2_MAX)   * HEATER_TEMP_SCALE,
