@@ -873,6 +873,11 @@ class MainDialog(QDialog):
         self.plc_controller.plc_link.connect(self._on_plc_link)
         self.plc_controller.plc_bit_changed.connect(self._on_plc_bit_changed)
         self._plc_bits: dict = {}                 # 이름별 마지막 값(로그·ERP·안전 판정용)
+        self._mv_itl_timer = QTimer(self)         # MV_INTERLOCK OFF 1초 지속 판정
+        self._mv_itl_timer.setSingleShot(True)
+        self._mv_itl_timer.setInterval(int(self.MV_INTERLOCK_ABORT_MS))
+        self._mv_itl_timer.timeout.connect(self._on_mv_interlock_timeout)
+        self._mv_itl_off_t = 0.0
         # 첫 plc_link(True) 전까지는 PLC 조작 위젯을 다운 상태로 둔다
         self._plc_link_up = True
         self._on_plc_link(False)
@@ -1011,6 +1016,7 @@ class MainDialog(QDialog):
     def _chat_reset_run_state(self):
         self._chat_user_stopped = False
         self._chat_emergency_stopped = False   # ALL STOP(비상 정지)으로 끝남 — 사용자 STOP 과 구분
+        self._fault_abort_active = False       # _abort_process_by_fault 가 이미 시작됐다(중복 판정 방지)
         self._finish_handled = False           # 새 공정(수동 / CSV STEP 마다) — 종료 처리 아직 안 함
         self._chat_errors = []
         self._chat_fail_notified = False
@@ -1611,6 +1617,7 @@ class MainDialog(QDialog):
         except Exception:
             return
 
+        self._fault_abort_active = True
         try:
             self._chk_process_ok = False
         except Exception:
@@ -3639,13 +3646,49 @@ class MainDialog(QDialog):
         names = list(PLC_COIL_MAP.keys()) + ["Door_Button"]
         return [w for w in (getattr(self.ui, n, None) for n in names) if w is not None]
 
+    MV_INTERLOCK_ABORT_MS = 1000
+
     @Slot(str, bool, object)
     def _on_plc_bit_changed(self, name: str, state: bool, prev):
-        """PLC 코일/DI 전이 1곳: (1) 값이 바뀌면 로그 1줄(첫 값 prev=None 은 로그 없음) (2) 공정 중 MV 닫힘 안전 판정."""
+        """PLC 코일/DI 전이 1곳: (1) 값이 바뀌면 로그 1줄(첫 값 prev=None 은 로그 없음)
+        (2) 공정 중 MV 닫힘 안전 판정 — 판정도 여기서만 한다(중단 자체는 _abort_process_by_fault 하나).
+        2026-09-17 CeO2 #1-2: RF 펄스 ON 직후 M00032 → M00003 이 내려갔는데 파이썬은 압력 대기에 갇혀 있었다."""
         state = bool(state)
         self._plc_bits[name] = state
         if prev is not None and bool(prev) != state:
             log_message_to_monitor("PLC", f"{name} {'ON' if prev else 'OFF'}→{'ON' if state else 'OFF'}")
+        if name == "MV_INTERLOCK" and state and self._mv_itl_timer.isActive():
+            self._mv_itl_timer.stop()
+            ms = int((time.monotonic() - self._mv_itl_off_t) * 1000)
+            log_message_to_monitor("PLC", f"PLC MV 인터락 순간 해제 후 복귀 ({ms} ms)")
+            return
+        if state or not self._mv_safety_armed():
+            return
+        # prev=None 인 첫 발행이라도 False 면 판정한다(링크 복구 뒤 MV 가 닫혀 있으면 중단해야 한다)
+        if name == "MV_button":
+            self._abort_process_by_fault("메인밸브 닫힘 (M00003 OFF)", detail=self._mv_detail())
+        elif name == "MV_INTERLOCK" and not self._mv_itl_timer.isActive():
+            self._mv_itl_off_t = time.monotonic()
+            self._mv_itl_timer.start()
+
+    def _mv_safety_armed(self) -> bool:
+        """공정이 돌고 있고 STOP/ALL STOP/설비 이상 중단 시퀀스가 아직 시작되지 않았을 때만 판정한다."""
+        return (self._process_active()
+                and not (self._chat_user_stopped or self._chat_emergency_stopped
+                         or getattr(self, "_fault_abort_active", False)))
+
+    def _mv_detail(self) -> str:
+        b = self._plc_bits
+        def v(n):
+            x = b.get(n); return "?" if x is None else ("ON" if x else "OFF")
+        return (f"MV={v('MV_button')} MV_INTERLOCK={v('MV_INTERLOCK')} "
+                f"Air={v('Air')} Gauge1={v('G1')} Gauge2={v('G2')}")
+
+    @Slot()
+    def _on_mv_interlock_timeout(self):
+        if self._plc_bits.get("MV_INTERLOCK") is False and self._mv_safety_armed():
+            self._abort_process_by_fault(
+                f"메인밸브 인터락 해제 (M00032 OFF, {self.MV_INTERLOCK_ABORT_MS / 1000:g}초 지속)", detail=self._mv_detail())
 
     @Slot(bool)
     def _on_plc_link(self, up: bool):
