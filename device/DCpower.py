@@ -9,6 +9,7 @@ import datetime
 from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo, QSerialPort as QS
 from PyQt6.QtCore import QIODeviceBase
 
+from lib.comm_policy import ReconnectPolicy
 from lib.config import (
     DC_PORT, DC_BAUDRATE,
     DC_INITIAL_VOLTAGE, DC_INITIAL_CURRENT, DC_MAX_VOLTAGE,
@@ -18,7 +19,8 @@ from lib.config import (
     DC_MIN_CURRENT_ABORT_COUNT,
     DC_CONTROL_GAIN, DC_RAMP_STEP_A, DC_MAINTAIN_STEP_UP_A, DC_MAINTAIN_STEP_DOWN_A,
     DC_LIMIT_STALL_SEC, DC_SMALL_ERROR_RATIO, DC_SMALL_ERROR_GAIN,
-    DC_COMM_LOSS_ABORT_SEC, DC_RECONNECT_BACKOFF_START_MS, DC_RECONNECT_BACKOFF_MAX_MS,
+    DC_COMM_LOSS_ABORT_SEC,
+    COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
 )
 
 # 연속 무응답 이 횟수면 포트를 닫고 백오프 재연결로 넘어간다(USB 어댑터 재열거 대응).
@@ -34,6 +36,7 @@ class DCPowerController(QObject):
     # ── 시리얼 장비 공통 통신 두절 정책 ──
     comm_event   = Signal(dict)    # COMM_events.csv 1행 (파일 I/O 는 main 스레드의 lib.logger)
     dc_recovered = Signal(float)   # 단절 뒤 첫 성공 (단절 초) — main 이 안전 상태 재적용 여부 판단
+    comm_long_outage = Signal(str, float)   # 장기두절 진입(장치명, 단절 초) — 두절당 1회
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -72,7 +75,7 @@ class DCPowerController(QObject):
         self._comm_last_ok: float = time.monotonic()   # 마지막으로 응답을 받은 시각
         self._comm_fail_streak: int = 0                 # 연속 무응답(쿼리 실패) 수
         self._outage_abort: bool = False                # 이번 단절로 공정을 중단했는가
-        self._reconnect_backoff_ms: int = int(DC_RECONNECT_BACKOFF_START_MS)
+        self._policy = ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC)   # 재연결 스케줄(공통)
         self._reconnect_pending: bool = False
         self._want_connected: bool = False
         self._comm_last_fail_log_t: float = 0.0
@@ -113,7 +116,7 @@ class DCPowerController(QObject):
         self._rx.clear()
 
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort, LF 종단)")
-        self._reconnect_backoff_ms = int(DC_RECONNECT_BACKOFF_START_MS)
+        self._policy.on_success()
         self._reconnect_pending = False
         if self._comm_fail_streak == 0:
             # 첫 연결에서만 예산 시계를 맞춘다 — 단절 중 포트 재오픈은 장비 응답이 아니다
@@ -173,9 +176,16 @@ class DCPowerController(QObject):
         if self._reconnect_pending or not self._want_connected:
             return
         self._reconnect_pending = True
-        self.status_message.emit("DCpower", f"재연결 시도... ({self._reconnect_backoff_ms} ms)")
-        self._emit_event("재연결시도", f"{self._reconnect_backoff_ms} ms 뒤")
-        QTimer.singleShot(self._reconnect_backoff_ms, self._try_reconnect)
+        ms = self._policy.on_failure()
+        if self._policy.take_long_outage_alert():
+            lost = self._policy.outage_sec()
+            self.status_message.emit("DCpower(경고)", f"DC 파워 통신 장기 두절 {lost:.0f}초 — {ms} ms 간격으로만 재시도")
+            self._emit_event("장기두절", f"{lost:.0f}초", lost=lost)
+            self.comm_long_outage.emit("DC", float(lost))
+        if self._policy.should_log():
+            self.status_message.emit("DCpower", f"재연결 시도... ({ms} ms)")
+            self._emit_event("재연결시도", f"{ms} ms 뒤")
+        QTimer.singleShot(ms, self._try_reconnect)
 
     def _try_reconnect(self) -> None:
         self._reconnect_pending = False
@@ -185,7 +195,6 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower", "재연결 성공")
             self._emit_event("재연결", DC_PORT)
         else:
-            self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, int(DC_RECONNECT_BACKOFF_MAX_MS))
             self._schedule_reconnect()
 
     def _on_serial_error(self, err) -> None:

@@ -31,8 +31,17 @@ PLC_TIMEOUT  = 0.5   # 초
 #  재오픈이 없었다(그 뒤 PLC CPU 자체가 정지한 것으로 판명).
 PLC_RETRY_COUNT         = get('PLC_RETRY_COUNT',         2)     # 트랜잭션 실패 시 재시도 횟수(총 1+N 회)
 PLC_RETRY_DELAY_MS      = get('PLC_RETRY_DELAY_MS',      30)    # 재시도 사이 대기(ms)
-PLC_COMM_REOPEN_SEC     = get('PLC_COMM_REOPEN_SEC',     3.0)   # 이만큼 단절이면 포트 close→open 시도(그 뒤 같은 주기로 반복)
 PLC_COMM_LOSS_ABORT_SEC = get('PLC_COMM_LOSS_ABORT_SEC', 10.0)  # 이만큼 단절이면 공정 중단 — PLC 히터 워치독 TON 10초와 같게
+
+# ── 시리얼 장치 공통 재연결 정책(lib/comm_policy.ReconnectPolicy) — PLC·MFC·DC·RFpulse 공통 ──
+#  첫 실패부터 START×2^n 으로 벌리고 MAX 에서 캡. 첫 실패 후 LONG_OUTAGE_SEC 가 지나면
+#  장기두절로 보고 PROBE_MS 고정 주기로만 시도하며, 알림은 1회, 로그는 OUTAGE_LOG_SEC 마다.
+#  2026-09-16 사고(3초마다 close/open 블로킹 13.6시간 → 락업) 대응.
+COMM_RECONNECT_START_MS = get('COMM_RECONNECT_START_MS', 1000)
+COMM_RECONNECT_MAX_MS   = get('COMM_RECONNECT_MAX_MS',   60000)
+COMM_LONG_OUTAGE_SEC    = get('COMM_LONG_OUTAGE_SEC',    600)
+COMM_PROBE_MS           = get('COMM_PROBE_MS',           60000)
+COMM_OUTAGE_LOG_SEC     = get('COMM_OUTAGE_LOG_SEC',     600)
 
 # ── PLC 콜드 스타트(재기동/메모리 초기화) 감지용 예비 D레지스터 ──
 #  접속 시 난수 마커를 써 두고 ≈1초마다 되읽는다. 값이 바뀌면 PLC 가 재기동(D영역 초기화)된
@@ -44,16 +53,15 @@ PLC_SESSION_MARK_REG    = get('PLC_SESSION_MARK_REG',    60)    # D00060
 #  "끊기면 재연결 시도, 예산 안에 복구 안 되면 안전정지 + 구글챗, 복구되면 OFF 재적용".
 #  MFC 는 이미 백오프 재연결이 있어 이벤트 기록만 붙인다.
 DC_COMM_LOSS_ABORT_SEC       = get('DC_COMM_LOSS_ABORT_SEC',       10.0)  # 공정 중 이만큼 응답이 없으면 "재시작"
-DC_RECONNECT_BACKOFF_START_MS = get('DC_RECONNECT_BACKOFF_START_MS', 500)
-DC_RECONNECT_BACKOFF_MAX_MS   = get('DC_RECONNECT_BACKOFF_MAX_MS',  8000)
 RFPULSE_COMM_LOSS_ABORT_SEC  = get('RFPULSE_COMM_LOSS_ABORT_SEC',  10.0)  # 폴링 중 이만큼 응답이 없으면 "재시작"
 RFPULSE_COMM_REOPEN_SEC      = 3.0      # 무응답이 이만큼 이어지면 포트를 닫고 다시 연다(USB 재열거 대응)
 
 
 def _validate_plc_comm_config() -> None:
     """설정이 틀려도 프로그램은 떠야 한다 — 클램프/끄기만 하고 예외는 던지지 않는다."""
-    global PLC_RETRY_COUNT, PLC_RETRY_DELAY_MS, PLC_COMM_REOPEN_SEC, PLC_COMM_LOSS_ABORT_SEC
+    global PLC_RETRY_COUNT, PLC_RETRY_DELAY_MS, PLC_COMM_LOSS_ABORT_SEC
     global PLC_SESSION_MARK_REG
+    global COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC
     try:
         PLC_RETRY_COUNT = max(0, min(5, int(PLC_RETRY_COUNT)))
     except Exception:
@@ -63,16 +71,27 @@ def _validate_plc_comm_config() -> None:
     except Exception:
         print(f"[Config] PLC_RETRY_DELAY_MS {PLC_RETRY_DELAY_MS!r} → 30"); PLC_RETRY_DELAY_MS = 30
     try:
-        PLC_COMM_REOPEN_SEC = max(0.5, float(PLC_COMM_REOPEN_SEC))
-    except Exception:
-        print(f"[Config] PLC_COMM_REOPEN_SEC {PLC_COMM_REOPEN_SEC!r} → 3.0"); PLC_COMM_REOPEN_SEC = 3.0
-    try:
         PLC_COMM_LOSS_ABORT_SEC = max(1.0, float(PLC_COMM_LOSS_ABORT_SEC))
     except Exception:
         print(f"[Config] PLC_COMM_LOSS_ABORT_SEC {PLC_COMM_LOSS_ABORT_SEC!r} → 10.0"); PLC_COMM_LOSS_ABORT_SEC = 10.0
-    if PLC_COMM_LOSS_ABORT_SEC < PLC_COMM_REOPEN_SEC:
-        print(f"[Config] PLC_COMM_LOSS_ABORT_SEC {PLC_COMM_LOSS_ABORT_SEC:g} < REOPEN {PLC_COMM_REOPEN_SEC:g} → REOPEN 으로 상향")
-        PLC_COMM_LOSS_ABORT_SEC = PLC_COMM_REOPEN_SEC
+    # 공통 재연결 정책 — 범위 밖이면 클램프
+    for _name, _lo, _hi, _def in (("COMM_RECONNECT_START_MS", 100, 60000, 1000),
+                                  ("COMM_RECONNECT_MAX_MS", 1000, 600000, 60000),
+                                  ("COMM_LONG_OUTAGE_SEC", 30, 86400, 600),
+                                  ("COMM_PROBE_MS", 1000, 600000, 60000),
+                                  ("COMM_OUTAGE_LOG_SEC", 30, 86400, 600)):
+        _raw = globals()[_name]
+        try:
+            _v = int(_raw)
+        except Exception:
+            print(f"[Config] {_name} {_raw!r} → {_def}"); _v = _def
+        _c = min(max(_v, _lo), _hi)
+        if _c != _v:
+            print(f"[Config] {_name} {_v} → {_c} 로 클램프 (허용 {_lo}~{_hi})")
+        globals()[_name] = _c
+    if COMM_RECONNECT_MAX_MS < COMM_RECONNECT_START_MS:
+        print(f"[Config] COMM_RECONNECT_MAX_MS {COMM_RECONNECT_MAX_MS} < START {COMM_RECONNECT_START_MS} → START 로 상향")
+        COMM_RECONNECT_MAX_MS = COMM_RECONNECT_START_MS
     # 마커 레지스터가 사용 중인 D 주소와 겹치면 기능을 끈다
     #  D00000~3 ADC, D00010~28 히터, D00029~32 예약, D00040~43 DAC
     _used = set(range(0, 4)) | set(range(10, 29)) | set(range(29, 33)) | set(range(40, 44))
@@ -522,9 +541,7 @@ RFPULSE_ACK_FOLLOWUP_GRACE_MS = 500
 RFPULSE_POLL_INTERVAL_MS      = 5000   # 폴링 주기(STATUS→FWD→REF 한 바퀴)
 RFPULSE_POLL_QUERY_TIMEOUT_MS = 9000
 RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS = 800
-RFPULSE_WATCHDOG_INTERVAL_MS       = 3000
-RFPULSE_RECONNECT_BACKOFF_START_MS = 2000
-RFPULSE_RECONNECT_BACKOFF_MAX_MS   = 30000
+RFPULSE_WATCHDOG_INTERVAL_MS       = 3000   # 재연결 스케줄은 COMM_* (lib/comm_policy)
 
 # 파워 감시 — 기본값은 원본과 같고, 현장에서 조정할 수 있게 config_user.json 경유다.
 #  (타이밍/백오프는 프로토콜 타이밍이라 위처럼 고정값으로 둔다)
@@ -605,9 +622,7 @@ MFC_PRESSURE_WARN_COUNT = get('MFC_PRESSURE_WARN_COUNT', 5)     # 이탈 연속 
 # 고정값 (타이밍/간격)
 MFC_POLLING_INTERVAL_MS       = 2000   # polling 주기(ms)
 MFC_STABILIZATION_INTERVAL_MS = 1000   # 안정화 확인 주기(ms)
-MFC_WATCHDOG_INTERVAL_MS      = 1500   # 포트 감시 주기(ms)
-MFC_RECONNECT_BACKOFF_START_MS = 500   # 재연결 첫 대기(ms)
-MFC_RECONNECT_BACKOFF_MAX_MS   = 8000  # 재연결 최대 대기(ms)
+MFC_WATCHDOG_INTERVAL_MS      = 1500   # 포트 감시 주기(ms) — 재연결 스케줄은 COMM_* (lib/comm_policy)
 MFC_TIMEOUT      = 1000   # 명령 timeout(ms)
 MFC_GAP_MS       = 1000   # 인터커맨드 간격(ms)
 MFC_DELAY_MS     = 1000   # 검증/재시도 지연(ms)

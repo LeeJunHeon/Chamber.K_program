@@ -30,12 +30,13 @@ class Command:
     allow_no_reply: bool
 
 # 필요한 설정만 가져옵니다(스케일 관련 상수는 사용하지 않음).
+from lib.comm_policy import ReconnectPolicy
 from lib.config import (
     MFC_PORT, MFC_BAUD, MFC_COMMANDS,
     FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT,
     MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS,
-    MFC_WATCHDOG_INTERVAL_MS, MFC_RECONNECT_BACKOFF_START_MS,
-    MFC_RECONNECT_BACKOFF_MAX_MS, MFC_TIMEOUT,
+    MFC_WATCHDOG_INTERVAL_MS, MFC_TIMEOUT,
+    COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
     MFC_GAP_MS, MFC_DELAY_MS, MFC_DELAY_MS_VALVE,
     MFC_PRESSURE_SCALE, MFC_PRESSURE_DECIMALS, MFC_SP1_VERIFY_TOL,
     MFC_PRESSURE_WARN_RATIO, MFC_PRESSURE_WARN_COUNT,
@@ -53,6 +54,7 @@ class MFCController(QObject):
     command_requested  = Signal(str, dict)
     flow_alert     = Signal(str)   # ← 추가: 유량 이탈 경고 (공정 유지, 채팅 알림용)
     mfc_comm_event = Signal(dict)  # COMM_events.csv 1행(재연결 시도/성공/실패, 명령 최종 실패). 로직 변경 없음
+    comm_long_outage = Signal(str, float)   # 장기두절 진입(장치명, 단절 초) — 두절당 1회
     pressure_alert = Signal(str)   # ← 추가: 압력 이탈 경고 (공정 유지, 채팅 알림용)
 
     def __init__(self, parent=None):
@@ -79,7 +81,7 @@ class MFCController(QObject):
 
         # 연결 상태
         self._want_connected = False
-        self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
+        self._policy = ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC)   # 재연결 스케줄(공통)
         self._reconnect_pending = False
 
         # 안정화/모니터링
@@ -179,7 +181,7 @@ class MFCController(QObject):
         self.serial_mfc.clear(QSerialPort.Direction.AllDirections)
         self._rx.clear()
 
-        self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
+        self._policy.on_success()
         self._reconnect_pending = False
 
         self.status_message.emit("MFC", f"{MFC_PORT} 연결 성공 (PyQt6 QSerialPort)")
@@ -202,9 +204,16 @@ class MFCController(QObject):
         if self._reconnect_pending:
             return
         self._reconnect_pending = True
-        self.status_message.emit("MFC", f"재연결 시도... ({self._reconnect_backoff_ms} ms)")
-        self._emit_comm_event("재연결시도", f"{self._reconnect_backoff_ms} ms 뒤")
-        QTimer.singleShot(self._reconnect_backoff_ms, self._try_reconnect)
+        ms = self._policy.on_failure()
+        if self._policy.take_long_outage_alert():
+            lost = self._policy.outage_sec()
+            self.status_message.emit("MFC", f"MFC 통신 장기 두절 {lost:.0f}초 — {ms} ms 간격으로만 재시도")
+            self._emit_comm_event("장기두절", f"{lost:.0f}초")
+            self.comm_long_outage.emit("MFC", float(lost))
+        if self._policy.should_log():
+            self.status_message.emit("MFC", f"재연결 시도... ({ms} ms)")
+            self._emit_comm_event("재연결시도", f"{ms} ms 뒤")
+        QTimer.singleShot(ms, self._try_reconnect)
 
     def _try_reconnect(self):
         self._reconnect_pending = False
@@ -214,10 +223,8 @@ class MFCController(QObject):
             self.status_message.emit("MFC", "재연결 성공. 대기 중 명령 재개.")
             self._emit_comm_event("재연결", "성공")
             QTimer.singleShot(0, self._dequeue_and_send)
-            self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
         else:
-            self._emit_comm_event("재연결", f"실패 (다음 백오프 {min(self._reconnect_backoff_ms * 2, MFC_RECONNECT_BACKOFF_MAX_MS)} ms)")
-            self._reconnect_backoff_ms = min(self._reconnect_backoff_ms * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
+            self._emit_comm_event("재연결", "실패")
 
     @Slot()
     def cleanup(self):

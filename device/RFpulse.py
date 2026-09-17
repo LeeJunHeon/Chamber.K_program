@@ -43,6 +43,7 @@ from typing import Callable, Deque, Optional, Tuple
 from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, pyqtSlot as Slot
 from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
+from lib.comm_policy import ReconnectPolicy
 from lib.config import (
     RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, RFPULSE_PARITY, RFPULSE_MAX_POWER,
     RFPULSE_ACK_TIMEOUT_MS, RFPULSE_QUERY_TIMEOUT_MS, RFPULSE_CMD_GAP_MS,
@@ -50,7 +51,7 @@ from lib.config import (
     RFPULSE_POLL_INTERVAL_MS, RFPULSE_POLL_QUERY_TIMEOUT_MS,
     RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS,
     RFPULSE_WATCHDOG_INTERVAL_MS,
-    RFPULSE_RECONNECT_BACKOFF_START_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS,
+    COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
     RFPULSE_COMM_LOSS_ABORT_SEC, RFPULSE_COMM_REOPEN_SEC,
     RFPULSE_FORP_TOLERANCE_PERCENT, RFPULSE_FORP_CONSECUTIVE_LIMIT,
     RFPULSE_REFP_LIMIT_WATTS, RFPULSE_REFP_CONSECUTIVE_LIMIT,
@@ -211,6 +212,7 @@ class RFPulseController(QObject):
     # ── 시리얼 장비 공통 통신 두절 정책 ──
     comm_event        = Signal(dict)    # COMM_events.csv 1행 (파일 I/O 는 main 스레드의 lib.logger)
     rfpulse_recovered = Signal(float)   # 단절 뒤 첫 성공 (단절 초) — main 이 안전 상태 재적용 여부 판단
+    comm_long_outage  = Signal(str, float)   # 장기두절 진입(장치명, 단절 초) — 두절당 1회
 
     _RX_MAX = 4096         # 수신 버퍼 상한(바이트)
 
@@ -235,7 +237,7 @@ class RFPulseController(QObject):
         self._want_connected = False
         self._closing = False
         self._reconnect_pending = False
-        self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
+        self._policy = ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC)   # 재연결 스케줄(공통)
         self._watchdog: Optional[QTimer] = None
 
         # 폴링
@@ -346,7 +348,7 @@ class RFPulseController(QObject):
             f"stop {int(self.serial_rfp.stopBits().value)} "
             f"(CESAR 규격 9600 8O1)")
 
-        self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
+        self._policy.on_success()
         self._reconnect_pending = False
 
         self.status_message.emit(
@@ -359,9 +361,15 @@ class RFPulseController(QObject):
         if self._reconnect_pending:
             return
         self._reconnect_pending = True
-        self.status_message.emit(
-            "RFPulse", f"재연결 시도... ({self._reconnect_backoff_ms} ms)")
-        QTimer.singleShot(self._reconnect_backoff_ms, self._try_reconnect)
+        ms = self._policy.on_failure()
+        if self._policy.take_long_outage_alert():
+            lost = self._policy.outage_sec()
+            self.status_message.emit("RFPulse(경고)", f"RF Pulse 통신 장기 두절 {lost:.0f}초 — {ms} ms 간격으로만 재시도")
+            self._emit_event("장기두절", f"{lost:.0f}초", lost=lost)
+            self.comm_long_outage.emit("RFPulse", float(lost))
+        if self._policy.should_log():
+            self.status_message.emit("RFPulse", f"재연결 시도... ({ms} ms)")
+        QTimer.singleShot(ms, self._try_reconnect)
 
     def _try_reconnect(self):
         self._reconnect_pending = False
@@ -370,10 +378,6 @@ class RFPulseController(QObject):
         if self._open_port():
             self.status_message.emit("RFPulse", "재연결 성공. 대기 중 명령 재개.")
             QTimer.singleShot(0, self._dequeue_and_send)
-            self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
-        else:
-            self._reconnect_backoff_ms = min(
-                self._reconnect_backoff_ms * 2, RFPULSE_RECONNECT_BACKOFF_MAX_MS)
 
     @Slot()
     def close_connection(self):

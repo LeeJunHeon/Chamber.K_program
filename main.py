@@ -42,6 +42,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
                         HEATER_HOLD_MV_AFTER_REACH, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC,
                         HEATER_HOLD_MV_ARRIVE_TOL_C, HEATER_HOLD_MV_DRIFT_PV_C, HEATER_HOLD_MV_DRIFT_MV,
+                        COMM_PROBE_MS,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
                         HEATER_GAS_HOLD_RELEASE_C,
@@ -863,6 +864,9 @@ class MainDialog(QDialog):
         self.rfpulse_controller.comm_event.connect(lambda r: self._on_comm_event("RFPulse", r))
         self.rfpulse_controller.rfpulse_recovered.connect(self._on_rfpulse_recovered)
         self.mfc_controller.mfc_comm_event.connect(lambda r: self._on_comm_event("MFC", r))
+        # 장기두절(10분) 알림 — 네 장치가 같은 정책(lib/comm_policy)으로 두절당 1회만 낸다
+        for _dev in (self.plc_controller, self.mfc_controller, self.dcpower_controller, self.rfpulse_controller):
+            _dev.comm_long_outage.connect(self._on_comm_long_outage)
         self.mfc_controller.status_message.connect(self.on_status_message)
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
@@ -1203,6 +1207,21 @@ class MainDialog(QDialog):
             append_comm_event(device, r)
         except Exception:
             pass
+
+    @Slot(str, float)
+    def _on_comm_long_outage(self, device: str, lost: float):
+        """장치 통신 장기 두절(정책이 두절당 1회 보장) — 로그 + 이벤트 + 챗 텍스트 1줄."""
+        mins = int(float(lost) // 60)
+        msg = (f"{device} 통신 장기 두절 {mins}분 — {int(COMM_PROBE_MS) // 1000}초 간격으로만 재시도 중. "
+               f"케이블/허브 확인 필요")
+        log_message_to_monitor("경고", f"[{device}] {msg}")
+        self._on_comm_event(device, {"종류": "장기두절", "상세": msg, "단절초": f"{float(lost):.1f}", "연속실패": ""})
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(f"⚠️ CHK {msg}")
+                self.chat_chk.flush()
+        except Exception as e:
+            log_message_to_monitor("경고", f"장기두절 챗 알림 실패({device}): {e!r}")
 
     def _process_active(self) -> bool:
         return (bool(getattr(self, "process_running", False))

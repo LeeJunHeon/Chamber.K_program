@@ -2,17 +2,20 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 from typing import Dict, List, Tuple
-from PyQt6.QtCore import QObject, QThread, pyqtSignal as Signal, pyqtSlot as Slot, QTimer, QMutex
+from PyQt6.QtCore import QObject, pyqtSignal as Signal, pyqtSlot as Slot, QTimer, QMutex
 import minimalmodbus
 import time
 import random
 import datetime
 import collections
 
+from lib.comm_policy import ReconnectPolicy
+from lib.serial_guard import open_guarded, close_guarded
 from lib.config import (
     PLC_PORT, PLC_SLAVE_ID, PLC_BAUD,
     PLC_TIMEOUT, PLC_COIL_MAP,
-    PLC_RETRY_COUNT, PLC_RETRY_DELAY_MS, PLC_COMM_REOPEN_SEC, PLC_COMM_LOSS_ABORT_SEC,
+    PLC_RETRY_COUNT, PLC_RETRY_DELAY_MS, PLC_COMM_LOSS_ABORT_SEC,
+    COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
     PLC_SESSION_MARK_REG,
     PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR,
     RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
@@ -123,6 +126,8 @@ class PLCController(QObject):
     # 시작 시 PLC 에 남아 있던 HEATER_RUN(M00040) 을 정리했다 — {'pv': °C, 'sv_old': °C}
     #  (RUN 의 진실은 PLC 하나다. 프로그램이 꺼져 있던 동안 돌던 히터는 허용하지 않는다)
     heater_residual = Signal(dict)
+    # 장기두절 진입(장치명, 단절 초) — 두절당 1회 (lib/comm_policy 가 보장)
+    comm_long_outage = Signal(str, float)
 
     def __init__(self):
         super().__init__()
@@ -146,7 +151,13 @@ class PLCController(QObject):
         self._comm_last_err: str = ""
         self._comm_last_fail_log_t: float = 0.0         # "통신 실패" 경고 솎음(1초)
         self._comm_last_retry_log_t: float = 0.0        # "재시도성공" 이벤트 솎음(1초)
-        self._comm_last_reopen_t: float = 0.0           # 마지막 포트 재오픈 시도 시각
+        # ★ 링크 상태 + 재연결 정책(공통). 링크가 죽어 있으면 어떤 슬롯도 트랜잭션을 하지 않는다.
+        self._link_down: bool = False
+        self._reconnect_pending: bool = False
+        self._ever_connected: bool = False
+        self._link_skip_log_t: float = 0.0
+        self._policy = ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS,
+                                       COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC)
         self._outage_abort: bool = False                # 이번 단절로 공정을 중단했는가(복구 후 안전 상태 재적용 판단)
         # ★ 블랙박스 링버퍼 — 성공한 폴링마다 스냅샷(200ms × 300 ≈ 60초)
         self._blackbox: collections.deque = collections.deque(maxlen=300)
@@ -201,23 +212,28 @@ class PLCController(QObject):
         self._blackbox_dumped = False
 
     # ============== 연결/해제 =================
+    def _make_instrument(self):
+        """Instrument 생성 + 포트 설정. 블로킹 가능성이 있으므로 open_guarded 로만 부른다."""
+        inst = minimalmodbus.Instrument(PLC_PORT, PLC_SLAVE_ID, mode=minimalmodbus.MODE_RTU)
+        inst.serial.baudrate = PLC_BAUD
+        inst.serial.bytesize = 8
+        inst.serial.parity   = 'N'
+        inst.serial.stopbits = 1
+        inst.serial.timeout  = PLC_TIMEOUT
+        inst.close_port_after_each_call = False
+        inst.clear_buffers_before_each_transaction = True
+        inst.handle_local_echo = False
+        return inst
+
     @Slot()
     def start_polling(self):
         if self._is_running:
             return
         try:
-            self.instrument = minimalmodbus.Instrument(
-                PLC_PORT, PLC_SLAVE_ID, mode=minimalmodbus.MODE_RTU
-            )
-            self.instrument.serial.baudrate = PLC_BAUD
-            self.instrument.serial.bytesize = 8
-            self.instrument.serial.parity   = 'N'
-            self.instrument.serial.stopbits = 1
-            self.instrument.serial.timeout  = PLC_TIMEOUT
-
-            self.instrument.close_port_after_each_call = False
-            self.instrument.clear_buffers_before_each_transaction = True
-            self.instrument.handle_local_echo = False
+            self.instrument = open_guarded(self._make_instrument, 2.0)
+            if self.instrument is None:
+                raise RuntimeError(f"{PLC_PORT} 를 2초 안에 열지 못했습니다")
+            self._ever_connected = True
 
             self._is_running = True
             self._comm_last_ok = time.monotonic()
@@ -249,23 +265,25 @@ class PLCController(QObject):
 
     @Slot()
     def cleanup(self):
+        """종료. 어떤 경우에도 2초 안에 반환한다 — closeEvent 가 BlockingQueuedConnection 으로 기다린다.
+        (a) 링크가 살아 있으면 히터 RUN=0 1회(_mb, ≤1.6초) (b) 포트는 close_guarded 로 넘기고 즉시 반환."""
         self.polling_timer.stop()
         self._heater_wd_timer.stop()               # ★
-        try:
-            if self.instrument:                    # ★ 종료 전 히터 정지
-                self.instrument.write_bit(HEATER_COIL_RUN, 0, functioncode=5)
-        except Exception:
-            pass
-        
         self._is_running = False
-        QThread.msleep(200)
-        try:
-            if self.instrument and self.instrument.serial and self.instrument.serial.is_open:
-                self.instrument.serial.close()
-        except Exception:
-            pass
+        inst = self.instrument
+        off_ok = False
+        if inst is not None and not self._link_down:
+            try:                                   # ★ 종료 전 히터 정지
+                self._mb("종료 히터 RUN=0", inst.write_bit, HEATER_COIL_RUN, 0, functioncode=5)
+                off_ok = True
+            except Exception as ex:
+                self.status_message.emit("PLC(경고)", f"종료 시 히터 OFF 쓰기 실패: {ex}")
+        if not off_ok:
+            self.status_message.emit("PLC(경고)", "종료 시 히터 OFF 미확인 — PLC 워치독이 10초 후 차단")
         self.instrument = None
-        self.status_message.emit("PLC", "포트를 안전하게 닫았습니다.")
+        if inst is not None:
+            close_guarded(getattr(inst, "serial", None), "PLC serial")
+        self.status_message.emit("PLC", "포트 닫기를 넘기고 종료합니다.")
 
     # ============== 통신 내성 (2026-09-16 사고 대응) =================
     def _mb(self, what: str, fn, *args, **kw):
@@ -314,9 +332,9 @@ class PLCController(QObject):
         self._comm_last_err = str(last_ex)
         raise last_ex
 
-    def _comm_note_failure(self, ex: Exception, what: str) -> None:
-        """코일 읽기 실패(재시도 포함 전부 실패) 뒤 단절 예산에 따라 경고 / 포트 재오픈 / 중단을 결정한다.
-        호출자(_poll_status)가 _mutex 를 잡고 있고 트랜잭션은 끝난 상태다."""
+    def _comm_budget_tick(self, ex: Exception, what: str) -> None:
+        """폴링당 1회: 경고 로그 + 10초 "재시작" 중단 판정 + 블랙박스 덤프(기존 그대로).
+        재연결 스케줄은 _comm_schedule_reconnect 가 따로 한다."""
         now = time.monotonic()
         lost = now - self._comm_last_ok
         streak = self._comm_fail_streak
@@ -346,29 +364,62 @@ class PLCController(QObject):
                     f"통신 실패 {what}: {ex} (단절 {lost:.1f}s, 연속 {streak}회)")
                 self._emit_event("실패", f"{what}: {ex}", lost=lost)
 
-        if (lost >= float(PLC_COMM_REOPEN_SEC)
-                and (now - self._comm_last_reopen_t) >= float(PLC_COMM_REOPEN_SEC)):
-            self._comm_last_reopen_t = now
-            self._reopen_port()
+    def _comm_schedule_reconnect(self) -> None:
+        """첫 실패 → 링크 다운으로 놓고 정책 스케줄로 _reconnect_attempt 를 예약한다.
+        재시도는 절대 COMM_RECONNECT_START_MS 보다 촘촘해지지 않는다."""
+        if self._reconnect_pending:
+            return
+        self._link_down = True
+        self._reconnect_pending = True
+        ms = self._policy.on_failure()
+        if self._policy.should_log():
+            self.status_message.emit("PLC", f"재연결 시도... ({ms} ms)")
+        QTimer.singleShot(ms, self._reconnect_attempt)
 
-    def _reopen_port(self) -> bool:
-        """시리얼 포트 close→open. _mutex 안, 트랜잭션 밖에서만 부른다."""
-        if self.instrument is None or self.instrument.serial is None:
-            return False
-        ser = self.instrument.serial
+    def _reconnect_attempt(self) -> None:
+        """기존 Serial 은 close_guarded 로 버리고 open_guarded(2초) 로 새 Instrument 를 만든다.
+        PLC 스레드에서 돌지만 OS 드라이버 호출에 2초 이상 묶이지 않는다(P4)."""
+        self._reconnect_pending = False
+        if not self._is_running:
+            return
+        self._mutex.lock()
         try:
-            try:
-                ser.close()
-            except Exception:
-                pass
-            ser.open()
-            self.status_message.emit("PLC", f"PLC 포트 재오픈({PLC_PORT})")
-            self._emit_event("재오픈", f"{PLC_PORT} 성공")
-            return True
-        except Exception as ex:
-            self.status_message.emit("PLC(경고)", f"포트 재오픈 실패: {ex}")
-            self._emit_event("재오픈", f"{PLC_PORT} 실패: {ex}")
+            old = self.instrument
+            self.instrument = None
+            if old is not None:
+                close_guarded(getattr(old, "serial", None), "PLC serial(재연결)")
+            new = open_guarded(self._make_instrument, 2.0)
+            if new is not None:
+                self.instrument = new
+                self._link_down = False
+                self._ever_connected = True
+                self._policy.on_success()
+                self.status_message.emit("PLC", f"PLC 포트 재연결({PLC_PORT})")
+                self._emit_event("재연결", f"{PLC_PORT} 성공")
+                return
+        finally:
+            self._mutex.unlock()
+        ms = self._policy.on_failure()
+        if self._policy.take_long_outage_alert():
+            lost = self._policy.outage_sec()
+            self.status_message.emit("PLC(경고)", f"PLC 통신 장기 두절 {lost:.0f}초 — {COMM_PROBE_MS} ms 간격으로만 재시도")
+            self._emit_event("장기두절", f"{lost:.0f}초", lost=lost)
+            self.comm_long_outage.emit("PLC", float(lost))
+        if self._policy.should_log():
+            self.status_message.emit("PLC", f"재연결 시도... ({ms} ms)")
+            self._emit_event("재연결시도", f"{ms} ms 뒤")
+        self._reconnect_pending = True
+        QTimer.singleShot(ms, self._reconnect_attempt)
+
+    def _link_down_skip(self, what: str) -> bool:
+        """링크 다운이면 True 를 돌려주고(호출자는 즉시 return) 1초 1회만 로그."""
+        if not self._link_down:
             return False
+        now = time.monotonic()
+        if (now - self._link_skip_log_t) >= 1.0:
+            self._link_skip_log_t = now
+            self.status_message.emit("PLC(경고)", f"PLC 링크 다운 — {what} 생략")
+        return True
 
     # ── 이벤트/블랙박스 (파일 I/O 는 main 스레드의 lib.logger 가 한다) ──
     def _heater_flags_str(self) -> str:
@@ -511,14 +562,12 @@ class PLCController(QObject):
         result: Dict[int, bool] = {}
         for (s, e) in ranges:
             count = (e - s) + 1
-            try:
-                bits = self._mb(f"Coils[{s}..{e}]", self.instrument.read_bits, s, count, functioncode=1)  # Coils
-                for i, b in enumerate(bits):
-                    result[s + i] = bool(b)
-            except Exception as ex:
-                # ★ 한 프레임 손실로 공정을 죽이지 않는다 — 재시도 뒤에도 실패면 단절 예산으로 판단
-                #   (경고 → 3초 포트 재오픈 → 10초 "재시작"). 2026-09-16 사고 대응.
-                self._comm_note_failure(ex, f"[{s}..{e}]")
+            # ★ 한 그룹이 재시도까지 실패하면 예외를 그대로 올린다 — 나머지 그룹·센서·히터 읽기를
+            #   건너뛰어 폴링 1회의 블로킹을 (그룹 3개 × 1.5초 = 4.5초) 가 아니라 1.5초로 묶는다.
+            #   단절 예산 판정(_comm_budget_tick)은 _poll_status 가 폴링당 1회 한다.
+            bits = self._mb(f"Coils[{s}..{e}]", self.instrument.read_bits, s, count, functioncode=1)  # Coils
+            for i, b in enumerate(bits):
+                result[s + i] = bool(b)
 
         return result
 
@@ -534,19 +583,19 @@ class PLCController(QObject):
         #   10초에 히터를 끄는데, 그것이 의도된 안전 동작이다(PLC_COMM_LOSS_ABORT_SEC 와 같은 예산).
         if not self._is_running or self._busy:
             return
-        if self.instrument is None:
-            self._check_disconnect_timeout()   # ★ instrument 없을 때도 끊김 감지
+        if self._link_down or self.instrument is None:
+            # ★ 링크 다운: 트랜잭션 없이 예산 판정(10초 "재시작")과 60초 끊김 감지만 계속 돈다.
+            #   재연결은 _reconnect_attempt 가 정책 스케줄로 따로 한다.
+            if self._ever_connected:
+                self._comm_budget_tick(RuntimeError(self._comm_last_err or "링크 다운"), "[link]")
+            self._check_disconnect_timeout()
             return
         self._busy = True
         self._mutex.lock()
         try:
-            # 1) 코일 상태(버튼) 동기화 — 비연속 주소를 그룹 폴링
+            # 1) 코일 상태(버튼) 동기화 — 비연속 주소를 그룹 폴링(첫 실패에서 예외로 빠진다)
             coil_addr_list = list(PLC_COIL_MAP.values())
             addr_to_state = self._read_coils_grouped(coil_addr_list)
-
-            # ★ 코일 읽기가 전부 실패(빈 dict)면 통신 두절로 간주
-            if coil_addr_list and not addr_to_state:
-                raise RuntimeError("PLC 코일 읽기 전부 실패")
 
             for btn_name, addr in PLC_COIL_MAP.items():
                 val = bool(addr_to_state.get(addr, False))
@@ -590,8 +639,9 @@ class PLCController(QObject):
             self._disconnect_notified = False
 
         except Exception as e:
-            self.status_message.emit("PLC(경고)", f"폴링 실패: {e}")
-            # ★ 추가: 폴링 실패 → 60초 끊김 감지
+            # 코일 읽기 실패(재시도 소진) → 예산 판정 1회 + 재연결 예약 + 60초 끊김 감지
+            self._comm_budget_tick(e, "[poll]")
+            self._comm_schedule_reconnect()
             self._check_disconnect_timeout()
         finally:
             self._busy = False
@@ -616,6 +666,8 @@ class PLCController(QObject):
     def update_port_state(self, btn_name: str, state: bool):
         if self.instrument is None:
             self.status_message.emit("PLC(오류)", "포트가 열려 있지 않습니다.")
+            return
+        if self._link_down_skip("코일 쓰기"):
             return
 
         self._busy = True
@@ -938,6 +990,8 @@ class PLCController(QObject):
         """PLC에 '파이썬 살아있음'을 알리는 하트비트. 값이 바뀌기만 하면 됨."""
         if self.instrument is None or self._busy:
             return
+        if self._link_down_skip("워치독"):
+            return
         self._busy = True
         self._mutex.lock()
         try:
@@ -954,6 +1008,8 @@ class PLCController(QObject):
         """목표 온도 쓰기 (PLC가 HEATER_SV_LIMIT으로 한 번 더 클램프함)."""
         if self.instrument is None:
             self.status_message.emit("PLC(오류)", "포트가 열려 있지 않습니다.")
+            return
+        if self._link_down_skip("히터 목표"):
             return
         self._busy = True
         self._mutex.lock()
@@ -982,6 +1038,8 @@ class PLCController(QObject):
         """레시피 스텝마다 램프 속도(D00020)를 바꾼다. 1 카운트/초 = 6°C/min."""
         if self.instrument is None:
             return
+        if self._link_down_skip("히터 램프"):
+            return
         self._busy = True
         self._mutex.lock()
         try:
@@ -999,6 +1057,8 @@ class PLCController(QObject):
         """런타임 DAC 출력 상한(D00018) 변경 — 목표 도달 후 출력 고정용.
         설정된 운전 상한(HEATER_MV_LIMIT)보다 위로는 절대 못 쓴다. 실패해도 예외를 밖으로 내보내지 않는다."""
         if self.instrument is None:
+            return
+        if self._link_down_skip("히터 DAC상한"):
             return
         self._busy = True
         self._mutex.lock()
@@ -1018,6 +1078,8 @@ class PLCController(QObject):
     def set_heater_run(self, on: bool):
         if self.instrument is None:
             return
+        if self._link_down_skip("히터 RUN"):
+            return
         self._busy = True
         self._mutex.lock()
         try:
@@ -1033,6 +1095,8 @@ class PLCController(QObject):
     def reset_heater_fault(self):
         """이상 리셋. PLC 래더가 자기 리셋하므로 0으로 되돌릴 필요 없음."""
         if self.instrument is None:
+            return
+        if self._link_down_skip("히터 리셋"):
             return
         self._busy = True
         self._mutex.lock()
@@ -1053,6 +1117,8 @@ class PLCController(QObject):
     def send_rfpower_command(self, pwm_value: int):
         if self.instrument is None:
             self.status_message.emit("PLC(오류)", "포트가 열려 있지 않습니다.")
+            return
+        if self._link_down_skip("RF DAC"):
             return
         self._busy = True
         self._mutex.lock()
@@ -1075,6 +1141,8 @@ class PLCController(QObject):
     def read_rf_feedback(self) -> tuple[float, float] | tuple[None, None]:
         if self.instrument is None:
             return None, None
+        if self._link_down_skip("RF 피드백"):
+            return None, None
         self._busy = True
         self._mutex.lock()
         try:
@@ -1096,6 +1164,8 @@ class PLCController(QObject):
         둘 다 True여야 메인밸브가 실제로 열린 상태(공정 시작 허용).
         포트 미연결/읽기 실패 시 (None, None)."""
         if self.instrument is None:
+            return None, None
+        if self._link_down_skip("메인밸브 읽기"):
             return None, None
         self._busy = True
         self._mutex.lock()
