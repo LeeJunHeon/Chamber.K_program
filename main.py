@@ -200,19 +200,20 @@ class MainDialog(QDialog):
         self.heater_recipe = HeaterRecipeRunner(self.plc_controller, self)
         self._heater_logger = HeaterCsvLogger()
         self._heater_log_last_ms = 0.0
-        self._heater_run_prev = False
+        # RUN 상승/하강 엣지는 update_heater_display 에서 한 번만 계산한다(_heater_run_edge).
+        #  로그/챗/가스유지 소비자는 자기 prev 플래그를 갖지 않는다.
+        self._heater_run_prev_view = False
+        # 이상 상승 엣지에서 RUN OFF 를 보냈는가(에피소드당 1회, fault 해제 시 리셋)
+        self._heater_fault_off_sent = False
         # 목표 도달 후 DAC 상한 고정 상태기 (_heater_mv_hold_tick)
         self._mvhold = {'state': 'idle', 'samples': [], 't0': 0.0, 'sv': None, 'value': None, 'last_push': 0.0,
                         'arrived': False, 'arr_sv': None, 'floor_warned': False, 'limit_warned': False,
                         'drift_log_t': 0.0}
-        # 히터 시작/종료 구글챗 카드용 — _heater_run_prev(CSV 로거)와는 별도 플래그
-        self._heater_chat_run_prev = False
+        # 히터 시작 카드의 운전 시간 계산용(상승 엣지 시각)
         self._heater_chat_t0 = 0.0
         # 가스·압력 준비가 끝나면 무엇을 이어서 할지. ("manual_on", 목표온도) 또는
         #  ("recipe_start", None). 준비 중이 아니면 None.
         self._heater_pending = None
-        # 히터 RUN 의 True→False 전이 감시용. _heater_run_prev(CSV 로거용)와 별도로 둔다.
-        self._atm_run_prev = False
         # 가스 준비 진행도("3/9"). 상태 문구에 붙인다.
         self._atm_progress = ""
         # 히터가 꺼진 뒤에도 식을 때까지 가스를 물고 있는 중인가
@@ -356,7 +357,6 @@ class MainDialog(QDialog):
                 if HEATER_ENABLED and self.heater_recipe.is_running():
                     raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
                 want = bool(args.get("on"))
-                btn = self.ui.heater_onoff_button
                 if want:
                     # 목표 온도가 함께 왔으면 먼저 반영한다(빈 SV로 인한 팝업 방지)
                     val = args.get("value")
@@ -404,16 +404,15 @@ class MainDialog(QDialog):
                         float(sv_txt)
                     except ValueError:
                         raise RuntimeError(f"히터 목표 온도가 숫자가 아닙니다: {sv_txt}")
-                    st = getattr(self.plc_controller, "_heater_last", None) or {}
+                    st = self.plc_controller.get_heater_status() or {}
                     if not st.get("itl"):
                         raise RuntimeError("히터 인터락 미충족 (TC/DAC 모듈 상태 확인 필요)")
 
-                if btn.isChecked() == want:
-                    # 이미 원하는 상태 — setChecked 가 무시되므로 명시적으로 알린다
+                # 이미 원하는 상태인지는 버튼이 아니라 PLC(마지막 폴링)로 판단한다
+                if bool((self.plc_controller.get_heater_status() or {}).get("run")) == want:
                     raise RuntimeError(f"히터가 이미 {'ON' if want else 'OFF'} 상태입니다")
-                btn.setChecked(want)
-                if btn.isChecked() != want:
-                    raise RuntimeError("히터 상태 변경이 장비에서 거부되었습니다")
+                # 버튼을 눌러 흉내내지 않고(P3) 핸들러를 직접 부른다 — 표시는 폴링이 맞춘다
+                self._on_heater_onoff_toggled(want)
 
             elif name == "RECIPE_PROCESS_RUN":
                 # 웹에서 만든 공정 레시피를 CSV로 저장하고 기존 CSV 실행 경로를 그대로 사용한다
@@ -481,7 +480,7 @@ class MainDialog(QDialog):
 
             elif name == "HEATER_RESET":
                 # PLC 래치된 히터 이상(M00043) 해제. 확인은 웹이 이미 받았다.
-                st = getattr(self.plc_controller, "_heater_last", None) or {}
+                st = self.plc_controller.get_heater_status() or {}
                 if not st.get("fault"):
                     raise RuntimeError("히터 이상 상태가 아닙니다")
                 log_message_to_monitor("히터", "[원격] 히터 이상 리셋 요청")
@@ -884,6 +883,7 @@ class MainDialog(QDialog):
 
             # (2) PLC -> UI : 200ms 폴링으로 올라오는 히터 상태를 화면에 반영
             self.plc_controller.update_heater_status.connect(self.update_heater_display)
+            self.plc_controller.heater_residual.connect(self._on_heater_residual)
             self.plc_controller.heater_fault.connect(self._on_heater_fault)
 
             # (3) UI 위젯 -> 핸들러
@@ -951,7 +951,8 @@ class MainDialog(QDialog):
                 self._on_process_heater_target)
             self.process_controller.set_heater_ramp_c.connect(
                 self._on_process_heater_ramp_c)
-            self.process_controller.set_heater_run.connect(self.plc_controller.set_heater_run)
+            #   RUN 도 목표와 같이 main 큐를 거쳐 PLC 로 간다(_on_process_heater_run 안에서 emit)
+            #   → 발행 순서 = 도착 순서(목표 → RUN)가 보장된다. PLC 직결은 두지 않는다.
             self.process_controller.set_heater_run.connect(self._on_process_heater_run)
         else:
             # 히터 비활성(config_user.json의 HEATER_ENABLED=false) 시
@@ -1332,7 +1333,7 @@ class MainDialog(QDialog):
         # PLC가 실제로 보고한 소프트 상한(D00013)이 있으면 그쪽도 함께 본다.
         # 래더/모니터가 상한을 낮춰 둔 경우 UI가 먼저 막아 주도록.
         try:
-            plc_limit = float((self.plc_controller._heater_last or {}).get('sv_limit') or 0.0)
+            plc_limit = float((self.plc_controller.get_heater_status() or {}).get('sv_limit') or 0.0)
         except Exception:
             plc_limit = 0.0
         limit = min(HEATER_MAX_TEMP, plc_limit) if plc_limit > 0 else HEATER_MAX_TEMP
@@ -1360,9 +1361,11 @@ class MainDialog(QDialog):
             self.request_heater_target.emit(float(t))
 
     def _on_process_heater_run(self, on: bool):
-        """공정이 히터를 끄면 램프도 같이 끊는다."""
+        """공정의 히터 RUN. 끌 때는 램프를 먼저 끊고, RUN 은 main 큐를 거쳐 PLC 로 보낸다
+        (목표 온도와 같은 경로 → 도착 순서가 발행 순서와 같다)."""
         if not on:
             self.heater_ramp.stop(restore_rate=False)
+        self.request_heater_run.emit(bool(on))
 
     def _heater_manual_go(self, v: float):
         """수동 ON — 감속 접근으로 올리고 히터를 켠다."""
@@ -1375,7 +1378,7 @@ class MainDialog(QDialog):
         v = self._read_heater_sv_input()
         if v is None:
             return
-        st = self.plc_controller._heater_last or {}
+        st = self.plc_controller.get_heater_status() or {}
         if st.get('run'):
             # 운전 중 목표 변경 — 지금 램프를 끊고 새 목표로 다시 접근한다.
             self.heater_ramp.stop(restore_rate=False)
@@ -1395,23 +1398,22 @@ class MainDialog(QDialog):
                 self, "조작 불가",
                 "히터 레시피 실행 중에는 수동 조작을 할 수 없습니다.\n"
                 "레시피를 먼저 중단하세요.")
-            btn = self.ui.heater_onoff_button
-            btn.blockSignals(True)          # setChecked 재진입 방지
-            btn.setChecked(not checked)     # 눌리기 전 상태로 되돌린다
-            btn.setText("OFF" if btn.isChecked() else "ON")
-            btn.blockSignals(False)
+            # 눌리기 전 상태로 되돌린다 — 헬퍼는 blockSignals 로 재진입을 막는다
+            self._set_heater_button_view(not checked, "OFF" if not checked else "ON")
             return
 
         if checked:
-            st = self.plc_controller._heater_last or {}
+            st = self.plc_controller.get_heater_status() or {}
             if not st.get('itl'):
                 QMessageBox.warning(self, "히터 시작 불가",
                     "히터 인터락이 미충족 상태입니다.\nTC/DAC 모듈 상태를 확인하세요.")
-                self.ui.heater_onoff_button.setChecked(False)
+                # ★ 맨 setChecked(False) 는 toggled(False) 로 이 핸들러에 재진입해
+                #   PLC 에 RUN=0 을 쓰는 부수효과가 있었다(09-17). 헬퍼는 시그널을 막는다.
+                self._revert_heater_onoff()
                 return
             v = self._read_heater_sv_input()
             if v is None:
-                self.ui.heater_onoff_button.setChecked(False)
+                self._revert_heater_onoff()
                 return
 
             # 가스·압력을 쓰기로 했으면 먼저 준비한다. 히터는 준비가 끝난 뒤
@@ -1424,8 +1426,7 @@ class MainDialog(QDialog):
                 self._show_heater_pending_button()
                 self._sync_heater_gas_inputs()
                 return
-            self._heater_manual_go(v)
-            self.ui.heater_onoff_button.setText("OFF")
+            self._heater_manual_go(v)          # 버튼 표시는 폴링(update_heater_display)이 맞춘다
         else:
             # 준비 중이면 [취소] 다. 히터는 아직 안 켜졌으니 OFF 를 보내지 않고
             #  잡아 둔 가스만 되돌린다. 이상으로 update_heater_display 가
@@ -1441,8 +1442,7 @@ class MainDialog(QDialog):
                 log_message_to_monitor("히터", "[히터] 가스·압력 준비 취소 — 해제합니다")
                 return
             self.heater_ramp.stop()
-            self.request_heater_run.emit(False)
-            self.ui.heater_onoff_button.setText("ON")
+            self.request_heater_run.emit(False)   # 버튼 표시는 폴링이 맞춘다
 
     # ==================== 히터 CSV 로깅 / 레시피 ====================
     # ---------- 설비 이상으로 인한 공정 중단 ----------
@@ -1453,16 +1453,11 @@ class MainDialog(QDialog):
         빈 문자열을 돌려주고 예외를 밖으로 내보내지 않는다.
         """
         try:
-            st = {}
             try:
-                st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
-            except Exception:
+                st = dict(self.plc_controller.get_heater_status() or {})
+            except Exception as e:
+                log_message_to_monitor("경고", f"히터 상태 조회 실패: {e!r}")
                 st = {}
-            if not st:
-                try:
-                    st = dict(self.plc_controller.get_heater_status() or {})
-                except Exception:
-                    st = {}
 
             # f-string 표현식 안에 역슬래시를 넣지 않기 위한 상수 (Py3.11 호환)
             _DEG = "\u00b0C"
@@ -1756,7 +1751,7 @@ class MainDialog(QDialog):
         """
         try:
             if st is None:
-                st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
+                st = dict(self.plc_controller.get_heater_status() or {})
             mv = int(st.get('mv', 0) or 0)
             lim = int(st.get('mv_limit', HEATER_MV_LIMIT) or HEATER_MV_LIMIT)
             if not st.get('run'):
@@ -1988,14 +1983,13 @@ class MainDialog(QDialog):
         m = int(max(0.0, sec) // 60)
         return f"{m // 60}시간 {m % 60}분" if m >= 60 else f"{m}분"
 
-    def _heater_chat_tick(self, st: dict):
-        """st['run'] 의 상승/하강 엣지에서 히터 시작/종료 카드를 1장씩 보낸다.
-        전용 플래그(_heater_chat_run_prev/_heater_chat_t0)만 쓰고 _heater_run_prev(CSV 로거)는 건드리지 않는다.
+    def _heater_chat_tick(self, st: dict, edge) -> None:
+        """RUN 엣지(update_heater_display 가 계산)에서 히터 시작/종료 카드를 1장씩 보낸다.
         어떤 예외도 밖으로 내보내지 않는다. flush() 는 부르지 않는다(urgent 카드)."""
-        run = bool(st.get('run'))
+        if edge not in ('rise', 'fall'):
+            return
+        run = (edge == 'rise')
         try:
-            if run == self._heater_chat_run_prev:
-                return
             pv = st.get('pv')
             pv_txt = "--.-" if pv is None else f"{float(pv):.1f}°C"
             ctx = self._heater_run_context()
@@ -2018,20 +2012,19 @@ class MainDialog(QDialog):
                           "사유": why}
             if self.chat_chk:
                 self.chat_chk.notify_heater_run(run, ctx, fields)
-        except Exception:
-            pass
-        finally:
-            self._heater_chat_run_prev = run
+        except Exception as e:
+            log_message_to_monitor("경고", f"히터 카드 전송 실패: {e!r}")
 
-    def _heater_log_tick(self, st: dict):
-        """히터 운전 구간 동안만 CSV를 남긴다. 화면 갱신 로직과는 독립."""
+    def _heater_log_tick(self, st: dict, edge) -> None:
+        """히터 운전 구간 동안만 CSV를 남긴다. 화면 갱신 로직과는 독립.
+        RUN 엣지는 update_heater_display 가 계산해 넘긴다."""
         if not HEATER_LOG_ENABLED:
             return
         run = bool(st.get('run'))
         try:
             now = time.monotonic() * 1000.0
 
-            if run and not self._heater_run_prev:
+            if edge == 'rise':
                 path = self._heater_logger.start(self._heater_log_prefix())
                 if path is not None:
                     # CSV 와 같은 이름/타임스탬프의 .txt 를 히터 전용 텍스트 로그로 쓴다
@@ -2052,7 +2045,7 @@ class MainDialog(QDialog):
                 self._heater_log_last_ms = now
                 self._heater_logger.write_row(st, self._heater_log_note(), self._mvhold_log_tuple())
 
-            if (not run) and self._heater_run_prev:
+            if edge == 'fall':
                 # 정지 직후 마지막 한 행을 남기고 파일을 닫는다
                 self._heater_logger.write_row(st, self._heater_log_note(), self._mvhold_log_tuple())
                 self._heater_logger.stop()
@@ -2060,10 +2053,8 @@ class MainDialog(QDialog):
                     clear_heater_log_file()
                 except Exception:
                     pass
-        except Exception:
-            pass
-        finally:
-            self._heater_run_prev = run
+        except Exception as e:
+            log_message_to_monitor("경고", f"히터 CSV 로그 처리 실패: {e!r}")
 
     def _write_heater_log_header(self):
         """히터 로그 파일이 열리는 순간, 무엇을 돌리는지 요약을 남긴다.
@@ -2149,7 +2140,7 @@ class MainDialog(QDialog):
 
         # --- PLC 에 들어 있는 설정값 ---
         try:
-            st = dict(getattr(self.plc_controller, "_heater_last", None) or {})
+            st = dict(self.plc_controller.get_heater_status() or {})
             if st:
                 def _n(k, fmt="{:.1f}", unit=""):
                     v = st.get(k)
@@ -2258,8 +2249,8 @@ class MainDialog(QDialog):
             self._refresh_heater_progress()   # 버튼 상태는 여기서 함께 맞춰진다
 
     # ---------- PZ400 스타일 표시부 ----------
-    def _heater_gas_hold_tick(self, st: dict):
-        """히터 RUN 하강 에지에서 가스 유지/해제를 정하고,
+    def _heater_gas_hold_tick(self, st: dict, edge) -> None:
+        """히터 RUN 하강 에지(update_heater_display 가 계산)에서 가스 유지/해제를 정하고,
         유지 중이면 PV 를 보며 해제 시점을 잡는다.
 
         뜨거운 상태에서 가스를 끊으면 진공만 남은 챔버에서 시료가 식는다.
@@ -2273,7 +2264,7 @@ class MainDialog(QDialog):
             pv = float(st['pv']) if pv_ok else None
             thr = float(HEATER_GAS_HOLD_RELEASE_C)
 
-            if self._atm_run_prev and not run and atm.is_active():
+            if edge == 'fall' and atm.is_active():
                 if pv_ok and pv <= thr:
                     atm.release("히터 OFF")
                 else:
@@ -2299,10 +2290,8 @@ class MainDialog(QDialog):
                     log_message_to_monitor(
                         "히터", f"[히터] PV {pv:.1f}°C ≤ {thr:g}°C — 가스·압력 해제")
                     atm.release(f"냉각 완료 {pv:.1f}°C")
-
-            self._atm_run_prev = run
-        except Exception:
-            pass
+        except Exception as e:
+            log_message_to_monitor("경고", f"히터 가스 유지 판정 실패: {e!r}")
 
     @Slot()
     def _on_heater_gas_release_clicked(self):
@@ -2341,8 +2330,8 @@ class MainDialog(QDialog):
                 "히터 가스·압력을 해제하는 중입니다.\n해제가 끝나면 공정이 자동으로 시작됩니다.")
             return False
 
-        st = self.plc_controller._heater_last or {}
-        heater_busy = (bool(st.get('run')) or self.ui.heater_onoff_button.isChecked()
+        st = self.plc_controller.get_heater_status() or {}
+        heater_busy = (bool(st.get('run'))
                        or self._heater_pending is not None
                        or self.heater_recipe.is_running())
         if heater_busy or atm.state() != "READY":
@@ -2658,7 +2647,7 @@ class MainDialog(QDialog):
         if not HEATER_ENABLED:
             return
         try:
-            run = bool((self.plc_controller._heater_last or {}).get('run'))
+            run = bool((self.plc_controller.get_heater_status() or {}).get('run'))
             base = ((not run) and (not self.heater_recipe.is_running())
                     and self.heater_atmosphere.state() == "IDLE"
                     and self._heater_pending is None)
@@ -2672,14 +2661,23 @@ class MainDialog(QDialog):
         except Exception:
             pass
 
+    def _set_heater_button_view(self, checked: bool, text: str) -> None:
+        """ON 버튼의 checked/text 를 바꾸는 유일한 경로. 버튼은 RUN 의 표시이지 저장소가 아니다.
+        blockSignals 로 감싸 toggled 재진입(→ PLC 쓰기 부수효과)을 원천 차단한다."""
+        btn = self.ui.heater_onoff_button
+        try:
+            btn.blockSignals(True)
+            self.ui.heater_onoff_button.setChecked(bool(checked))   # 저장소 전체에서 유일한 setChecked
+            self.ui.heater_onoff_button.setText(text)
+        except Exception as e:
+            log_message_to_monitor("경고", f"히터 버튼 표시 갱신 실패: {e!r}")
+        finally:
+            btn.blockSignals(False)
+
     def _show_heater_pending_button(self):
         """준비 중에는 ON 버튼이 [취소] 가 된다 — 유일한 중단 수단이다."""
-        btn = self.ui.heater_onoff_button
-        btn.blockSignals(True)
-        btn.setChecked(True)
-        btn.setText("취소")
-        btn.setEnabled(True)
-        btn.blockSignals(False)
+        self._set_heater_button_view(True, "취소")
+        self.ui.heater_onoff_button.setEnabled(True)
 
     def _heater_gas_start_guard(self) -> bool:
         """가스·압력 준비를 시작해도 되는지 확인하고 시작한다.
@@ -2704,16 +2702,9 @@ class MainDialog(QDialog):
         return True
 
     def _revert_heater_onoff(self):
-        """ON 버튼을 눌리기 전 상태로 되돌린다."""
-        try:
-            btn = self.ui.heater_onoff_button
-            btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.setText("ON")
-            btn.setEnabled(True)
-            btn.blockSignals(False)
-        except Exception:
-            pass
+        """ON 버튼을 눌리기 전 상태(unchecked/"ON")로 되돌린다."""
+        self._set_heater_button_view(False, "ON")
+        self.ui.heater_onoff_button.setEnabled(True)
 
     @Slot(str, str)
     def _on_heater_atmosphere_state(self, state: str, detail: str):
@@ -2761,12 +2752,8 @@ class MainDialog(QDialog):
         kind, val = pending
         if kind == "manual_on":
             self._heater_manual_go(val)
-            try:
-                btn = self.ui.heater_onoff_button
-                btn.setText("OFF")
-                btn.setEnabled(True)
-            except Exception:
-                pass
+            self._set_heater_button_view(True, "OFF")    # 폴링이 곧 RUN 으로 확정한다
+            self.ui.heater_onoff_button.setEnabled(True)
             self._sync_heater_gas_inputs()
         elif kind == "recipe_start":
             # 준비 중 [취소] 로 쓰던 버튼을 원래대로 돌린다.
@@ -2822,7 +2809,13 @@ class MainDialog(QDialog):
         래치는 프로그램을 껐다 켜도 안 지워진다. 예전에는 XG5000 을 띄워야만
         풀 수 있었다(2026-09-04 TC 배선 후 TC=1/ITL=0 이 걸렸다).
         안전 래치를 지우는 동작이라 무조건 확인을 받는다.
+        RUN 이 켜진 채 ITL 이 복구되면 래더가 같은 스캔에서 PID 를 재개해 편차만큼 즉시
+        풀파워가 된다 — RUN 이 켜져 있으면 리셋을 막는다.
         """
+        if bool((self.plc_controller.get_heater_status() or {}).get('run')):
+            QMessageBox.warning(self, "리셋 불가",
+                                "히터 RUN 이 켜져 있습니다.\n먼저 히터를 OFF 한 뒤 리셋하세요.")
+            return
         reply = QMessageBox.question(
             self, "히터 이상 리셋",
             "히터 이상을 리셋합니다.\n"
@@ -3057,21 +3050,32 @@ class MainDialog(QDialog):
         except Exception:
             pass
 
+        # --- RUN 엣지는 여기서 한 번만 계산한다(소비자: 챗·로그·가스유지) ---
+        run = bool(st.get('run'))
+        edge = self._heater_run_edge(run)
+
+        # --- 버튼 = RUN 의 표시 (준비 중 [취소] 일 때는 손대지 않는다) ---
+        if self._heater_pending is None:
+            self._set_heater_button_view(run, "OFF" if run else "ON")
+
+        # --- 이상 상승 엣지 → RUN OFF 명시 전송(에피소드당 1회) ---
+        self._heater_fault_off_tick(st)
+
         # --- 목표 도달 후 DAC 상한 고정 (레시피/수동/공정 어느 경로든 여기서 동일하게) ---
         self._heater_mv_hold_tick(st)
 
         # --- 히터 시작/종료 구글챗 카드 (RUN 엣지) ---
-        self._heater_chat_tick(st)
+        self._heater_chat_tick(st, edge)
 
         # --- CSV 로깅 (운전 중에만, HEATER_LOG_PERIOD_MS 주기) ---
         #     폴링은 200ms이므로 반드시 시각 비교로 솎아낸다.
-        self._heater_log_tick(st)
+        self._heater_log_tick(st, edge)
 
         # --- PZ400 스타일 LCD 표시 ---
         self._update_heater_lcd(st)
 
         # --- 히터 OFF → 가스 유지/해제 ---
-        self._heater_gas_hold_tick(st)
+        self._heater_gas_hold_tick(st, edge)
 
         # --- 가스·압력 위젯 활성 ---
         self._sync_heater_gas_inputs()
@@ -3088,16 +3092,53 @@ class MainDialog(QDialog):
         except Exception:
             pass
 
-        # --- 이상 발생 시 ON 버튼 자동 해제 ---
-        #     PLC 래더는 HEATER_RUN을 절대 건드리지 않으므로,
-        #     이 처리가 없으면 '화면은 ON인데 히터는 정지' 상태가 된다.
-        if st.get('fault') and self.ui.heater_onoff_button.isChecked():
-            self.ui.heater_onoff_button.setChecked(False)
-
         # --- NAS CSV 로그용 평균 누적 (운전 중 + 온도 유효할 때만) ---
         if st.get('ok') and st.get('pv') is not None and st.get('run'):
             self._chk_heater_sum += float(st['pv'])
             self._chk_heater_cnt += 1
+
+    def _heater_run_edge(self, run: bool):
+        """RUN 의 상승/하강 엣지 — 'rise' / 'fall' / None. 한 폴링에 한 번만 계산한다."""
+        prev = self._heater_run_prev_view
+        self._heater_run_prev_view = run
+        if run and not prev:
+            return 'rise'
+        if prev and not run:
+            return 'fall'
+        return None
+
+    def _heater_fault_off_tick(self, st: dict) -> None:
+        """이상 상승 엣지에서 RUN 이면 RUN OFF 를 명시적으로 보낸다(에피소드당 1회).
+        래더 H9 가 출력은 끊지만 RUN 비트는 파이썬만 끈다 — 시그널 재진입 부수효과가 아니라
+        여기서 명시적으로 쓴다."""
+        fault = bool(st.get('fault'))
+        if not fault:
+            self._heater_fault_off_sent = False
+            return
+        if self._heater_fault_off_sent:
+            return
+        self._heater_fault_off_sent = True
+        if bool(st.get('run')):
+            self.request_heater_run.emit(False)
+            log_message_to_monitor("히터", "[히터] 이상 발생 — RUN OFF 전송")
+
+    @Slot(dict)
+    def _on_heater_residual(self, d: dict):
+        """시작 시 PLC 에 남아 있던 RUN 을 PLC 스레드가 정리했다 — 기록 + 챗 텍스트 1줄."""
+        pv = d.get('pv'); sv_old = d.get('sv_old')
+        pv_txt = "--.-" if pv is None else f"{float(pv):.1f}"
+        try:
+            log_message_to_monitor(
+                "히터", f"[히터] 이전 세션의 히터 RUN 잔존 (PV {pv_txt} / 이전 SV {float(sv_old or 0):.1f})"
+                        f" → OFF, SV 를 현재 온도로 초기화")
+        except Exception as e:
+            print(f"[main] 잔존 RUN 로그 실패: {e!r}")
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text("⚠️ CHK 이전 세션 히터 RUN 잔존 감지 → OFF")
+                self.chat_chk.flush()
+        except Exception as e:
+            log_message_to_monitor("경고", f"잔존 RUN 챗 알림 실패: {e!r}")
 
     @Slot(str)
     def _on_heater_fault(self, reason: str):
@@ -4467,7 +4508,7 @@ class MainDialog(QDialog):
                         f"/{self.heater_recipe.total_steps()} 스텝{pv_txt}\n"
                         "종료하면 레시피가 중단되고 히터가 꺼집니다."
                     )
-                elif self.ui.heater_onoff_button.isChecked():
+                elif bool((self.plc_controller.get_heater_status() or {}).get('run')):
                     heater_warn = (
                         f"\n\n[주의] 히터 운전 중{pv_txt}\n"
                         "종료하면 히터가 꺼집니다."
@@ -4520,8 +4561,7 @@ class MainDialog(QDialog):
             except Exception:
                 pass
             try:
-                self.request_heater_run.emit(False)
-                self.ui.heater_onoff_button.setChecked(False)
+                self.request_heater_run.emit(False)   # 표시는 폴링/PLC cleanup 이 맞춘다
             except Exception:
                 pass
 

@@ -120,6 +120,9 @@ class PLCController(QObject):
     plc_event     = Signal(dict)    # PLC_events.csv 1행 (파일 I/O 는 main 스레드의 lib.logger 가 한다)
     plc_blackbox  = Signal(list)    # 최근 ≈60초 폴링 스냅샷 덤프 요청
     plc_restarted = Signal(str)     # 마커 불일치 = PLC 재기동/메모리 초기화 감지 (사유)
+    # 시작 시 PLC 에 남아 있던 HEATER_RUN(M00040) 을 정리했다 — {'pv': °C, 'sv_old': °C}
+    #  (RUN 의 진실은 PLC 하나다. 프로그램이 꺼져 있던 동안 돌던 히터는 허용하지 않는다)
+    heater_residual = Signal(dict)
 
     def __init__(self):
         super().__init__()
@@ -181,6 +184,7 @@ class PLCController(QObject):
         #  시작 직후 읽은 이상은 '지금 발생'이 아니라 '이전부터 있던 것'이므로
         #  문구를 구분해야 "재시작했더니 알림이 왔다"는 혼선을 막을 수 있다.
         self._heater_first_poll = True
+        self._residual_fail_log_t: float = 0.0   # 잔존 RUN 정리 실패 경고 솎음(1초)
 
     # 상위와 동일 API 유지
     def set_rf_controller(self, rf_controller):
@@ -838,6 +842,13 @@ class PLCController(QObject):
         st['output_dead'] = bool(st.get('run') and not st.get('fault')
                                  and st.get('mv') is not None
                                  and st['mv'] < HEATER_MV_MIN)
+        # ★ 시작 시 잔존 RUN 정리 — 첫 폴링에서 RUN 이 On 이면 이전 세션이 남긴 것이다.
+        #   같은 폴링·같은 뮤텍스 안에서 RUN=0, SV=현재 온도로 되돌린 뒤에야 발행한다.
+        #   쓰기가 실패하면 발행하지 않고(_heater_first_poll 유지) 다음 폴링에 재시도한다.
+        if self._heater_first_poll and st['run']:
+            if not self._clear_residual_run(st, raw_pv, tc_bad):
+                return
+
         self._heater_last = st
         self.update_heater_status.emit(st)
 
@@ -895,6 +906,32 @@ class PLCController(QObject):
 
         # 이상 유무와 무관하게 첫 폴링은 한 번뿐이므로 여기서 해제한다.
         self._heater_first_poll = False
+
+    def _clear_residual_run(self, st: Dict[str, object], raw_pv: int, tc_bad: bool) -> bool:
+        """이전 세션 잔존 RUN 정리: RUN=0 → (PV 유효면) SV=현재 온도 → st 보정 + heater_residual.
+        실패하면 False (호출자가 발행을 건너뛰고 다음 폴링에 재시도). 워치독 철학의 연장 —
+        프로그램이 켜져 있지 않을 때 히터가 도는 것을 허용하지 않는다. FAULT 유무와 무관하다."""
+        try:
+            self._mb("잔존 RUN OFF", self.instrument.write_bit, HEATER_COIL_RUN, 0, functioncode=5)
+            if not tc_bad:
+                self._mb("잔존 SV=PV", self.instrument.write_register,
+                         HEATER_REG_SV, max(0, min(32767, int(raw_pv))), functioncode=6)
+        except Exception as ex:
+            now = time.monotonic()
+            if (now - self._residual_fail_log_t) >= 1.0:
+                self._residual_fail_log_t = now
+                self.status_message.emit("히터(경고)", f"이전 세션 RUN 정리 실패 — 재시도: {ex}")
+            return False
+        sv_old = float(st.get('sv') or 0.0)
+        pv_c = None if tc_bad else raw_pv * HEATER_TEMP_SCALE
+        st['run'] = False
+        st['residual_run'] = True
+        self.status_message.emit(
+            "히터", f"이전 세션 히터 RUN 잔존 → OFF, SV {sv_old:.1f}°C → "
+                    f"{('현재 온도 %.1f°C' % pv_c) if pv_c is not None else 'PV 무효(SV 유지)'}")
+        self._emit_event("잔존RUN정리", f"PV {pv_c} / 이전 SV {sv_old:.1f}")
+        self.heater_residual.emit({'pv': pv_c, 'sv_old': sv_old})
+        return True
 
     @Slot()
     def _kick_heater_watchdog(self):
