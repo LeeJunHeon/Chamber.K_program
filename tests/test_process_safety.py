@@ -105,3 +105,75 @@ def test_T44_csv_delay_mv_off_cancels_list_and_no_next_step(safe, monkeypatch):
     spin(1500)                                                # 딜레이가 끝났어도 다음 STEP 없음
     assert starts == []
     assert any("CSV Delay 중 설비 이상" in m for _, m in w._logs)
+
+
+# ───────────────────────── 수동 모드: 히터 ↔ 공정 분리 ─────────────────────────
+def _fill_manual_ui(w):
+    ui = w.ui
+    ui.Ar_gas_radio.setChecked(True); ui.O2_gas_radio.setChecked(False)
+    ui.Ar_flow_edit.setPlainText("20"); ui.working_pressure_edit.setPlainText("5")
+    ui.dc_power_checkbox.setChecked(True); ui.DC_power_edit.setPlainText("100")
+    ui.rf_power_checkbox.setChecked(False); ui.rf_pulse_checkbox.setChecked(False)
+    ui.Shutter_delay_edit.setPlainText("1"); ui.process_time_edit.setPlainText("1")
+    ui.G1_checkbox.setChecked(True); ui.G1_edit.setPlainText("CeO2"); ui.G2_checkbox.setChecked(False)
+
+
+@pytest.fixture
+def manual(fresh, monkeypatch):
+    w = fresh
+    w.csv_file_path = None; w.process_running = False; w.csv_mode = False; w._csv_delay_active = False
+    _fill_manual_ui(w)
+    monkeypatch.setattr(w, "_check_main_valve_open", lambda: True)
+    monkeypatch.setattr(MAIN, "set_process_log_file", lambda **k: None)
+    logs = []
+    monkeypatch.setattr(MAIN, "log_message_to_monitor", lambda lvl, msg: logs.append((lvl, msg)))
+    started = []
+    w.request_process_start.disconnect()
+    w.request_process_start.connect(lambda p: started.append(dict(p)))
+    w._started = started; w._logs = logs
+    yield w
+    w.request_process_start.disconnect()
+    w.request_process_start.connect(w.process_controller.start_process_flow)
+    w.process_running = False
+    w.ui.Sputter_Start_Button.setEnabled(True)
+
+
+def test_T45_manual_process_never_owns_heater(manual):
+    w = manual
+    w._set_heater_button_view(True, "OFF")               # 히터 패널: 600°C ON 상태
+    w.ui.heater_sv_edit.setText("600")
+    feed(w, make_heater_st(run=True, pv=600.0, sv=600.0))
+    w._handle_start_process()
+    assert len(w._started) == 1, MAIN.QMessageBox.warning.call_args
+    p = w._started[0]
+    assert p["use_heater"] is False and p["heater_temp"] == 0.0
+    assert w._process_heater_claimed is False
+    assert ("정보", "[히터] 미사용") in w._logs
+    assert w.process_running is True
+
+
+def test_T46_start_rejected_when_heater_atmosphere_active(manual):
+    w = manual
+    w.heater_atmosphere.is_active.return_value = True
+    w._handle_start_process()
+    assert w._started == [] and w.process_running is False
+    msg = MAIN.QMessageBox.warning.call_args.args
+    assert msg[1] == "공정 시작 불가" and "히터 가스·압력이 잡혀 있습니다. [가스 해제] 후 시작하세요." in msg[2]
+    assert not hasattr(w, "_start_after_release")
+
+
+def test_T47_gas_hold_tick_noop_during_process(fresh, monkeypatch):
+    w = fresh
+    logs = []
+    monkeypatch.setattr(MAIN, "log_message_to_monitor", lambda lvl, msg: logs.append((lvl, msg)))
+    w.heater_atmosphere.is_active.return_value = True
+    w.process_running = True
+    try:
+        feed(w, make_heater_st(run=True, pv=500.0))
+        feed(w, make_heater_st(run=False, pv=500.0))         # 하강 엣지, 뜨거움 → 원래는 가스 유지
+        assert w._atm_hold is False and w.heater_atmosphere.release.call_count == 0
+        assert any("공정 중이라 가스·압력 유지/해제는 하지 않습니다" in m for _, m in logs)
+        feed(w, make_heater_st(run=False, pv=50.0))          # 식어도 해제 없음
+        assert w.heater_atmosphere.release.call_count == 0
+    finally:
+        w.process_running = False
