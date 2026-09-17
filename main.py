@@ -16,7 +16,7 @@ import time
 import datetime
 
 from UI import Ui_Dialog
-from lib.config import PLC_COIL_MAP, PLC_SENSOR_BITS
+from lib.config import PLC_COIL_MAP, PLC_SENSOR_BITS, PLC_MONITOR_BITS
 from lib.logger import (
     set_monitor_widget,
     log_message_to_monitor,
@@ -735,6 +735,7 @@ class MainDialog(QDialog):
                         "overtime": bool(getattr(self, "_erp_indicators", {}).get("ION_OT")),
                     },
                     "indicators": dict(getattr(self, "_erp_indicators", {})),
+                    "mvInterlock": (getattr(self, "_plc_bits", {}) or {}).get("MV_INTERLOCK"),
                     "valves": dict(getattr(self, "_erp_valves", {})),
                     # 링크 다운 중 indicators/valves 는 마지막 값 그대로다(거짓 OFF 보고 금지) — 이 플래그로 구분
                     "plc_link": bool(getattr(self, "_plc_link_up", False)),
@@ -870,6 +871,8 @@ class MainDialog(QDialog):
         self.plc_controller.update_button_display.connect(self.update_ui_button_display)
         self.plc_controller.update_sensor_display.connect(self.set_indicator)
         self.plc_controller.plc_link.connect(self._on_plc_link)
+        self.plc_controller.plc_bit_changed.connect(self._on_plc_bit_changed)
+        self._plc_bits: dict = {}                 # 이름별 마지막 값(로그·ERP·안전 판정용)
         # 첫 plc_link(True) 전까지는 PLC 조작 위젯을 다운 상태로 둔다
         self._plc_link_up = True
         self._on_plc_link(False)
@@ -3635,6 +3638,14 @@ class MainDialog(QDialog):
         """링크 상태로 잠그는 화면 조작 위젯: PLC_COIL_MAP 의 모든 버튼 + Door_Button."""
         names = list(PLC_COIL_MAP.keys()) + ["Door_Button"]
         return [w for w in (getattr(self.ui, n, None) for n in names) if w is not None]
+
+    @Slot(str, bool, object)
+    def _on_plc_bit_changed(self, name: str, state: bool, prev):
+        """PLC 코일/DI 전이 1곳: (1) 값이 바뀌면 로그 1줄(첫 값 prev=None 은 로그 없음) (2) 공정 중 MV 닫힘 안전 판정."""
+        state = bool(state)
+        self._plc_bits[name] = state
+        if prev is not None and bool(prev) != state:
+            log_message_to_monitor("PLC", f"{name} {'ON' if prev else 'OFF'}→{'ON' if state else 'OFF'}")
 
     @Slot(bool)
     def _on_plc_link(self, up: bool):

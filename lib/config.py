@@ -464,6 +464,12 @@ PLC_SENSOR_BITS: Dict[str, int] = {
 PLC_MV_COIL           = 3    # M00003 (Main Valve open 명령 비트)
 PLC_MV_INTERLOCK_COIL = 50   # M00032 (Main Valve interlock,  3×16+2)
 
+# 화면은 없지만 변화를 기록·감시하는 읽기 전용 비트 (센서 그룹 읽기에 합쳐 읽는다 — 트랜잭션 추가 없음)
+#  2026-09-17 CeO2 #1-2: RF 펄스 ON 직후 M00032 가 내려가 MV 가 닫혔는데 로그에 아무것도 남지 않았다.
+PLC_MONITOR_BITS: Dict[str, int] = {
+    "MV_INTERLOCK": PLC_MV_INTERLOCK_COIL,   # M00032
+}
+
 # ================================================================
 # DC Power 설정
 # ================================================================

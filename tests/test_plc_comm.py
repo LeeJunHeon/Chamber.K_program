@@ -53,7 +53,8 @@ class FakeInstrument:
             bits[1] = 1   # ITL
             bits[CFG.HEATER_COIL_PV_SEL_EFF - CFG.HEATER_COIL_BASE] = int(FakeInstrument.scenario.get("pv_sel_eff_bit", 0))
             return bits
-        return [0] * count
+        coils = FakeInstrument.scenario.get("coils", {})          # {절대 코일 주소: 0/1}
+        return [int(coils.get(addr + i, 0)) for i in range(count)]
 
     def read_registers(self, addr, count, functioncode=3):
         self.calls.append(("read_registers", addr, count)); self._maybe_fail()
@@ -475,3 +476,47 @@ def test_T39_first_poll_after_link_up_republishes_unchanged_buttons(plc, monkeyp
     plc._poll_status()
     assert len(pub) == n_all                             # 값이 그대로여도 전부 다시 발행
     assert ("Door_Button", False) in pub
+
+
+# ───────────────────────── plc_bit_changed ─────────────────────────
+def test_T40_monitor_bits_read_with_sensor_group_and_change_only(plc):
+    inst = plc.instrument
+    ch = []
+    plc.plc_bit_changed.connect(lambda n, v, p: ch.append((n, v, p)))
+    FakeInstrument.scenario["coils"] = {CFG.PLC_MV_COIL: 1, CFG.PLC_MV_INTERLOCK_COIL: 1, 160: 1}
+    n0 = len(inst.calls)
+    plc._poll_status()
+    reads = [c for c in inst.calls[n0:] if c[0] == "read_bits" and c[1] != CFG.HEATER_COIL_BASE]
+    # 버튼 [0..33],[80] + 센서·모니터 [50],[160..182] — 모니터 비트가 센서 그룹 호출에 같이 읽힌다
+    assert [(c[1], c[2]) for c in reads] == [(0, 34), (80, 1), (50, 1), (160, 23)]
+    # 첫 폴링: 전부 prev=None
+    names = {n for n, _, _ in ch}
+    assert set(CFG.PLC_COIL_MAP) | {"Door_Button"} | set(CFG.PLC_SENSOR_BITS) | {"MV_INTERLOCK"} == names
+    assert all(p is None for _, _, p in ch)
+    assert ("MV_INTERLOCK", True, None) in ch and ("MV_button", True, None) in ch and ("Air", True, None) in ch
+    ch.clear()
+    plc._poll_status()                                     # 변화 없음 → 발행 0
+    assert ch == []
+    FakeInstrument.scenario["coils"][CFG.PLC_MV_INTERLOCK_COIL] = 0
+    plc._poll_status()
+    assert ch == [("MV_INTERLOCK", False, True)]
+    ch.clear()
+    FakeInstrument.scenario["coils"][CFG.PLC_MV_COIL] = 0
+    plc._poll_status()
+    assert ch == [("MV_button", False, True)]
+
+
+def test_T41_link_up_republishes_all_bits_with_prev_none(plc, monkeypatch):
+    shots = _shots(monkeypatch)
+    ch = []
+    plc.plc_bit_changed.connect(lambda n, v, p: ch.append((n, v, p)))
+    FakeInstrument.scenario["coils"] = {CFG.PLC_MV_COIL: 1, CFG.PLC_MV_INTERLOCK_COIL: 1}
+    plc._poll_status(); n_all = len(ch); ch.clear()
+    FakeInstrument.scenario["fail_reads"] = True
+    plc._poll_status()                                     # 다운
+    FakeInstrument.scenario["fail_reads"] = False
+    FakeInstrument.scenario["coils"][CFG.PLC_MV_COIL] = 0  # 단절 중 MV 가 닫혔다
+    shots[-1][1]()                                         # 링크 업
+    plc._poll_status()
+    assert len(ch) == n_all and all(p is None for _, _, p in ch)
+    assert ("MV_button", False, None) in ch

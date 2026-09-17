@@ -17,7 +17,7 @@ from lib.config import (
     PLC_RETRY_COUNT, PLC_RETRY_DELAY_MS, PLC_COMM_LOSS_ABORT_SEC,
     COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
     PLC_SESSION_MARK_REG,
-    PLC_SENSOR_BITS, RF_ADC_FORWARD_ADDR,
+    PLC_SENSOR_BITS, PLC_MONITOR_BITS, RF_ADC_FORWARD_ADDR,
     RF_ADC_REFLECT_ADDR, RF_ADC_MAX_COUNT,
     RF_DAC_ADDR_CH0, COIL_ENABLE_DAC_CH0,
     RF_FORWARD_SCALING_MAX_WATT,
@@ -131,6 +131,9 @@ class PLCController(QObject):
     # 장기두절 진입(장치명, 단절 초) — 두절당 1회 (lib/comm_policy 가 보장)
     comm_long_outage = Signal(str, float)
     plc_link = Signal(bool)         # 링크 업(프로브 응답)/다운 전이에서만 1회 — main 이 버튼·램프·히터 표시를 맞춘다
+    plc_bit_changed = Signal(str, bool, object)   # (이름, 값, 직전값|None) — 버튼·센서·모니터 비트가 바뀔 때만. None = 시작/링크 복구 후 첫 값
+
+    COIL_GROUP_GAP = 32     # _read_coils_grouped: 이 틈까지는 한 프레임으로 묶는다(비트)
 
     def __init__(self):
         super().__init__()
@@ -169,6 +172,7 @@ class PLCController(QObject):
         self._blackbox_dumped: bool = False             # 같은 단절에서 1회만 덤프
         self._sensor_last: Dict[str, bool] = {}
         self._coils_last: Dict[str, bool] = {}
+        self._bit_last: Dict[str, bool] = {}       # 센서·모니터 비트의 plc_bit_changed 용 캐시(버튼은 _last_button_states)
         # ★ 재기동 감지 마커 (B3)
         self._marker: int | None = None
         self._marker_poll_cnt: int = 0
@@ -274,8 +278,10 @@ class PLCController(QObject):
         if not self._link_ui_up:
             self._link_ui_up = True
             self.plc_link.emit(True)
-        # 다음 폴링이 모든 버튼/Door 상태를 다시 발행하게 한다(값이 안 바뀐 버튼도 화면을 다시 그려야 한다)
+        # 다음 폴링이 모든 버튼/Door·센서·모니터 비트를 prev=None 으로 다시 발행하게 한다
+        #  (값이 안 바뀐 버튼도 화면을 다시 그려야 하고, 링크 복구 뒤 MV 가 닫혀 있으면 main 이 알아야 한다)
         self._last_button_states.clear()
+        self._bit_last.clear()
         # 접속할 때마다 JSON의 한계값을 PLC에 복구한다. 여기서 무슨 일이 나도 링크는 유지한다.
         try:
             self._push_heater_config()
@@ -606,11 +612,13 @@ class PLCController(QObject):
         if not addrs:
             return {}
 
+        # 틈이 COIL_GROUP_GAP 이하인 주소는 한 프레임으로 읽는다 — 남는 비트 몇 개를 더 읽는 것이
+        #  FC1 프레임 하나(≈30ms + 타임아웃 위험)보다 싸다. 버튼 [0..33],[80] / 센서·모니터 [50],[160..182]
         sorted_addrs = sorted(set(addrs))
         ranges: List[Tuple[int, int]] = []
         start = prev = sorted_addrs[0]
         for a in sorted_addrs[1:]:
-            if a == prev + 1:
+            if a - prev <= self.COIL_GROUP_GAP:
                 prev = a
             else:
                 ranges.append((start, prev))
@@ -660,26 +668,33 @@ class PLCController(QObject):
                 val = bool(addr_to_state.get(addr, False))
                 self._coils_last[btn_name] = val
                 if self._last_button_states.get(btn_name) != val:
+                    prev = self._last_button_states.get(btn_name)
                     self._last_button_states[btn_name] = val
                     self.update_button_display.emit(btn_name, val)
+                    self.plc_bit_changed.emit(btn_name, val, prev)
 
             up_addr = PLC_COIL_MAP.get("Doorup_button")
             if up_addr is not None:
                 # addr_to_state 는 이미 _read_coils_grouped() 결과 딕셔너리
                 door_state = bool(addr_to_state.get(up_addr, False))
                 if self._last_button_states.get("Door_Button") != door_state:
+                    prev = self._last_button_states.get("Door_Button")
                     self._last_button_states["Door_Button"] = door_state
                     self.update_button_display.emit("Door_Button", door_state)
+                    self.plc_bit_changed.emit("Door_Button", door_state, prev)
 
-            # 2) 센서(코일) 읽기 — FC=1, 절대 코일 주소
-            if PLC_SENSOR_BITS:
+            # 2) 센서(코일) + 모니터 비트 읽기 — FC=1, 절대 코일 주소. 한 그룹 호출로 같이 읽는다
+            if PLC_SENSOR_BITS or PLC_MONITOR_BITS:
                 try:
-                    coil_addrs = list(PLC_SENSOR_BITS.values())               # [256,257,258,259,260]
+                    coil_addrs = list(PLC_SENSOR_BITS.values()) + list(PLC_MONITOR_BITS.values())
                     addr_to_state = self._read_coils_grouped(coil_addrs)      # FC=1로 그룹 폴링 (이미 구현됨)
                     for name, addr in PLC_SENSOR_BITS.items():
                         _sv = bool(addr_to_state.get(addr, False))
                         self._sensor_last[name] = _sv
-                        self.update_sensor_display.emit(name, _sv)
+                        self.update_sensor_display.emit(name, _sv)            # 화면용은 매 폴링
+                        self._emit_bit_change(name, _sv)
+                    for name, addr in PLC_MONITOR_BITS.items():
+                        self._emit_bit_change(name, bool(addr_to_state.get(addr, False)))
                 except Exception as ex:
                     self.status_message.emit("PLC(경고)", f"센서(코일) 읽기 실패: {ex}")
 
@@ -705,6 +720,13 @@ class PLCController(QObject):
         finally:
             self._busy = False
             self._mutex.unlock()
+
+    def _emit_bit_change(self, name: str, val: bool) -> None:
+        """센서·모니터 비트: 마지막 값과 다를 때만 plc_bit_changed (첫 값은 prev=None)."""
+        if self._bit_last.get(name) != val:
+            prev = self._bit_last.get(name)
+            self._bit_last[name] = val
+            self.plc_bit_changed.emit(name, val, prev)
 
     def _check_disconnect_timeout(self):
         """폴링 실패가 60초 이상 지속되면 Google Chat 알림을 1회 방출."""
@@ -907,6 +929,7 @@ class PLCController(QObject):
         raw_pv = _signed(_reg(HEATER_REG_PV))
         tc_bad = (raw_pv == -1)                       # hFFFF = 단선/모듈이상
         raw_pv2 = _signed(_reg(HEATER_REG_PV2))       # TC2: -1 = 센서 이상/미연결
+        raw_pv_ctrl = _signed(_reg(HEATER_REG_PV_CTRL))
 
         def _bit(coil: int) -> bool:
             return bool(bits[coil - HEATER_COIL_BASE])
@@ -943,7 +966,7 @@ class PLCController(QObject):
             'holdback':  _reg(HEATER_REG_HOLDBACK)  * HEATER_TEMP_SCALE,
             'ot_limit':  _reg(HEATER_REG_OT_LIMIT)  * HEATER_TEMP_SCALE,
             'pv2':       None if raw_pv2 == -1 else raw_pv2 * HEATER_TEMP_SCALE,
-            'pv_ctrl':   _signed(_reg(HEATER_REG_PV_CTRL)) * HEATER_TEMP_SCALE,   # 미확인: D00033 이 TC 이상 시 -1(hFFFF)을 그대로 비추는지 — signed 로 읽는다
+            'pv_ctrl':   None if raw_pv_ctrl == -1 else raw_pv_ctrl * HEATER_TEMP_SCALE,   # pv/pv2 와 같은 규칙(-1 = 이상)
             'ot2_limit': _reg(HEATER_REG_OT2_LIMIT) * HEATER_TEMP_SCALE,
             'sv2':       _reg(HEATER_REG_SV2)       * HEATER_TEMP_SCALE,
             'sv2_max':   _reg(HEATER_REG_SV2_MAX)   * HEATER_TEMP_SCALE,
