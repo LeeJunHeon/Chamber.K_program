@@ -32,9 +32,9 @@ def test_open_guarded_times_out_and_late_object_is_closed():
         return made["obj"]
 
     t0 = time.monotonic()
-    r = open_guarded(factory, 2.0)
+    r, reason = open_guarded(factory, 2.0)
     took = time.monotonic() - t0
-    assert r is None
+    assert r is None and reason == "timeout 2s"
     assert took < 2.3
     # 늦게 만들어진 객체는 그 스레드가 스스로 닫는다
     assert "obj" not in made or made["obj"].closed.wait(5.0)
@@ -44,11 +44,12 @@ def test_open_guarded_times_out_and_late_object_is_closed():
 
 def test_open_guarded_returns_object_when_fast_and_none_on_error():
     obj = object()
-    assert open_guarded(lambda: obj, 1.0) is obj
+    assert open_guarded(lambda: obj, 1.0) == (obj, None)
 
     def boom():
         raise OSError("no port")
-    assert open_guarded(boom, 1.0) is None
+    r, reason = open_guarded(boom, 1.0)
+    assert r is None and "OSError" in reason and "no port" in reason
 
 
 def test_close_guarded_returns_immediately():

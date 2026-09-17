@@ -348,8 +348,7 @@ class RFPulseController(QObject):
             f"stop {int(self.serial_rfp.stopBits().value)} "
             f"(CESAR 규격 9600 8O1)")
 
-        self._policy.on_success()
-        self._reconnect_pending = False
+        self._reconnect_pending = False      # 정책의 성공(on_success)은 포트 열림이 아니라 장비 응답(_comm_ok)
 
         self.status_message.emit(
             "RFPulse", f"{RFPULSE_PORT} 연결 성공 (PyQt6 QSerialPort, {RFPULSE_BAUD}bps)")
@@ -710,7 +709,7 @@ class RFPulseController(QObject):
                 else:
                     self._safe_callback(failed.callback, None)
             if not (self.serial_rfp and self.serial_rfp.isOpen()):
-                QTimer.singleShot(0, self._try_reconnect)
+                self._watch_connection()       # 정책 스케줄러를 거친다(즉시 open 금지)
             else:
                 self._schedule_next(RFPULSE_CMD_GAP_MS)
         finally:
@@ -780,6 +779,8 @@ class RFPulseController(QObject):
             self.status_message.emit("RFPulse", f"RF Pulse 통신 복구 (단절 {lost:.1f}초, 실패 {n}회) — {what}")
             self._emit_event("복구", f"{what}, 실패 {n}회", lost=lost)
             self.rfpulse_recovered.emit(float(lost))
+        if self._policy.in_outage():
+            self._policy.on_success()      # 장비가 실제로 응답했다 — 여기서만 리셋(포트 열림은 성공이 아니다)
         self._comm_last_ok = now
 
     def _check_comm_budget(self) -> None:
@@ -800,7 +801,7 @@ class RFPulseController(QObject):
                     pass
                 self._rx.clear()
             self._emit_event("재오픈", f"무응답 {lost:.1f}초", lost=lost)
-            self._try_reconnect()
+            self._watch_connection()       # 정책 스케줄러를 거친다(직접 open 금지)
         if (not self._outage_abort) and lost >= float(RFPULSE_COMM_LOSS_ABORT_SEC):
             self._outage_abort = True
             self.status_message.emit(
@@ -837,7 +838,7 @@ class RFPulseController(QObject):
                     pass
                 self._rx.clear()
             self._emit_event("재오픈", f"두절 중 프로브 (단절 {now - self._comm_last_ok:.1f}초)")
-            self._try_reconnect()
+            self._watch_connection()       # 정책 스케줄러를 거친다(직접 open 금지)
         if self._inflight is None and not self._cmd_q and self.serial_rfp and self.serial_rfp.isOpen():
             self._enqueue_query(CMD_REPORT_STATUS, b"", tag="[OUTAGE PROBE]",
                                 timeout_ms=RFPULSE_POLL_QUERY_TIMEOUT_MS, retries=0,

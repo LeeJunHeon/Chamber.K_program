@@ -37,6 +37,40 @@ def test_T13_removed_symbols_absent():
         assert _grep(pat, files) == [], pat
 
 
+def test_T13_policy_success_not_at_port_open():
+    """정책의 on_success 는 포트 열림 지점(start_polling/_reconnect_attempt/connect_dcpower_device/_open_port)
+    에 없어야 하고, 우회 경로에서 _try_reconnect() 를 직접 부르지 않아야 한다."""
+    import ast
+    checks = {
+        "device/PLC.py": ("start_polling", "_reconnect_attempt", "_on_link_up"),
+        "device/DCpower.py": ("connect_dcpower_device",),
+        "device/RFpulse.py": ("_open_port", "_check_comm_budget", "_outage_probe_tick"),
+        "device/MFC.py": ("_open_port",),
+    }
+    for rel, funcs in checks.items():
+        src = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        tree = ast.parse(src)
+        bodies = {n.name: ast.get_source_segment(src, n) for n in ast.walk(tree)
+                  if isinstance(n, ast.FunctionDef) and n.name in funcs}
+        assert set(bodies) == set(funcs), (rel, set(funcs) - set(bodies))
+        for name, body in bodies.items():
+            assert "on_success(" not in body, f"{rel}:{name} 에 on_success"
+            if name in ("_check_comm_budget", "_outage_probe_tick"):
+                assert "self._try_reconnect()" not in body, f"{rel}:{name} 가 _try_reconnect 직접 호출"
+    # 응답 지점에는 있어야 하고, MFC 재시도 경로는 스케줄러를 거친다
+    for rel, fn in (("device/PLC.py", "_mb"), ("device/DCpower.py", "_comm_ok"),
+                    ("device/RFpulse.py", "_comm_ok"), ("device/MFC.py", "_finish_command")):
+        src = open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        body = src.split(f"def {fn}(")[1].split("\n    def ")[0]
+        assert "self._policy.on_success()" in body, f"{rel}:{fn} 에 on_success 없음"
+        if fn == "_finish_command":
+            assert "self._try_reconnect()" not in body
+    # _try_reconnect 는 정의 + _watch_connection 의 singleShot 예약, 이 두 곳뿐이다
+    for rel in ("device/RFpulse.py", "device/MFC.py"):
+        hits = _grep(r"_try_reconnect", [os.path.join(ROOT, rel)])
+        assert len(hits) == 2, hits
+
+
 def test_T13_button_setchecked_only_in_helper():
     hits = _grep(r"heater_onoff_button\.setChecked", [os.path.join(ROOT, "main.py")])
     assert len(hits) == 1, hits

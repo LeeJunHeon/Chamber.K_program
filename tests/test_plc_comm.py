@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""T3 폴링 블로킹 상한 / T4 cleanup 상한 / T5 잔존 RUN — 가짜 minimalmodbus.Instrument."""
+"""T3 폴링 블로킹 상한 / T4 cleanup 상한 / T5 잔존 RUN / T15~T19 링크업·정책·pending OFF — 가짜 minimalmodbus.Instrument."""
 import threading
 import time
 
@@ -26,7 +26,7 @@ class FakeSerial:
 
 
 class FakeInstrument:
-    """시나리오: fail_reads(모든 read 가 0.5초 자고 예외) / run_bit / pv_raw / write_bit_fail_once."""
+    """시나리오: fail_reads(모든 read 가 0.5초 자고 예외) / fail_writes(모든 write 예외) / run_bit / pv_raw / write_bit_fail_n."""
     scenario = {}
     ctor_fail = False
 
@@ -66,8 +66,12 @@ class FakeInstrument:
         self.calls.append(("read_register", addr)); self._maybe_fail()
         return 0
 
+    def _maybe_fail_write(self):
+        if FakeInstrument.scenario.get("fail_writes"):
+            raise OSError("No communication with the instrument (no answer)")
+
     def write_bit(self, addr, value, functioncode=5):
-        self.calls.append(("write_bit", addr, int(value)))
+        self.calls.append(("write_bit", addr, int(value))); self._maybe_fail_write()
         n = FakeInstrument.scenario.get("write_bit_fail_n", 0)
         if n > 0:
             FakeInstrument.scenario["write_bit_fail_n"] = n - 1
@@ -76,10 +80,10 @@ class FakeInstrument:
             raise OSError("write failed")
 
     def write_register(self, addr, value, functioncode=6):
-        self.calls.append(("write_register", addr, int(value)))
+        self.calls.append(("write_register", addr, int(value))); self._maybe_fail_write()
 
     def write_bits(self, addr, values):
-        self.calls.append(("write_bits", addr, list(values)))
+        self.calls.append(("write_bits", addr, list(values))); self._maybe_fail_write()
 
 
 @pytest.fixture
@@ -184,3 +188,132 @@ def test_T5_residual_retry_when_first_write_fails(plc):
     assert len(residual) == 1 and published[-1]["run"] is False
     wb = [c for c in inst.calls if c[0] == "write_bit"]
     assert len(wb) == 4                    # 3회 실패 + 다음 폴링 1회 성공
+
+
+def _shots(monkeypatch):
+    shots = []
+    monkeypatch.setattr(PLCM.QTimer, "singleShot", staticmethod(lambda ms, fn: shots.append((ms, fn))))
+    return shots
+
+
+def _run_writes(inst):
+    return [c for c in inst.calls if c[0] == "write_bit" and c[1] == CFG.HEATER_COIL_RUN]
+
+
+def test_T15_policy_success_only_on_device_response(plc, monkeypatch):
+    """포트가 열려도 장비가 침묵하면 정책은 리셋되지 않는다(백오프 계속 상승). 첫 응답에서 리셋."""
+    shots = _shots(monkeypatch)
+    FakeInstrument.scenario.update(fail_reads=True, fail_writes=True)   # 포트는 열리지만 장비 침묵
+    plc._poll_status()                                   # 실패 → 링크 다운, 1000ms 예약
+    assert shots[-1][0] == 1000
+    shots[-1][1]()                                       # 재연결: 포트 열림(장비는 여전히 침묵)
+    assert plc._link_down is False and plc._policy.in_outage()
+    plc._poll_status()                                   # 응답 없음 → 다시 다운, 2000 (1000 으로 안 돌아감)
+    assert plc._link_down is True and shots[-1][0] == 2000
+    shots[-1][1]()
+    plc._poll_status()
+    assert shots[-1][0] == 4000
+    # 장비가 응답하면 그제야 리셋
+    FakeInstrument.scenario.update(fail_reads=False, fail_writes=False)
+    shots[-1][1]()
+    plc._poll_status()
+    assert plc._link_down is False and not plc._policy.in_outage()
+    assert plc._policy.on_failure() == 1000
+
+
+def test_T16_start_polling_open_failure_schedules_policy_not_error(qapp, monkeypatch):
+    FakeInstrument.scenario = {}
+    FakeInstrument.ctor_fail = True
+    monkeypatch.setattr(PLCM.minimalmodbus, "Instrument", FakeInstrument)
+    monkeypatch.setattr(PLCM, "PLC_RETRY_DELAY_MS", 0)
+    shots = _shots(monkeypatch)
+    c = PLCM.PLCController()
+    msgs = []; events = []
+    c.status_message.connect(lambda l, m: msgs.append((l, m)))
+    monkeypatch.setattr(c, "_emit_event", lambda k, d="", lost=None: events.append((k, d)))
+    c.start_polling()
+    c.polling_timer.stop(); c._heater_wd_timer.stop()
+    assert c._is_running is True and c._link_down is True and c._ever_connected is False
+    assert not any("연결 실패" in m for _, m in msgs)
+    assert any(l == "PLC(경고)" and "포트 열기 실패" in m and "OSError" in m for l, m in msgs)
+    assert events and events[0][0] == "열기실패" and "could not open port" in events[0][1]
+    assert shots and shots[-1][0] == 1000
+    # 연결된 적 없으면 예산 판정·60초 알림 없음
+    ticks = []
+    monkeypatch.setattr(c, "_comm_budget_tick", lambda ex, what: ticks.append(what))
+    c._disconnect_since = time.monotonic() - 120
+    c._poll_status()
+    assert ticks == [] and c._disconnect_notified is False
+    # 포트가 돌아오면 _on_link_up(first=True): 설정 푸시 + 마커 + "연결 성공"
+    FakeInstrument.ctor_fail = False
+    shots[-1][1]()
+    assert c._link_down is False and c._ever_connected is True
+    assert any("연결 성공" in m for _, m in msgs)
+    assert ("연결", f"{PLCM.PLC_PORT} ID={PLCM.PLC_SLAVE_ID}") in events
+    inst = c.instrument
+    assert any(cl[0] == "write_register" and cl[1] == PLCM.PLC_SESSION_MARK_REG for cl in inst.calls)
+    assert any(cl[0] == "write_register" and cl[1] != PLCM.PLC_SESSION_MARK_REG for cl in inst.calls)  # 설정 푸시
+
+
+def test_T17_link_up_single_path_on_reconnect(plc, monkeypatch):
+    """재연결 성공도 _on_link_up 을 거친다: 설정 푸시 + 마커 + 재연결 로그, '연결 성공' 문구는 없다."""
+    shots = _shots(monkeypatch)
+    FakeInstrument.scenario["fail_reads"] = True
+    plc._poll_status()
+    FakeInstrument.scenario["fail_reads"] = False
+    n_msgs = len(plc._msgs)
+    shots[-1][1]()
+    inst = plc.instrument
+    assert any(cl[0] == "write_register" and cl[1] == PLCM.PLC_SESSION_MARK_REG for cl in inst.calls)
+    assert any(cl[0] == "write_register" and cl[1] != PLCM.PLC_SESSION_MARK_REG for cl in inst.calls)
+    new = plc._msgs[n_msgs:]
+    assert any("재연결(" in m for _, m in new) and not any("연결 성공" in m for _, m in new)
+
+
+def test_T18_pending_heater_off_applied_on_link_up(plc, monkeypatch):
+    shots = _shots(monkeypatch)
+    FakeInstrument.scenario["fail_reads"] = True
+    plc._poll_status()
+    assert plc._link_down is True
+    plc.set_heater_run(True)                     # ON 은 보관하지 않는다
+    assert plc._pending_heater_off is False
+    plc.set_heater_run(False)                    # OFF 는 보류
+    assert plc._pending_heater_off is True
+    assert any("히터 OFF 를 보류" in m for _, m in plc._msgs)
+    FakeInstrument.scenario["fail_reads"] = False
+    shots[-1][1]()                               # 링크 업 → 1회 적용
+    inst = plc.instrument
+    assert _run_writes(inst) == [("write_bit", CFG.HEATER_COIL_RUN, 0)]
+    assert plc._pending_heater_off is False
+    assert any("보류된 히터 OFF 적용" in m for _, m in plc._msgs)
+    plc._poll_status()                           # 이후 다시 쓰지 않는다
+    assert len(_run_writes(inst)) == 1
+
+
+def test_T18_pending_heater_off_on_write_failure_then_mb_recovery(plc):
+    """링크는 살아 있는데 쓰기가 실패한 OFF 도 보류 → 다음 _mb 복구 분기에서 적용."""
+    inst = plc.instrument
+    FakeInstrument.scenario["write_bit_fail_n"] = 3
+    plc.set_heater_run(False)
+    assert plc._pending_heater_off is True and plc._comm_fail_streak == 1
+    plc._poll_status()                           # 읽기 성공 → 복구 분기 → 보류 OFF 적용
+    assert plc._pending_heater_off is False
+    assert len(_run_writes(inst)) == 4           # 실패 3회(기록됨) + 복구 시 1회
+    assert any("보류된 히터 OFF 적용" in m for _, m in plc._msgs)
+
+
+def test_T19_open_failure_reason_logged_with_cadence(plc, monkeypatch):
+    shots = _shots(monkeypatch)
+    FakeInstrument.scenario["fail_reads"] = True
+    plc._poll_status()
+    FakeInstrument.ctor_fail = True
+    events = []
+    monkeypatch.setattr(plc, "_emit_event", lambda k, d="", lost=None: events.append((k, d)))
+    logs = [True, False]
+    monkeypatch.setattr(plc._policy, "should_log", lambda: logs.pop(0))
+    n = len(plc._msgs)
+    shots[-1][1]()                               # should_log True → 상태 메시지
+    shots[-1][1]()                               # should_log False → 메시지 없음, 이벤트는 매번
+    warn = [m for l, m in plc._msgs[n:] if l == "PLC(경고)" and "포트 열기 실패" in m]
+    assert len(warn) == 1 and "could not open port" in warn[0]
+    assert [k for k, _ in events].count("열기실패") == 2

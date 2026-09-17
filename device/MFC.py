@@ -181,8 +181,7 @@ class MFCController(QObject):
         self.serial_mfc.clear(QSerialPort.Direction.AllDirections)
         self._rx.clear()
 
-        self._policy.on_success()
-        self._reconnect_pending = False
+        self._reconnect_pending = False      # 정책의 성공(on_success)은 포트 열림이 아니라 장비 응답
 
         self.status_message.emit("MFC", f"{MFC_PORT} 연결 성공 (PyQt6 QSerialPort)")
         return True
@@ -413,7 +412,7 @@ class MFCController(QObject):
                 self._cmd_q.appendleft(failed)
             try:
                 if not (self.serial_mfc and self.serial_mfc.isOpen()):
-                    QTimer.singleShot(0, self._try_reconnect)
+                    self._watch_connection()   # 정책 스케줄러를 거친다(즉시 open 금지)
                 else:
                     gap_ms = failed.gap_ms if failed else 100
                     if self._gap_timer:
@@ -451,7 +450,7 @@ class MFCController(QObject):
                 self._cmd_q.appendleft(cmd)
                 if self.serial_mfc and self.serial_mfc.isOpen():
                     self.serial_mfc.close()
-                self._try_reconnect()
+                self._watch_connection()       # 정책 스케줄러를 거친다(직접 open 금지)
                 return
             self._emit_comm_event("명령최종실패", f"{cmd.tag or cmd.cmd_str} (응답 없음, 재시도 소진)")
             self._safe_callback(cmd.callback, None)
@@ -459,6 +458,8 @@ class MFCController(QObject):
                 self._gap_timer.start(cmd.gap_ms)
             return
 
+        if self._policy.in_outage():
+            self._policy.on_success()      # 장비가 실제로 응답했다 — 여기서만 리셋(포트 열림은 성공이 아니다)
         self._safe_callback(cmd.callback, (line.strip() if isinstance(line, str) else line))
         if self._gap_timer:
             self._gap_timer.start(cmd.gap_ms)

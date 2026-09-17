@@ -156,6 +156,7 @@ class PLCController(QObject):
         self._reconnect_pending: bool = False
         self._ever_connected: bool = False
         self._link_skip_log_t: float = 0.0
+        self._pending_heater_off: bool = False   # 링크 다운 중 요청된 히터 OFF — 링크 업/복구 시 1회 적용
         self._policy = ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS,
                                        COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC)
         self._outage_abort: bool = False                # 이번 단절로 공정을 중단했는가(복구 후 안전 상태 재적용 판단)
@@ -227,41 +228,62 @@ class PLCController(QObject):
 
     @Slot()
     def start_polling(self):
+        """포트를 열고 폴링을 시작한다. 못 열어도 '연결 실패' 로 끝내지 않고 링크 다운으로 두어
+        정책 재시도(_comm_schedule_reconnect)에 넘긴다 — RFpulse 와 같은 동작."""
         if self._is_running:
             return
+        self._is_running = True
+        self._comm_last_ok = time.monotonic()
+        self._comm_fail_streak = 0
+        # 재연결 후 첫 목표 설정은 반드시 로그되게 초기화한다
+        self._heater_sv_log_last_c = None
+        self._heater_sv_log_last_t = 0.0
+        self.polling_timer.start()
+        if HEATER_ENABLED:
+            self._heater_wd_timer.start()      # ★ 하트비트 시작
+
+        self.instrument, reason = open_guarded(self._make_instrument, 2.0)
+        if self.instrument is None:
+            self.status_message.emit("PLC(경고)", f"포트 열기 실패: {reason}")
+            self._emit_event("열기실패", str(reason))
+            self._comm_schedule_reconnect()
+            return
+        self._on_link_up(first=True)
+
+    def _on_link_up(self, first: bool) -> None:
+        """링크 업 처리는 한 곳: 설정 푸시 + 세션 마커 + 보류 히터 OFF + 연결 로그·이벤트.
+        start_polling 성공과 _reconnect_attempt 성공 양쪽에서 부른다(재연결 시에도 설정을
+        다시 밀어 넣는다 — 단절 중 PLC 전원이 갔다 온 경우 대비, 쓰기는 멱등). _mutex 밖에서 부른다."""
+        self._link_down = False
+        self._ever_connected = True
+        # 접속할 때마다 JSON의 한계값을 PLC에 복구한다. 여기서 무슨 일이 나도 링크는 유지한다.
         try:
-            self.instrument = open_guarded(self._make_instrument, 2.0)
-            if self.instrument is None:
-                raise RuntimeError(f"{PLC_PORT} 를 2초 안에 열지 못했습니다")
-            self._ever_connected = True
-
-            self._is_running = True
-            self._comm_last_ok = time.monotonic()
-            self._comm_fail_streak = 0
-            # 재연결 후 첫 목표 설정은 반드시 로그되게 초기화한다
-            self._heater_sv_log_last_c = None
-            self._heater_sv_log_last_t = 0.0
-            self.polling_timer.start()
-            if HEATER_ENABLED:
-                self._heater_wd_timer.start()      # ★ 하트비트 시작
-
-            # 접속할 때마다 JSON의 한계값을 PLC에 복구한다.
-            # 여기서 무슨 일이 나도 '연결 실패'로 떨어뜨리지 않는다.
-            try:
-                self._push_heater_config()
-            except Exception as ex:
-                self.status_message.emit("히터(경고)", f"설정 적용 중 예외: {ex}")
-
-            # 재기동 감지 마커 (B3) — 설정 푸시 직후 난수를 써 둔다
-            try:
-                self._write_marker()
-            except Exception as ex:
-                self.status_message.emit("PLC(경고)", f"세션 마커 쓰기 실패: {ex}")
-
+            self._push_heater_config()
+        except Exception as ex:
+            self.status_message.emit("히터(경고)", f"설정 적용 중 예외: {ex}")
+        # 재기동 감지 마커 (B3) — 설정 푸시 직후 난수를 써 둔다
+        try:
+            self._write_marker()
+        except Exception as ex:
+            self.status_message.emit("PLC(경고)", f"세션 마커 쓰기 실패: {ex}")
+        self._apply_pending_heater_off()
+        if first:
             self.status_message.emit("PLC", f"연결 성공: {PLC_PORT}, ID={PLC_SLAVE_ID}")
             self._emit_event("연결", f"{PLC_PORT} ID={PLC_SLAVE_ID}")
-        except Exception as e:
-            self.status_message.emit("PLC(오류)", f"연결 실패: {e}")
+        else:
+            self.status_message.emit("PLC", f"PLC 포트 재연결({PLC_PORT})")
+            self._emit_event("재연결", f"{PLC_PORT} 성공")
+
+    def _apply_pending_heater_off(self) -> None:
+        """링크 다운 중 보류된 히터 OFF 를 1회 적용한다(_mutex 를 잡지 않은 상태에서 부른다)."""
+        if not self._pending_heater_off or self.instrument is None:
+            return
+        try:
+            self._mb("보류 히터 RUN=0", self.instrument.write_bit, HEATER_COIL_RUN, 0, functioncode=5)
+            self._pending_heater_off = False
+            self.status_message.emit("히터", "링크 복구 — 보류된 히터 OFF 적용")
+        except Exception as ex:
+            self.status_message.emit("PLC(경고)", f"보류된 히터 OFF 적용 실패(다음 복구에 재시도): {ex}")
 
     @Slot()
     def cleanup(self):
@@ -323,9 +345,19 @@ class PLCController(QObject):
                     self.plc_reconnected.emit()
                 self._blackbox_dumped = False
                 self.plc_recovered.emit(float(lost))
+                if self._pending_heater_off:
+                    try:
+                        self._pending_heater_off = False
+                        self.instrument.write_bit(HEATER_COIL_RUN, 0, functioncode=5)
+                        self.status_message.emit("히터", "링크 복구 — 보류된 히터 OFF 적용")
+                    except Exception as ex:
+                        self._pending_heater_off = True
+                        self.status_message.emit("PLC(경고)", f"보류된 히터 OFF 적용 실패(다음 복구에 재시도): {ex}")
             elif attempt > 0 and (now - self._comm_last_retry_log_t) >= 1.0:
                 self._comm_last_retry_log_t = now
                 self._emit_event("재시도성공", f"{what} {attempt}회 재시도 후 성공: {last_ex}")
+            if self._policy.in_outage():
+                self._policy.on_success()   # ★ 정책의 '성공' 은 포트 열림이 아니라 장비 응답 — 여기서만 리셋
             self._comm_last_ok = now
             return r
         self._comm_fail_streak += 1
@@ -388,24 +420,26 @@ class PLCController(QObject):
             self.instrument = None
             if old is not None:
                 close_guarded(getattr(old, "serial", None), "PLC serial(재연결)")
-            new = open_guarded(self._make_instrument, 2.0)
+            new, reason = open_guarded(self._make_instrument, 2.0)
             if new is not None:
                 self.instrument = new
-                self._link_down = False
-                self._ever_connected = True
-                self._policy.on_success()
-                self.status_message.emit("PLC", f"PLC 포트 재연결({PLC_PORT})")
-                self._emit_event("재연결", f"{PLC_PORT} 성공")
-                return
         finally:
             self._mutex.unlock()
+        if new is not None:
+            # 포트가 열린 것뿐이다 — 정책의 성공(on_success)은 첫 실제 응답(_mb 복구 분기)에서 한다
+            self._on_link_up(first=not self._ever_connected)
+            return
         ms = self._policy.on_failure()
+        quiet = not self._policy.should_log()       # 한 시도당 1회 판정(장기 두절 중엔 600초에 1번만 말한다)
+        if not quiet:
+            self.status_message.emit("PLC(경고)", f"포트 열기 실패: {reason}")
+        self._emit_event("열기실패", str(reason))
         if self._policy.take_long_outage_alert():
             lost = self._policy.outage_sec()
             self.status_message.emit("PLC(경고)", f"PLC 통신 장기 두절 {lost:.0f}초 — {COMM_PROBE_MS} ms 간격으로만 재시도")
             self._emit_event("장기두절", f"{lost:.0f}초", lost=lost)
             self.comm_long_outage.emit("PLC", float(lost))
-        if self._policy.should_log():
+        if not quiet:
             self.status_message.emit("PLC", f"재연결 시도... ({ms} ms)")
             self._emit_event("재연결시도", f"{ms} ms 뒤")
         self._reconnect_pending = True
@@ -586,8 +620,9 @@ class PLCController(QObject):
         if self._link_down or self.instrument is None:
             # ★ 링크 다운: 트랜잭션 없이 예산 판정(10초 "재시작")과 60초 끊김 감지만 계속 돈다.
             #   재연결은 _reconnect_attempt 가 정책 스케줄로 따로 한다.
-            if self._ever_connected:
-                self._comm_budget_tick(RuntimeError(self._comm_last_err or "링크 다운"), "[link]")
+            if not self._ever_connected:
+                return          # 한 번도 연결된 적 없으면 예산 판정(10초 재시작·60초 알림)을 하지 않는다
+            self._comm_budget_tick(RuntimeError(self._comm_last_err or "링크 다운"), "[link]")
             self._check_disconnect_timeout()
             return
         self._busy = True
@@ -1076,16 +1111,23 @@ class PLCController(QObject):
 
     @Slot(bool)
     def set_heater_run(self, on: bool):
-        if self.instrument is None:
-            return
-        if self._link_down_skip("히터 RUN"):
+        """RUN 쓰기. OFF 요청은 링크 다운/쓰기 실패여도 유실되지 않는다(_pending_heater_off →
+        링크 업·복구 시 1회 적용). ON 은 보관하지 않는다(거부·로그만)."""
+        if self.instrument is None or self._link_down_skip("히터 RUN"):
+            if not on:
+                self._pending_heater_off = True
+                self.status_message.emit("히터", "링크 다운 — 히터 OFF 를 보류(복구 시 적용)")
             return
         self._busy = True
         self._mutex.lock()
         try:
             self._mb("히터 RUN", self.instrument.write_bit, HEATER_COIL_RUN, int(bool(on)), functioncode=5)
+            if not on:
+                self._pending_heater_off = False
             self.status_message.emit("히터", f"운전 {'ON' if on else 'OFF'}")
         except Exception as e:
+            if not on:
+                self._pending_heater_off = True
             self.status_message.emit("PLC(오류)", f"히터 운전 쓰기 실패: {e}")
         finally:
             self._busy = False

@@ -13,15 +13,15 @@ close 는 데몬 스레드에 넘기고 즉시 반환한다.
 from __future__ import annotations
 import logging
 import threading
-from typing import Callable, Optional, Any
+from typing import Callable, Optional, Any, Tuple
 
 _log = logging.getLogger("serial_guard")
 
 
-def open_guarded(factory: Callable[[], Any], timeout_sec: float) -> Optional[Any]:
-    """factory() 를 데몬 스레드에서 실행한다. timeout 안에 끝나면 결과, 아니면 None.
-    늦게 성공한 객체는 누수 방지를 위해 그 스레드가 스스로 close() 한다.
-    호출 스레드는 timeout_sec 이상 묶이지 않는다."""
+def open_guarded(factory: Callable[[], Any], timeout_sec: float) -> Tuple[Optional[Any], Optional[str]]:
+    """factory() 를 데몬 스레드에서 실행한다. (객체, None) 또는 (None, 사유) 를 돌려준다.
+    사유는 f"timeout {t}s" 또는 repr(예외). 늦게 성공한 객체는 누수 방지를 위해 그 스레드가
+    스스로 close() 한다. 호출 스레드는 timeout_sec 이상 묶이지 않는다."""
     lock = threading.Lock()
     box = {"obj": None, "err": None, "done": False, "timed_out": False}
 
@@ -51,11 +51,11 @@ def open_guarded(factory: Callable[[], Any], timeout_sec: float) -> Optional[Any
         if not box["done"]:
             box["timed_out"] = True
             _log.warning("open_guarded: %.1fs 안에 열리지 않음 — 포기(늦게 열리면 스스로 닫음)", timeout_sec)
-            return None
+            return None, f"timeout {timeout_sec:g}s"
         if box["err"] is not None:
             _log.warning("open_guarded: 열기 실패: %r", box["err"])
-            return None
-        return box["obj"]
+            return None, repr(box["err"])
+        return box["obj"], None
 
 
 def _close_quietly(obj: Any, label: str) -> None:

@@ -116,8 +116,7 @@ class DCPowerController(QObject):
         self._rx.clear()
 
         self.status_message.emit("DCpower", f"{DC_PORT} 연결 성공(QSerialPort, LF 종단)")
-        self._policy.on_success()
-        self._reconnect_pending = False
+        self._reconnect_pending = False      # 정책의 성공(on_success)은 포트 열림이 아니라 장비 응답(_comm_ok)
         if self._comm_fail_streak == 0:
             # 첫 연결에서만 예산 시계를 맞춘다 — 단절 중 포트 재오픈은 장비 응답이 아니다
             self._comm_last_ok = time.monotonic()
@@ -145,6 +144,8 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower", f"DC 파워 통신 복구 (단절 {lost:.1f}초, 실패 {n}회)")
             self._emit_event("복구", f"실패 {n}회", lost=lost)
             self.dc_recovered.emit(float(lost))
+        if self._policy.in_outage():
+            self._policy.on_success()      # 장비가 실제로 응답했다 — 여기서만 리셋(포트 열림은 성공이 아니다)
         self._comm_last_ok = now
 
     def _comm_fail(self, why: str) -> None:
