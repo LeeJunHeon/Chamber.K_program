@@ -125,6 +125,7 @@ HEATER_HOLD_MV_DRIFT_PV_C   = get('HEATER_HOLD_MV_DRIFT_PV_C',   0.5)   # 창 �
 HEATER_HOLD_MV_DRIFT_MV     = get('HEATER_HOLD_MV_DRIFT_MV',     15)    # 창 후반부 평균 MV − 전반부 평균 MV 허용 [카운트]
 # 히터 패널 stale 표시 — 마지막 폴링 뒤 이만큼(초) 지나면 "PLC 응답 없음 · n초 전 값" 으로 바꾼다
 HEATER_STALE_SEC            = get('HEATER_STALE_SEC',            5.0)
+HEATER_STALE_FG             = "#9e9e9e"   # stale 표시 시 PV/SV 글자색(스타일의 color 만 바꾼다)
 
 
 def _validate_heater_hold_config() -> None:

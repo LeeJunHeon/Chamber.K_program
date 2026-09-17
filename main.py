@@ -42,7 +42,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
                         HEATER_HOLD_MV_AFTER_REACH, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC,
                         HEATER_HOLD_MV_ARRIVE_TOL_C, HEATER_HOLD_MV_DRIFT_PV_C, HEATER_HOLD_MV_DRIFT_MV,
-                        COMM_PROBE_MS, HEATER_STALE_SEC,
+                        COMM_PROBE_MS, HEATER_STALE_SEC, HEATER_STALE_FG,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
                         HEATER_GAS_HOLD_RELEASE_C,
@@ -209,6 +209,7 @@ class MainDialog(QDialog):
         # 히터 패널 stale 표시 — 마지막 폴링 시각 / 현재 stale 여부(바뀔 때만 스타일 재적용)
         self._heater_status_t = 0.0
         self._heater_stale = False
+        self._heater_style_orig: dict = {}      # stale 진입 시 원본 styleSheet 보관 → 해제 시 그대로 복원
         # 목표 도달 후 DAC 상한 고정 상태기 (_heater_mv_hold_tick)
         self._mvhold = {'state': 'idle', 'samples': [], 't0': 0.0, 'sv': None, 'value': None, 'last_push': 0.0,
                         'arrived': False, 'arr_sv': None, 'floor_warned': False, 'limit_warned': False,
@@ -361,6 +362,14 @@ class MainDialog(QDialog):
                 if HEATER_ENABLED and self.heater_recipe.is_running():
                     raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
                 want = bool(args.get("on"))
+                # 이미 원하는 상태인지는 버튼이 아니라 PLC(마지막 폴링)로 판단한다.
+                # 가스 준비 중(_heater_pending)도 'ON 진행 중' 으로 본다: ON 은 거부, OFF 는 취소 경로.
+                run = bool((self.plc_controller.get_heater_status() or {}).get("run"))
+                pending = self._heater_pending is not None
+                if want and pending:
+                    raise RuntimeError("히터가 이미 준비 중입니다(가스·압력 대기)")
+                if (run or pending) == want:
+                    raise RuntimeError(f"히터가 이미 {'ON' if want else 'OFF'} 상태입니다")
                 if want:
                     # 목표 온도가 함께 왔으면 먼저 반영한다(빈 SV로 인한 팝업 방지)
                     val = args.get("value")
@@ -412,9 +421,6 @@ class MainDialog(QDialog):
                     if not st.get("itl"):
                         raise RuntimeError("히터 인터락 미충족 (TC/DAC 모듈 상태 확인 필요)")
 
-                # 이미 원하는 상태인지는 버튼이 아니라 PLC(마지막 폴링)로 판단한다
-                if bool((self.plc_controller.get_heater_status() or {}).get("run")) == want:
-                    raise RuntimeError(f"히터가 이미 {'ON' if want else 'OFF'} 상태입니다")
                 # 버튼을 눌러 흉내내지 않고(P3) 핸들러를 직접 부른다 — 표시는 폴링이 맞춘다
                 self._on_heater_onoff_toggled(want)
 
@@ -2595,24 +2601,31 @@ class MainDialog(QDialog):
                 getattr(self.ui, _w).setEnabled(False)      # _sync_heater_recipe_buttons 가 매초 되살리므로 다시 잠근다
 
     def _heater_set_stale(self, stale: bool, n: int) -> None:
-        """stale 전환(스타일 재적용은 여기서만). True: 회색 값 + 빨간 라벨 + 버튼 잠금. False: 원복."""
+        """stale 전환(스타일 재적용은 여기서만). True: 값 글자색만 회색 + 빨간 라벨 + 버튼 잠금.
+        False: 진입 때 보관한 원본 styleSheet 를 그대로 복원(UI.py 의 스타일을 여기서 다시 적지 않는다)."""
         self._heater_stale = stale
         ui = self.ui
         try:
             if stale:
                 ui.heater_status_label.setText(f"PLC 응답 없음 · {n}초 전 값")
                 ui.heater_status_label.setStyleSheet("border: none; color:#c62828; font-weight:bold;")
-                ui.heater_pv_edit.setStyleSheet(
-                    "QLineEdit {background: transparent; border: none; color: #9e9e9e; font-size: 26pt; font-weight: bold;}")
-                ui.heater_sv_big.setStyleSheet(
-                    "QLabel {border: none; background: transparent; color: #9e9e9e; font-size: 17pt; font-weight: bold;}")
+                for _w in ("heater_pv_edit", "heater_sv_big"):
+                    wdg = getattr(ui, _w)
+                    orig = wdg.styleSheet()
+                    self._heater_style_orig[_w] = orig
+                    if re.search(r"color\s*:", orig):
+                        new = re.sub(r"color\s*:\s*[^;}]+", f"color: {HEATER_STALE_FG}", orig)
+                    elif orig.rstrip().endswith("}"):
+                        new = orig.rstrip()[:-1] + f" color: {HEATER_STALE_FG};}}"
+                    else:
+                        new = f"{orig}; color: {HEATER_STALE_FG};"
+                    wdg.setStyleSheet(new)
                 for _w in ("heater_onoff_button", "heater_apply_button", "heater_reset_button"):
                     getattr(ui, _w).setEnabled(False)
             else:
-                ui.heater_pv_edit.setStyleSheet(
-                    "QLineEdit {background: transparent; border: none; color: #1f2937; font-size: 26pt; font-weight: bold;}")
-                ui.heater_sv_big.setStyleSheet(
-                    "QLabel {border: none; background: transparent; color: #6b7280; font-size: 17pt; font-weight: bold;}")
+                for _w, orig in self._heater_style_orig.items():
+                    getattr(ui, _w).setStyleSheet(orig)
+                self._heater_style_orig.clear()
                 self._sync_heater_recipe_buttons()    # ON/적용 활성은 레시피 상태에 따라 원래 규칙으로
         except Exception as e:
             log_message_to_monitor("경고", f"히터 stale 표시 전환 실패: {e!r}")

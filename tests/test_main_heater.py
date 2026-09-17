@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""T6~T12 — main.MainDialog(offscreen). PLC 포트 없음이 정상. 챗·ERP·CSV 는 스텁."""
+"""T6~T12, T20~T21 — main.MainDialog(offscreen). PLC 포트 없음이 정상. 챗·ERP·CSV 는 스텁."""
 import threading
 import time
 from unittest.mock import MagicMock
@@ -189,3 +189,66 @@ def test_T12_stale_display_and_restore(fresh):
     assert w._heater_stale is False
     assert "응답 없음" not in w.ui.heater_status_label.text()
     assert w.ui.heater_onoff_button.isEnabled() is True
+
+
+def test_T20_stale_restores_original_stylesheet_exactly(fresh):
+    w = fresh; ui = w.ui
+    feed(w, make_heater_st(run=False))
+    pv0, sv0 = ui.heater_pv_edit.styleSheet(), ui.heater_sv_big.styleSheet()
+    assert "#1f2937" in pv0 and "#6b7280" in sv0          # UI.py 원본
+    w._heater_status_t = time.monotonic() - 6.0
+    w._refresh_heater_progress()
+    assert w._heater_stale is True
+    pv1, sv1 = ui.heater_pv_edit.styleSheet(), ui.heater_sv_big.styleSheet()
+    assert MAIN.HEATER_STALE_FG in pv1 and MAIN.HEATER_STALE_FG in sv1
+    # color 만 바뀌고 나머지(font-size 등)는 그대로
+    assert pv1.replace(MAIN.HEATER_STALE_FG, "#1f2937") == pv0
+    assert sv1.replace(MAIN.HEATER_STALE_FG, "#6b7280") == sv0
+    feed(w, make_heater_st(run=False))
+    assert w._heater_stale is False
+    assert ui.heater_pv_edit.styleSheet() == pv0 and ui.heater_sv_big.styleSheet() == sv0
+    assert w._heater_style_orig == {}
+    # 원본이 다른 스타일이어도(예: 사용자 정의) 그 스타일로 복원된다
+    custom = "QLineEdit {color: red; font-size: 10pt;}"
+    ui.heater_pv_edit.setStyleSheet(custom)
+    w._heater_set_stale(True, 7)
+    assert ui.heater_pv_edit.styleSheet() == f"QLineEdit {{color: {MAIN.HEATER_STALE_FG}; font-size: 10pt;}}"
+    w._heater_set_stale(False, 0)
+    assert ui.heater_pv_edit.styleSheet() == custom
+    ui.heater_pv_edit.setStyleSheet(pv0)
+
+
+def _erp(w, on):
+    """ERP 명령 1건을 드레인 타이머 경로로 실행하고 (ok, reason) 을 돌려준다."""
+    w.erp.rejected = False
+    w.erp.pop_commands.return_value = [{"id": 1, "command": "HEATER_ONOFF", "args": {"on": on}}]
+    w.erp.cmd_result.reset_mock()
+    w._erp_cmd_timer.timeout.emit()
+    w.erp.pop_commands.return_value = []
+    args = w.erp.cmd_result.call_args.args
+    return bool(args[1]), (args[2] if len(args) > 2 else "")
+
+
+def test_T21_erp_heater_onoff_pending_counts_as_on(fresh):
+    w = fresh
+    calls = []
+    orig = w._on_heater_onoff_toggled
+    w._on_heater_onoff_toggled = lambda v: calls.append(v)
+    try:
+        feed(w, make_heater_st(run=False))
+        w._heater_pending = ("manual_on", 300.0); w._show_heater_pending_button()
+        ok, why = _erp(w, True)
+        assert ok is False and "준비 중" in why and calls == []
+        ok, why = _erp(w, False)                             # 준비 중 OFF = 취소 경로
+        assert ok is True and calls == [False]
+        w._heater_pending = None
+        ok, why = _erp(w, False)
+        assert ok is False and "이미 OFF" in why
+        feed(w, make_heater_st(run=True))
+        ok, why = _erp(w, True)
+        assert ok is False and "이미 ON" in why
+        assert calls == [False]
+    finally:
+        w._on_heater_onoff_toggled = orig
+        w._heater_pending = None
+        w.erp.pop_commands.return_value = []
