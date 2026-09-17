@@ -201,18 +201,15 @@ def _run_writes(inst):
 
 
 def test_T15_policy_success_only_on_device_response(plc, monkeypatch):
-    """포트가 열려도 장비가 침묵하면 정책은 리셋되지 않는다(백오프 계속 상승). 첫 응답에서 리셋."""
+    """포트가 열려도 장비가 침묵하면 링크 업이 아니고 정책도 리셋되지 않는다(백오프 계속 상승). 첫 응답에서 리셋."""
     shots = _shots(monkeypatch)
     FakeInstrument.scenario.update(fail_reads=True, fail_writes=True)   # 포트는 열리지만 장비 침묵
     plc._poll_status()                                   # 실패 → 링크 다운, 1000ms 예약
     assert shots[-1][0] == 1000
-    shots[-1][1]()                                       # 재연결: 포트 열림(장비는 여전히 침묵)
-    assert plc._link_down is False and plc._policy.in_outage()
-    plc._poll_status()                                   # 응답 없음 → 다시 다운, 2000 (1000 으로 안 돌아감)
-    assert plc._link_down is True and shots[-1][0] == 2000
+    shots[-1][1]()                                       # 재연결: 포트 열림 → 프로브 실패 → 링크 다운 유지, 2000
+    assert plc._link_down is True and plc._policy.in_outage() and shots[-1][0] == 2000
     shots[-1][1]()
-    plc._poll_status()
-    assert shots[-1][0] == 4000
+    assert plc._link_down is True and shots[-1][0] == 4000
     # 장비가 응답하면 그제야 리셋
     FakeInstrument.scenario.update(fail_reads=False, fail_writes=False)
     shots[-1][1]()
@@ -309,11 +306,65 @@ def test_T19_open_failure_reason_logged_with_cadence(plc, monkeypatch):
     FakeInstrument.ctor_fail = True
     events = []
     monkeypatch.setattr(plc, "_emit_event", lambda k, d="", lost=None: events.append((k, d)))
-    logs = [True, False]
-    monkeypatch.setattr(plc._policy, "should_log", lambda: logs.pop(0))
+    logs = {"v": True}
+    monkeypatch.setattr(plc._policy, "should_log", lambda: logs["v"])
     n = len(plc._msgs)
     shots[-1][1]()                               # should_log True → 상태 메시지
+    logs["v"] = False
     shots[-1][1]()                               # should_log False → 메시지 없음, 이벤트는 매번
     warn = [m for l, m in plc._msgs[n:] if l == "PLC(경고)" and "포트 열기 실패" in m]
     assert len(warn) == 1 and "could not open port" in warn[0]
     assert [k for k, _ in events].count("열기실패") == 2
+
+
+def _silent(plc, monkeypatch):
+    """T22 준비: 폴링 실패로 링크 다운 → 이후 시나리오는 '포트 열림 + 전부 무응답'."""
+    shots = _shots(monkeypatch)
+    steps = []
+    orig = plc._policy_failure_step
+    monkeypatch.setattr(plc, "_policy_failure_step", lambda r: (steps.append(r), orig(r)))
+    alerts = []
+    plc.comm_long_outage.connect(lambda d, lost: alerts.append((d, lost)))
+    return shots, steps, alerts
+
+
+def test_T22_silent_plc_port_opens_but_no_link_up(plc, monkeypatch):
+    shots, steps, alerts = _silent(plc, monkeypatch)
+    FakeInstrument.scenario.update(fail_reads=True, fail_writes=True)
+    plc._poll_status()
+    n_msg = len(plc._msgs)
+    t0 = time.monotonic()
+    shots[-1][1]()                                       # 재연결 1회
+    took = time.monotonic() - t0
+    assert took < 2.5, f"_reconnect_attempt {took:.2f}s"
+    assert plc._link_down is True
+    new = [m for _, m in plc._msgs[n_msg:]]
+    assert not any("재연결(" in m or "연결 성공" in m for m in new)
+    assert any("무응답" in m for m in new)
+    inst = FakeInstrument.scenario["instances"][-1]
+    assert not any(c[0] == "write_register" for c in inst.calls)     # 설정 푸시 0회
+    assert steps == ["통신 실패", "무응답"]
+    delays = [shots[-1][0]]
+    shots[-1][1](); delays.append(shots[-1][0])
+    shots[-1][1](); delays.append(shots[-1][0])
+    assert delays == [2000, 4000, 8000]
+    # 600초 뒤 장기 두절 알림 정확히 1회, 이후 60000 고정
+    base = plc._policy._now
+    monkeypatch.setattr(plc._policy, "_now", lambda: base() + 600.0)
+    shots[-1][1]()
+    assert [d for d, _ in alerts] == ["PLC"] and shots[-1][0] == 60000
+    shots[-1][1]()
+    assert len(alerts) == 1 and shots[-1][0] == 60000
+
+
+def test_T23_long_outage_alert_single_path_on_open_failure(plc, monkeypatch):
+    shots, steps, alerts = _silent(plc, monkeypatch)
+    FakeInstrument.scenario["fail_reads"] = True
+    plc._poll_status()
+    FakeInstrument.ctor_fail = True
+    shots[-1][1](); shots[-1][1]()
+    assert steps == ["통신 실패", "열기 실패", "열기 실패"]
+    base = plc._policy._now
+    monkeypatch.setattr(plc._policy, "_now", lambda: base() + 600.0)
+    shots[-1][1](); shots[-1][1]()
+    assert [d for d, _ in alerts] == ["PLC"] and shots[-1][0] == 60000

@@ -2613,8 +2613,8 @@ class MainDialog(QDialog):
                     wdg = getattr(ui, _w)
                     orig = wdg.styleSheet()
                     self._heater_style_orig[_w] = orig
-                    if re.search(r"color\s*:", orig):
-                        new = re.sub(r"color\s*:\s*[^;}]+", f"color: {HEATER_STALE_FG}", orig)
+                    if re.search(r"(?<![-\w])color\s*:", orig):          # background-color 는 제외
+                        new = re.sub(r"(?<![-\w])color\s*:\s*[^;}]+", f"color: {HEATER_STALE_FG}", orig)
                     elif orig.rstrip().endswith("}"):
                         new = orig.rstrip()[:-1] + f" color: {HEATER_STALE_FG};}}"
                     else:

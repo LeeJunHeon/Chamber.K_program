@@ -250,10 +250,21 @@ class PLCController(QObject):
             return
         self._on_link_up(first=True)
 
-    def _on_link_up(self, first: bool) -> None:
-        """링크 업 처리는 한 곳: 설정 푸시 + 세션 마커 + 보류 히터 OFF + 연결 로그·이벤트.
+    def _on_link_up(self, first: bool) -> bool:
+        """링크 업 처리는 한 곳: 프로브 1회 → 설정 푸시 + 세션 마커 + 보류 히터 OFF + 연결 로그·이벤트.
+        프로브 실패면 False(링크 다운 유지, 재시도 예약, 2초 안에 반환).
         start_polling 성공과 _reconnect_attempt 성공 양쪽에서 부른다(재연결 시에도 설정을
         다시 밀어 넣는다 — 단절 중 PLC 전원이 갔다 온 경우 대비, 쓰기는 멱등). _mutex 밖에서 부른다."""
+        # ★ 링크 업 = 포트 열림 + 프로브 응답 1회. 포트만 열리고 PLC 가 침묵하면 링크 업이 아니다.
+        reg = PLC_SESSION_MARK_REG or HEATER_REG_PV
+        try:
+            self._mb("링크 프로브", self.instrument.read_register, reg, 0, functioncode=3)
+        except Exception as ex:
+            if self._policy.should_log():
+                self.status_message.emit("PLC(경고)", f"포트는 열렸으나 PLC 무응답: {ex}")
+            self._emit_event("무응답", f"D{reg:05d} 읽기: {ex}")
+            self._policy_failure_step("무응답")
+            return False
         self._link_down = False
         self._ever_connected = True
         # 접속할 때마다 JSON의 한계값을 PLC에 복구한다. 여기서 무슨 일이 나도 링크는 유지한다.
@@ -273,6 +284,7 @@ class PLCController(QObject):
         else:
             self.status_message.emit("PLC", f"PLC 포트 재연결({PLC_PORT})")
             self._emit_event("재연결", f"{PLC_PORT} 성공")
+        return True
 
     def _apply_pending_heater_off(self) -> None:
         """링크 다운 중 보류된 히터 OFF 를 1회 적용한다(_mutex 를 잡지 않은 상태에서 부른다)."""
@@ -399,13 +411,24 @@ class PLCController(QObject):
     def _comm_schedule_reconnect(self) -> None:
         """첫 실패 → 링크 다운으로 놓고 정책 스케줄로 _reconnect_attempt 를 예약한다.
         재시도는 절대 COMM_RECONNECT_START_MS 보다 촘촘해지지 않는다."""
+        self._policy_failure_step("통신 실패")
+
+    def _policy_failure_step(self, reason: str) -> None:
+        """정책 실패 처리는 여기 한 곳: 링크 다운 → on_failure → (장기두절 알림 1회) → (재시도 로그) → 예약.
+        _comm_schedule_reconnect·열기 실패·프로브 실패가 모두 이것을 쓴다."""
+        self._link_down = True
         if self._reconnect_pending:
             return
-        self._link_down = True
         self._reconnect_pending = True
         ms = self._policy.on_failure()
+        if self._policy.take_long_outage_alert():
+            lost = self._policy.outage_sec()
+            self.status_message.emit("PLC(경고)", f"PLC 통신 장기 두절 {lost:.0f}초 — {COMM_PROBE_MS} ms 간격으로만 재시도")
+            self._emit_event("장기두절", f"{lost:.0f}초", lost=lost)
+            self.comm_long_outage.emit("PLC", float(lost))
         if self._policy.should_log():
-            self.status_message.emit("PLC", f"재연결 시도... ({ms} ms)")
+            self.status_message.emit("PLC", f"재연결 시도... ({ms} ms) — {reason}")
+            self._emit_event("재연결시도", f"{ms} ms 뒤 — {reason}")
         QTimer.singleShot(ms, self._reconnect_attempt)
 
     def _reconnect_attempt(self) -> None:
@@ -426,24 +449,13 @@ class PLCController(QObject):
         finally:
             self._mutex.unlock()
         if new is not None:
-            # 포트가 열린 것뿐이다 — 정책의 성공(on_success)은 첫 실제 응답(_mb 복구 분기)에서 한다
+            # 포트가 열린 것뿐이다 — 링크 업 여부는 _on_link_up 의 프로브가 정한다(열림 자체는 로그하지 않는다)
             self._on_link_up(first=not self._ever_connected)
             return
-        ms = self._policy.on_failure()
-        quiet = not self._policy.should_log()       # 한 시도당 1회 판정(장기 두절 중엔 600초에 1번만 말한다)
-        if not quiet:
+        if self._policy.should_log():
             self.status_message.emit("PLC(경고)", f"포트 열기 실패: {reason}")
         self._emit_event("열기실패", str(reason))
-        if self._policy.take_long_outage_alert():
-            lost = self._policy.outage_sec()
-            self.status_message.emit("PLC(경고)", f"PLC 통신 장기 두절 {lost:.0f}초 — {COMM_PROBE_MS} ms 간격으로만 재시도")
-            self._emit_event("장기두절", f"{lost:.0f}초", lost=lost)
-            self.comm_long_outage.emit("PLC", float(lost))
-        if not quiet:
-            self.status_message.emit("PLC", f"재연결 시도... ({ms} ms)")
-            self._emit_event("재연결시도", f"{ms} ms 뒤")
-        self._reconnect_pending = True
-        QTimer.singleShot(ms, self._reconnect_attempt)
+        self._policy_failure_step("열기 실패")
 
     def _link_down_skip(self, what: str) -> bool:
         """링크 다운이면 True 를 돌려주고(호출자는 즉시 return) 1초 1회만 로그."""

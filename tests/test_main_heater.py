@@ -252,3 +252,15 @@ def test_T21_erp_heater_onoff_pending_counts_as_on(fresh):
         w._on_heater_onoff_toggled = orig
         w._heater_pending = None
         w.erp.pop_commands.return_value = []
+
+
+def test_T24_stale_regex_leaves_background_color(fresh):
+    w = fresh; ui = w.ui
+    orig = ui.heater_sv_big.styleSheet()
+    custom = "QLabel {background-color: #fff; color: #111;}"
+    ui.heater_sv_big.setStyleSheet(custom)
+    w._heater_set_stale(True, 7)
+    assert ui.heater_sv_big.styleSheet() == f"QLabel {{background-color: #fff; color: {MAIN.HEATER_STALE_FG};}}"
+    w._heater_set_stale(False, 0)
+    assert ui.heater_sv_big.styleSheet() == custom
+    ui.heater_sv_big.setStyleSheet(orig)
