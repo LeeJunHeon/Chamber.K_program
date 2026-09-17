@@ -110,7 +110,7 @@ class Ui_Dialog(object):
         self.BuzzStop_Button.setCheckable(True)
         self.ALL_STOP_button = QPushButton(Dialog)
         self.ALL_STOP_button.setObjectName(u"ALL_STOP_button")
-        self.ALL_STOP_button.setGeometry(QRect(590, 390, 131, 81))
+        self.ALL_STOP_button.setGeometry(QRect(20, 270, 131, 81))
         self.ALL_STOP_button.setStyleSheet(u"QPushButton {background: #A0A0A0; color: red; font-weight: bold; font-size: 18pt; border-radius: 8px; border: 2px solid #555555;}\n"
 "QPushButton:pressed {background: #808080; border-color: #333333;}")
         self.ALL_STOP_button.setCheckable(False)
