@@ -562,21 +562,32 @@ class Ui_Dialog(object):
 
         self.heater_pv_edit = QLineEdit(self.heater_lcd)
         self.heater_pv_edit.setObjectName(u"heater_pv_edit")
-        self.heater_pv_edit.setGeometry(QRect(30, 2, 140, 46))
+        self.heater_pv_edit.setGeometry(QRect(30, 2, 140, 32))
         self.heater_pv_edit.setReadOnly(True)                       # PLC 값만 표시
         self.heater_pv_edit.setAlignment(Qt.AlignmentFlag.AlignRight
                                          | Qt.AlignmentFlag.AlignVCenter)
         self.heater_pv_edit.setStyleSheet(
             u"QLineEdit {background: transparent; border: none; "
-            u"color: #1f2937; font-size: 26pt; font-weight: bold;}"
+            u"color: #1f2937; font-size: 20pt; font-weight: bold;}"
         )
 
         self.heater_pv_unit = QLabel(self.heater_lcd)
         self.heater_pv_unit.setObjectName(u"heater_pv_unit")
-        self.heater_pv_unit.setGeometry(QRect(172, 24, 22, 18))
+        self.heater_pv_unit.setGeometry(QRect(172, 10, 22, 18))
         self.heater_pv_unit.setStyleSheet(
             u"QLabel {border: none; background: transparent; "
             u"color: #6b7280; font-size: 9pt;}"
+        )
+
+        # --- TC2 (D00011) — TC1 아래 한 줄. TC2 추종 중이면 "TC2 1052.3 → 1052.3" 로 목표를 같이 보인다 ---
+        self.heater_pv2_label = QLabel(self.heater_lcd)
+        self.heater_pv2_label.setObjectName(u"heater_pv2_label")
+        self.heater_pv2_label.setGeometry(QRect(8, 35, 186, 14))
+        self.heater_pv2_label.setAlignment(Qt.AlignmentFlag.AlignRight
+                                           | Qt.AlignmentFlag.AlignVCenter)
+        self.heater_pv2_label.setStyleSheet(
+            u"QLabel {border: none; background: transparent; "
+            u"color: #6b7280; font-size: 8pt;}"
         )
 
         # --- SV (PLC 가 지금 쫓는 목표. 램프 중간 목표 포함) ---
@@ -1046,7 +1057,8 @@ class Ui_Dialog(object):
         # --- 히터 패널 ---
         # 단위를 제목에 명시 → 각 입력창에서 단위 표기를 생략할 수 있음
         self.heater_title_label.setText(QCoreApplication.translate("Dialog", u"Heater [\u00b0C]", None))
-        self.heater_pv_title.setText(QCoreApplication.translate("Dialog", u"PV", None))
+        self.heater_pv_title.setText(QCoreApplication.translate("Dialog", u"TC1", None))
+        self.heater_pv2_label.setText(QCoreApplication.translate("Dialog", u"TC2 --.-", None))
         self.heater_sv_title.setText(QCoreApplication.translate("Dialog", u"\ubaa9\ud45c", None))
         # --- 가스·압력 ---
         self.heater_ar_check.setText(QCoreApplication.translate("Dialog", u"Ar", None))

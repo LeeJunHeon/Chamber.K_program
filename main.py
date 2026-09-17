@@ -2285,6 +2285,24 @@ class MainDialog(QDialog):
             return "가스 유지 · 냉각 중", "#1565c0"
         return "정지", "#616161"
 
+    def _update_heater_pv2_label(self, st: dict) -> None:
+        """TC2 한 줄: "TC2 1052.3 °C" / 없으면 "TC2 --.-" / TC2 추종 중 "TC2 1052.3 → 1052.3"(운전색)."""
+        ui = self.ui
+        pv2 = st.get('pv2')
+        tc2_hold = self.heater_hold.is_holding() and self.heater_hold.kind == 'tc2'
+        if pv2 is None:
+            txt = "TC2 --.-"
+        elif tc2_hold and self.heater_hold.sv2 is not None:
+            txt = f"TC2 {float(pv2):.1f} → {float(self.heater_hold.sv2):.1f}"
+        else:
+            txt = f"TC2 {float(pv2):.1f} °C"
+        ui.heater_pv2_label.setText(txt)
+        col = "#2e7d32" if tc2_hold else "#6b7280"
+        if getattr(self, "_heater_pv2_col", None) != col and not self._heater_stale:
+            self._heater_pv2_col = col
+            ui.heater_pv2_label.setStyleSheet(
+                f"QLabel {{border: none; background: transparent; color: {col}; font-size: 8pt;}}")
+
     def _update_heater_lcd(self, st: dict):
         """LCD 영역(PV/SV/편차/출력/배지/테두리)을 갱신한다.
 
@@ -2302,15 +2320,24 @@ class MainDialog(QDialog):
             #  정지 중  : sv(D00012) — 래더가 cur_sv 를 운전 중에만 갱신해서
             #             정지 상태에서는 마지막 운전 때의 중간 목표가 남는다.
             #             그대로 두면 꺼져 있는데 600°C 를 향하는 것처럼 보인다.
-            sv_show = cur_sv if running else st.get('sv')
+            #  TC2 추종 중: cur_sv(D00016)는 TC2 목표를 비추므로 sv(D00012 = TC1 목표)를 보이고
+            #             편차도 TC1 − 최종 목표로 잰다(TC1 600 옆에 SV 1052 가 보이면 안 된다)
+            tc2_hold = self.heater_hold.is_holding() and self.heater_hold.kind == 'tc2'
+            if tc2_hold:
+                sv_show = st.get('sv')
+                dev_ref = self._heater_final_target(st)
+                dev_ref = float(dev_ref) if dev_ref is not None else sv_show
+            else:
+                sv_show = cur_sv if running else st.get('sv')
+                dev_ref = cur_sv
             if sv_show is None:
                 ui.heater_sv_big.setText("---")
             else:
                 ui.heater_sv_big.setText(f"{float(sv_show):.1f}")
 
             # 편차 — 정지 중에는 의미가 없으므로 비운다
-            if running and pv is not None and cur_sv is not None:
-                dev = float(pv) - float(cur_sv)
+            if running and pv is not None and dev_ref is not None:
+                dev = float(pv) - float(dev_ref)
                 ui.heater_dev_label.setText(f"\u0394{dev:+.1f}")
                 col = "#2e7d32" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#6b7280"
                 if getattr(self, "_heater_dev_col", None) != col:
@@ -2468,7 +2495,7 @@ class MainDialog(QDialog):
             if stale:
                 ui.heater_status_label.setText(f"PLC 응답 없음 · {n}초 전 값")
                 ui.heater_status_label.setStyleSheet("border: none; color:#c62828; font-weight:bold;")
-                for _w in ("heater_pv_edit", "heater_sv_big"):
+                for _w in ("heater_pv_edit", "heater_sv_big", "heater_pv2_label"):
                     wdg = getattr(ui, _w)
                     orig = wdg.styleSheet()
                     self._heater_style_orig[_w] = orig
@@ -2485,6 +2512,7 @@ class MainDialog(QDialog):
                 for _w, orig in self._heater_style_orig.items():
                     getattr(ui, _w).setStyleSheet(orig)
                 self._heater_style_orig.clear()
+                self._heater_pv2_col = None            # 다음 폴링이 TC2 색을 다시 정한다
                 self._sync_heater_recipe_buttons()    # ON/적용 활성은 레시피 상태에 따라 원래 규칙으로
         except Exception as e:
             log_message_to_monitor("경고", f"히터 stale 표시 전환 실패: {e!r}")
@@ -2973,12 +3001,14 @@ class MainDialog(QDialog):
         except Exception:
             pass
 
-        # --- 현재 온도 (QLineEdit이므로 setText 사용) ---
+        # --- 현재 온도 TC1 (QLineEdit이므로 setText 사용) ---
         if st.get('ok') and st.get('pv') is not None:
             self.ui.heater_pv_edit.setText(f"{st['pv']:.1f}")
         else:
             # 단선/모듈이상 시 PLC가 hFFFF를 쓰고 파이썬은 -1로 읽는다
             self.ui.heater_pv_edit.setText("")      # 빈 칸 → placeholder "--.-" 노출
+        # --- TC2 한 줄 ---
+        self._update_heater_pv2_label(st)
 
         # --- 상태 문구 ---
         s, c = self._heater_status_text(st)
