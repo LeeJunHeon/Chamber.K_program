@@ -32,6 +32,8 @@ from lib.config import (
     HEATER_REG_MV_LIMIT, HEATER_REG_SV_RAMP, HEATER_REG_RAMP_RATE,
     HEATER_REG_HOLDBACK, HEATER_REG_OT_LIMIT, HEATER_REG_SLOW_ZONE,
     HEATER_REG_SLOW_RATE,
+    HEATER_REG_PV2, HEATER_REG_PV_CTRL, HEATER_REG_OT2_LIMIT, HEATER_REG_SV2, HEATER_REG_SV2_MAX,
+    HEATER_OT2_LIMIT_C, HEATER_COIL_PV_SEL, HEATER_COIL_PV_SEL_EFF,
     HEATER_PUSH_CONFIG, HEATER_SV_LIMIT_C, HEATER_RAMP_RATE_C_PER_MIN,
     HEATER_HOLDBACK_C, HEATER_OT_LIMIT_C, HEATER_SLOW_ZONE_C,
     HEATER_SLOW_RATE_C_PER_MIN,
@@ -821,6 +823,8 @@ class PLCController(QObject):
              "홀드백",   f"{HEATER_HOLDBACK_C:.1f}°C"),
             (HEATER_REG_OT_LIMIT,  _clamp(round(HEATER_OT_LIMIT_C * 10)),
              "OT",       f"{HEATER_OT_LIMIT_C:.1f}°C"),
+            (HEATER_REG_OT2_LIMIT, _clamp(round(HEATER_OT2_LIMIT_C * 10)),
+             "OT2",      f"{HEATER_OT2_LIMIT_C:.1f}°C"),
             (HEATER_REG_SLOW_ZONE, _clamp(round(HEATER_SLOW_ZONE_C * 10)),
              "감속구간", f"{HEATER_SLOW_ZONE_C:.1f}°C"),
             (HEATER_REG_SLOW_RATE, _clamp(_rate(HEATER_SLOW_RATE_C_PER_MIN)),
@@ -864,13 +868,16 @@ class PLCController(QObject):
                 f" · 램프 {HEATER_RAMP_RATE_C_PER_MIN:.0f}°C/min"
                 f" · 홀드백 {HEATER_HOLDBACK_C:.1f}°C"
                 f" · OT {HEATER_OT_LIMIT_C:.1f}°C"
+                f" · OT2 {HEATER_OT2_LIMIT_C:.1f}°C"
                 f" · SV상한 {HEATER_SV_LIMIT_C:.1f}°C")
         finally:
             self._busy = False
             self._mutex.unlock()
 
     def _poll_heater(self):
-        """D00010~D00028 + D00041 + 코일 64~73 을 읽어 update_heater_status로 발행.
+        """D00010~D00036(27개) + D00041 + 코일 64~75(12개) 를 읽어 update_heater_status로 발행.
+        TC2 추종 관련 키: pv2(TC2, -1→None) / pv_ctrl(D00033) / ot2_limit(D00034) / sv2(D00035) /
+        sv2_max(D00036, 옛 래더는 0) / pv_sel(M0004A 요구) / pv_sel_eff(M0004B 실제 적용).
         주의: 호출자(_poll_status)가 이미 _mutex를 잡고 있으므로 여기서 잠그지 않는다."""
         try:
             blk  = self._mb("히터 D블록", self.instrument.read_registers,
@@ -889,6 +896,7 @@ class PLCController(QObject):
 
         raw_pv = _signed(_reg(HEATER_REG_PV))
         tc_bad = (raw_pv == -1)                       # hFFFF = 단선/모듈이상
+        raw_pv2 = _signed(_reg(HEATER_REG_PV2))       # TC2: -1 = 센서 이상/미연결
 
         def _bit(coil: int) -> bool:
             return bool(bits[coil - HEATER_COIL_BASE])
@@ -924,6 +932,11 @@ class PLCController(QObject):
             'ramp_rate': _reg(HEATER_REG_RAMP_RATE) * 6,          # °C/min 환산
             'holdback':  _reg(HEATER_REG_HOLDBACK)  * HEATER_TEMP_SCALE,
             'ot_limit':  _reg(HEATER_REG_OT_LIMIT)  * HEATER_TEMP_SCALE,
+            'pv2':       None if raw_pv2 == -1 else raw_pv2 * HEATER_TEMP_SCALE,
+            'pv_ctrl':   _signed(_reg(HEATER_REG_PV_CTRL)) * HEATER_TEMP_SCALE,
+            'ot2_limit': _reg(HEATER_REG_OT2_LIMIT) * HEATER_TEMP_SCALE,
+            'sv2':       _reg(HEATER_REG_SV2)       * HEATER_TEMP_SCALE,
+            'sv2_max':   _reg(HEATER_REG_SV2_MAX)   * HEATER_TEMP_SCALE,
             'est_current': 0.0 if mv < HEATER_MV_MIN else heater_est_current(mv),
             'run':       _bit(HEATER_COIL_RUN),
             'itl':       _bit(HEATER_COIL_ITL),
@@ -933,6 +946,8 @@ class PLCController(QObject):
             'wd_err':    _bit(HEATER_COIL_WD_ERR),
             'at_done':   _bit(HEATER_COIL_AT_DONE),
             'pid_run':   _bit(HEATER_COIL_PID_RUN),
+            'pv_sel':     _bit(HEATER_COIL_PV_SEL),
+            'pv_sel_eff': _bit(HEATER_COIL_PV_SEL_EFF),
         }
 
         # 래더는 전부 정상(RUN=On, ITL=On, FAULT=Off)인데 PID 블록만 멈춰
@@ -1010,6 +1025,8 @@ class PLCController(QObject):
         """이전 세션 잔존 RUN 정리: RUN=0 → (PV 유효면) SV=현재 온도 → st 보정 + heater_residual.
         실패하면 False (호출자가 발행을 건너뛰고 다음 폴링에 재시도). 워치독 철학의 연장 —
         프로그램이 켜져 있지 않을 때 히터가 도는 것을 허용하지 않는다. FAULT 유무와 무관하다."""
+        # M0004A(TC2 제어 선택)는 여기서 쓰지 않는다 — 래더가 ¬RUN 에서 스스로 리셋하므로
+        #  RUN=0 만 쓰면 함께 정리된다. 파이썬이 따로 쓰면 쓰기 1회가 늘 뿐이다.
         try:
             self._mb("잔존 RUN OFF", self.instrument.write_bit, HEATER_COIL_RUN, 0, functioncode=5)
             if not tc_bad:
@@ -1117,6 +1134,43 @@ class PLCController(QObject):
             self.status_message.emit("히터", f"DAC 상한 {v} 설정 (≒{heater_est_current(v):.0f}A)")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"히터 DAC 상한 쓰기 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    @Slot(float)
+    def set_heater_sv2(self, c: float):
+        """TC2 목표(D00035) 쓰기 — TC2 추종 유지 모드 전용. 래더가 D00036 으로 한 번 더 클램프한다."""
+        if self.instrument is None:
+            return
+        if self._link_down_skip("TC2 목표"):
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            raw = max(0, min(32767, int(round(float(c) * 10))))
+            self._mb("TC2 목표", self.instrument.write_register, HEATER_REG_SV2, raw, functioncode=6)
+            self.status_message.emit("히터", f"TC2 목표 D{HEATER_REG_SV2:05d} ← {raw / 10:.1f}°C")
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"TC2 목표 쓰기 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    @Slot(bool)
+    def set_heater_pv_sel(self, on: bool):
+        """TC2 제어 선택(M0004A) 쓰기. 실제 적용 여부는 래더가 M0004B 로 알려 준다."""
+        if self.instrument is None:
+            return
+        if self._link_down_skip("TC2 제어 선택"):
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            self._mb("TC2 제어 선택", self.instrument.write_bit, HEATER_COIL_PV_SEL, int(bool(on)), functioncode=5)
+            self.status_message.emit("히터", f"TC2 제어 선택 M0004A ← {'ON' if on else 'OFF'}")
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"TC2 제어 선택 쓰기 실패: {e}")
         finally:
             self._busy = False
             self._mutex.unlock()

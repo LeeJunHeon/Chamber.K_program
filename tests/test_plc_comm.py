@@ -51,6 +51,7 @@ class FakeInstrument:
             bits = [0] * count
             bits[CFG.HEATER_COIL_RUN - CFG.HEATER_COIL_BASE] = int(FakeInstrument.scenario.get("run_bit", 0))
             bits[1] = 1   # ITL
+            bits[CFG.HEATER_COIL_PV_SEL_EFF - CFG.HEATER_COIL_BASE] = int(FakeInstrument.scenario.get("pv_sel_eff_bit", 0))
             return bits
         return [0] * count
 
@@ -60,6 +61,11 @@ class FakeInstrument:
         if addr == CFG.HEATER_REG_BLOCK_START:
             regs[CFG.HEATER_REG_PV - addr] = int(FakeInstrument.scenario.get("pv_raw", 0))
             regs[CFG.HEATER_REG_SV - addr] = int(FakeInstrument.scenario.get("sv_raw", 0))
+            pv2 = int(FakeInstrument.scenario.get("pv2_raw", -1))
+            regs[CFG.HEATER_REG_PV2 - addr] = pv2 & 0xFFFF
+            regs[CFG.HEATER_REG_SV2_MAX - addr] = int(FakeInstrument.scenario.get("sv2_max_raw", 0))
+            regs[CFG.HEATER_REG_SV2 - addr] = int(FakeInstrument.scenario.get("sv2_raw", 0))
+            regs[CFG.HEATER_REG_OT2_LIMIT - addr] = int(FakeInstrument.scenario.get("ot2_raw", 11500))
         return regs
 
     def read_register(self, addr, dec=0, functioncode=3, signed=False):
@@ -368,3 +374,53 @@ def test_T23_long_outage_alert_single_path_on_open_failure(plc, monkeypatch):
     monkeypatch.setattr(plc._policy, "_now", lambda: base() + 600.0)
     shots[-1][1](); shots[-1][1]()
     assert [d for d, _ in alerts] == ["PLC"] and shots[-1][0] == 60000
+
+
+# ───────────────────────── TC2 추종: 레지스터/코일/OT2/슬롯 ─────────────────────────
+def _last_heater_st(plc):
+    got = []
+    plc.update_heater_status.connect(lambda st: got.append(dict(st)))
+    plc._poll_status()
+    return got[-1]
+
+
+def test_T31_poll_reads_27_regs_12_coils_and_pv2_minus1_is_none(plc):
+    inst = plc.instrument
+    FakeInstrument.scenario.update(pv_raw=2750, pv2_raw=-1, sv2_max_raw=11000, ot2_raw=11500, pv_sel_eff_bit=1)
+    st = _last_heater_st(plc)
+    assert ("read_registers", CFG.HEATER_REG_BLOCK_START, 27) in inst.calls
+    assert ("read_bits", CFG.HEATER_COIL_BASE, 12) in inst.calls
+    assert st["pv2"] is None and st["pv_sel_eff"] is True and st["pv_sel"] is False
+    assert st["sv2_max"] == pytest.approx(1100.0) and st["ot2_limit"] == pytest.approx(1150.0)
+    FakeInstrument.scenario["pv2_raw"] = 10523
+    st = _last_heater_st(plc)
+    assert st["pv2"] == pytest.approx(1052.3)
+
+
+def test_T32_ot2_pushed_and_read_back(plc):
+    inst = plc.instrument
+    raw = round(PLCM.HEATER_OT2_LIMIT_C * 10)
+    assert ("write_register", CFG.HEATER_REG_OT2_LIMIT, raw) in inst.calls
+    rb = [c for c in inst.calls if c[0] == "read_registers" and c[1] <= CFG.HEATER_REG_SV_LIMIT
+          and c[1] + c[2] - 1 >= CFG.HEATER_REG_OT2_LIMIT]
+    assert rb, "되읽기 범위가 D00034 를 포함해야 한다"
+    assert any("OT2 1150.0°C" in m for _, m in plc._msgs)
+
+
+def test_T33_sv2_and_pv_sel_slots(plc):
+    inst = plc.instrument
+    plc.set_heater_sv2(1052.34)
+    assert inst.calls[-1] == ("write_register", CFG.HEATER_REG_SV2, 10523)
+    assert any("TC2 목표 D00035 ← 1052.3°C" in m for _, m in plc._msgs)
+    plc.set_heater_sv2(99999.0)                       # 클램프
+    assert inst.calls[-1] == ("write_register", CFG.HEATER_REG_SV2, 32767)
+    plc.set_heater_pv_sel(True)
+    assert inst.calls[-1] == ("write_bit", CFG.HEATER_COIL_PV_SEL, 1)
+    plc.set_heater_pv_sel(False)
+    assert inst.calls[-1] == ("write_bit", CFG.HEATER_COIL_PV_SEL, 0)
+    assert any("M0004A ← ON" in m for _, m in plc._msgs) and any("M0004A ← OFF" in m for _, m in plc._msgs)
+    # 링크 다운이면 트랜잭션 0회
+    plc._link_down = True
+    n = len(inst.calls)
+    plc.set_heater_sv2(500.0); plc.set_heater_pv_sel(True)
+    assert len(inst.calls) == n

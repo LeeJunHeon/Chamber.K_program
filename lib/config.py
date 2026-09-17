@@ -93,8 +93,8 @@ def _validate_plc_comm_config() -> None:
         print(f"[Config] COMM_RECONNECT_MAX_MS {COMM_RECONNECT_MAX_MS} < START {COMM_RECONNECT_START_MS} → START 로 상향")
         COMM_RECONNECT_MAX_MS = COMM_RECONNECT_START_MS
     # 마커 레지스터가 사용 중인 D 주소와 겹치면 기능을 끈다
-    #  D00000~3 ADC, D00010~28 히터, D00029~32 예약, D00040~43 DAC
-    _used = set(range(0, 4)) | set(range(10, 29)) | set(range(29, 33)) | set(range(40, 44))
+    #  D00000~3 ADC, D00010~36 히터(TC2 추종 포함), D00040~43 DAC
+    _used = set(range(0, 4)) | set(range(10, 37)) | set(range(40, 44))
     try:
         _m = int(PLC_SESSION_MARK_REG)
     except Exception:
@@ -189,9 +189,10 @@ COIL_ENABLE_DAC_CH0 = 320   # U02.02.0 -> Coil 320
 # 히터 (PLC 내장 PID — HEATER 스캔 프로그램)
 # ================================================================
 # --- 홀딩 레지스터 (D영역) ---
-HEATER_REG_BLOCK_START = 10   # D00010~D00028 연속 19개 배치 읽기
-HEATER_REG_BLOCK_COUNT = 19
-HEATER_REG_PV       = 10      # D00010 TEMP_READ_1 (signed, -1=이상)
+HEATER_REG_BLOCK_START = 10   # D00010~D00036 연속 27개 배치 읽기
+HEATER_REG_BLOCK_COUNT = 27
+HEATER_REG_PV       = 10      # D00010 TEMP_READ_1 = TC1 (signed, -1=이상)   [R]
+HEATER_REG_PV2      = 11      # D00011 TEMP_READ_2 = TC2 (XBO-TC02A CH1, signed, -1=이상) [R]
 HEATER_REG_SV       = 12      # D00012 목표 온도        [W]
 HEATER_REG_SV_LIMIT = 13      # D00013 목표 상한        [W] 접속 시 JSON 값으로 복구
 HEATER_REG_WD       = 14      # D00014 워치독 카운터    [W]
@@ -207,10 +208,15 @@ HEATER_REG_HOLDBACK  = 21     # D00021 홀드백 폭(0.1°C)  [W]
 HEATER_REG_OT_LIMIT  = 26     # D00026 과온 트립(0.1°C)  [W]
 HEATER_REG_SLOW_ZONE = 27     # D00027 감속 구간 폭(0.1°C) [W]
 HEATER_REG_SLOW_RATE = 28     # D00028 감속 구간 램프 속도 [W]
+# --- TC2 추종 (래더 2026-09-17) ---
+HEATER_REG_PV_CTRL   = 33     # D00033 PID 가 보는 PV(TC1 또는 TC2)      [R]
+HEATER_REG_OT2_LIMIT = 34     # D00034 TC2 과온 트립(0.1°C, 래더 상한 11500) [W] 접속 시 JSON 값으로 복구
+HEATER_REG_SV2       = 35     # D00035 TC2 목표(0.1°C)                   [W]  ※ 곧 추가될 래더
+HEATER_REG_SV2_MAX   = 36     # D00036 TC2 목표 상한 = D00034 − 500 (래더 계산) [R] 옛 래더에서는 항상 0
 
 # --- 코일 (M영역, 워드×16+비트) ---
-HEATER_COIL_BASE    = 64      # M00040~M00049 연속 10개
-HEATER_COIL_COUNT   = 10
+HEATER_COIL_BASE    = 64      # M00040~M0004B 연속 12개
+HEATER_COIL_COUNT   = 12
 HEATER_COIL_RUN     = 64      # M00040 운전 요구        [W]
 HEATER_COIL_ITL     = 65      # M00041 인터락 정상      [R]
 HEATER_COIL_FAULT   = 66      # M00042 이상 종합        [R]
@@ -221,6 +227,8 @@ HEATER_COIL_WD_ERR  = 70      # M00046 워치독 타임아웃
 HEATER_COIL_AT_REQ  = 71      # M00047 오토튜닝 요구    [W]
 HEATER_COIL_AT_DONE = 72      # M00048 오토튜닝 완료
 HEATER_COIL_PID_RUN = 73      # M00049 PID 동작 중
+HEATER_COIL_PV_SEL     = 74   # M0004A "TC2 로 제어" 요구(파이썬이 씀. ¬RUN 이면 래더가 리셋) [W]
+HEATER_COIL_PV_SEL_EFF = 75   # M0004B 래더가 실제 TC2 로 제어 중(TC2 이상이면 래더가 내림)   [R]
 
 # --- DAC 출력 범위 ---
 #   DAC(XBF-DV04A): 0~10V 를 0~4000 카운트로 출력  →  1 카운트 = 2.5mV
@@ -286,7 +294,8 @@ HEATER_GAS_HOLD_RELEASE_C = get('HEATER_GAS_HOLD_RELEASE_C', 100.0)
 HEATER_SV_LIMIT_C          = get('HEATER_SV_LIMIT_C',          500.0)  # D00013 [°C]
 HEATER_RAMP_RATE_C_PER_MIN = get('HEATER_RAMP_RATE_C_PER_MIN', 12.0)   # D00020 [°C/min]
 HEATER_HOLDBACK_C          = get('HEATER_HOLDBACK_C',          2.0)    # D00021 [°C]
-HEATER_OT_LIMIT_C          = get('HEATER_OT_LIMIT_C',          550.0)  # D00026 [°C]
+HEATER_OT_LIMIT_C          = get('HEATER_OT_LIMIT_C',          550.0)  # D00026 [°C] TC1 과온
+HEATER_OT2_LIMIT_C         = get('HEATER_OT2_LIMIT_C',         1150.0) # D00034 [°C] TC2 과온 (래더 상한 1150.0)
 HEATER_SLOW_ZONE_C         = get('HEATER_SLOW_ZONE_C',         10.0)   # D00027 [°C]
 # 마지막 스텝 목표가 이 온도 이하면 냉각 스텝으로 본다(램프 없이 대기)
 HEATER_COOLDOWN_TARGET_C   = get('HEATER_COOLDOWN_TARGET_C',   30.0)   # [°C]
@@ -313,7 +322,7 @@ HEATER_RECIPE_HOLD_AT_END = get('HEATER_RECIPE_HOLD_AT_END', False)  # True면 �
 def _validate_heater_config() -> None:
     """JSON 값이 위험하거나 앞뒤가 안 맞으면 안전한 쪽으로 클램프한다.
     예외는 던지지 않는다 — 설정이 틀려도 프로그램은 떠야 한다."""
-    global HEATER_MV_LIMIT, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP
+    global HEATER_MV_LIMIT, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP, HEATER_OT2_LIMIT_C
     global HEATER_RAMP_RATE_C_PER_MIN, HEATER_SLOW_RATE_C_PER_MIN
     global HEATER_APPROACH_ZONE_C, HEATER_APPROACH_MIN_RATE_C_PER_MIN
     global HEATER_APPROACH_LEAD_C
@@ -333,6 +342,21 @@ def _validate_heater_config() -> None:
         print(f"[Config] HEATER_OT_LIMIT_C {HEATER_OT_LIMIT_C} → {new} 로 상향 "
               f"(SV 상한 {HEATER_SV_LIMIT_C} 보다 최소 20°C 높아야 함)")
         HEATER_OT_LIMIT_C = new
+
+    # 2-1) TC2 과온(D00034): TC1 과온보다 충분히 높아야 하고, 래더 상한 11500(1150.0°C)을 넘을 수 없다
+    #      (보드 K 타입 측정 상한 1200°C, PV_MAX = OT2 + 50)
+    try:
+        HEATER_OT2_LIMIT_C = float(HEATER_OT2_LIMIT_C)
+    except Exception:
+        print(f"[Config] HEATER_OT2_LIMIT_C {HEATER_OT2_LIMIT_C!r} → 1150.0"); HEATER_OT2_LIMIT_C = 1150.0
+    if HEATER_OT2_LIMIT_C < HEATER_OT_LIMIT_C + 20:
+        new = HEATER_OT_LIMIT_C + 50
+        print(f"[Config] HEATER_OT2_LIMIT_C {HEATER_OT2_LIMIT_C} → {new} 로 상향 "
+              f"(TC1 과온 {HEATER_OT_LIMIT_C} 보다 최소 20°C 높아야 함)")
+        HEATER_OT2_LIMIT_C = new
+    if HEATER_OT2_LIMIT_C > 1150.0:
+        print(f"[Config] HEATER_OT2_LIMIT_C {HEATER_OT2_LIMIT_C} → 1150.0 로 하향 (래더 상한 11500)")
+        HEATER_OT2_LIMIT_C = 1150.0
 
     # 3) UI 입력 상한이 PLC 소프트 상한을 넘을 수 없다
     if HEATER_MAX_TEMP > HEATER_SV_LIMIT_C:
