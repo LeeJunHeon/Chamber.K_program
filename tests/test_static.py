@@ -104,3 +104,15 @@ def test_T14_line_endings_unchanged_vs_head():
     for name in ("main.py", "device/PLC.py", "device/MFC.py", "device/DCpower.py",
                  "device/RFpulse.py", "lib/config.py", "config_user.json"):
         assert b"\r\n" not in open(os.path.join(ROOT, name), "rb").read(), name
+
+
+def test_T13_no_jig_wording_in_new_code():
+    """TC1/TC2 작업(2026-09-17)으로 새로 만든/고친 코드·문구에 '지그' 를 쓰지 않는다.
+    허용: config_user.json 의 홀드백 이력 주석 1건(기존)."""
+    files = PY_FILES + [os.path.join(ROOT, "config_user.json")]
+    hits = _grep(r"지그", files)
+    assert all(h.startswith("config_user.json:") and "홀드백" in h for h in hits), hits
+    assert _grep(r"지그", [os.path.join(ROOT, "controller", "heater_hold.py"),
+                          os.path.join(ROOT, "main.py"), os.path.join(ROOT, "UI.py"),
+                          os.path.join(ROOT, "device", "PLC.py"), os.path.join(ROOT, "lib", "config.py"),
+                          os.path.join(ROOT, "lib", "heater_logger.py")]) == []
