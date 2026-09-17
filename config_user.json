@@ -186,6 +186,8 @@
     "HEATER_HOLD_MV_ARRIVE_TOL_C": 1.0,
     "HEATER_HOLD_MV_DRIFT_PV_C": 0.5,
     "HEATER_HOLD_MV_DRIFT_MV": 15,
+    "// 히터 패널 stale 표시: 마지막 PLC 폴링 뒤 이만큼(초) 지나면 'PLC 응답 없음 · n초 전 값' 으로 바꾸고 ON/적용/리셋을 잠근다": "",
+    "HEATER_STALE_SEC": 5.0,
 
     "// → D00013. PLC 쪽 목표 온도 소프트 상한(°C). HEATER_MAX_TEMP 이상일 것": "",
     "HEATER_SV_LIMIT_C": 630.0,

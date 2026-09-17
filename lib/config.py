@@ -123,6 +123,8 @@ HEATER_HOLD_MV_ENTER_SEC   = get('HEATER_HOLD_MV_ENTER_SEC',   60)      # 이만
 HEATER_HOLD_MV_ARRIVE_TOL_C = get('HEATER_HOLD_MV_ARRIVE_TOL_C', 1.0)   # 이 안에 한 번은 들어와야 고정을 잰다 [°C]
 HEATER_HOLD_MV_DRIFT_PV_C   = get('HEATER_HOLD_MV_DRIFT_PV_C',   0.5)   # 창 후반부 평균 PV − 전반부 평균 PV 허용 [°C]
 HEATER_HOLD_MV_DRIFT_MV     = get('HEATER_HOLD_MV_DRIFT_MV',     15)    # 창 후반부 평균 MV − 전반부 평균 MV 허용 [카운트]
+# 히터 패널 stale 표시 — 마지막 폴링 뒤 이만큼(초) 지나면 "PLC 응답 없음 · n초 전 값" 으로 바꾼다
+HEATER_STALE_SEC            = get('HEATER_STALE_SEC',            5.0)
 
 
 def _validate_heater_hold_config() -> None:
@@ -148,6 +150,11 @@ def _validate_heater_hold_config() -> None:
     if sc != s:
         print(f"[Config] HEATER_HOLD_MV_ENTER_SEC {s:g} → {sc:g} 로 클램프 (허용 10~600)")
     HEATER_HOLD_MV_ENTER_SEC = sc
+    global HEATER_STALE_SEC
+    try:
+        HEATER_STALE_SEC = min(max(float(HEATER_STALE_SEC), 1.0), 60.0)
+    except Exception:
+        print(f"[Config] HEATER_STALE_SEC {HEATER_STALE_SEC!r} → 5.0"); HEATER_STALE_SEC = 5.0
     global HEATER_HOLD_MV_ARRIVE_TOL_C, HEATER_HOLD_MV_DRIFT_PV_C, HEATER_HOLD_MV_DRIFT_MV
     for _name, _lo, _hi, _def in (("HEATER_HOLD_MV_ARRIVE_TOL_C", 0.2, 10.0, 1.0),
                                   ("HEATER_HOLD_MV_DRIFT_PV_C", 0.1, 10.0, 0.5),

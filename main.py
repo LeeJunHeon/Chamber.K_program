@@ -42,7 +42,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
                         HEATER_HOLD_MV_AFTER_REACH, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC,
                         HEATER_HOLD_MV_ARRIVE_TOL_C, HEATER_HOLD_MV_DRIFT_PV_C, HEATER_HOLD_MV_DRIFT_MV,
-                        COMM_PROBE_MS,
+                        COMM_PROBE_MS, HEATER_STALE_SEC,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
                         HEATER_GAS_HOLD_RELEASE_C,
@@ -206,6 +206,9 @@ class MainDialog(QDialog):
         self._heater_run_prev_view = False
         # 이상 상승 엣지에서 RUN OFF 를 보냈는가(에피소드당 1회, fault 해제 시 리셋)
         self._heater_fault_off_sent = False
+        # 히터 패널 stale 표시 — 마지막 폴링 시각 / 현재 stale 여부(바뀔 때만 스타일 재적용)
+        self._heater_status_t = 0.0
+        self._heater_stale = False
         # 목표 도달 후 DAC 상한 고정 상태기 (_heater_mv_hold_tick)
         self._mvhold = {'state': 'idle', 'samples': [], 't0': 0.0, 'sv': None, 'value': None, 'last_push': 0.0,
                         'arrived': False, 'arr_sv': None, 'floor_warned': False, 'limit_warned': False,
@@ -749,6 +752,7 @@ class MainDialog(QDialog):
         worker가 속한 스레드에서 method_name 슬롯을 동기 실행한다.
         main.py에서 worker QObject를 직접 건드리지 않기 위한 헬퍼.
         """
+        t0 = time.monotonic()
         try:
             if worker.thread() is QThread.currentThread():
                 getattr(worker, method_name)()
@@ -763,6 +767,11 @@ class MainDialog(QDialog):
                 raise RuntimeError(f"invokeMethod 실패: {method_name}")
         except Exception as e:
             log_message_to_monitor("경고", f"{type(worker).__name__}.{method_name} 실행 실패: {e}")
+        finally:
+            # 워커 슬롯은 2초 안에 돌아와야 한다(P4). 넘으면 다음 사고의 증거로 남긴다.
+            took = time.monotonic() - t0
+            if took > 2.5:
+                log_message_to_monitor("경고", f"{type(worker).__name__}.{method_name} {took:.1f}초 소요")
 
     def _connect_signals(self):
         """[최종 수정] 모든 시그널-슬롯 연결을 논리적으로 정리하고 중복을 제거합니다."""
@@ -2395,7 +2404,7 @@ class MainDialog(QDialog):
         if st.get('fault'):
             if   st.get('ot'):     return "과온 트립", "#c62828"
             elif st.get('tc_err'): return "센서 이상", "#c62828"
-            elif st.get('wd_err'): return "통신 두절", "#c62828"
+            elif st.get('wd_err'): return "워치독 트립", "#c62828"
             else:                  return "이상 발생", "#c62828"
         if not st.get('itl'):
             return "인터락", "#ef6c00"          # 하드웨어 조건 미충족
@@ -2566,6 +2575,47 @@ class MainDialog(QDialog):
             self._sync_heater_recipe_buttons()
         except Exception:
             pass
+        self._heater_stale_tick()
+
+    def _heater_stale_tick(self) -> None:
+        """1초 주기. 마지막 폴링 뒤 HEATER_STALE_SEC 이 지나면 'PLC 응답 없음 · n초 전 값' 로 바꾼다.
+        값은 지우지 않는다(마지막 값임을 알 수 있게). 전환은 플래그가 바뀔 때만 스타일을 재적용하고,
+        stale 중에는 라벨의 초 수와 버튼 잠금만 매초 갱신한다."""
+        if not HEATER_ENABLED or self._heater_status_t <= 0.0:
+            return
+        age = time.monotonic() - self._heater_status_t
+        if age <= float(HEATER_STALE_SEC):
+            return
+        n = int(age)
+        if not self._heater_stale:
+            self._heater_set_stale(True, n)
+        else:
+            self.ui.heater_status_label.setText(f"PLC 응답 없음 · {n}초 전 값")
+            for _w in ("heater_onoff_button", "heater_apply_button", "heater_reset_button"):
+                getattr(self.ui, _w).setEnabled(False)      # _sync_heater_recipe_buttons 가 매초 되살리므로 다시 잠근다
+
+    def _heater_set_stale(self, stale: bool, n: int) -> None:
+        """stale 전환(스타일 재적용은 여기서만). True: 회색 값 + 빨간 라벨 + 버튼 잠금. False: 원복."""
+        self._heater_stale = stale
+        ui = self.ui
+        try:
+            if stale:
+                ui.heater_status_label.setText(f"PLC 응답 없음 · {n}초 전 값")
+                ui.heater_status_label.setStyleSheet("border: none; color:#c62828; font-weight:bold;")
+                ui.heater_pv_edit.setStyleSheet(
+                    "QLineEdit {background: transparent; border: none; color: #9e9e9e; font-size: 26pt; font-weight: bold;}")
+                ui.heater_sv_big.setStyleSheet(
+                    "QLabel {border: none; background: transparent; color: #9e9e9e; font-size: 17pt; font-weight: bold;}")
+                for _w in ("heater_onoff_button", "heater_apply_button", "heater_reset_button"):
+                    getattr(ui, _w).setEnabled(False)
+            else:
+                ui.heater_pv_edit.setStyleSheet(
+                    "QLineEdit {background: transparent; border: none; color: #1f2937; font-size: 26pt; font-weight: bold;}")
+                ui.heater_sv_big.setStyleSheet(
+                    "QLabel {border: none; background: transparent; color: #6b7280; font-size: 17pt; font-weight: bold;}")
+                self._sync_heater_recipe_buttons()    # ON/적용 활성은 레시피 상태에 따라 원래 규칙으로
+        except Exception as e:
+            log_message_to_monitor("경고", f"히터 stale 표시 전환 실패: {e!r}")
 
     def _sync_heater_recipe_buttons(self):
         """레시피 조작 버튼 상태를 한 곳에서 맞춘다.
@@ -3039,6 +3089,11 @@ class MainDialog(QDialog):
           est_current : DAC 카운트로 추정한 전류 [A]
           run/itl/fault/ot/tc_err/wd_err : 상태 비트
         """
+        # 폴링이 왔다 — stale 시계를 되감고, stale 표시 중이었으면 원래대로 복원
+        self._heater_status_t = time.monotonic()
+        if self._heater_stale:
+            self._heater_set_stale(False, 0)
+
         # ERP 리포터용 히터 상세 상태 기록
         try:
             self._erp_heater = dict(st or {})
