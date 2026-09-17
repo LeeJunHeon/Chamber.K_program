@@ -130,6 +130,7 @@ class PLCController(QObject):
     heater_residual = Signal(dict)
     # 장기두절 진입(장치명, 단절 초) — 두절당 1회 (lib/comm_policy 가 보장)
     comm_long_outage = Signal(str, float)
+    plc_link = Signal(bool)         # 링크 업(프로브 응답)/다운 전이에서만 1회 — main 이 버튼·램프·히터 표시를 맞춘다
 
     def __init__(self):
         super().__init__()
@@ -159,6 +160,7 @@ class PLCController(QObject):
         self._ever_connected: bool = False
         self._link_skip_log_t: float = 0.0
         self._pending_heater_off: bool = False   # 링크 다운 중 요청된 히터 OFF — 링크 업/복구 시 1회 적용
+        self._link_ui_up: bool = False           # plc_link 를 마지막으로 어느 값으로 냈는가(전이에서만 emit)
         self._policy = ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS,
                                        COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC)
         self._outage_abort: bool = False                # 이번 단절로 공정을 중단했는가(복구 후 안전 상태 재적용 판단)
@@ -269,6 +271,11 @@ class PLCController(QObject):
             return False
         self._link_down = False
         self._ever_connected = True
+        if not self._link_ui_up:
+            self._link_ui_up = True
+            self.plc_link.emit(True)
+        # 다음 폴링이 모든 버튼/Door 상태를 다시 발행하게 한다(값이 안 바뀐 버튼도 화면을 다시 그려야 한다)
+        self._last_button_states.clear()
         # 접속할 때마다 JSON의 한계값을 PLC에 복구한다. 여기서 무슨 일이 나도 링크는 유지한다.
         try:
             self._push_heater_config()
@@ -419,6 +426,9 @@ class PLCController(QObject):
         """정책 실패 처리는 여기 한 곳: 링크 다운 → on_failure → (장기두절 알림 1회) → (재시도 로그) → 예약.
         _comm_schedule_reconnect·열기 실패·프로브 실패가 모두 이것을 쓴다."""
         self._link_down = True
+        if self._link_ui_up:
+            self._link_ui_up = False
+            self.plc_link.emit(False)
         if self._reconnect_pending:
             return
         self._reconnect_pending = True

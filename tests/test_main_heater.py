@@ -327,3 +327,34 @@ def test_T36_lcd_children_no_overlap_and_inside(win):
     # SV 행과 그 아래는 그대로
     g = win.ui.heater_sv_big.geometry(); assert (g.x(), g.y()) == (30, 50)
     g = win.ui.heater_sv_small.geometry(); assert (g.x(), g.y()) == (8, 54)
+
+
+# ───────────────────────── PLC 링크 ↔ 화면 ─────────────────────────
+def test_T37_plc_link_down_up_ui(fresh):
+    w = fresh; ui = w.ui
+    w._plc_link_up = False; w._on_plc_link(True)          # 기준: 업 상태
+    title0 = w.windowTitle()
+    ui.Rotary_button.setChecked(True); ui.Door_Button.setChecked(True)
+    w.set_indicator("Air", True)
+    feed(w, make_heater_st(run=False))
+    w._on_plc_link(False)
+    names = [n for n in list(MAIN.PLC_COIL_MAP) + ["Door_Button"] if hasattr(ui, n)]   # Doorup/Doordn 은 Door_Button 하나
+    assert len(names) >= 14 and "Door_Button" in names
+    for n in names:
+        b = getattr(ui, n)
+        assert b.isChecked() is False and b.isEnabled() is False, n
+    assert "#9e9e9e" in ui.Air_Indicator.styleSheet()
+    assert w._erp_indicators["Air"] is True                 # 링크 다운 중 마지막 값 유지(거짓 OFF 금지)
+    assert w.windowTitle() == title0 + " — PLC 연결 끊김"
+    assert w._heater_stale is True and ui.heater_onoff_button.isEnabled() is False
+    w._on_plc_link(False)                                   # 같은 값 재호출 — 제목 접미사가 겹치지 않는다
+    assert w.windowTitle() == title0 + " — PLC 연결 끊김"
+    w._on_plc_link(True)
+    for n in names:
+        assert getattr(ui, n).isEnabled() is True, n
+    assert w.windowTitle() == title0
+    assert w._heater_stale is True                          # 히터 stale 은 폴링이 푼다
+    feed(w, make_heater_st(run=False))
+    assert w._heater_stale is False
+    w.set_indicator("Air", False)
+    assert "#d6252f" in ui.Air_Indicator.styleSheet()

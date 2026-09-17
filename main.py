@@ -16,7 +16,7 @@ import time
 import datetime
 
 from UI import Ui_Dialog
-from lib.config import PLC_COIL_MAP
+from lib.config import PLC_COIL_MAP, PLC_SENSOR_BITS
 from lib.logger import (
     set_monitor_widget,
     log_message_to_monitor,
@@ -736,6 +736,8 @@ class MainDialog(QDialog):
                     },
                     "indicators": dict(getattr(self, "_erp_indicators", {})),
                     "valves": dict(getattr(self, "_erp_valves", {})),
+                    # 링크 다운 중 indicators/valves 는 마지막 값 그대로다(거짓 OFF 보고 금지) — 이 플래그로 구분
+                    "plc_link": bool(getattr(self, "_plc_link_up", False)),
                 }
 
                 # 진행률 계산용 총 공정 시간(초)
@@ -867,6 +869,10 @@ class MainDialog(QDialog):
         
         self.plc_controller.update_button_display.connect(self.update_ui_button_display)
         self.plc_controller.update_sensor_display.connect(self.set_indicator)
+        self.plc_controller.plc_link.connect(self._on_plc_link)
+        # 첫 plc_link(True) 전까지는 PLC 조작 위젯을 다운 상태로 둔다
+        self._plc_link_up = True
+        self._on_plc_link(False)
         self.mfc_controller.update_flow.connect(self.update_mfc_flow_display)
         self.mfc_controller.update_pressure.connect(self.update_mfc_pressure_display)
         self.dcpower_controller.update_dc_status_display.connect(self.update_dc_status_display)
@@ -2498,6 +2504,8 @@ class MainDialog(QDialog):
                 for _w in ("heater_pv_edit", "heater_sv_big", "heater_pv2_label"):
                     wdg = getattr(ui, _w)
                     orig = wdg.styleSheet()
+                    if _w in self._heater_style_orig:      # 이미 stale(링크 다운 → 5초 tick 재호출) — 원본을 덮지 않는다
+                        continue
                     self._heater_style_orig[_w] = orig
                     if re.search(r"(?<![-\w])color\s*:", orig):          # background-color 는 제외
                         new = re.sub(r"(?<![-\w])color\s*:\s*[^;}]+", f"color: {HEATER_STALE_FG}", orig)
@@ -3601,22 +3609,64 @@ class MainDialog(QDialog):
                 self.request_process_stop.emit()
 
     @Slot(str, bool)
-    def set_indicator(self, name, state: bool):
-        # ERP 리포터용 상태 기록 (표시 로직에는 영향 없음)
-        try:
-            if not hasattr(self, "_erp_indicators"):
-                self._erp_indicators = {}
-            self._erp_indicators[str(name)] = bool(state)
-        except Exception:
-            pass
+    def set_indicator(self, name, state):
+        """센서 램프. state: True(녹) / False(적) / None(회색 — PLC 링크 다운으로 알 수 없음).
+        ERP 기록은 True/False 일 때만(링크 다운 중엔 마지막 값을 그대로 둔다 — 거짓 OFF 보고 금지)."""
+        if state is not None:
+            try:
+                if not hasattr(self, "_erp_indicators"):
+                    self._erp_indicators = {}
+                self._erp_indicators[str(name)] = bool(state)
+            except Exception:
+                pass
 
         frame_name = f"{name}_Indicator"
         frame = getattr(self.ui, frame_name, None)
         if frame is not None:
-            color = "#38d62f" if state else "#d6252f"
+            color = "#9e9e9e" if state is None else ("#38d62f" if state else "#d6252f")
             frame.setStyleSheet(f"background: {color}; border-radius: 25px; border: 2px solid #333;")
         else:
             log_message_to_monitor("WARN", f"[set_indicator] '{frame_name}' 인디케이터가 UI에 없습니다.")
+
+    # ==================== PLC 링크 ↔ 화면 ====================
+    PLC_LINK_DOWN_TITLE = " — PLC 연결 끊김"
+
+    def _plc_link_widgets(self):
+        """링크 상태로 잠그는 화면 조작 위젯: PLC_COIL_MAP 의 모든 버튼 + Door_Button."""
+        names = list(PLC_COIL_MAP.keys()) + ["Door_Button"]
+        return [w for w in (getattr(self.ui, n, None) for n in names) if w is not None]
+
+    @Slot(bool)
+    def _on_plc_link(self, up: bool):
+        """PLC 링크 전이 1곳. down: 버튼 unchecked+잠금, 램프 회색, 히터 stale 즉시, 제목 접미사.
+        up: 잠금 해제·제목 복원 — 값은 첫 폴링(캐시 비움)이 다시 채우고 히터 stale 은 update_heater_display 가 푼다.
+        프로그램 경로의 PLC 쓰기(공정·히터 OFF 보류·ERP)는 건드리지 않는다 — 잠금은 화면 조작만이다."""
+        up = bool(up)
+        if getattr(self, "_plc_link_up", None) == up:
+            return
+        self._plc_link_up = up
+        title = self.windowTitle()
+        if title.endswith(self.PLC_LINK_DOWN_TITLE):
+            title = title[:-len(self.PLC_LINK_DOWN_TITLE)]
+        if up:
+            for w in self._plc_link_widgets():
+                w.setEnabled(True)
+            self.setWindowTitle(title)
+            log_message_to_monitor("정보", "PLC 링크 업 — 표시 재동기화")
+            return
+        for w in self._plc_link_widgets():
+            w.blockSignals(True)
+            try:
+                w.setChecked(False)
+            finally:
+                w.blockSignals(False)
+            w.setEnabled(False)
+        for name in PLC_SENSOR_BITS:
+            self.set_indicator(name, None)
+        if HEATER_ENABLED:
+            self._heater_set_stale(True, 0)
+        self.setWindowTitle(title + self.PLC_LINK_DOWN_TITLE)
+        log_message_to_monitor("경고", "PLC 링크 다운 — 수동 조작 잠금, 표시 초기화")
 
     @Slot(str, bool)
     def update_ui_button_display(self, button_name, state):

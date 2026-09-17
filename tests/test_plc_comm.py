@@ -424,3 +424,54 @@ def test_T33_sv2_and_pv_sel_slots(plc):
     n = len(inst.calls)
     plc.set_heater_sv2(500.0); plc.set_heater_pv_sel(True)
     assert len(inst.calls) == n
+
+
+# ───────────────────────── plc_link 전이 ─────────────────────────
+def test_T38_plc_link_emits_once_per_transition(plc, monkeypatch):
+    links = []
+    plc.plc_link.connect(lambda up: links.append(up))
+    shots = _shots(monkeypatch)
+    FakeInstrument.scenario["fail_reads"] = True
+    plc._poll_status()                                   # 다운 1회
+    plc._poll_status(); plc._poll_status()               # 연속 실패에도 추가 emit 없음
+    FakeInstrument.ctor_fail = True
+    shots[-1][1](); shots[-1][1]()                        # 열기 실패 반복
+    assert links == [False]
+    FakeInstrument.ctor_fail = False
+    FakeInstrument.scenario.update(fail_reads=True, fail_writes=True)
+    shots[-1][1]()                                        # 포트 열림 + 프로브 실패 → 여전히 다운
+    assert links == [False]
+    FakeInstrument.scenario.update(fail_reads=False, fail_writes=False)
+    shots[-1][1]()                                        # 프로브 성공 → 업 1회
+    assert links == [False, True]
+    plc._poll_status()
+    assert links == [False, True]
+
+
+def test_T38_start_polling_first_link_up(qapp, monkeypatch):
+    FakeInstrument.scenario = {}; FakeInstrument.ctor_fail = False
+    monkeypatch.setattr(PLCM.minimalmodbus, "Instrument", FakeInstrument)
+    c = PLCM.PLCController()
+    links = []
+    c.plc_link.connect(lambda up: links.append(up))
+    c.start_polling(); c.polling_timer.stop(); c._heater_wd_timer.stop()
+    assert links == [True]
+
+
+def test_T39_first_poll_after_link_up_republishes_unchanged_buttons(plc, monkeypatch):
+    shots = _shots(monkeypatch)
+    pub = []
+    plc.update_button_display.connect(lambda n, v: pub.append((n, v)))
+    plc._poll_status()                                   # 정상 폴링 — 모든 버튼 발행(첫 폴링)
+    n_all = len(pub); assert n_all >= len(CFG.PLC_COIL_MAP)
+    pub.clear()
+    plc._poll_status()                                   # 값이 안 바뀜 → 발행 0
+    assert pub == []
+    FakeInstrument.scenario["fail_reads"] = True
+    plc._poll_status()                                   # 다운
+    FakeInstrument.scenario["fail_reads"] = False
+    shots[-1][1]()                                       # 링크 업 → 캐시 비움
+    pub.clear()
+    plc._poll_status()
+    assert len(pub) == n_all                             # 값이 그대로여도 전부 다시 발행
+    assert ("Door_Button", False) in pub
