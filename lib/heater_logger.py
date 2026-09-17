@@ -28,7 +28,8 @@ COLUMNS = [
     "ramp_rate_c_per_min", "holdback_c",
     "run", "itl", "fault", "ot", "tc_err", "wd_err",
     "note",
-    "hold", "hold_mv",        # 목표 도달 후 DAC 상한 고정 상태(0/1) / 고정값
+    "hold", "hold_mv",        # 유지 모드 holding(0/1, dac·tc2 공통) / dac 고정값(그 외 빈칸)
+    "pv2_c", "pv_ctrl_c", "hold_kind", "sv2_c",   # TC2 / PID 가 보는 PV / 유지 종류(dac·tc2) / TC2 목표
 ]
 
 
@@ -77,6 +78,12 @@ class HeaterCsvLogger:
 
         stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = base_dir / f"{prefix}_{stamp}.csv"
+        # 로거는 RUN 상승 엣지마다 새 파일을 "w" 로 만든다(이어 쓰기 없음) → 헤더는 항상 현재 COLUMNS 다.
+        #  같은 초에 다시 시작해 파일이 이미 있으면(옛 헤더일 수 있다) 덮어쓰지 않고 _2, _3 … 을 붙인다.
+        k = 1
+        while path.exists():
+            k += 1
+            path = base_dir / f"{prefix}_{stamp}_{k}.csv"
         try:
             fp = open(path, "w", encoding="utf-8-sig", newline="")
             writer = csv.writer(fp)
@@ -92,8 +99,9 @@ class HeaterCsvLogger:
         self._warned = False
         return path
 
-    def write_row(self, st: dict, note: str = "", hold=None):
-        """한 행 기록 후 즉시 flush. 프로그램이 죽어도 데이터는 남는다."""
+    def write_row(self, st: dict, note: str = "", hold=None, hold_kind=None):
+        """한 행 기록 후 즉시 flush. 프로그램이 죽어도 데이터는 남는다.
+        hold=(holding 0/1, dac 고정값|None), hold_kind="dac"|"tc2"|None."""
         if self._fp is None or self._writer is None:
             return
 
@@ -125,6 +133,10 @@ class HeaterCsvLogger:
                 note,
                 (1 if (hold and hold[0]) else 0),
                 ("" if (not hold or hold[1] is None) else int(hold[1])),
+                "" if st.get('pv2') is None else f"{float(st['pv2']):.1f}",
+                "" if st.get('pv_ctrl') is None else f"{float(st['pv_ctrl']):.1f}",
+                ("" if not (hold and hold[0]) else (hold_kind or "")),
+                "" if st.get('sv2') is None else f"{float(st['sv2']):.1f}",
             ])
             self._fp.flush()
         except Exception as e:

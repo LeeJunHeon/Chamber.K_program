@@ -109,20 +109,26 @@ def _validate_plc_comm_config() -> None:
 
 _validate_plc_comm_config()
 
-# ── 목표 온도 도달 후 DAC 출력 상한(D00018)을 그 시점 출력으로 고정 ──
-#  2026-09-15 사고: 메인 셔터가 열릴 때 지그 TC 가 실제보다 낮게 읽혀 PID 가 DAC 를
-#  최대(1200 ≒143A)로 45분간 밀어붙였다. 파이썬은 D00041(DAC 값)을 직접 쓸 수 없다
-#  (래더가 매 스캔 덮어씀) → PID 출력 상한 D00018 로 막는다. 내리는 방향은 막지 않는다.
-HEATER_HOLD_MV_AFTER_REACH = get('HEATER_HOLD_MV_AFTER_REACH', False)   # 기능 on/off
-HEATER_HOLD_MV_ENTER_TOL_C = get('HEATER_HOLD_MV_ENTER_TOL_C', 3.0)     # |PV-SV| 허용 오차 [°C]
-HEATER_HOLD_MV_ENTER_SEC   = get('HEATER_HOLD_MV_ENTER_SEC',   60)      # 이만큼 연속 안정돼야 캡처 [초]
-# 진입 조건 보강 (2026-09-16 실측 실패 3건)
+# ── 목표 도달 후 유지 모드(controller/heater_hold.HeaterHold) ──
+#  "off" : 없음
+#  "dac" : DAC 출력 상한(D00018)을 도달 시점 출력으로 고정. 2026-09-15 사고(메인 셔터가 열릴 때
+#          TC1 이 실제보다 낮게 읽혀 PID 가 DAC 를 최대(1200 ≒143A)로 45분간 밀어붙임) 대응.
+#          파이썬은 D00041 을 직접 쓸 수 없다(래더가 매 스캔 덮어씀) → D00018 로 막는다.
+#  "tc2" : 도달 시점 TC2(D00011) 평균을 D00035 에 쓰고 M0004A 로 PID 를 TC2 제어로 전환(TC2 추종).
+#          래더가 지원하지 않거나(D00036=0) TC2 가 없으면(D00011=-1) "dac" 로 대체한다.
+HEATER_HOLD_MODE           = get('HEATER_HOLD_MODE',           None)
+HEATER_HOLD_MV_ENTER_TOL_C = get('HEATER_HOLD_MV_ENTER_TOL_C', 3.0)     # |PV-SV| 허용 오차 [°C]   (두 모드 공용)
+HEATER_HOLD_MV_ENTER_SEC   = get('HEATER_HOLD_MV_ENTER_SEC',   60)      # 이만큼 연속 안정돼야 캡처 [초] (두 모드 공용)
+# 진입 조건 보강 (2026-09-16 실측 실패 3건) — 두 모드 공용
 #  A: 이제 막 가열을 시작한 과도 상태(PV 하강·MV 상승)를 |PV-SV|≤3 만으로 잡아 467 을 고정 → 8분간 식음
 #  B: PV 가 분당 5.6°C 로 목표를 스쳐 지나가는 구간에서 582 를 고정(실제 유지 430~460)
 #  C: MV 가 최소치(400)에 붙어 있을 때 캡처되면 D00018=420 이 박혀 히터가 죽는다
 HEATER_HOLD_MV_ARRIVE_TOL_C = get('HEATER_HOLD_MV_ARRIVE_TOL_C', 1.0)   # 이 안에 한 번은 들어와야 고정을 잰다 [°C]
 HEATER_HOLD_MV_DRIFT_PV_C   = get('HEATER_HOLD_MV_DRIFT_PV_C',   0.5)   # 창 후반부 평균 PV − 전반부 평균 PV 허용 [°C]
 HEATER_HOLD_MV_DRIFT_MV     = get('HEATER_HOLD_MV_DRIFT_MV',     15)    # 창 후반부 평균 MV − 전반부 평균 MV 허용 [카운트]
+# tc2 전용
+HEATER_HOLD_TC2_MARGIN_C    = get('HEATER_HOLD_TC2_MARGIN_C',    50.0)  # TC2 목표 ≤ OT2 − 마진 [°C] (최소 20)
+HEATER_HOLD_TC2_DRIFT_C     = get('HEATER_HOLD_TC2_DRIFT_C',     1.0)   # 창 후반부 평균 TC2 − 전반부 평균 TC2 허용 [°C] (최소 0.1)
 # 히터 패널 stale 표시 — 마지막 폴링 뒤 이만큼(초) 지나면 "PLC 응답 없음 · n초 전 값" 으로 바꾼다
 HEATER_STALE_SEC            = get('HEATER_STALE_SEC',            5.0)
 HEATER_STALE_FG             = "#9e9e9e"   # stale 표시 시 PV/SV 글자색(스타일의 color 만 바꾼다)
@@ -130,11 +136,21 @@ HEATER_STALE_FG             = "#9e9e9e"   # stale 표시 시 PV/SV 글자색(스
 
 def _validate_heater_hold_config() -> None:
     """설정이 틀려도 프로그램은 떠야 한다 — 클램프/끄기만 하고 예외는 던지지 않는다."""
-    global HEATER_HOLD_MV_AFTER_REACH, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC
-    v = HEATER_HOLD_MV_AFTER_REACH
-    if isinstance(v, str):
-        v = v.strip().lower() in ("1", "t", "true", "y", "yes", "on")
-    HEATER_HOLD_MV_AFTER_REACH = bool(v)
+    global HEATER_HOLD_MODE, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC
+    if HEATER_HOLD_MODE is None:
+        # 옛 키 HEATER_HOLD_MV_AFTER_REACH(bool) 호환 — True→"dac", False→"off"
+        _old = get('HEATER_HOLD_MV_AFTER_REACH', None)
+        if _old is not None:
+            if isinstance(_old, str):
+                _old = _old.strip().lower() in ("1", "t", "true", "y", "yes", "on")
+            HEATER_HOLD_MODE = "dac" if bool(_old) else "off"
+            print(f"[Config] HEATER_HOLD_MV_AFTER_REACH 는 HEATER_HOLD_MODE 로 바뀌었습니다 → \"{HEATER_HOLD_MODE}\" 로 해석")
+        else:
+            HEATER_HOLD_MODE = "off"
+    HEATER_HOLD_MODE = str(HEATER_HOLD_MODE).strip().lower()
+    if HEATER_HOLD_MODE not in ("off", "dac", "tc2"):
+        print(f"[Config] HEATER_HOLD_MODE {HEATER_HOLD_MODE!r} → \"off\" (허용: off / dac / tc2)")
+        HEATER_HOLD_MODE = "off"
     try:
         t = float(HEATER_HOLD_MV_ENTER_TOL_C)
     except Exception:
@@ -157,9 +173,12 @@ def _validate_heater_hold_config() -> None:
     except Exception:
         print(f"[Config] HEATER_STALE_SEC {HEATER_STALE_SEC!r} → 5.0"); HEATER_STALE_SEC = 5.0
     global HEATER_HOLD_MV_ARRIVE_TOL_C, HEATER_HOLD_MV_DRIFT_PV_C, HEATER_HOLD_MV_DRIFT_MV
+    global HEATER_HOLD_TC2_MARGIN_C, HEATER_HOLD_TC2_DRIFT_C
     for _name, _lo, _hi, _def in (("HEATER_HOLD_MV_ARRIVE_TOL_C", 0.2, 10.0, 1.0),
                                   ("HEATER_HOLD_MV_DRIFT_PV_C", 0.1, 10.0, 0.5),
-                                  ("HEATER_HOLD_MV_DRIFT_MV", 3.0, 200.0, 15.0)):
+                                  ("HEATER_HOLD_MV_DRIFT_MV", 3.0, 200.0, 15.0),
+                                  ("HEATER_HOLD_TC2_MARGIN_C", 20.0, 500.0, 50.0),
+                                  ("HEATER_HOLD_TC2_DRIFT_C", 0.1, 20.0, 1.0)):
         _raw = globals()[_name]
         try:
             _v = float(_raw)
