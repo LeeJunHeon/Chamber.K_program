@@ -885,7 +885,7 @@ class MainDialog(QDialog):
         self._mv_itl_off_t = 0.0
         # 첫 plc_link(True) 전까지는 PLC 조작 위젯을 다운 상태로 둔다
         self._plc_link_up = True
-        self._on_plc_link(False)
+        self._on_plc_link(False, initial=True)
         self.mfc_controller.update_flow.connect(self.update_mfc_flow_display)
         self.mfc_controller.update_pressure.connect(self.update_mfc_pressure_display)
         self.dcpower_controller.update_dc_status_display.connect(self.update_dc_status_display)
@@ -3684,7 +3684,7 @@ class MainDialog(QDialog):
                 f"메인밸브 인터락 해제 (M00032 OFF, {self.MV_INTERLOCK_ABORT_MS / 1000:g}초 지속)", detail=self._mv_detail())
 
     @Slot(bool)
-    def _on_plc_link(self, up: bool):
+    def _on_plc_link(self, up: bool, initial: bool = False):
         """PLC 링크 전이 1곳. down: 버튼 unchecked+잠금, 램프 회색, 히터 stale 즉시, 제목 접미사.
         up: 잠금 해제·제목 복원 — 값은 첫 폴링(캐시 비움)이 다시 채우고 히터 stale 은 update_heater_display 가 푼다.
         프로그램 경로의 PLC 쓰기(공정·히터 OFF 보류·ERP)는 건드리지 않는다 — 잠금은 화면 조작만이다."""
@@ -3713,7 +3713,8 @@ class MainDialog(QDialog):
         if HEATER_ENABLED:
             self._heater_set_stale(True, 0)
         self.setWindowTitle(title + self.PLC_LINK_DOWN_TITLE)
-        log_message_to_monitor("경고", "PLC 링크 다운 — 수동 조작 잠금, 표시 초기화")
+        if not initial:      # 생성자의 초기 down 은 전이가 아니라 초기 상태 — 경고를 찍지 않는다
+            log_message_to_monitor("경고", "PLC 링크 다운 — 수동 조작 잠금, 표시 초기화")
 
     @Slot(str, bool)
     def update_ui_button_display(self, button_name, state):

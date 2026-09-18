@@ -421,3 +421,15 @@ def test_T58_heater_cards_tc1_tc2_fields(fresh):
     import inspect, controller.process_controller as PC
     assert "\"pv2\": _pv2" in inspect.getsource(PC.SputterProcessController._heater_wait)
 
+
+def test_T59_plc_link_initial_down_no_warning_then_transition_warns(fresh, monkeypatch):
+    w = fresh
+    logs = []
+    monkeypatch.setattr(MAIN, "log_message_to_monitor", lambda lvl, msg: logs.append((lvl, msg)))
+    w._plc_link_up = True
+    w._on_plc_link(False, initial=True)                       # 생성자 경로
+    assert logs == [] and w._plc_link_up is False
+    w._on_plc_link(True)
+    w._on_plc_link(False)
+    assert [m for l, m in logs if l == "경고"] == ["PLC 링크 다운 — 수동 조작 잠금, 표시 초기화"]
+    w._on_plc_link(True)
