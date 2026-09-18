@@ -117,3 +117,14 @@ def test_T25_rfpulse_silent_port(qapp, shots, monkeypatch):
     assert _reconnect_delays(shots) == [1000, 2000, 4000]
     c._comm_ok("poll")
     assert not c._policy.in_outage()
+
+
+def test_T60_dcpower_connect_on_open_port_is_noop(qapp, shots):
+    c = DCM.DCPowerController()
+    c.serial = FakeQSerial()
+    msgs = []
+    c.status_message.connect(lambda l, m: msgs.append(m))
+    assert c.connect_dcpower_device() is True and c.serial.opens == 1
+    msgs.clear()
+    assert c.connect_dcpower_device() is True                 # 이미 열림 → 다시 열지 않고 True
+    assert c.serial.opens == 1 and msgs == []

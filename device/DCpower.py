@@ -94,6 +94,8 @@ class DCPowerController(QObject):
             self.status_message.emit("DCpower", f"{DC_PORT} 포트를 찾을 수 없습니다. 사용 가능: {sorted(ports)}")
             return False
 
+        if self.serial is not None and self.serial.isOpen():
+            return True          # 이미 열려 있다 — 다시 열면 "Device is already open" 경고만 남는다
         if self.serial is None:
             self.serial = QSerialPort(self)
             self.serial.setBaudRate(DC_BAUDRATE)
