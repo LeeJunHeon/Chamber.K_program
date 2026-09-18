@@ -116,3 +116,23 @@ def test_T13_no_jig_wording_in_new_code():
                           os.path.join(ROOT, "main.py"), os.path.join(ROOT, "UI.py"),
                           os.path.join(ROOT, "device", "PLC.py"), os.path.join(ROOT, "lib", "config.py"),
                           os.path.join(ROOT, "lib", "heater_logger.py")]) == []
+
+
+def test_T13_coil_cache_written_only_by_polling():
+    """_last_button_states / _bit_last 에 쓰는 곳은 _poll_status(+_emit_bit_change)·_on_link_up(clear) 뿐이다."""
+    import ast
+    src = open(os.path.join(ROOT, "device", "PLC.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    writers = set()
+    for fn in [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]:
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Subscript) and isinstance(t.value, ast.Attribute) \
+                            and t.value.attr in ("_last_button_states", "_bit_last"):
+                        writers.add(fn.name)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "clear" \
+                    and isinstance(node.func.value, ast.Attribute) \
+                    and node.func.value.attr in ("_last_button_states", "_bit_last"):
+                writers.add(fn.name)
+    assert writers == {"_poll_status", "_emit_bit_change", "_on_link_up"}, writers

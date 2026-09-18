@@ -644,6 +644,9 @@ class PLCController(QObject):
     # ============== 폴링 ======================
     @Slot()
     def _poll_status(self):
+        """200 ms 폴링. 코일(버튼)·센서·모니터 비트 상태의 유일한 판정자 — _last_button_states/_bit_last 를 쓰는 곳은
+        여기와 _on_link_up(clear) 뿐이다. 쓰기 경로(update_port_state/on_emergency_stop)는 캐시를 갱신하지 않으므로
+        누가 바꿨든 다음 폴링이 변화를 보고 plc_bit_changed 를 낸다."""
         # ★ 단절 중에는 폴링 1회가 (PLC_TIMEOUT 0.5초 × 3회 × 트랜잭션 수)만큼 길어진다.
         #   타이머는 _busy 로 건너뛰므로 허용한다. 그동안 워치독 kick 이 못 나가면 PLC 가
         #   10초에 히터를 끄는데, 그것이 의도된 안전 동작이다(PLC_COMM_LOSS_ABORT_SEC 와 같은 예산).
@@ -745,6 +748,11 @@ class PLCController(QObject):
     # ============== 쓰기(버튼 클릭 반영) =========
     @Slot(str, bool)
     def update_port_state(self, btn_name: str, state: bool):
+        """코일 쓰기. 쓰기 직후 update_button_display 로 화면만 즉시 맞추고 _last_button_states 는 건드리지 않는다 —
+        코일 상태의 진실은 폴링(_poll_status) 하나다. 누가 바꿨든 다음 폴링(≤200 ms)이 변화를 보고
+        plc_bit_changed(name, val, prev) 를 내야 main 이 "[PLC] name A→B" 로그와 MV 안전 판정을 한다
+        (2026-09-17: 쓰기 경로가 캐시를 먼저 갱신해 파이썬이 쓴 코일은 전이 로그가 0건이었다).
+        즉시 emit 과 다음 폴링의 재-emit 이 겹치는 것은 무해하다(blockSignals + setChecked)."""
         if self.instrument is None:
             self.status_message.emit("PLC(오류)", "포트가 열려 있지 않습니다.")
             return
@@ -767,14 +775,11 @@ class PLCController(QObject):
                 self._mb("Door up", self.instrument.write_bit, up_addr, int(state), functioncode=5)
                 self._mb("Door dn", self.instrument.write_bit, dn_addr, int(not state), functioncode=5)
 
-                # UI 동기화 (Door_Button은 Up 상태를 표시)
+                # UI 동기화 (Door_Button은 Up 상태를 표시) — 캐시는 폴링만 갱신한다
                 self.update_button_display.emit("Door_Button", state)
-                self._last_button_states["Door_Button"] = state
                 # 개별 버튼도 존재하면 동기화
                 self.update_button_display.emit("Doorup_button", state)
                 self.update_button_display.emit("Doordn_button", not state)
-                self._last_button_states["Doorup_button"] = state
-                self._last_button_states["Doordn_button"] = (not state)
                 return
 
             # 3-2) 문 개별 버튼이 직접 들어오는 경우(상호배타 보장)
@@ -792,7 +797,6 @@ class PLCController(QObject):
                         self._mb("Doordn=0", self.instrument.write_bit, dn_addr, 0, functioncode=5)
                     # Door_Button은 Up 기준 표시
                     self.update_button_display.emit("Door_Button", state)
-                    self._last_button_states["Door_Button"] = state
                     self.update_button_display.emit("Doordn_button", False if state else self._last_button_states.get("Doordn_button", False))
                 else:
                     # Down = state, Up은 동시에 켜지지 않도록
@@ -801,12 +805,10 @@ class PLCController(QObject):
                         self._mb("Doorup=0", self.instrument.write_bit, up_addr, 0, functioncode=5)
                     # Door_Button은 Up 기준 표시 → Down이 True면 Door_Button은 False
                     self.update_button_display.emit("Door_Button", not state if state else self._last_button_states.get("Door_Button", False))
-                    self._last_button_states["Door_Button"] = (not state) if state else self._last_button_states.get("Door_Button", False)
                     self.update_button_display.emit("Doorup_button", False if state else self._last_button_states.get("Doorup_button", False))
 
-                # 개별 버튼 토글 반영
+                # 개별 버튼 토글 반영(캐시는 폴링만 갱신한다)
                 self.update_button_display.emit(btn_name, state)
-                self._last_button_states[btn_name] = state
                 return
 
             # 3-3) 일반 코일 (그 외 버튼들)
@@ -815,8 +817,7 @@ class PLCController(QObject):
                 self.status_message.emit("PLC(오류)", f"알 수 없는 버튼: {btn_name}")
                 return
             self._mb(f"코일 {btn_name}", self.instrument.write_bit, addr, int(state), functioncode=5)
-            self.update_button_display.emit(btn_name, state)
-            self._last_button_states[btn_name] = state
+            self.update_button_display.emit(btn_name, state)      # 캐시는 폴링만 갱신한다
 
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"코일 쓰기 실패({btn_name}): {e}")
@@ -1362,8 +1363,7 @@ class PLCController(QObject):
             for btn_name in PLC_COIL_MAP.keys():
                 self.update_button_display.emit(btn_name, False)
 
-            self.update_button_display.emit("Door_Button", False)
-            self._last_button_states["Door_Button"] = False
+            self.update_button_display.emit("Door_Button", False)   # 캐시는 폴링만 갱신한다 → 다음 폴링이 ON→OFF 전이를 낸다
 
             # ★ 히터 정지
             if HEATER_ENABLED:

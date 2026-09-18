@@ -520,3 +520,57 @@ def test_T41_link_up_republishes_all_bits_with_prev_none(plc, monkeypatch):
     plc._poll_status()
     assert len(ch) == n_all and all(p is None for _, _, p in ch)
     assert ("MV_button", False, None) in ch
+
+
+# ───────────────────────── 코일 전이는 폴링이 유일한 판정자 ─────────────────────────
+def _bits(plc):
+    ch = []
+    plc.plc_bit_changed.connect(lambda n, v, p: ch.append((n, v, p)))
+    return ch
+
+
+def test_T49_update_port_state_does_not_touch_cache_poll_emits_transition(plc):
+    FakeInstrument.scenario["coils"] = {}
+    plc._poll_status()                                    # 첫 폴링: 전부 False, prev=None
+    ch = _bits(plc)
+    disp = []
+    plc.update_button_display.connect(lambda n, v: disp.append((n, v)))
+    plc.update_port_state("Ar_Button", True)
+    assert plc._last_button_states["Ar_Button"] is False   # 캐시 불변
+    assert disp == [("Ar_Button", True)] and ch == []      # 즉시 표시만
+    FakeInstrument.scenario["coils"][CFG.PLC_COIL_MAP["Ar_Button"]] = 1
+    plc._poll_status()
+    assert ch == [("Ar_Button", True, False)]
+    plc._poll_status()
+    assert ch == [("Ar_Button", True, False)]              # 1회
+
+
+def test_T50_door_button_write_display_then_poll_transitions(plc):
+    FakeInstrument.scenario["coils"] = {}
+    plc._poll_status()
+    ch = _bits(plc); disp = []
+    plc.update_button_display.connect(lambda n, v: disp.append((n, v)))
+    plc.update_port_state("Door_Button", True)
+    assert disp == [("Door_Button", True), ("Doorup_button", True), ("Doordn_button", False)]
+    assert plc._last_button_states["Door_Button"] is False and plc._last_button_states["Doorup_button"] is False
+    assert ch == []
+    FakeInstrument.scenario["coils"].update({CFG.PLC_COIL_MAP["Doorup_button"]: 1, CFG.PLC_COIL_MAP["Doordn_button"]: 0})
+    plc._poll_status()
+    assert ("Doorup_button", True, False) in ch and ("Door_Button", True, False) in ch
+    assert not any(n == "Doordn_button" for n, _, _ in ch)     # 0→0 은 전이가 아니다
+
+
+def test_T51_emergency_stop_cache_untouched_then_poll_emits_on_to_off(plc):
+    coils = {CFG.PLC_COIL_MAP[n]: 1 for n in ("Rotary_button", "MV_button", "Ar_Button", "Doorup_button")}
+    FakeInstrument.scenario["coils"] = coils
+    plc._poll_status()
+    ch = _bits(plc)
+    plc.on_emergency_stop()
+    assert plc._last_button_states["MV_button"] is True and plc._last_button_states["Door_Button"] is True
+    assert ch == []
+    for a in list(coils):
+        coils[a] = 0                                        # PLC 가 실제로 껐다
+    plc._poll_status()
+    assert sorted(ch) == sorted([("Rotary_button", False, True), ("MV_button", False, True),
+                                 ("Ar_Button", False, True), ("Doorup_button", False, True),
+                                 ("Door_Button", False, True)])

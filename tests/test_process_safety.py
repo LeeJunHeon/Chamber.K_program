@@ -200,3 +200,45 @@ def test_T48_heater_reached_card_once_from_process_path(fresh):
     body = src.split("def _heater_wait(")[1].split("\n    def ")[0]
     assert "히터 온도 도달 완료" in body and "self.heater_reached.emit(" in body
     assert body.index("self.heater_reached.emit(") < body.rindex("self._next_step()")
+
+
+# ───────────────────────── 코일 전이 단일화(UI 경유 MV OFF / ALL STOP 순서) ─────────────────────────
+def _fake_plc_poll(w, monkeypatch):
+    """PLC 스레드 대신: update_port_state 는 즉시 display 만, 폴링은 테스트가 값을 정해 plc_bit_changed 를 낸다."""
+    plc = w.plc_controller
+    writes = []
+    monkeypatch.setattr(plc, "update_port_state", lambda n, v: writes.append((n, v)))
+    return writes
+
+
+def test_T52_ui_mv_off_during_process_aborts_via_poll_transition(safe, monkeypatch):
+    w = safe
+    writes = _fake_plc_poll(w, monkeypatch)
+    w.process_running = True; w._chat_reset_run_state()
+    w._on_plc_bit_changed("MV_button", True, None)
+    w.plc_controller.update_port_state("MV_button", False)          # UI 경유 쓰기(즉시 표시만, 캐시 불변)
+    assert writes == [("MV_button", False)] and w._aborts == []
+    w._on_plc_bit_changed("MV_button", False, True)                 # 다음 폴링이 본 전이
+    assert len(w._aborts) == 1 and w._aborts[0][0] == "메인밸브 닫힘 (M00003 OFF)"
+    assert ("PLC", "MV_button ON→OFF") in w._logs
+
+
+def test_T53_all_stop_sets_flags_before_plc_emergency_then_poll_off_no_abort(safe, monkeypatch):
+    w = safe
+    order = []
+    w.request_plc_emergency_stop.disconnect()
+    w.request_plc_emergency_stop.connect(lambda: order.append(("emg", w._chat_emergency_stopped, w._chk_process_ok)))
+    monkeypatch.setattr(w, "_chat_notify_failed_now", lambda *a, **k: order.append(("card",)))
+    try:
+        w.process_running = True; w._chat_reset_run_state(); w._chk_process_ok = True
+        w._on_plc_bit_changed("MV_button", True, None)
+        w._on_all_stop_clicked()
+        assert order[0] == ("emg", True, False)                      # 플래그가 먼저
+        assert w._chat_emergency_stopped is True
+        w._on_plc_bit_changed("MV_button", False, True)             # 비상정지로 꺼진 코일을 다음 폴링이 본다
+        assert w._aborts == []                                       # 이중 중단 없음
+        assert ("PLC", "MV_button ON→OFF") in w._logs
+    finally:
+        w.request_plc_emergency_stop.disconnect()
+        w.request_plc_emergency_stop.connect(w.plc_controller.on_emergency_stop)
+        MAIN.QMessageBox.reset_mock()

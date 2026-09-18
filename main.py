@@ -1709,15 +1709,13 @@ class MainDialog(QDialog):
                 self.heater_recipe.stop("비상 정지")
         except Exception:
             pass
-        try:
-            self.request_plc_emergency_stop.emit()
-        except Exception:
-            pass
         # 공정 상태머신도 세운다 — PLC 비상정지만으로는 컨트롤러가 다음 스텝을 계속 밟는다.
         #  ★ 비상정지로 끝난 공정은 '실패'로 기록되어야 한다. 그냥 request_process_stop 만
         #    보내면 _chk_process_ok 가 True 로 남아 구글챗에 "정상 종료" 카드가 나가고
         #    ChK_log.csv 에도 정상 공정으로 기록됐다. 사용자 STOP(_chat_user_stopped)과는
         #    구분해야 하므로 그 플래그는 건드리지 않고 별도 플래그로 "긴급 중단" 카드를 낸다.
+        #  ★ 플래그는 request_plc_emergency_stop 보다 먼저 선다 — 비상정지로 코일이 전부 OFF 되면
+        #    다음 폴링이 MV_button False 를 내는데, 그때 _mv_safety_armed() 가 이미 False 여야 이중 중단이 없다.
         _proc_active = bool(getattr(self, "process_running", False))
         _csv_active = bool(getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None))
         _csv_delay = bool(getattr(self, "_csv_delay_active", False))
@@ -1726,6 +1724,14 @@ class MainDialog(QDialog):
             try:
                 self._chk_process_ok = False
                 self._chat_emergency_stopped = True
+            except Exception:
+                pass
+        try:
+            self.request_plc_emergency_stop.emit()
+        except Exception:
+            pass
+        if _proc_active or _csv_active or _csv_delay:
+            try:
                 self._chat_notify_failed_now("ALL STOP(비상 정지)으로 중단", send_text=False)
             except Exception:
                 pass
