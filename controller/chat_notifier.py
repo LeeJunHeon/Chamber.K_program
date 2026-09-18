@@ -383,14 +383,15 @@ class ChatNotifier(QObject):
         )
 
     @Slot(bool, str, dict)
-    def notify_heater_run(self, started: bool, subtitle: str, fields: dict):
+    def notify_heater_run(self, started: bool, subtitle: str, fields: dict, ok: bool = True):
         """히터 RUN 상승/하강 엣지 카드. 공정 카드 상태기(_last_started_params/_errors/_finished_sent/_buffer)
         와 완전히 독립 — 읽지도 쓰지도 않는다. urgent=True 여야 한다: notify_process_started() 가
         self._buffer.clear() 를 하므로 버퍼에 실으면 공정 시작 순간 조용히 사라진다.
         호출부는 flush() 를 부르지 않는다(flush 는 _upsert_error_card 도 함께 돌린다)."""
-        # 아이콘 구분: 시작 ℹ️(INFO) / 종료 ❌(FAIL) — 공정 카드의 종료(Stop/오류)=FAIL 규칙과 같은 매핑을 쓴다
+        # 아이콘 구분: 시작 ℹ️(INFO) / 정상 종료 ✅(SUCCESS) / 이상 종료 ❌(FAIL). ok 는 종료 카드에만 쓴다.
         self._post_card("히터 시작" if started else "히터 종료", subtitle=subtitle,
-                        status=("INFO" if started else "FAIL"), fields=dict(fields or {}), urgent=True)
+                        status=("INFO" if started else ("SUCCESS" if ok else "FAIL")),
+                        fields=dict(fields or {}), urgent=True)
 
     def notify_heater_reached(self, subtitle: str, fields: dict):
         """공정이 소유한 히터의 승온 대기 통과 카드("히터 도달", ℹ️). notify_heater_run 과 같은 형식·규칙(urgent)."""

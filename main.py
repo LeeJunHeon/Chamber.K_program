@@ -1951,7 +1951,9 @@ class MainDialog(QDialog):
                           "운전 시간": self._fmt_duration(time.monotonic() - self._heater_chat_t0) if self._heater_chat_t0 else "-",
                           "사유": why}
             if self.chat_chk:
-                self.chat_chk.notify_heater_run(run, ctx, fields)
+                # 종료 카드 아이콘: 이상(fault/ot/tc_err/wd_err)이면 ❌, 아니면 ✅. 시작 카드는 ℹ️ 그대로
+                ok = not (st.get('fault') or st.get('ot') or st.get('tc_err') or st.get('wd_err'))
+                self.chat_chk.notify_heater_run(run, ctx, fields, ok=bool(ok))
         except Exception as e:
             log_message_to_monitor("경고", f"히터 카드 전송 실패: {e!r}")
 

@@ -358,3 +358,29 @@ def test_T37_plc_link_down_up_ui(fresh):
     assert w._heater_stale is False
     w.set_indicator("Air", False)
     assert "#d6252f" in ui.Air_Indicator.styleSheet()
+
+
+def test_T57_heater_stop_card_icon_ok_vs_fault(fresh):
+    """히터 종료 카드: 이상이면 ❌(FAIL), 아니면 ✅(SUCCESS). 시작은 ℹ️(INFO)."""
+    from controller.chat_notifier import ChatNotifier
+    w = fresh
+    posted = []
+    real = ChatNotifier.__new__(ChatNotifier)
+    real._post_card = lambda title, subtitle="", status="INFO", fields=None, urgent=False, route_params=None:         posted.append((title, status, dict(fields or {})))
+    w.chat_chk = real
+    try:
+        for kw, why in ((dict(ot=True, fault=True), "이상 — 과온"), (dict(tc_err=True, fault=True), "이상 — 온도센서"),
+                        (dict(wd_err=True, fault=True), "이상 — 통신 워치독"), (dict(fault=True), "이상")):
+            posted.clear()
+            feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False, **kw))
+            assert posted[0][:2] == ("히터 시작", "INFO")
+            assert posted[1][0] == "히터 종료" and posted[1][1] == "FAIL" and posted[1][2]["사유"] == why, posted
+        posted.clear()
+        feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False))
+        assert posted[1][1] == "SUCCESS" and posted[1][2]["사유"] == "정지"
+        posted.clear(); w.process_running = True
+        feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False))
+        assert posted[1][1] == "SUCCESS" and posted[1][2]["사유"] == "공정 종료"
+    finally:
+        w.process_running = False
+        w.chat_chk = MagicMock()
