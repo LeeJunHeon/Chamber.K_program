@@ -45,6 +45,7 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.comm_policy import ReconnectPolicy
 from lib.config import (
+    rfpulse_pulse_edge_violation,
     RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, RFPULSE_PARITY, RFPULSE_MAX_POWER,
     RFPULSE_ACK_TIMEOUT_MS, RFPULSE_QUERY_TIMEOUT_MS, RFPULSE_CMD_GAP_MS,
     RFPULSE_RAW_LOG, RFPULSE_VERIFY_PULSE_CONFIG,
@@ -80,7 +81,7 @@ PULSING_TX = {
     2: 0x02,  # External pulsing
     3: 0x03,  # External pulsing inverted
     4: 0x04,  # Gated internal pulsing
-    5: 0x05,  # Gated internal pulsing inverted
+    # 5 (gated internal pulsing inverted) 는 CESAR 1310 매뉴얼 명령 27(0~4)에 없다 — 사용 금지. start_process 는 1 만 쓴다.
 }
 
 CMD_SET_PULSE_FREQ      = 93     # 3 bytes (Hz, LSB first)
@@ -209,6 +210,7 @@ class RFPulseController(QObject):
     # {'freq_khz': float|None, 'duty': int|None} — 한쪽만 실패해도 있는 쪽은 올린다.
     #  (예전 Signal(float, int) 은 둘 다 있어야 emit 해서 freq 실패에 duty 까지 버려졌다)
     pulse_config_readback         = Signal(object)
+    pulse_config_warning          = Signal(str)      # 리드백된 펄스 설정이 최소 ON/OFF 16 µs 규칙 위반(공정은 계속)
     # ── 시리얼 장비 공통 통신 두절 정책 ──
     comm_event        = Signal(dict)    # COMM_events.csv 1행 (파일 I/O 는 main 스레드의 lib.logger)
     rfpulse_recovered = Signal(float)   # 단절 뒤 첫 성공 (단절 초) — main 이 안전 상태 재적용 여부 판단
@@ -1056,6 +1058,12 @@ class RFPulseController(QObject):
                 _d = "?" if state['duty'] is None else str(state['duty'])
                 self.status_message.emit("RFPulse", f"펄스 설정 리드백: {_f} kHz · {_d}%")
                 self.pulse_config_readback.emit(dict(state))
+                if state['freq_khz'] is not None and state['duty'] is not None:
+                    # 장비는 위반 설정도 CSR 0 으로 받는다 — main 의 시작 전 검사와 같은 함수로 경고만 낸다
+                    _why = rfpulse_pulse_edge_violation(int(round(state['freq_khz'] * 1000.0)), int(state['duty']))
+                    if _why:
+                        self.status_message.emit("RFPulse(경고)", "장비 펄스 설정 " + _why + " — 공정은 계속")
+                        self.pulse_config_warning.emit(_why)
             _verify()
 
         def on_duty(res):

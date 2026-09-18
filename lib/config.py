@@ -573,12 +573,35 @@ def _validate_rfpulse_parity() -> None:
 _validate_rfpulse_parity()
 RFPULSE_MAX_POWER = get('RFPULSE_MAX_POWER', 600.0)   # 장비 최대값(W)
 # 펄스 주파수/듀티 시작 전 범위 검증 — CESAR 1310 매뉴얼: 펄스 주파수 1 Hz~30 kHz(3-5, 5-44),
-#  듀티 1~99 %(4-75). 30 kHz 에서는 40~60 % 로 좁아지는데(5-33) 그건 막지 않는다 —
-#  장비가 CSR 51 로 알려 주고 드라이버의 CSR 50/51 처리가 최후 방어선이다.
+#  듀티 1~99 %(4-75). 주파수에 따른 듀티 축소는 아래 최소 ON/OFF 시간 규칙으로 잰다
+#  (장비는 위반 설정도 CSR 0 으로 받는다 — 2026-09-17 20 kHz·80 % 가 CSR 51 없이 남아 있었다).
 RFPULSE_PULSE_FREQ_MAX_HZ = get('RFPULSE_PULSE_FREQ_MAX_HZ', 30000)   # 다른 모델이면 config 에서 수정
 RFPULSE_PULSE_FREQ_MIN_HZ = 1
 RFPULSE_DUTY_MIN = 1
 RFPULSE_DUTY_MAX = 99
+# CESAR 1310 매뉴얼 명령 96: "duty ON time 1~99 %, 최소 ON 또는 OFF 시간 16 µs". 모델별 값.
+RFPULSE_PULSE_MIN_EDGE_US = get('RFPULSE_PULSE_MIN_EDGE_US', 16.0)
+
+
+def rfpulse_pulse_edge_violation(freq_hz: int, duty_pct: int):
+    """펄스 ON/OFF 시간이 RFPULSE_PULSE_MIN_EDGE_US 이상인지. 위반이면 설명 문구, 아니면 None.
+    main(시작 전 검사)과 RFpulse(리드백 경고)가 같은 함수를 쓴다."""
+    try:
+        f = float(freq_hz); d = float(duty_pct); m = float(RFPULSE_PULSE_MIN_EDGE_US)
+    except Exception:
+        return None
+    if f <= 0 or m <= 0:
+        return None
+    on_us = d / 100.0 / f * 1e6
+    off_us = (100.0 - d) / 100.0 / f * 1e6
+    if on_us >= m - 1e-6 and off_us >= m - 1e-6:
+        return None
+    lo = math.ceil(m * f * 1e-6 * 100 - 1e-9)             # 허용 듀티 하한 [%]
+    hi = math.floor(100 - m * f * 1e-6 * 100 + 1e-9)       # 허용 듀티 상한 [%]
+    fmax = math.floor(min(d, 100.0 - d) / 100.0 / m * 1e6 + 1e-9)   # 이 듀티에서 허용 최대 주파수 [Hz]
+    fk = f / 1000.0
+    return (f"{fk:g}kHz·{d:g}% → ON {on_us:.1f}µs / OFF {off_us:.1f}µs, 최소 {m:g}µs 미만 — "
+            f"{fk:g}kHz 에서 허용 듀티 {lo}~{hi}%, {d:g}% 를 쓰려면 {fmax / 1000.0:g}kHz 이하")
 
 # 프레임 단위 송수신 로그(챔버2 원본의 [RFP][RAW][TX]/[RX] 수준). 통신 문제 추적용.
 #  False 면 전송 줄의 raw= 와 수신 줄 전체를 생략하고 기존 로그만 남긴다.

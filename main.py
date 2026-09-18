@@ -50,6 +50,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_APPROACH_ZONE_C,
                         HEATER_APPROACH_MIN_RATE_C_PER_MIN,
                         RFPULSE_MAX_POWER, RFPULSE_PULSE_FREQ_MAX_HZ, RFPULSE_PULSE_FREQ_MIN_HZ,
+                        rfpulse_pulse_edge_violation,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
                         heater_est_current)
 from lib.recipe_io import load_table
@@ -836,6 +837,7 @@ class MainDialog(QDialog):
         self.rfpulse_controller.status_message.connect(self.on_status_message)
         self.rfpulse_controller.pulse_config_readback.connect(
             self._on_rfpulse_config_readback)
+        self.rfpulse_controller.pulse_config_warning.connect(self._on_rfpulse_config_warning)
 
         # RF power / RF Pulse / DC power 는 서로 독립이고 동시에 쓸 수 있다.
         #  체크박스는 자기 입력칸의 활성/비활성만 담당한다.
@@ -4383,6 +4385,14 @@ class MainDialog(QDialog):
             self.chat_chk.flush()
 
     @Slot(str)
+    def _on_rfpulse_config_warning(self, msg: str):
+        """장비 펄스 설정이 16 µs 규칙 위반(리드백) — 공정은 계속, 공정 중이면 챗 텍스트 1줄(_on_mfc_flow_alert 관례)."""
+        if self.chat_chk and self.process_running:
+            name = self.current_process_name or "CHK"
+            self.chat_chk.notify_text(f"⚠️ CHK RF 펄스 설정 경고: {name} | {msg}")
+            self.chat_chk.flush()
+
+    @Slot(str)
     def _on_mfc_pressure_alert(self, msg: str):
         log_message_to_monitor("MFC(경고)", msg)
         if self.chat_chk and (self.process_running or self._heater_atm_active()):
@@ -4664,8 +4674,10 @@ class MainDialog(QDialog):
     def _check_rfpulse_pulse_range(freq_khz, duty, where: str) -> None:
         """펄스 주파수/듀티가 장비 범위 안인지 시작 전에 확인한다. None 은 통과(장비 현재값 유지).
 
-        CESAR 1310 매뉴얼: 펄스 주파수 1 Hz~30 kHz, 듀티 1~99 %. 주파수에 따른 듀티 축소
-        (30 kHz 에서 40~60 %)는 여기서 막지 않는다 — 장비가 CSR 51 로 알려 준다.
+        CESAR 1310 매뉴얼: 펄스 주파수 1 Hz~30 kHz, 듀티 1~99 %, 그리고 최소 ON/OFF 시간 16 µs(명령 96).
+        16 µs 규칙은 둘 다 주어졌을 때만 여기서 잰다(rfpulse_pulse_edge_violation). 한쪽이 None(장비값 유지)이면
+        START 뒤 리드백에서 같은 함수로 경고한다 — 장비는 위반 설정도 CSR 0 으로 받아들이므로(2026-09-17 20 kHz·80 %)
+        CSR 51 에 기대지 않는다.
         """
         if freq_khz is not None:
             _hz = float(freq_khz) * 1000.0
@@ -4681,6 +4693,10 @@ class MainDialog(QDialog):
                 raise ValueError(
                     f"[{where}] RF Pulse 듀티 {_d}% 가 범위 "
                     f"{int(RFPULSE_DUTY_MIN)}~{int(RFPULSE_DUTY_MAX)}% 를 벗어납니다.")
+        if freq_khz is not None and duty is not None:
+            _why = rfpulse_pulse_edge_violation(int(round(float(freq_khz) * 1000.0)), int(duty))
+            if _why:
+                raise ValueError(f"[{where}] RF Pulse 설정 {_why} (CESAR 1310 최소 ON/OFF 시간, RFPULSE_PULSE_MIN_EDGE_US).")
 
     def _build_params_from_csv_row(self, row: dict) -> dict:
         """
