@@ -1080,7 +1080,11 @@ class SputterProcessController(QObject):
             _nxt = self._steps[self._idx + 1].message if 0 <= self._idx + 1 < len(self._steps) else ""
         except Exception:
             _nxt = ""
-        self.heater_reached.emit({"pv": _pv, "target": float(target_c), "took_sec": _took, "next": _nxt})
+        try:
+            _pv2 = (self.plc.get_heater_status() or {}).get('pv2')
+        except Exception:
+            _pv2 = None
+        self.heater_reached.emit({"pv": _pv, "pv2": _pv2, "target": float(target_c), "took_sec": _took, "next": _nxt})
         self._next_step()
 
     def _exec_loop_with_timeout(

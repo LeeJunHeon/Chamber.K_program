@@ -189,7 +189,8 @@ def test_T48_heater_reached_card_once_from_process_path(fresh):
         assert w.chat_chk.notify_heater_reached.call_count == 1
         sub, fields = w.chat_chk.notify_heater_reached.call_args.args
         assert sub == '공정 "CeO2 #1"'
-        assert fields == {"목표": "600.0°C", "도달 온도": "599.6°C", "승온 소요": "62분 5초", "다음 단계": "압력 안정화 대기"}
+        assert fields == {"목표": "600.0°C", "도달 TC1": "599.6°C", "도달 TC2": "--.-",
+                          "승온 소요": "62분 5초", "다음 단계": "압력 안정화 대기"}
         assert w.chat_chk.notify_heater_run.call_count == 0
     finally:
         w.process_running = False

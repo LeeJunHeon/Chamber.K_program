@@ -1861,15 +1861,20 @@ class MainDialog(QDialog):
         return "HEATER"
 
     # ==================== 히터 시작/종료/도달 구글챗 카드 ====================
+    @staticmethod
+    def _chat_temp(v) -> str:
+        """카드 온도 문구: None → "--.-", 아니면 "600.0°C"."""
+        return "--.-" if v is None else f"{float(v):.1f}°C"
+
     @Slot(dict)
     def _on_process_heater_reached(self, d: dict) -> None:
         """공정 소유 히터의 승온 대기 통과 → "히터 도달" 카드 1장(수동 히터·히터 레시피는 이 경로가 없다)."""
         if not self.chat_chk:
             return
         try:
-            pv = d.get("pv"); tgt = d.get("target"); took = int(d.get("took_sec") or 0)
-            fields = {"목표": ("--.-" if tgt is None else f"{float(tgt):.1f}°C"),
-                      "도달 온도": ("--.-" if pv is None else f"{float(pv):.1f}°C"),
+            took = int(d.get("took_sec") or 0)
+            fields = {"목표": self._chat_temp(d.get("target")),
+                      "도달 TC1": self._chat_temp(d.get("pv")), "도달 TC2": self._chat_temp(d.get("pv2")),
                       "승온 소요": f"{took // 60}분 {took % 60}초",
                       "다음 단계": (d.get("next") or "-")}
             self.chat_chk.notify_heater_reached(self._heater_run_context(), fields)
@@ -1930,15 +1935,14 @@ class MainDialog(QDialog):
             return
         run = (edge == 'rise')
         try:
-            pv = st.get('pv')
-            pv_txt = "--.-" if pv is None else f"{float(pv):.1f}°C"
+            pv_txt = self._chat_temp(st.get('pv')); pv2_txt = self._chat_temp(st.get('pv2'))
             ctx = self._heater_run_context()
             if run:
                 self._heater_chat_t0 = time.monotonic()
                 tgt = self._heater_final_target(st)
-                fields = {"목표": ("--.-" if tgt is None else f"{float(tgt):.1f}°C"),
+                fields = {"목표": self._chat_temp(tgt),
                           "램프": self._heater_ramp_rate_text(),
-                          "현재": pv_txt}
+                          "현재 TC1": pv_txt, "현재 TC2": pv2_txt}
             else:
                 if st.get('ot'):        why = "이상 — 과온"
                 elif st.get('tc_err'):  why = "이상 — 온도센서"
@@ -1947,7 +1951,7 @@ class MainDialog(QDialog):
                 elif self.process_running or self.csv_mode: why = "공정 종료"
                 elif ctx.startswith("레시피"):               why = "레시피 종료"
                 else:                                        why = "정지"
-                fields = {"마지막 온도": pv_txt,
+                fields = {"마지막 TC1": pv_txt, "마지막 TC2": pv2_txt,
                           "운전 시간": self._fmt_duration(time.monotonic() - self._heater_chat_t0) if self._heater_chat_t0 else "-",
                           "사유": why}
             if self.chat_chk:

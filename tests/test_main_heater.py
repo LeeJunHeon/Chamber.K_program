@@ -375,6 +375,7 @@ def test_T57_heater_stop_card_icon_ok_vs_fault(fresh):
             feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False, **kw))
             assert posted[0][:2] == ("히터 시작", "INFO")
             assert posted[1][0] == "히터 종료" and posted[1][1] == "FAIL" and posted[1][2]["사유"] == why, posted
+            assert list(posted[1][2]) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유"]
         posted.clear()
         feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False))
         assert posted[1][1] == "SUCCESS" and posted[1][2]["사유"] == "정지"
@@ -384,3 +385,39 @@ def test_T57_heater_stop_card_icon_ok_vs_fault(fresh):
     finally:
         w.process_running = False
         w.chat_chk = MagicMock()
+
+
+def test_T58_heater_cards_tc1_tc2_fields(fresh):
+    from controller.chat_notifier import ChatNotifier
+    w = fresh
+    posted = []
+    real = ChatNotifier.__new__(ChatNotifier)
+    real._post_card = lambda title, subtitle="", status="INFO", fields=None, urgent=False, route_params=None: \
+        posted.append((title, status, dict(fields or {})))
+    w.chat_chk = real
+    try:
+        w.ui.heater_sv_edit.setText("600")
+        feed(w, make_heater_st(run=True, pv=598.7, pv2=1052.3))
+        feed(w, make_heater_st(run=False, pv=590.0, pv2=None))
+        assert posted[0][0] == "히터 시작" and posted[0][1] == "INFO"
+        assert list(posted[0][2]) == ["목표", "램프", "현재 TC1", "현재 TC2"]
+        assert posted[0][2]["현재 TC1"] == "598.7°C" and posted[0][2]["현재 TC2"] == "1052.3°C"
+        assert posted[1][0] == "히터 종료" and posted[1][1] == "SUCCESS"
+        assert list(posted[1][2]) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유"]
+        assert posted[1][2]["마지막 TC1"] == "590.0°C" and posted[1][2]["마지막 TC2"] == "--.-"
+        posted.clear(); w.process_running = True
+        w.process_controller.heater_reached.emit({"pv": 599.6, "pv2": 1051.0, "target": 600.0, "took_sec": 65, "next": "압력 안정화"})
+        spin(50)
+        assert posted == [("히터 도달", "INFO", {"목표": "600.0°C", "도달 TC1": "599.6°C", "도달 TC2": "1051.0°C",
+                                                 "승온 소요": "1분 5초", "다음 단계": "압력 안정화"})]
+        posted.clear()
+        w.process_controller.heater_reached.emit({"pv": 599.6, "pv2": None, "target": 600.0, "took_sec": 5, "next": ""})
+        spin(50)
+        assert posted[0][2]["도달 TC2"] == "--.-" and posted[0][2]["다음 단계"] == "-"
+        assert not any("온도" in k for c in posted for k in c[2])       # "도달 온도"/"마지막 온도"/"현재" 키 없음
+    finally:
+        w.process_running = False
+        w.chat_chk = MagicMock()
+    import inspect, controller.process_controller as PC
+    assert "\"pv2\": _pv2" in inspect.getsource(PC.SputterProcessController._heater_wait)
+
