@@ -740,16 +740,19 @@ class MainDialog(QDialog):
                     "plc_link": bool(getattr(self, "_plc_link_up", False)),
                 }
 
-                # 진행률 계산용 총 공정 시간(초)
+                # 공정 진행 정보 — 계산은 장비가 하고 웹은 표시만 한다.
+                #  remainSec: 메인 공정 잔여 초 (process_time_tick 원본). -1 = 아직 메인 공정 전
+                #  totalSec : 메인 공정 총 초
+                #  phase    : main = 메인 공정 진행 중, pre = 준비 단계(승온·안정화·셔터딜레이)
                 if running:
-                    try:
-                        total_min = float(_w("process_time_edit") or 0)
-                        state["process"] = {
-                            "name": getattr(self, "current_process_name", "") or "",
-                            "totalSec": int(total_min * 60),
-                        }
-                    except Exception:
-                        pass
+                    _remain = int(getattr(self, "_erp_main_remain_sec", -1))
+                    _total = int(getattr(self, "_erp_main_total_sec", 0))
+                    state["process"] = {
+                        "name": getattr(self, "current_process_name", "") or "",
+                        "remainSec": _remain,
+                        "totalSec": _total,
+                        "phase": "main" if _remain >= 0 else "pre",
+                    }
 
                 self.erp.update_state(state)
             except Exception as e:
@@ -873,6 +876,8 @@ class MainDialog(QDialog):
         self.plc_controller.plc_link.connect(self._on_plc_link)
         self.plc_controller.plc_bit_changed.connect(self._on_plc_bit_changed)
         self._plc_bits: dict = {}                 # 이름별 마지막 값(로그·ERP·안전 판정용)
+        self._erp_main_remain_sec = -1            # ERP: 메인 공정 잔여 초(-1 = 미진입), 총 초
+        self._erp_main_total_sec = 0
         self._mv_itl_timer = QTimer(self)         # MV_INTERLOCK OFF 1초 지속 판정
         self._mv_itl_timer.setSingleShot(True)
         self._mv_itl_timer.setInterval(int(self.MV_INTERLOCK_ABORT_MS))
@@ -1025,6 +1030,8 @@ class MainDialog(QDialog):
         self._chat_fail_reason = ""
         self._erp_run_ended = False   # ERP: 이번 공정 run_end 미전송 상태로 초기화
         self._erp_meas = {}           # 이전 공정의 MFC 실측값을 물고 가지 않는다
+        self._erp_main_remain_sec = -1    # -1 = 메인 공정 미진입
+        self._erp_main_total_sec = 0
 
     def _chat_build_params(self, params: dict, process_name: str) -> dict:
         """
@@ -1153,6 +1160,8 @@ class MainDialog(QDialog):
 
         try:
             self._erp_meas = {}   # 종료 후 대기 중에 이전 공정 값이 남지 않도록 비운다
+            self._erp_main_remain_sec = -1    # -1 = 메인 공정 미진입
+            self._erp_main_total_sec = 0
         except Exception:
             pass
 
@@ -4297,6 +4306,15 @@ class MainDialog(QDialog):
         m, s = divmod(seconds_left, 60)
         text = f"{m:02d}:{s:02d}"
         self.ui.process_time_edit.setPlainText(text)
+
+        # ERP 전송용 원본 값. UI 칸은 "MM:SS" 로 덮이므로 숫자를 따로 들고 있어야 한다.
+        try:
+            self._erp_main_remain_sec = int(seconds_left)
+            if getattr(self, "_erp_main_total_sec", 0) <= 0:
+                # 메인 공정 첫 tick 을 총 시간으로 본다(이후 갱신하지 않는다)
+                self._erp_main_total_sec = int(seconds_left)
+        except Exception:
+            pass
 
         # process time이 끝났으면 샘플링 종료
         if seconds_left <= 0:
