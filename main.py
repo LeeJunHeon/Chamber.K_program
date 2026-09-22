@@ -233,6 +233,9 @@ class MainDialog(QDialog):
         # process_controller 는 main 속성을 직접 읽지 않는다 — 스냅샷 dict 를 돌려주는 콜러블을 주입한다
         self._hold_snapshot: dict = {}
         self._hold_fail_info = None            # 도달 흐름 안의 유지 모드 실패 정보 — 도달 카드가 싣고 비운다(공정마다 리셋)
+        # 히터 RUN 한 번(상승~하강 엣지) 동안의 이상 이벤트 라벨(중복 없이) — 종료 카드 "특이사항"/❌ 판정. 상승 엣지에서 리셋
+        self._heater_run_events: list = []
+        self._heater_run_engaged = False       # 이번 런에 유지 모드 holding 이 한 번이라도 됐는가(engaged 시그널)
         self._refresh_hold_snapshot()
         self.process_controller.set_hold_state_provider(lambda: dict(self._hold_snapshot))
         self.process_controller.request_hold_force.connect(self._on_hold_force)
@@ -1896,6 +1899,24 @@ class MainDialog(QDialog):
         h = self.heater_hold
         desc = f"SV2 {float(h.sv2):.1f}°C" if (kind == 'tc2' and h.sv2 is not None) else f"DAC 상한 {h.value}"
         log_message_to_monitor("히터", f"[유지 모드] 진입 — {kind} ({desc}){' [완화 경로]' if h.engaged_relaxed else ''}")
+        self._heater_run_engaged = True
+        if kind == 'tc2' and h.engaged_relaxed:
+            self._heater_run_event("유지 모드 완화 진입")
+        elif kind == 'dac' and HEATER_HOLD_MODE != "dac":
+            self._heater_run_event("유지 모드 DAC 폴백")
+
+    def _heater_run_event(self, label: str) -> None:
+        """이번 히터 런의 이상 이벤트 기록(같은 라벨은 한 번만) — 종료 카드가 요약한다."""
+        if label not in self._heater_run_events:
+            self._heater_run_events.append(label)
+
+    def _heater_run_events_text(self) -> str:
+        ev = list(self._heater_run_events)
+        if not ev:
+            return "없음"
+        if len(ev) > 4:
+            return " · ".join(ev[:4]) + f" 외 {len(ev) - 4}건"
+        return " · ".join(ev)
 
     @Slot(str, object)
     def _on_hold_force(self, mode: str, mv) -> None:
@@ -1915,6 +1936,7 @@ class MainDialog(QDialog):
         reason = str(info.get("reason") or "")
         action = str(info.get("action") or "")
         log_message_to_monitor("히터(경고)", f"[유지 모드] 진입 실패({action}) — {reason}")
+        self._heater_run_event(f"유지 모드 진입 실패({action})")
         if action != "abort":
             # 도달 흐름 안의 실패(완화 tc2 / dac 폴백 / proceed) — 별도 카드 없이 도달 카드가 싣는다
             self._hold_fail_info = dict(info)
@@ -1951,6 +1973,8 @@ class MainDialog(QDialog):
     def _on_heater_hold_alert(self, kind: str, d: dict) -> None:
         """HeaterHold 의 알림 사건 → 챗 카드(공정당 같은 종류 1장): tc2→dac 강등 / 강등 실패 / 상한 여유 없음."""
         self._refresh_hold_snapshot()
+        self._heater_run_event({"demoted": "TC2 상실 → DAC 강등", "demote_failed": "TC2 상실 · 강등 실패",
+                                "no_margin": "출력 여유 없음(MV ≥ 상한 98%)"}.get(kind, kind))
         sent = getattr(self, "_chat_hold_alert_sent", None)
         if sent is None:
             sent = self._chat_hold_alert_sent = set()
@@ -1978,6 +2002,7 @@ class MainDialog(QDialog):
     @Slot(dict)
     def _on_heater_saturated(self, d: dict) -> None:
         """DAC 포화 판정(HeaterSaturationGuard 가 에피소드당 1회) — 챗 카드 1장."""
+        self._heater_run_event("DAC 출력 포화")
         if not self.chat_chk:
             return
         try:
@@ -2109,6 +2134,7 @@ class MainDialog(QDialog):
             ctx = self._heater_run_context()
             if run:
                 self._heater_chat_t0 = time.monotonic()
+                self._heater_run_events = []; self._heater_run_engaged = False     # 런 단위 이벤트 리셋
                 tgt = self._heater_final_target(st)
                 fields = {"목표": self._chat_temp(tgt),
                           "램프": self._heater_ramp_rate_text(),
@@ -2125,8 +2151,14 @@ class MainDialog(QDialog):
                           "운전 시간": self._fmt_duration(time.monotonic() - self._heater_chat_t0) if self._heater_chat_t0 else "-",
                           "사유": why}
             if self.chat_chk:
-                # 종료 카드 아이콘: 이상(fault/ot/tc_err/wd_err)이면 ❌, 아니면 ✅. 시작 카드는 ℹ️ 그대로
-                ok = not (st.get('fault') or st.get('ot') or st.get('tc_err') or st.get('wd_err'))
+                # 종료 카드 아이콘: PLC 이상(fault/ot/tc_err/wd_err) 또는 런 중 이상 이벤트가 있으면 ❌. 시작 카드는 ℹ️ 그대로
+                #  (09-22: 유지 모드 미진입 + DAC 포화 25분인데 PLC 트립이 없어 ✅ 로 떴다)
+                if not run:
+                    if HEATER_HOLD_MODE != "off" and not self._heater_run_engaged:
+                        self._heater_run_event("유지 모드 미진입")
+                    fields["특이사항"] = self._heater_run_events_text()
+                plc_ok = not (st.get('fault') or st.get('ot') or st.get('tc_err') or st.get('wd_err'))
+                ok = plc_ok and not self._heater_run_events
                 self.chat_chk.notify_heater_run(run, ctx, fields, ok=bool(ok))
         except Exception as e:
             log_message_to_monitor("경고", f"히터 카드 전송 실패: {e!r}")

@@ -360,10 +360,11 @@ def test_T37_plc_link_down_up_ui(fresh):
     assert "#d6252f" in ui.Air_Indicator.styleSheet()
 
 
-def test_T57_heater_stop_card_icon_ok_vs_fault(fresh):
+def test_T57_heater_stop_card_icon_ok_vs_fault(fresh, monkeypatch):
     """히터 종료 카드: 이상이면 ❌(FAIL), 아니면 ✅(SUCCESS). 시작은 ℹ️(INFO)."""
     from controller.chat_notifier import ChatNotifier
     w = fresh
+    monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "off")
     posted = []
     real = ChatNotifier.__new__(ChatNotifier)
     real._post_card = lambda title, subtitle="", status="INFO", fields=None, urgent=False, route_params=None:         posted.append((title, status, dict(fields or {})))
@@ -375,7 +376,7 @@ def test_T57_heater_stop_card_icon_ok_vs_fault(fresh):
             feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False, **kw))
             assert posted[0][:2] == ("히터 시작", "INFO")
             assert posted[1][0] == "히터 종료" and posted[1][1] == "FAIL" and posted[1][2]["사유"] == why, posted
-            assert list(posted[1][2]) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유"]
+            assert list(posted[1][2]) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유", "특이사항"]
         posted.clear()
         feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False))
         assert posted[1][1] == "SUCCESS" and posted[1][2]["사유"] == "정지"
@@ -387,9 +388,10 @@ def test_T57_heater_stop_card_icon_ok_vs_fault(fresh):
         w.chat_chk = MagicMock()
 
 
-def test_T58_heater_cards_tc1_tc2_fields(fresh):
+def test_T58_heater_cards_tc1_tc2_fields(fresh, monkeypatch):
     from controller.chat_notifier import ChatNotifier
     w = fresh
+    monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "off")
     posted = []
     real = ChatNotifier.__new__(ChatNotifier)
     real._post_card = lambda title, subtitle="", status="INFO", fields=None, urgent=False, route_params=None: \
@@ -403,9 +405,11 @@ def test_T58_heater_cards_tc1_tc2_fields(fresh):
         assert list(posted[0][2]) == ["목표", "램프", "현재 TC1", "현재 TC2"]
         assert posted[0][2]["현재 TC1"] == "598.7°C" and posted[0][2]["현재 TC2"] == "1052.3°C"
         assert posted[1][0] == "히터 종료" and posted[1][1] == "SUCCESS"
-        assert list(posted[1][2]) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유"]
+        assert list(posted[1][2]) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유", "특이사항"]
         assert posted[1][2]["마지막 TC1"] == "590.0°C" and posted[1][2]["마지막 TC2"] == "--.-"
+        assert posted[1][2]["특이사항"] == "없음"
         posted.clear(); w.process_running = True
+        monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "tc2")                     # 도달 카드는 유지 모드 결과를 싣는다
         w.heater_hold._h.update(state="holding", kind="tc2", sv2=1052.3)        # 엄격 캡처로 tc2 진입한 상태
         w.heater_hold.engaged_relaxed = False
         w.process_controller.heater_reached.emit({"pv": 599.6, "pv2": 1051.0, "target": 600.0, "took_sec": 65, "next": "압력 안정화"})
@@ -546,3 +550,117 @@ def test_T87_saturated_card_without_clamp(fresh):
                             "owner": "guard", "limit": 1200})
     args, _ = w.chat_chk.notify_heater_alert.call_args
     assert args[2]["클램프"] == "D00018 ← 1077 (포화 직전 60초 평균)" and "주의" not in args[2]
+
+
+# ═══════════════ 종료 카드: 런 중 이상 이벤트 요약 ═══════════════
+@pytest.fixture
+def stop_card(fresh, monkeypatch):
+    from controller.chat_notifier import ChatNotifier
+    w = fresh
+    posted = []
+    real = ChatNotifier.__new__(ChatNotifier)
+    real._post_card = lambda title, subtitle="", status="INFO", fields=None, urgent=False, route_params=None: \
+        posted.append((title, status, dict(fields or {})))
+    w.chat_chk = real
+    monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "tc2")
+    h = w.heater_hold; h._h = h._fresh(); h.engaged_relaxed = False; h.no_margin_warned = False
+    w._heater_run_events = []; w._heater_run_engaged = False
+    w._posted = posted
+    yield w
+    w.chat_chk = MagicMock(); w.process_running = False
+    h._h = h._fresh(); h.engaged_relaxed = False
+
+
+def _run(w, **stop_kw):
+    """RUN 상승 엣지 → (테스트가 이벤트를 넣고) → 하강 엣지. 종료 카드 (status, 특이사항) 을 돌려준다."""
+    w._posted.clear()
+    feed(w, make_heater_st(run=True))
+    return w
+
+
+def _stop(w, **kw):
+    feed(w, make_heater_st(run=False, **kw))
+    card = [c for c in w._posted if c[0] == "히터 종료"][-1]
+    return card[1], card[2]["특이사항"], card[2]
+
+
+def _engaged(w, kind="tc2", relaxed=False):
+    w.heater_hold.engaged_relaxed = relaxed
+    if kind == "tc2":
+        w.heater_hold._h.update(sv2=893.4)
+    else:
+        w.heater_hold._h.update(value=1113)
+    w._on_heater_hold_engaged(kind)
+
+
+def test_T88_normal_run_success(stop_card):
+    w = _run(stop_card); _engaged(w, "tc2")
+    status, note, f = _stop(w)
+    assert status == "SUCCESS" and note == "없음" and f["사유"] == "정지"
+    assert list(f) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유", "특이사항"]
+
+
+def test_T88_dac_fallback_marks_fail(stop_card):
+    w = _run(stop_card)
+    w._on_heater_hold_failed({"action": "dac", "reason": "…", "tc2_why": "TC2 값 없음"}); _engaged(w, "dac", relaxed=True)
+    status, note, _ = _stop(w)
+    assert status == "FAIL" and note == "유지 모드 진입 실패(dac) · 유지 모드 DAC 폴백"
+
+
+def test_T88_demotion_saturation_no_margin(stop_card):
+    w = _run(stop_card); _engaged(w, "tc2")
+    w._on_heater_hold_alert("demoted", {"why": "TC2 값 없음(D00011=-1)", "value": 1059, "source": "강등 직전 MV"})
+    assert _stop(w)[:2] == ("FAIL", "TC2 상실 → DAC 강등")
+    w = _run(stop_card); _engaged(w, "tc2")
+    w._on_heater_saturated({"pv": 529.0, "pv2": None, "mv": 1031, "sec": 120.0, "clamp": None, "owner": "hold_dac", "limit": 1031})
+    assert _stop(w)[:2] == ("FAIL", "DAC 출력 포화")
+    w = _run(stop_card); _engaged(w, "tc2")
+    w._on_heater_hold_alert("no_margin", {"mv": 1181, "limit": 1200, "why": "…"})
+    assert _stop(w)[:2] == ("FAIL", "출력 여유 없음(MV ≥ 상한 98%)")
+
+
+def test_T88_plc_fault_still_fail_with_reason(stop_card):
+    w = _run(stop_card); _engaged(w, "tc2")
+    status, note, f = _stop(w, fault=True, ot=True)
+    assert status == "FAIL" and f["사유"] == "이상 — 과온" and note == "없음"
+
+
+def test_T88_more_than_four_events_and_dedup(stop_card):
+    w = _run(stop_card)
+    for _ in range(3):
+        w._on_heater_hold_alert("no_margin", {})                    # 같은 이벤트 3번 → 라벨 1개
+    w._on_heater_hold_failed({"action": "proceed", "reason": "…"})
+    w._on_heater_hold_alert("demoted", {}); w._on_heater_hold_alert("demote_failed", {})
+    w._on_heater_saturated({"clamp": None})
+    status, note, _ = _stop(w)
+    ev = w._heater_run_events
+    assert len(ev) == 6 and ev.count("출력 여유 없음(MV ≥ 상한 98%)") == 1
+    assert note == " · ".join(ev[:4]) + " 외 2건" and status == "FAIL"
+
+
+def test_T88_events_reset_on_next_run(stop_card):
+    w = _run(stop_card); w._on_heater_saturated({"clamp": 1077})
+    assert _stop(w)[0] == "FAIL"
+    w = _run(stop_card); _engaged(w, "tc2")                           # 다음 런
+    status, note, _ = _stop(w)
+    assert status == "SUCCESS" and note == "없음"
+
+
+def test_T88_manual_run_reflects_demotion_and_saturation(stop_card):
+    """수동 런(공정 아님): heater_hold_failed 는 없지만 alert/saturated/engaged 는 그대로 온다."""
+    w = _run(stop_card); assert w.process_running is False
+    _engaged(w, "tc2", relaxed=True)                                   # 완화 진입
+    w.heater_hold.alert.emit("demoted", {"why": "래더가 TC2 제어를 해제(M0004B OFF)", "value": 1059})
+    w.heater_sat.saturated.emit({"pv": 500.0, "pv2": None, "mv": 1059, "sec": 120.0, "clamp": None, "owner": "hold_dac", "limit": 1059})
+    spin(50)
+    status, note, _ = _stop(w)
+    assert status == "FAIL" and note == "유지 모드 완화 진입 · TC2 상실 → DAC 강등 · DAC 출력 포화"
+
+
+def test_T88_0922_replay_not_engaged_plus_saturation(stop_card):
+    """09-22: 유지 모드 미진입 + DAC 포화 25분, PLC 트립 없음 → 종료 카드 ❌ (당시에는 ✅ 였다)."""
+    w = _run(stop_card)
+    w._on_heater_saturated({"pv": 529.0, "pv2": 952.0, "mv": 1200, "sec": 120.0, "clamp": 1077, "src": "포화 직전 60초 평균", "owner": "guard", "limit": 1200})
+    status, note, f = _stop(w, pv=559.6, pv2=952.0)
+    assert status == "FAIL" and note == "DAC 출력 포화 · 유지 모드 미진입" and f["사유"] == "정지"
+    assert f["마지막 TC1"] == "559.6°C"
