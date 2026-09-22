@@ -117,8 +117,50 @@ def test_T72b_demoted_dac_hold_is_not_overwritten_by_guard():
     for _ in range(30):
         tick(mv=1200, sv2=hold.sv2, pv_sel_eff=True)     # tc2 유지 중 MV 상한 — hold_active 라 감시는 판정하지 않는다
     assert g.ev == []
-    tick(mv=1200, sv2=hold.sv2, pv_sel_eff=True, pv2=None)   # TC2 상실 → dac 강등
+    tick(mv=1000, sv2=hold.sv2, pv_sel_eff=True, pv2=None)   # TC2 상실 → dac 강등(강등 직전 MV 1000)
     assert hold.is_holding() and hold.kind == "dac" and hev == [1000]
     for _ in range(60):
         tick(mv=1000, mv_limit=1000, pv2=None, pv_sel_eff=False)      # PLC 가 D00018=1000 을 비춘다
     assert g.ev == [] and hold.value == 1000 and hev == [1000]   # 감시는 dac 유지의 D00018 을 건드리지 않는다
+
+
+def _guard(sat_sec=10):
+    return G(sat_sec=sat_sec)
+
+
+def test_T86_dac_hold_saturation_warns_without_clamp():
+    """hold_kind='dac', 실제 상한(D00018) 1031, MV 1031 연속 → 경고 1회 + saturated(clamp=None, owner='hold_dac'), 쓰기 없음."""
+    g = _guard()
+    for _ in range(12):
+        g.step(hold=True, kind="dac", mv=1031, mv_limit=1031, pv2=None)
+    assert g.ev == [] and len(g.sat) == 1
+    d = g.sat[0]
+    assert d["clamp"] is None and d["owner"] == "hold_dac" and d["limit"] == 1031
+    w = [m for l, m in g.msgs if l == "히터(경고)"]
+    assert len(w) == 1 and "상한(1031)" in w[0] and "클램프 없음(유지 모드가 D00018 1031 을 소유)" in w[0]
+    assert "TC2 없음 · OT2 과온 보호 없음 — 즉시 확인 필요" in w[0]
+    for _ in range(100):
+        g.step(hold=True, kind="dac", mv=1031, mv_limit=1031, pv2=None)      # 같은 에피소드 — 반복 없음
+    assert g.ev == [] and len(g.sat) == 1
+    # 설정 상한(1200) 기준이었다면 1031 은 86% 라 판정 자체가 없었다
+    g2 = _guard()
+    for _ in range(12):
+        g2.step(hold=True, kind="dac", mv=1031, mv_limit=None)
+    assert g2.sat == []
+
+
+def test_T86b_tc2_hold_emits_nothing():
+    g = _guard()
+    for _ in range(60):
+        g.step(hold=True, kind="tc2", mv=1200, mv_limit=1200)
+    assert g.ev == [] and g.sat == [] and g.msgs == []
+
+
+def test_T86c_no_hold_uses_actual_limit_and_clamps():
+    g = _guard()
+    for _ in range(30):
+        g.step(mv=900, mv_limit=1031)                    # 이력
+    for _ in range(12):
+        g.step(mv=1031, mv_limit=1031)                   # 실제 상한 1031 기준으로 포화
+    assert g.ev == [900] and g.sat[0]["clamp"] == 900 and g.sat[0]["owner"] == "guard" and g.sat[0]["limit"] == 1031
+    assert "상한(1031)" in g.msgs[-1][1]

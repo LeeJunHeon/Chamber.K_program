@@ -124,8 +124,8 @@ def test_T26b_tc2_lost_demotes_to_dac(kw, why):
     assert H.ev == [("sel", False), ("sv2", 0.0), ("mv", 800)]
     assert H.h.state == "holding" and H.h.kind == "dac" and H.h.value == 800 and eng == ["tc2", "dac"]
     assert al and al[0][0] == "demoted" and al[0][1]["why"] == why and al[0][1]["value"] == 800
-    w = [m for l, m in H.msgs if l == "히터(경고)" and "강등" in m]
-    assert len(w) == 1 and why in w[0] and "OT2 과온 보호도 함께 사라졌습니다" in w[0]
+    w = [m for l, m in H.msgs if l == "히터(경고)" and "고정으로 강등" in m]
+    assert len(w) == 1 and why in w[0] and "OT2 과온 보호도 함께 사라졌습니다" in w[0] and "강등 직전 MV" in w[0]
     # 강등된 dac 유지는 이후 재적용도 dac 규칙대로 (D00018 이 되돌아가면 5초 뒤 재적용)
     for _ in range(7):
         H.step(**_stable(**{"mv_limit": 1200, "pv2": None, "pv_sel_eff": False}))
@@ -450,3 +450,36 @@ def test_T83_ring_survives_drift_failures_and_only_loads_when_ok():
     assert len(H.h._ring) == n
     H.step(**_stable(run=False))                                         # 운전 OFF 에서만 비운다
     assert len(H.h._ring) == 0
+
+
+# ═══════════════ 강등 클램프 값: 강등 직전 MV 우선 ═══════════════
+def test_T85_demote_uses_current_mv_not_arrival_window():
+    """tc2 holding(SV2 1052.3, last_window_mv 800) 에서 현재 MV 1059 로 pv2=None → D00018 ← 1059 (800 이 아님)."""
+    H = Harness("tc2"); al = []
+    H.h.alert.connect(lambda k, d: al.append((k, d)))
+    _engage(H)
+    assert H.h._h["last_window_mv"] == 800.0
+    H.step(**_stable(sv2=1052.3, pv_sel_eff=True, mv=1059))            # 공정 한복판: MV 가 도달 시점과 다르다
+    H.ev.clear()
+    H.step(**_stable(sv2=1052.3, pv_sel_eff=True, mv=1059, pv2=None))
+    assert H.ev == [("sel", False), ("sv2", 0.0), ("mv", 1059)]
+    assert H.h.value == 1059 and H.h.last_force_source == "강등 직전 MV"
+    assert al[-1][0] == "demoted" and al[-1][1]["value"] == 1059 and al[-1][1]["source"] == "강등 직전 MV"
+    assert any("(D00018 1059, 강등 직전 MV)" in m for _, m in H.msgs)
+
+
+def test_T85b_demote_falls_back_to_window_when_no_current_mv():
+    H = Harness("tc2")
+    _engage(H); H.ev.clear()
+    H.step(**_stable(sv2=1052.3, pv_sel_eff=True, mv=None, pv2=None))   # 현재 MV 없음
+    assert H.ev == [("sel", False), ("sv2", 0.0), ("mv", 800)]
+    assert H.h.last_force_source == "마지막 측정 창 평균"
+    assert any("(D00018 800, 마지막 측정 창 평균)" in m for _, m in H.msgs)
+
+
+def test_T85c_entry_failure_fallback_still_prefers_window():
+    """진입 실패 폴백(prefer_current 미지정)은 마지막 측정 창 평균을 쓴다(회귀 방지)."""
+    H = Harness("tc2")
+    _fail_gates(H)
+    assert H.h.force_dac_hold(1150) is True
+    assert 1077 <= H.ev[-1][1] <= 1120 and H.h.last_force_source == "마지막 측정 창 평균"

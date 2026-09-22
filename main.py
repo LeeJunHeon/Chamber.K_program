@@ -1962,7 +1962,7 @@ class MainDialog(QDialog):
             common = {"TC1": self._chat_temp(st.get('pv')), "TC2": self._chat_temp(st.get('pv2')), "MV": str(st.get('mv'))}
             if kind == "demoted":
                 title = "히터 TC2 추종 → DAC 고정 강등"
-                fields = {"사유": str(d.get("why")), "조치": f"D00018 ← {d.get('value')} (마지막 측정 창/현재 MV)",
+                fields = {"사유": str(d.get("why")), "조치": f"D00018 ← {d.get('value')} ({d.get('source') or '강등 직전 MV'})",
                           "주의": "OT2 과온 보호도 함께 사라졌습니다. TC2 배선을 확인하십시오", **common}
             elif kind == "demote_failed":
                 title = "히터 TC2 추종 해제 — DAC 고정 실패"
@@ -1981,9 +1981,13 @@ class MainDialog(QDialog):
         if not self.chat_chk:
             return
         try:
+            clamp = d.get("clamp")
             fields = {"TC1": self._chat_temp(d.get("pv")), "TC2": self._chat_temp(d.get("pv2")),
                       "MV": str(d.get("mv")), "경과": f"{float(d.get('sec') or 0):.0f}초",
-                      "클램프": f"D00018 ← {d.get('clamp')} ({d.get('src')})"}
+                      "클램프": (f"D00018 ← {clamp} ({d.get('src')})" if clamp is not None
+                              else f"없음 (유지 모드가 D00018 소유, 현재 상한 {d.get('limit')})")}
+            if d.get("pv2") is None:
+                fields["주의"] = "TC2 없음 · OT2 과온 보호 없음 — 즉시 확인 필요"
             self.chat_chk.notify_heater_alert("히터 DAC 출력 포화", self._heater_run_context(), fields, ok=False)
         except Exception as e:
             log_message_to_monitor("경고", f"DAC 포화 카드 전송 실패: {e!r}")

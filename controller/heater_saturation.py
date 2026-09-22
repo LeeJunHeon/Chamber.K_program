@@ -6,7 +6,10 @@ DAC 1200(상한) 포화 25분, TC2 894→952°C. 히터 관련 로그·챗 0건 
 이 감시가 있었다면 12:52 경 잡혔다(실제 발견 13:21).
 
 동작(main.update_heater_display 가 heater_hold.tick 직전에 tick(st, hold_active) 를 부른다):
-  · hold_active(유지 모드가 이미 출력을 묶고 있다) 면 판정도 클램프도 하지 않는다 — D00018 을 두 주체가 쓰지 않는다.
+  · hold_active: tc2 유지면 아무것도 하지 않는다(PID 가 TC2 를 능동 제어 중). dac 유지면 클램프는 하지 않되(그쪽이 소유자)
+    MV 가 실제 상한에 sat_sec 연속 물려 있으면 경고 + saturated(clamp=None, owner="hold_dac") 를 에피소드당 1회 낸다 —
+    TC2 상실 강등 뒤에는 TC2 도 OT2 도 없어 남는 방어가 클램프 값 하나뿐이라 알리는 것까지 끄면 안 된다.
+  · 포화 판정 기준은 "실제 상한"(st['mv_limit'] = D00018 되읽기, 없으면 설정 MV_LIMIT). 클램프 계산의 상·하한은 설정값이 맡는다.
   · RUN 중 hold 없이 mv >= MV_SAT_REL×mv_limit 가 sat_sec 연속이면 포화 1회: 경고 로그 + saturated(dict)(챗 카드용)
     + D00018 ← 포화 직전 60초 평균 MV(이력 없으면 MV_SAT_FALLBACK_REL×상한), MV_MIN+20~MV_LIMIT 로 클램프.
   · 해제(RUN OFF / fault / 목표 변경 / 유지 모드 진입) → HEATER_MV_LIMIT 원복 + 로그 1줄.
@@ -41,6 +44,7 @@ class HeaterSaturationGuard(QObject):
         self._hist: deque = deque()          # (t, mv) 최근 PRE_WINDOW_SEC + 포화 구간
         self._sat_since = 0.0                # 상한에 붙기 시작한 시각(0 = 아님)
         self._clamped = None                 # 내가 쓴 D00018 값(None = 안 씀)
+        self._warned_hold = False            # dac 유지 중 포화 경고를 이번 에피소드에 냈는가
         self._sv = None                      # 목표 변경 감지용
 
     # ───────── 조회 ─────────
@@ -60,6 +64,7 @@ class HeaterSaturationGuard(QObject):
                 self._msg("히터", f"DAC 포화 클램프 종료 — 유지 모드가 D00018 을 이어받음 ({why})")
         self._clamped = None
         self._sat_since = 0.0
+        self._warned_hold = False
         self._hist.clear()
 
     # ───────── tick ─────────
@@ -78,8 +83,23 @@ class HeaterSaturationGuard(QObject):
         if fault:
             self._release("히터 이상"); return
         if hold_active:
-            # 유지 모드가 출력을 묶고 있다 — 판정도 클램프도 하지 않는다. dac 유지면 D00018 은 그쪽 소유
-            self._release("유지 모드 진입", restore=(hold_kind != 'dac'))
+            if self._clamped is not None:
+                # 유지 모드가 출력을 이어받는다. dac 유지면 D00018 은 그쪽 소유(원복하지 않음)
+                self._release("유지 모드 진입", restore=(hold_kind != 'dac'))
+            if hold_kind != 'dac':
+                self._sat_since = 0.0; self._warned_hold = False
+                return                        # tc2 유지: PID 가 TC2 를 능동 제어 중 — 아무것도 하지 않는다
+            # dac 유지: 클램프는 하지 않되 실제 상한(D00018)에 물려 있으면 알린다(에피소드당 1회)
+            if mv is None or self._warned_hold:
+                return
+            if float(mv) >= MV_SAT_REL * self._actual_limit(st):
+                if not self._sat_since:
+                    self._sat_since = now
+                elif (now - self._sat_since) >= self.sat_sec:
+                    self._warned_hold = True
+                    self._announce(st, now, clamp=None, owner="hold_dac")
+            else:
+                self._sat_since = 0.0
             return
         if sv is not None:
             if self._sv is not None and abs(float(sv) - float(self._sv)) > 0.05:
@@ -94,13 +114,21 @@ class HeaterSaturationGuard(QObject):
             self._hist.popleft()
         if self._clamped is not None:
             return                            # 이번 에피소드는 이미 처리했다(해제 조건까지 유지)
-        if mv >= MV_SAT_REL * float(self.mv_limit):
+        if mv >= MV_SAT_REL * self._actual_limit(st):
             if not self._sat_since:
                 self._sat_since = now
             elif (now - self._sat_since) >= self.sat_sec:
                 self._saturate(st, now)
         else:
             self._sat_since = 0.0
+
+    def _actual_limit(self, st: dict) -> float:
+        """포화 판정의 기준 상한 — D00018 되읽기(st['mv_limit'])가 있으면 그것, 없으면 설정 MV_LIMIT."""
+        try:
+            v = st.get('mv_limit')
+            return float(v) if v is not None and float(v) > 0 else float(self.mv_limit)
+        except Exception:
+            return float(self.mv_limit)
 
     def _saturate(self, st: dict, now: float) -> None:
         pre = [m for t, m in self._hist if (self._sat_since - PRE_WINDOW_SEC) <= t < self._sat_since]
@@ -109,12 +137,20 @@ class HeaterSaturationGuard(QObject):
         else:
             raw = MV_SAT_FALLBACK_REL * float(self.mv_limit); src = f"이력 없음 → 상한×{MV_SAT_FALLBACK_REL:g}"
         value = max(int(self.mv_min) + 20, min(int(self.mv_limit), int(round(raw))))
+        self._clamped = value
+        self._announce(st, now, clamp=value, owner="guard", src=src)
+        self.request_mv_limit.emit(value)
+
+    def _announce(self, st: dict, now: float, clamp, owner: str, src: str = "") -> None:
         sec = now - self._sat_since
         pv = st.get('pv'); pv2 = st.get('pv2'); mv = st.get('mv')
+        limit = int(self._actual_limit(st))
         t = lambda v: "--.-" if v is None else f"{float(v):.1f}"
-        self._clamped = value
+        tail = (f" → D00018 을 {clamp}(≒{heater_est_current(clamp):.0f}A, {src})로 클램프" if clamp is not None
+                else f" — 클램프 없음(유지 모드가 D00018 {limit} 을 소유)")
+        if pv2 is None:
+            tail += " · TC2 없음 · OT2 과온 보호 없음 — 즉시 확인 필요"
         self._msg("히터(경고)",
-                  f"DAC 출력 포화 — {sec:.0f}초째 상한({int(self.mv_limit)})에 물려 있음: TC1 {t(pv)} / TC2 {t(pv2)} / MV {mv}"
-                  f" → D00018 을 {value}(≒{heater_est_current(value):.0f}A, {src})로 클램프")
-        self.request_mv_limit.emit(value)
-        self.saturated.emit({"pv": pv, "pv2": pv2, "mv": mv, "sec": sec, "clamp": value, "src": src})
+                  f"DAC 출력 포화 — {sec:.0f}초째 상한({limit})에 물려 있음: TC1 {t(pv)} / TC2 {t(pv2)} / MV {mv}{tail}")
+        self.saturated.emit({"pv": pv, "pv2": pv2, "mv": mv, "sec": sec, "clamp": clamp, "src": src,
+                             "owner": owner, "limit": limit})

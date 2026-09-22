@@ -80,6 +80,7 @@ class HeaterHold(QObject):
         self.engaged_relaxed: bool = False   # 마지막 holding 진입이 완화 경로(force_tc2_hold)였는가
         self.no_margin_warned: bool = False  # tc2 캡처 시 "출력 여유 없음(MV ≥ 상한 98%)" 안내가 떴는가(운전/목표 바뀌면 리셋)
         self.last_force_reason: str = ""     # force_*_hold 가 False 를 돌려준 사유
+        self.last_force_source: str = ""     # force_dac_hold 가 쓴 값의 출처("강등 직전 MV" / "마지막 측정 창 평균" / "현재 MV")
 
     # ───────────────────────── 상태 ─────────────────────────
     @staticmethod
@@ -159,18 +160,27 @@ class HeaterHold(QObject):
         self._msg("히터(경고)", f"완화 조건으로 TC2 추종 진입 — SV2 {sv2:.1f}°C (정착 창 미확보, 최근 {self.enter_sec:.0f}초 평균 {n2}표본)")
         return True
 
-    def force_dac_hold(self, mv_value=None) -> bool:
-        """공정이 유지 모드 진입을 기다리다 포기했을 때: 마지막 측정 창의 평균 MV(없으면 인자의 현재 MV)로
-        dac 유지에 강제 진입한다. 값이 없으면 False. 클램프는 _capture_dac 과 같다(MV_MIN+20 ~ MV_LIMIT)."""
+    def force_dac_hold(self, mv_value=None, prefer_current: bool = False) -> bool:
+        """dac 유지에 강제 진입한다. 값 선택:
+          prefer_current=False(진입 실패 폴백, 도달 시점): 마지막 측정 창 평균 → 없으면 인자(현재 MV)
+          prefer_current=True (TC2 상실 강등, 공정 한복판): 인자(강등 직전 MV) → 없으면 마지막 측정 창 평균
+            — 강등에서 얼려야 할 값은 "방금까지 TC2 를 SV2 에 붙들던 현재 MV" 다(09-21: 창 평균 1031 vs 추종 중 1059).
+        값이 없으면 False. 클램프는 _capture_dac 과 같다(MV_MIN+20 ~ MV_LIMIT). 어느 값을 썼는지 last_force_source 에 남긴다."""
         h = self._h
         if h['state'] == 'holding':
             return True
-        src = h['last_window_mv']
-        if src is None and mv_value is not None:
+        cur = None
+        if mv_value is not None:
             try:
-                src = float(mv_value)
+                cur = float(mv_value)
             except Exception:
-                src = None
+                cur = None
+        if prefer_current:
+            src, self.last_force_source = ((cur, "강등 직전 MV") if cur is not None
+                                           else (h['last_window_mv'], "마지막 측정 창 평균"))
+        else:
+            src, self.last_force_source = ((h['last_window_mv'], "마지막 측정 창 평균") if h['last_window_mv'] is not None
+                                           else (cur, "현재 MV"))
         if src is None:
             self.last_force_reason = "측정 창 평균도 현재 MV 도 없음"
             return False
@@ -182,8 +192,7 @@ class HeaterHold(QObject):
                  engage_t0=0.0, gave_up=None)
         self.engaged_relaxed = True
         self.request_mv_limit.emit(value)
-        self._msg("히터(경고)", f"유지 모드 강제 진입 — DAC 상한 {value} 고정 (≒{heater_est_current(value):.0f}A, "
-                              f"{'마지막 측정 창 평균' if h['last_window_mv'] is not None else '현재 MV'})")
+        self._msg("히터(경고)", f"유지 모드 강제 진입 — DAC 상한 {value} 고정 (≒{heater_est_current(value):.0f}A, {self.last_force_source})")
         self.engaged.emit('dac')
         return True
 
@@ -454,11 +463,12 @@ class HeaterHold(QObject):
         self.request_pv_sel.emit(False)
         self.request_sv2.emit(0.0)
         self._reset(keep_arrived=True)
-        ok = self.force_dac_hold(None if not self._last_st else self._last_st.get('mv'))
+        ok = self.force_dac_hold(None if not self._last_st else self._last_st.get('mv'), prefer_current=True)
         base = f"{why} — TC2 추종 → DAC 상한 고정으로 강등"
         if ok:
-            self.alert.emit("demoted", {"why": why, "value": self._h['value'], "from": was})
-            self._msg("히터(경고)", f"{base} (D00018 {self._h['value']}). OT2 과온 보호도 함께 사라졌습니다. TC2 배선을 확인하십시오")
+            self.alert.emit("demoted", {"why": why, "value": self._h['value'], "from": was, "source": self.last_force_source})
+            self._msg("히터(경고)", f"{base} (D00018 {self._h['value']}, {self.last_force_source}). "
+                                  f"OT2 과온 보호도 함께 사라졌습니다. TC2 배선을 확인하십시오")
         else:
             self._msg("히터(경고)", f"{base} 실패({self.last_force_reason}) → TC1 제어로 복귀. 출력 상한이 {int(self.mv_limit)} 그대로입니다 — 확인 필요")
             self.alert.emit("demote_failed", {"why": why, "reason": self.last_force_reason, "from": was})

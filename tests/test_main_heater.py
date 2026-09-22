@@ -531,3 +531,18 @@ def test_T84_previous_process_failure_not_carried_over(hold_card):
     _set_hold(w, "tc2", sv2=893.4)
     ok, txt, _ = _reached(w)
     assert ok is True and txt == "TC2 추종 (SV2 893.4°C)"
+
+
+def test_T87_saturated_card_without_clamp(fresh):
+    w = fresh
+    w.chat_chk.notify_heater_alert.reset_mock()
+    w._on_heater_saturated({"pv": 529.0, "pv2": None, "mv": 1031, "sec": 120.0, "clamp": None, "src": "",
+                            "owner": "hold_dac", "limit": 1031})
+    args, kw = w.chat_chk.notify_heater_alert.call_args
+    assert args[0] == "히터 DAC 출력 포화" and kw["ok"] is False
+    assert args[2]["클램프"] == "없음 (유지 모드가 D00018 소유, 현재 상한 1031)"
+    assert args[2]["주의"] == "TC2 없음 · OT2 과온 보호 없음 — 즉시 확인 필요" and args[2]["TC2"] == "--.-"
+    w._on_heater_saturated({"pv": 529.0, "pv2": 900.0, "mv": 1200, "sec": 120.0, "clamp": 1077, "src": "포화 직전 60초 평균",
+                            "owner": "guard", "limit": 1200})
+    args, _ = w.chat_chk.notify_heater_alert.call_args
+    assert args[2]["클램프"] == "D00018 ← 1077 (포화 직전 60초 평균)" and "주의" not in args[2]
