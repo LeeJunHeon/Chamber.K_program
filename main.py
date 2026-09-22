@@ -233,7 +233,7 @@ class MainDialog(QDialog):
         self._hold_snapshot: dict = {}
         self._refresh_hold_snapshot()
         self.process_controller.set_hold_state_provider(lambda: dict(self._hold_snapshot))
-        self.process_controller.request_hold_force_dac.connect(self._on_hold_force_dac)
+        self.process_controller.request_hold_force.connect(self._on_hold_force)
         self.process_controller.heater_hold_failed.connect(self._on_heater_hold_failed)
         # DAC 포화 감시 — 유지 모드와 독립된 안전망(HEATER_HOLD_MODE 가 off 여도 돈다)
         self.heater_sat = HeaterSaturationGuard(mv_limit=HEATER_MV_LIMIT, mv_min=HEATER_MV_MIN,
@@ -1039,6 +1039,7 @@ class MainDialog(QDialog):
         self._chat_emergency_stopped = False   # ALL STOP(비상 정지)으로 끝남 — 사용자 STOP 과 구분
         self._fault_abort_active = False       # _abort_process_by_fault 가 이미 시작됐다(중복 판정 방지)
         self._chat_hold_fail_key = None        # 유지 모드 실패 카드 중복 방지(공정당 같은 사유 1장)
+        self._hold_force_result = None         # 마지막 폴백(force_*_hold) 결과 — 스냅샷으로 컨트롤러에 전달
         self._finish_handled = False           # 새 공정(수동 / CSV STEP 마다) — 종료 처리 아직 안 함
         self._chat_errors = []
         self._chat_fail_notified = False
@@ -1881,21 +1882,27 @@ class MainDialog(QDialog):
         """process_controller(다른 스레드)가 읽는 유지 모드 스냅샷 — main 스레드에서만 갱신한다."""
         h = self.heater_hold
         self._hold_snapshot = {"mode": HEATER_HOLD_MODE, "state": h.state, "kind": h.kind,
-                               "holding": h.is_holding(), "sv2": h.sv2, "value": h.value, "gave_up": h.gave_up}
+                               "holding": h.is_holding(), "sv2": h.sv2, "value": h.value, "gave_up": h.gave_up,
+                               "relaxed": h.engaged_relaxed,
+                               "force_result": getattr(self, "_hold_force_result", None)}
 
     @Slot(str)
     def _on_heater_hold_engaged(self, kind: str) -> None:
         self._refresh_hold_snapshot()
         h = self.heater_hold
         desc = f"SV2 {float(h.sv2):.1f}°C" if (kind == 'tc2' and h.sv2 is not None) else f"DAC 상한 {h.value}"
-        log_message_to_monitor("히터", f"[유지 모드] 진입 — {kind} ({desc})")
+        log_message_to_monitor("히터", f"[유지 모드] 진입 — {kind} ({desc}){' [완화 경로]' if h.engaged_relaxed else ''}")
 
-    @Slot(object)
-    def _on_hold_force_dac(self, mv) -> None:
-        """process_controller 가 진입 대기를 포기했다 — 마지막 측정 창(없으면 현재 MV)로 dac 강제 진입."""
-        ok = self.heater_hold.force_dac_hold(mv)
+    @Slot(str, object)
+    def _on_hold_force(self, mode: str, mv) -> None:
+        """process_controller 의 폴백 요청: "tc2" → force_tc2_hold(완화 캡처), "dac" → force_dac_hold(마지막 창/현재 MV).
+        결과는 스냅샷 force_result 로 돌려준다(컨트롤러는 다른 스레드)."""
+        h = self.heater_hold
+        ok = h.force_tc2_hold() if mode == "tc2" else h.force_dac_hold(mv)
+        why = "" if ok else h.last_force_reason
         if not ok:
-            log_message_to_monitor("히터(경고)", "[유지 모드] DAC 강제 고정 불가 — 측정 창도 현재 MV 도 없음")
+            log_message_to_monitor("히터(경고)", f"[유지 모드] 폴백 {mode} 불가 — {why}")
+        self._hold_force_result = {"mode": mode, "ok": bool(ok), "reason": why}
         self._refresh_hold_snapshot()
 
     @Slot(dict)
@@ -1912,14 +1919,22 @@ class MainDialog(QDialog):
             return
         try:
             st = self.plc_controller.get_heater_status() or {}
-            act_txt = {"dac": "DAC 상한 강제 고정 후 진행", "abort": "공정 중단",
+            act_txt = {"tc2_relaxed": "완화 조건으로 TC2 추종 진입 후 진행",
+                       "dac": "DAC 상한 강제 고정 후 진행(TC2 추종 불가)", "abort": "공정 중단",
                        "proceed": "경고만 내고 진행"}.get(action, action)
             fields = {"사유": reason, "조치": act_txt,
                       "경과": f"{int(info.get('elapsed') or 0)}초", "상태": str(info.get("state")),
                       "TC1": self._chat_temp(st.get('pv')), "TC2": self._chat_temp(st.get('pv2')),
                       "MV": str(st.get('mv'))}
-            if info.get("forced") and self.heater_hold.value is not None:
-                fields["DAC 상한"] = str(self.heater_hold.value)
+            if action == "tc2_relaxed":
+                fields["SV2"] = self._chat_temp(info.get("sv2") if info.get("sv2") is not None else self.heater_hold.sv2)
+                fields["근거"] = f"{info.get('why') or '정착 창 미확보'} — 최근 {HEATER_HOLD_MV_ENTER_SEC:.0f}초 TC2 평균"
+            if action == "dac":
+                fields["TC2 추종 불가 사유"] = str(info.get("tc2_why") or "-")
+                if self.heater_hold.value is not None:
+                    fields["DAC 상한"] = str(self.heater_hold.value)
+            if action in ("abort", "proceed"):
+                fields["완화 tc2"] = str(info.get("tc2_why") or "-"); fields["dac"] = str(info.get("dac_why") or "-")
             self.chat_chk.notify_heater_alert("히터 유지 모드 진입 실패", self._heater_run_context(), fields, ok=False)
         except Exception as e:
             log_message_to_monitor("경고", f"유지 모드 실패 카드 전송 실패: {e!r}")

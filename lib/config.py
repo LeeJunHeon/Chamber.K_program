@@ -133,8 +133,9 @@ HEATER_HOLD_TC2_MARGIN_C    = get('HEATER_HOLD_TC2_MARGIN_C',    50.0)  # TC2 �
 HEATER_HOLD_TC2_DRIFT_C     = get('HEATER_HOLD_TC2_DRIFT_C',     1.0)   # 창 후반부 평균 TC2 − 전반부 평균 TC2 허용 하한 [°C] (최소 0.1)
 # 공정이 유지 모드 진입을 기다리는 상한(초). 0 이면 추가 대기 없음(2026-09-22 이전 동작)
 HEATER_HOLD_WAIT_SEC        = get('HEATER_HOLD_WAIT_SEC',        600)
-# 대기 상한 안에 진입하지 못했을 때: "dac"(측정값으로 DAC 상한 강제 고정 후 진행) | "abort"(공정 중단) | "proceed"(경고만)
-HEATER_HOLD_FAIL_ACTION     = get('HEATER_HOLD_FAIL_ACTION',     "dac")
+# 대기 상한 안에 진입하지 못하면 폴백 순서: ① 완화 tc2(최근 60초 TC2 평균으로 추종) → ② dac 고정(tc2 불가일 때만)
+#  → ③ 둘 다 실패하면 이 값: "abort"(공정 중단, 기본) | "proceed"(경고만 내고 진행). 둘 다 실패 = 히터를 묶을 수단이 없다.
+HEATER_HOLD_FAIL_ACTION     = get('HEATER_HOLD_FAIL_ACTION',     "abort")
 # DAC 포화 감시(controller/heater_saturation): 상한에 이만큼 연속으로 물려 있으면 포화(초, 최소 10)
 HEATER_MV_SAT_SEC           = get('HEATER_MV_SAT_SEC',           120)
 # 히터 패널 stale 표시 — 마지막 폴링 뒤 이만큼(초) 지나면 "PLC 응답 없음 · n초 전 값" 으로 바꾼다
@@ -357,9 +358,10 @@ def _validate_heater_config() -> None:
     except Exception:
         print(f"[Config] HEATER_HOLD_WAIT_SEC {HEATER_HOLD_WAIT_SEC!r} → 600"); HEATER_HOLD_WAIT_SEC = 600.0
     _fa = str(HEATER_HOLD_FAIL_ACTION or "").strip().lower()
-    if _fa not in ("dac", "abort", "proceed"):
-        print(f"[Config] HEATER_HOLD_FAIL_ACTION {HEATER_HOLD_FAIL_ACTION!r} → \"dac\" (허용: dac / abort / proceed)")
-        _fa = "dac"
+    if _fa not in ("abort", "proceed"):
+        print(f"[Config] HEATER_HOLD_FAIL_ACTION {HEATER_HOLD_FAIL_ACTION!r} → \"abort\" (허용: abort / proceed — "
+              f"완화 tc2·dac 폴백은 항상 먼저 시도한다)")
+        _fa = "abort"
     HEATER_HOLD_FAIL_ACTION = _fa
     try:
         _ss = float(HEATER_MV_SAT_SEC)

@@ -17,6 +17,7 @@ from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
                         DC_RAMP_STEP_A)
 from lib.heater_profile import ramp_minutes
+from controller.heater_hold import ENGAGE_TIMEOUT_SEC
 
 # 승온 예정시간에 더할 여유 / 상한. heater_recipe.py 와 같은 값이다.
 WAIT_TIMEOUT_MARGIN_SEC = 1800.0     # 30분
@@ -289,7 +290,7 @@ class SputterProcessController(QObject):
     set_heater_ramp_c     = Signal(float)    # ★ 같은 값의 °C/min — 감속 접근 램프용
     heater_reached        = Signal(dict)     # 공정 소유 히터의 승온 대기 통과 {"pv","target","took_sec","next"} → 챗 카드
     heater_hold_failed    = Signal(dict)     # 유지 모드 진입 실패 {"action","reason","state","elapsed","forced"} → main 이 경고 로그+챗 카드
-    request_hold_force_dac = Signal(object)  # main → HeaterHold.force_dac_hold(현재 MV). PLC 스레드에서 main 객체를 직접 부르지 않는다
+    request_hold_force  = Signal(str, object)  # ("tc2"|"dac", 현재 MV) → main 이 HeaterHold.force_*_hold 실행. 결과는 스냅샷 force_result
 
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
@@ -1162,46 +1163,87 @@ class SputterProcessController(QObject):
             self.status_message.emit("히터", f"유지 모드 진입 확인 ({snap.get('kind')}, {self._hold_desc(snap)})")
             return True
 
-        # ── 진입 실패: HEATER_HOLD_FAIL_ACTION ──
+        # ── 진입 실패 → 폴백 순서: ① 완화 tc2 → ② dac → ③ HEATER_HOLD_FAIL_ACTION ──
         elapsed = int(round(clock.elapsed() / 1000.0))
         reason = st_['gave_up'] or f"유지 모드 진입 대기 {elapsed}s 초과 (상태: {self._hold_snapshot().get('state')})"
-        action = str(HEATER_HOLD_FAIL_ACTION)
-        forced = False
-        if action == "dac":
-            mv = (st_['last_st'] or {}).get('mv')
-            self.request_hold_force_dac.emit(mv)
-            # main 스레드가 force_dac_hold 를 실행하고 다음 폴링이 holding 을 비춘다 — 최대 3초 기다린다
-            loop2 = QEventLoop()
+        mv = (st_['last_st'] or {}).get('mv')
+        base = {"reason": reason, "elapsed": elapsed, "target": float(target_c)}
 
-            def _on_status2(st: dict):
-                if self._hold_snapshot().get("holding") or not self._running or self._stop_pending:
-                    loop2.quit()
-            self.plc.update_heater_status.connect(_on_status2)
-            self._active_loops = [("heater_hold_force", loop2)]
-            self._exec_loop_with_timeout(loop2, 3000)
-            try:
-                self.plc.update_heater_status.disconnect(_on_status2)
-            except Exception:
-                pass
-            self._active_loops = []
-            if not self._running or self._stop_pending:
-                return False
-            forced = bool(self._hold_snapshot().get("holding"))
-            if not forced:
-                action = "abort"
-                reason += " — DAC 강제 고정도 실패(측정 창·현재 MV 없음)"
-        info = {"action": action, "reason": reason, "state": self._hold_snapshot().get("state"),
-                "elapsed": elapsed, "forced": forced, "target": float(target_c)}
-        self.heater_hold_failed.emit(info)
-        if action == "abort":
-            self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 공정 중단: {reason}")
-            self._abort_with_error(f"{self._step_tag()} | 유지 모드 진입 실패 — {reason}")
+        # ① 완화 tc2 — force_tc2_hold 는 핸드셰이크 시작이라 holding 을 ENGAGE_TIMEOUT 여유를 두고 확인한다
+        ok, why = self._hold_force("tc2", mv, wait_holding_sec=2 * ENGAGE_TIMEOUT_SEC + 3.0)
+        if not self._running or self._stop_pending:
             return False
-        if action == "dac":
-            self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 → DAC 상한 강제 고정 후 진행: {reason}")
-        else:
-            self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 경고만 내고 진행(HEATER_HOLD_FAIL_ACTION=proceed): {reason}")
-        return True
+        if ok:
+            snap = self._hold_snapshot()
+            info = dict(base, action="tc2_relaxed", state=snap.get("state"), forced=True,
+                        sv2=snap.get("sv2"), why="정착 창 미확보")
+            self.heater_hold_failed.emit(info)
+            self.status_message.emit("히터(경고)", f"정착 창 미확보 → 완화 조건으로 TC2 추종 진입({self._hold_desc(snap)}) 후 진행: {reason}")
+            return True
+        tc2_why = why or "TC2 추종 불가"
+
+        # ② dac — tc2 가 물리적으로 불가(센서 없음/래더 미지원/핸드셰이크 실패)할 때의 최후 수단
+        ok, why = self._hold_force("dac", mv, wait_holding_sec=3.0)
+        if not self._running or self._stop_pending:
+            return False
+        if ok:
+            snap = self._hold_snapshot()
+            info = dict(base, action="dac", state=snap.get("state"), forced=True, tc2_why=tc2_why)
+            self.heater_hold_failed.emit(info)
+            self.status_message.emit("히터(경고)", f"TC2 추종 불가({tc2_why}) → DAC 상한 강제 고정({self._hold_desc(snap)}) 후 진행: {reason}")
+            return True
+        dac_why = why or "DAC 고정 불가"
+
+        # ③ 둘 다 실패 — 히터를 묶을 수단이 없다
+        action = str(HEATER_HOLD_FAIL_ACTION)
+        reason2 = f"{reason} — 완화 tc2 불가({tc2_why}) / dac 불가({dac_why})"
+        info = dict(base, action=action, reason=reason2, state=self._hold_snapshot().get("state"), forced=False,
+                    tc2_why=tc2_why, dac_why=dac_why)
+        self.heater_hold_failed.emit(info)
+        if action == "proceed":
+            self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 경고만 내고 진행(HEATER_HOLD_FAIL_ACTION=proceed): {reason2}")
+            return True
+        self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 공정 중단: {reason2}")
+        self._abort_with_error(f"{self._step_tag()} | 유지 모드 진입 실패 — {reason2}")
+        return False
+
+    def _hold_force(self, mode: str, mv, wait_holding_sec: float):
+        """main 에 force_{mode}_hold 를 요청하고 스냅샷 force_result 로 수락 여부를, 그 뒤 holding 전이를 기다린다.
+        (ok, 실패 사유). 스냅샷은 main 스레드가 갱신하고 PLC 폴링(update_heater_status)마다 다시 읽는다."""
+        self.request_hold_force.emit(mode, mv)
+        loop = QEventLoop()
+        res = {'accepted': None, 'holding': False}
+        clock = QElapsedTimer(); clock.start()
+
+        def _on_status(st: dict):
+            if not self._running or self._stop_pending:
+                loop.quit(); return
+            snap = self._hold_snapshot()
+            fr = snap.get("force_result") or {}
+            if res['accepted'] is None and fr.get("mode") == mode:
+                res['accepted'] = bool(fr.get("ok")); res['why'] = fr.get("reason") or ""
+                if not res['accepted']:
+                    loop.quit(); return
+            if res['accepted'] and snap.get("holding"):
+                res['holding'] = True; loop.quit(); return
+            if res['accepted'] is None and clock.elapsed() > 3000:
+                loop.quit()                                   # main 이 응답하지 않는다
+
+        self.plc.update_heater_status.connect(_on_status)
+        self._active_loops = [(f"heater_hold_force_{mode}", loop)]
+        self._exec_loop_with_timeout(loop, int((wait_holding_sec + 3.0) * 1000))
+        try:
+            self.plc.update_heater_status.disconnect(_on_status)
+        except Exception:
+            pass
+        self._active_loops = []
+        if res['holding']:
+            return True, ""
+        if res['accepted'] is None:
+            return False, "main 응답 없음"
+        if not res['accepted']:
+            return False, res.get('why') or "거부"
+        return False, "핸드셰이크 실패(holding 전이 없음)"
 
     @staticmethod
     def _hold_desc(snap: dict) -> str:

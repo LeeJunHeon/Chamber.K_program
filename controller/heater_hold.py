@@ -12,10 +12,17 @@ main 은 생성·시그널 연결·tick 호출·상태 조회만 한다.
 dac : D00018 ← 창 평균 MV. 해제 시 HEATER_MV_LIMIT 원복.
 tc2 : D00035 ← min(창 평균 TC2, OT2−마진) → 되읽기 일치 → M0004A ON → M0004B 확인 → holding.
       해제는 반드시 M0004A OFF 먼저, 그다음 D00035=0.
+
+폴백 순서(2026-09-22, process_controller 가 HEATER_HOLD_WAIT_SEC 안에 holding 을 못 보면):
+  1) 엄격 캡처 성공 → tc2 (정상)   2) force_tc2_hold(): 최근 ENTER_SEC 링버퍼 TC2 평균으로 완화 tc2 진입
+  3) tc2 불가(센서 없음/래더 미지원/핸드셰이크 실패) → force_dac_hold()   4) 그것도 불가 → HEATER_HOLD_FAIL_ACTION
+  TC2 추종에 필요한 것은 정밀한 SV2 가 아니라 대략 맞는 SV2 다(894°C 에서 ±10°C = 1%). 드리프트 게이트는 SV2 정밀도를
+  높이는 장치이지 추종의 전제 조건이 아니다. dac 고정은 PID 입력이 TC1 인 채로의 정전력 운전이라 최후 수단이다.
 """
 from __future__ import annotations
 
 import time
+from collections import deque
 from typing import Callable, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal as Signal
@@ -49,7 +56,7 @@ class HeaterHold(QObject):
     request_sv2      = Signal(float)
     request_pv_sel   = Signal(bool)
     message          = Signal(str, str)     # (레벨, 문구) → main 이 log_message_to_monitor 에 연결
-    engaged          = Signal(str)          # 'tc2' | 'dac' — holding 전이 순간 1회
+    engaged          = Signal(str)          # 'tc2' | 'dac' — holding 전이 순간 1회 (완화 경로 여부는 engaged_relaxed 로 조회)
     give_up          = Signal(str)          # 진입 불가 확정(창 평균 MV 가 상한 98% 이상 등) 사유 1회. mode='off' 는 해당 없음
 
     def __init__(self, mode: str, *, mv_limit: int, mv_min: int,
@@ -66,6 +73,11 @@ class HeaterHold(QObject):
         self.tc2_margin = float(tc2_margin_c); self.tc2_drift = float(tc2_drift_c)
         self._now = clock
         self._h = self._fresh()
+        # 완화 캡처용 링버퍼 — 드리프트 실패로 samples 가 비워져도 남는다. ok(램프 완료·arrived·|PV-SV|≤ENTER_TOL) 동안만 적재
+        self._ring: deque = deque()          # (t, mv, pv, pv2)
+        self._last_st: dict = {}
+        self.engaged_relaxed: bool = False   # 마지막 holding 진입이 완화 경로(force_tc2_hold)였는가
+        self.last_force_reason: str = ""     # force_*_hold 가 False 를 돌려준 사유
 
     # ───────────────────────── 상태 ─────────────────────────
     @staticmethod
@@ -107,6 +119,44 @@ class HeaterHold(QObject):
         eff_tc2 = max(self.tc2_drift, DRIFT_TC2_REL * float(tc2_mean)) if tc2_mean else self.tc2_drift
         return eff_pv, eff_mv, eff_tc2
 
+    def ring_tc2_mean(self):
+        vals = [r[3] for r in self._ring if r[3] is not None]
+        return (sum(vals) / len(vals), len(vals)) if vals else (None, 0)
+
+    def force_tc2_hold(self) -> bool:
+        """공정이 정착 창을 기다리다 포기했을 때: 최근 ENTER_SEC 링버퍼의 TC2 평균으로 tc2 추종에 완화 진입한다.
+        드리프트 게이트·MV 상한/바닥 판정은 건너뛴다. 조건(전부): _effective_kind=='tc2', 유효 TC2 표본 ≥4,
+        지금(마지막 폴링) |TC1−SV| ≤ ENTER_TOL. 성공하면 engaging_sv2 → engaging_sel 핸드셰이크를 그대로 탄다(True 반환은
+        핸드셰이크 시작이지 holding 이 아니다). 실패 사유는 last_force_reason."""
+        h = self._h; st = self._last_st
+        if h['state'] == 'holding':
+            return True
+        if self.mode == 'off':
+            self.last_force_reason = "유지 모드 꺼짐(HEATER_HOLD_MODE=off)"; return False
+        kind, alt = self._effective_kind(st)
+        if kind != 'tc2':
+            self.last_force_reason = (alt or "TC2 추종 불가")
+            return False
+        mean2, n2 = self.ring_tc2_mean()
+        if mean2 is None or n2 < 4:
+            self.last_force_reason = f"TC2 표본 부족({n2}개 < 4)"; return False
+        pv_now = st.get('pv') if st.get('pv') is not None else self._ring[-1][2]   # 지금 TC1(마지막 폴링)
+        sv = h['last_sv']
+        if sv is None or pv_now is None or abs(float(pv_now) - float(sv)) > self.enter_tol:
+            self.last_force_reason = f"TC1 이 목표 근처가 아님(|TC1−SV| > {self.enter_tol:g})"; return False
+        if h['state'] in ('engaging_sv2', 'engaging_sel'):
+            return True                                      # 이미 핸드셰이크 중
+        cap = float(st.get('ot2_limit') or 0.0) - self.tc2_margin
+        sv2 = round(min(mean2, cap), 1)
+        if mean2 > cap:
+            self._msg("히터", f"TC2 목표를 OT2−마진으로 제한 {mean2:.1f} → {sv2:.1f}°C")
+        h.update(state='engaging_sv2', kind='tc2', sv2=sv2, final=h['arr_sv'] if h['arr_sv'] is not None else sv,
+                 value=None, engage_t0=self._now(), samples=[], t0=0.0, gave_up=None, engage_warned=False)
+        self.engaged_relaxed = True
+        self.request_sv2.emit(float(sv2))
+        self._msg("히터(경고)", f"완화 조건으로 TC2 추종 진입 — SV2 {sv2:.1f}°C (정착 창 미확보, 최근 {self.enter_sec:.0f}초 평균 {n2}표본)")
+        return True
+
     def force_dac_hold(self, mv_value=None) -> bool:
         """공정이 유지 모드 진입을 기다리다 포기했을 때: 마지막 측정 창의 평균 MV(없으면 인자의 현재 MV)로
         dac 유지에 강제 진입한다. 값이 없으면 False. 클램프는 _capture_dac 과 같다(MV_MIN+20 ~ MV_LIMIT)."""
@@ -120,6 +170,7 @@ class HeaterHold(QObject):
             except Exception:
                 src = None
         if src is None:
+            self.last_force_reason = "측정 창 평균도 현재 MV 도 없음"
             return False
         if h['state'] in ('engaging_sv2', 'engaging_sel'):
             self.request_pv_sel.emit(False); self.request_sv2.emit(0.0)      # tc2 진입 중이면 순서대로 되돌린다
@@ -127,6 +178,7 @@ class HeaterHold(QObject):
         value = max(int(self.mv_min) + 20, min(int(self.mv_limit), int(round(src))))
         h.update(state='holding', kind='dac', sv=sv, value=value, last_push=self._now(), samples=[], t0=0.0,
                  engage_t0=0.0, gave_up=None)
+        self.engaged_relaxed = True
         self.request_mv_limit.emit(value)
         self._msg("히터(경고)", f"유지 모드 강제 진입 — DAC 상한 {value} 고정 (≒{heater_est_current(value):.0f}A, "
                               f"{'마지막 측정 창 평균' if h['last_window_mv'] is not None else '현재 MV'})")
@@ -202,6 +254,7 @@ class HeaterHold(QObject):
     def _tick(self, st: dict, final_target) -> None:
         h = self._h
         now = self._now()
+        self._last_st = st
         if self.mode == 'off':
             if h['state'] == 'holding' or h['state'].startswith('engaging'):
                 self.release("기능 꺼짐")
@@ -219,6 +272,7 @@ class HeaterHold(QObject):
             if h['state'] != 'idle' or h['samples']:
                 self.release("운전 OFF")
             h['last_window_mv'] = None                        # 다음 운전에 이전 창 평균을 물고 가지 않는다
+            self._ring.clear()
             return
         if fault:
             if h['state'] != 'idle' or h['samples']:
@@ -254,6 +308,12 @@ class HeaterHold(QObject):
             self._msg("히터", f"목표 도달 확인 — 유지 모드 측정 시작 (TC1 {float(pv):.1f} / SV {final:.1f})")
 
         ok = (ramp_done and bool(h['arrived']) and abs(float(pv) - float(sv)) <= self.enter_tol)
+        if ok:
+            # 완화 캡처용 링버퍼(최근 ENTER_SEC) — samples 와 달리 드리프트 실패로 비우지 않는다
+            _pv2 = st.get('pv2')
+            self._ring.append((now, float(mv), float(pv), None if _pv2 is None else float(_pv2)))
+            while self._ring and (now - self._ring[0][0]) > self.enter_sec:
+                self._ring.popleft()
         if not ok:
             if h['samples']:
                 h['samples'] = []; h['t0'] = 0.0; h['state'] = 'idle'; h['alt_reason'] = None
@@ -332,6 +392,7 @@ class HeaterHold(QObject):
         if value != raw_value:
             self._msg("히터", f"DAC 상한 고정값 클램프 {raw_value} → {value} (PLC 하한 HEATER_MV_MIN+20)")
         h.update(state='holding', kind='dac', sv=float(sv), value=value, last_push=now, samples=[], t0=0.0)
+        self.engaged_relaxed = False
         self.request_mv_limit.emit(value)
         amps = heater_est_current(value)
         self._msg("히터", f"히터 DAC 상한 {value} 고정 (≒{amps:.0f}A, PV {float(pv):.1f} / SV {float(sv):.1f})")
@@ -366,6 +427,7 @@ class HeaterHold(QObject):
         # 미확인: D00035 는 RUN 중에도 언제든 써도 되는지(래더가 M0004B 일 때만 읽는다고 가정), D00036 클램프는 래더가 한다
         h.update(state='engaging_sv2', kind='tc2', sv2=sv2, final=final, value=None,
                  engage_t0=now, samples=[], t0=0.0)
+        self.engaged_relaxed = False
         self.request_sv2.emit(float(sv2))
 
     def _tick_engaging(self, st: dict, now: float, final) -> None:

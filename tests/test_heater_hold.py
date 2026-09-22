@@ -345,3 +345,59 @@ def test_T67_force_dac_hold_uses_last_window_or_current_mv():
     assert H2.h.force_dac_hold(1150) is True and H2.ev == [("mv", 1150)]
     H3 = Harness("tc2")
     assert H3.h.force_dac_hold(1300) is True and H3.ev == [("mv", 1200)]   # 클램프
+
+
+# ═══════════════ force_tc2_hold (완화 캡처, 폴백 ①) ═══════════════
+def _fail_gates(H, n_windows=3, **kw):
+    """드리프트 게이트를 계속 실패시킨다(MV 드리프트 +80 > 허용 60). 링버퍼는 채워진다."""
+    for _ in range(n_windows):
+        st = _run_window(H, _window(1077, 20, 80.0), _window(599.9, 1.0, 0.0), _window(kw.get("tc2", 893.4), 2.0, 0.0))
+        assert st == "arming" and H.ev == []
+
+
+def test_T80_force_tc2_hold_after_gate_failures():
+    H = Harness("tc2"); eng = []; H.h.engaged.connect(lambda k: eng.append(k))
+    _fail_gates(H)
+    assert len(H.h._ring) >= 4 and len(H.h._h["samples"]) < 10       # samples 는 창마다 비워졌지만 링버퍼는 남아 있다
+    mean2, n2 = H.h.ring_tc2_mean()
+    assert H.h.force_tc2_hold() is True
+    assert H.h.state == "engaging_sv2" and H.ev == [("sv2", round(mean2, 1))] and H.h.engaged_relaxed is True
+    H.step(**_stable(sv2=H.h.sv2)); H.step(**_stable(sv2=H.h.sv2, pv_sel_eff=True))
+    assert H.h.is_holding() and H.h.kind == "tc2" and eng == ["tc2"]
+    assert any(l == "히터(경고)" and m.startswith("완화 조건으로 TC2 추종 진입 — SV2") and "정착 창 미확보" in m for l, m in H.msgs)
+    assert not any("TC2 추종 시작 —" in m and "완화" in m for _, m in H.msgs)      # 정상 진입 문구와 구분
+
+
+def test_T81_force_tc2_hold_clamps_to_ot2_minus_margin():
+    H = Harness("tc2")
+    _fail_gates(H, tc2=1120.0)
+    assert H.h.force_tc2_hold() is True and H.ev == [("sv2", 1100.0)]
+    assert any("TC2 목표를 OT2−마진으로 제한" in m for _, m in H.msgs)
+
+
+def test_T82_force_tc2_hold_refusals():
+    H = Harness("tc2"); _fail_gates(H)
+    H.step(**_stable(pv2=None))                                          # 마지막 st: TC2 없음
+    assert H.h.force_tc2_hold() is False and "TC2 값 없음" in H.h.last_force_reason
+    H = Harness("tc2"); _fail_gates(H)
+    H.step(**_stable(sv2_max=0.0))                                       # 래더 미지원
+    assert H.h.force_tc2_hold() is False and "D00036=0" in H.h.last_force_reason
+    H = Harness("tc2"); _fail_gates(H)
+    for _ in range(3):
+        H.step(**_stable(pv=590.0))                                      # |TC1−SV| = 10 > 3 (ok=False → 링버퍼 미적재)
+    assert H.h.force_tc2_hold() is False and "목표 근처가 아님" in H.h.last_force_reason
+    H = Harness("tc2")
+    H.step(**_stable()); H.step(**_stable()); H.step(**_stable())        # 표본 3개
+    assert H.h.force_tc2_hold() is False and "표본 부족" in H.h.last_force_reason
+    assert H.ev == []
+
+
+def test_T83_ring_survives_drift_failures_and_only_loads_when_ok():
+    H = Harness("tc2")
+    _fail_gates(H, n_windows=2)
+    assert len(H.h._h["samples"]) < 10 and len(H.h._ring) >= 4
+    n = len(H.h._ring)
+    H.step(**_stable(pv=590.0))                                          # ok=False: 적재 없음
+    assert len(H.h._ring) == n
+    H.step(**_stable(run=False))                                         # 운전 OFF 에서만 비운다
+    assert len(H.h._ring) == 0

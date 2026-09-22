@@ -245,7 +245,7 @@ def test_T53_all_stop_sets_flags_before_plc_emergency_then_poll_off_no_abort(saf
         MAIN.QMessageBox.reset_mock()
 
 
-# ═══════════════ 유지 모드 진입 대기 (process_controller._heater_wait + _heater_hold_wait) ═══════════════
+# ═══════════════ 유지 모드 진입 대기 + 폴백 순서 (process_controller._heater_wait / _heater_hold_wait) ═══════════════
 from PyQt6.QtCore import QObject, pyqtSignal as Signal
 import controller.process_controller as PC
 
@@ -263,7 +263,8 @@ class _FakePlcStatus(QObject):
 
 @pytest.fixture
 def pc(qapp, monkeypatch):
-    """테스트 스레드에서 도는 컨트롤러 + 50ms 폴링 흉내. soak 1초, 유지 대기 상한 1초."""
+    """테스트 스레드에서 도는 컨트롤러 + 50ms 폴링 흉내. soak 1초, 유지 대기 상한 1초.
+    폴백 요청(request_hold_force)은 main 을 흉내 내는 _force 가 받는다: pc._force_ok[mode]=(수락, holding 까지 ms|None, 사유)."""
     plc = _FakePlcStatus()
     c = PC.SputterProcessController(MagicMock(), MagicMock(), MagicMock(), plc, None)
     c._running = True; c._stop_pending = False; c._steps = []; c._idx = 0
@@ -272,12 +273,28 @@ def pc(qapp, monkeypatch):
     monkeypatch.setattr(c, "_abort_with_error", lambda r: calls["abort"].append(r))
     c.status_message.connect(lambda l, m: calls["msgs"].append((l, m)))
     c.heater_hold_failed.connect(lambda d: calls["failed"].append(d))
-    c.request_hold_force_dac.connect(lambda mv: calls["force"].append(mv))
     monkeypatch.setattr(PC, "HEATER_SOAK_TIME_SEC", 1)
     monkeypatch.setattr(PC, "HEATER_HOLD_WAIT_SEC", 1.0)
-    monkeypatch.setattr(PC, "HEATER_HOLD_FAIL_ACTION", "dac")
-    hold = {"mode": "tc2", "state": "arming", "kind": None, "holding": False, "sv2": None, "value": None, "gave_up": None}
+    monkeypatch.setattr(PC, "HEATER_HOLD_FAIL_ACTION", "abort")
+    monkeypatch.setattr(PC, "ENGAGE_TIMEOUT_SEC", 0.2)
+    hold = {"mode": "tc2", "state": "arming", "kind": None, "holding": False, "sv2": None, "value": None,
+            "gave_up": None, "relaxed": False, "force_result": None}
     c.set_hold_state_provider(lambda: dict(hold))
+    c._force_ok = {"tc2": (False, None, "TC2 값 없음(D00011=-1) — DAC 상한 고정으로 대체"),
+                   "dac": (False, None, "측정 창 평균도 현재 MV 도 없음")}
+
+    def _force(mode, mv):
+        calls["force"].append((mode, mv))
+        ok, ms, why = c._force_ok[mode]
+        hold["force_result"] = {"mode": mode, "ok": ok, "reason": ("" if ok else why)}
+        if ok:
+            hold.update(state=("engaging_sv2" if mode == "tc2" else "holding"), kind=mode, relaxed=True)
+            if ms is not None:
+                def _hold():
+                    hold.update(state="holding", holding=True, sv2=(893.4 if mode == "tc2" else None),
+                                value=(None if mode == "tc2" else 1077))
+                QTimer.singleShot(ms, _hold)
+    c.request_hold_force.connect(_force)
     feeder = QTimer(); feeder.setInterval(50)
     feeder.timeout.connect(lambda: plc.update_heater_status.emit(dict(plc.st)))
     feeder.start()
@@ -290,39 +307,49 @@ def test_T73_hold_wait_passes_when_holding_arrives(pc):
     QTimer.singleShot(1500, lambda: pc._hold.update(state="holding", kind="tc2", holding=True, sv2=854.9))
     pc._heater_wait(600.0)
     c = pc._calls
-    assert c["next"] == 1 and c["abort"] == [] and c["failed"] == []
+    assert c["next"] == 1 and c["abort"] == [] and c["failed"] == [] and c["force"] == []
     assert any("유지 모드 진입 확인 (tc2, SV2 854.9°C)" in m for _, m in c["msgs"])
-    assert any("유지 모드(tc2) 진입 대기 시작" in m for _, m in c["msgs"])
 
 
-def test_T74_hold_wait_timeout_dac_forces_and_continues(pc):
-    def _force(mv):                                    # main 이 force_dac_hold 를 실행한 것처럼
-        pc._hold.update(state="holding", kind="dac", holding=True, value=1077)
-    pc.request_hold_force_dac.connect(_force)
+def test_T74_timeout_relaxed_tc2_succeeds_and_continues(pc):
+    pc._force_ok["tc2"] = (True, 150, "")
     pc._heater_wait(600.0)
     c = pc._calls
-    assert c["force"] == [1077] and c["next"] == 1 and c["abort"] == []
-    assert len(c["failed"]) == 1 and c["failed"][0]["action"] == "dac" and c["failed"][0]["forced"] is True
-    assert any(l == "히터(경고)" and "DAC 상한 강제 고정 후 진행" in m for l, m in c["msgs"])
-    assert any("유지 모드 진입 확인 (dac, DAC 상한 1077)" not in m for _, m in c["msgs"])
+    assert [m for m, _ in c["force"]] == ["tc2"] and c["next"] == 1 and c["abort"] == []
+    assert len(c["failed"]) == 1 and c["failed"][0]["action"] == "tc2_relaxed" and c["failed"][0]["sv2"] == 893.4
+    assert c["failed"][0]["why"] == "정착 창 미확보"
+    assert any(l == "히터(경고)" and "완화 조건으로 TC2 추종 진입(SV2 893.4°C) 후 진행" in m for l, m in c["msgs"])
 
 
-def test_T74b_dac_force_fails_falls_back_to_abort(pc):
-    pc._heater_wait(600.0)                             # force 요청에 아무도 응답하지 않음 → abort
-    c = pc._calls
-    assert c["force"] == [1077] and c["next"] == 0 and len(c["abort"]) == 1
-    assert "유지 모드 진입 실패" in c["abort"][0] and c["failed"][0]["action"] == "abort"
-
-
-def test_T75_fail_action_abort(pc, monkeypatch):
-    monkeypatch.setattr(PC, "HEATER_HOLD_FAIL_ACTION", "abort")
+def test_T74b_tc2_rejected_then_dac_succeeds(pc):
+    pc._force_ok["dac"] = (True, 100, "")
     pc._heater_wait(600.0)
     c = pc._calls
-    assert c["force"] == [] and c["next"] == 0 and len(c["abort"]) == 1
-    assert c["failed"][0]["action"] == "abort" and "대기 1s 초과" in c["failed"][0]["reason"]
+    assert [m for m, _ in c["force"]] == ["tc2", "dac"] and c["next"] == 1 and c["abort"] == []
+    f = c["failed"][0]
+    assert f["action"] == "dac" and "TC2 값 없음" in f["tc2_why"]
+    assert any(l == "히터(경고)" and "TC2 추종 불가(TC2 값 없음" in m and "DAC 상한 강제 고정(DAC 상한 1077)" in m
+               for l, m in c["msgs"])
 
 
-def test_T75b_fail_action_proceed_warns(pc, monkeypatch):
+def test_T74c_tc2_handshake_fails_then_dac(pc):
+    pc._force_ok["tc2"] = (True, None, "")                     # 수락됐지만 holding 이 오지 않는다
+    pc._force_ok["dac"] = (True, 100, "")
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert [m for m, _ in c["force"]] == ["tc2", "dac"] and c["next"] == 1
+    assert "핸드셰이크 실패" in c["failed"][0]["tc2_why"]
+
+
+def test_T75_both_fail_abort(pc):
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert [m for m, _ in c["force"]] == ["tc2", "dac"] and c["next"] == 0 and len(c["abort"]) == 1
+    f = c["failed"][0]
+    assert f["action"] == "abort" and "완화 tc2 불가(TC2 값 없음" in f["reason"] and "dac 불가(측정 창" in f["reason"]
+
+
+def test_T75b_both_fail_proceed_warns(pc, monkeypatch):
     monkeypatch.setattr(PC, "HEATER_HOLD_FAIL_ACTION", "proceed")
     pc._heater_wait(600.0)
     c = pc._calls
@@ -334,8 +361,8 @@ def test_T76_mode_off_passes_immediately(pc):
     pc._hold["mode"] = "off"
     t0 = time.monotonic()
     pc._heater_wait(600.0)
-    assert pc._calls["next"] == 1 and time.monotonic() - t0 < 1.8          # soak 1초 + 즉시
-    assert not any("진입 대기" in m for _, m in pc._calls["msgs"])
+    assert pc._calls["next"] == 1 and time.monotonic() - t0 < 1.8
+    assert not any("진입 대기" in m for _, m in pc._calls["msgs"]) and pc._calls["force"] == []
 
 
 def test_T77_fault_and_stop_during_hold_wait(pc):
@@ -343,17 +370,56 @@ def test_T77_fault_and_stop_during_hold_wait(pc):
     pc._heater_wait(600.0)
     c = pc._calls
     assert c["next"] == 0 and len(c["abort"]) == 1 and "히터 이상 발생(유지 모드 대기 중)" in c["abort"][0]
-    # 중단 요청
     pc._calls.update(next=0, abort=[]); pc._plc.st.update(fault=False)
     QTimer.singleShot(1400, lambda: setattr(pc, "_stop_pending", True))
     pc._heater_wait(600.0)
     assert pc._calls["next"] == 0 and pc._calls["abort"] == [] and pc._calls["failed"] == []
 
 
-def test_T78_give_up_ends_wait_early(pc):
+def test_T78_give_up_ends_wait_early_then_relaxed_tc2(pc):
+    pc._force_ok["tc2"] = (True, 150, "")
     QTimer.singleShot(1300, lambda: pc._hold.update(gave_up="도달 시점 출력이 상한에 붙어 있어 고정하지 않음"))
-    QTimer.singleShot(1400, lambda: pc._hold.update(state="holding", kind="dac", holding=True, value=1176))
-    pc.request_hold_force_dac.connect(lambda mv: None)
     pc._heater_wait(600.0)
     c = pc._calls
-    assert c["failed"] and "상한에 붙어" in c["failed"][0]["reason"] and c["next"] == 1
+    assert c["failed"] and "상한에 붙어" in c["failed"][0]["reason"] and c["failed"][0]["action"] == "tc2_relaxed"
+    assert c["next"] == 1
+
+
+def _st(**kw):
+    d = {"run": True, "pv": 599.9, "sv": 600.0, "sv_ramp": 600.0, "cur_sv": 600.0, "mv": 1077,
+         "pv2": 893.4, "sv2": 0.0, "sv2_max": 1100.0, "ot2_limit": 1150.0, "pv_sel_eff": False}
+    d.update(kw); return d
+
+
+def test_T79_0922_end_to_end_strict_fail_then_relaxed_tc2(pc):
+    """09-22 재현: 실제 HeaterHold 에 6개 탈락 창을 그대로 먹여 엄격 캡처를 실패시킨 뒤(당시 절대 게이트로 되돌려 재현),
+    컨트롤러 폴백 ① 이 force_tc2_hold 로 tc2 추종에 진입하는 것까지 한 번에."""
+    import controller.heater_hold as HH
+    from test_heater_hold import Harness, _window, _run_window
+    H = Harness("tc2")
+    saved = (HH.DRIFT_PV_REL, HH.DRIFT_MV_REL, HH.DRIFT_TC2_REL)
+    HH.DRIFT_PV_REL, HH.DRIFT_MV_REL, HH.DRIFT_TC2_REL = 0.0, 0.0, 0.0        # 09-22 당시 게이트
+    try:
+        for pv, mv, tc2 in ((-1.01, 22.3, -3.60), (0.56, -13.8, -3.63), (1.21, -26.4, 1.15),
+                            (-0.32, 12.2, 13.89), (-1.64, 35.5, -2.91), (0.56, -14.0, -2.53)):
+            st = _run_window(H, _window(1077, 20, mv), _window(599.9, 1.0, pv), _window(893.4, 2.0, tc2))
+            assert st == "arming"                                                # 엄격 캡처 전부 탈락
+    finally:
+        HH.DRIFT_PV_REL, HH.DRIFT_MV_REL, HH.DRIFT_TC2_REL = saved
+    assert H.ev == [] and len(H.h._ring) >= 4
+
+    def _force(mode, mv):                                                        # main 흉내: 실제 force_*_hold 호출
+        ok = H.h.force_tc2_hold() if mode == "tc2" else H.h.force_dac_hold(mv)
+        pc._hold["force_result"] = {"mode": mode, "ok": ok, "reason": "" if ok else H.h.last_force_reason}
+        if ok and mode == "tc2":                                                 # 핸드셰이크: 되읽기 일치 → M0004B
+            H.step(**_st(sv2=H.h.sv2)); H.step(**_st(sv2=H.h.sv2, pv_sel_eff=True))
+        pc._hold.update(state=H.h.state, kind=H.h.kind, holding=H.h.is_holding(), sv2=H.h.sv2, relaxed=True)
+    pc.request_hold_force.disconnect()
+    pc.request_hold_force.connect(_force)
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert H.h.is_holding() and H.h.kind == "tc2" and H.h.engaged_relaxed is True
+    assert abs(H.h.sv2 - 893.4) < 3.0
+    assert [e[0] for e in H.ev] == ["sv2", "sel"]                                # D00035 → M0004A 순서
+    assert c["next"] == 1 and c["failed"][0]["action"] == "tc2_relaxed"
+    assert any("완화 조건으로 TC2 추종 진입 — SV2" in m and "정착 창 미확보" in m for l, m in H.msgs)
