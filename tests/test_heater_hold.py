@@ -67,11 +67,15 @@ def test_T25_tc2_engage_order():
     assert H.h.state == "holding" and H.h.kind == "tc2" and H.h.is_holding()
     assert any("TC2 추종 시작 — TC1 600.0 / TC2 1052.3 (SV2 1052.3 고정)" in m for _, m in H.msgs)
     assert H.h.log_tuple() == (1, None)
-    # 유지 중 TC1 이 튀어도 해제하지 않는다 — 5분 뒤 안내 1회, 복귀 안내 1회
+    # 유지 중 TC1 이 튀어도 해제하지 않는다 — 셔터 개방 수준(-110.9°C, 09-21 실측)은 안내도 없고,
+    #  120°C 를 넘는 편차만 5분 뒤 안내 1회, 복귀 안내 1회
     for _ in range(301):
-        H.step(**_stable(pv=576.6, sv2=1052.3, pv_sel_eff=True))
+        H.step(**_stable(pv=489.1, sv2=1052.3, pv_sel_eff=True))
+    assert H.h.state == "holding" and not any("TC1 편차" in m for _, m in H.msgs)
+    for _ in range(301):
+        H.step(**_stable(pv=470.0, sv2=1052.3, pv_sel_eff=True))
     assert H.h.state == "holding"
-    assert sum("TC2 추종 중 TC1 편차 -23.4°C (5분 경과) — 추종 유지" in m for _, m in H.msgs) == 1
+    assert sum("TC2 추종 중 TC1 편차 -130.0°C (5분 경과) — 추종 유지" in m for _, m in H.msgs) == 1
     for _ in range(3):
         H.step(**_stable(pv=600.0, sv2=1052.3, pv_sel_eff=True))
     assert sum("TC1 편차 정상 복귀" in m for _, m in H.msgs) == 1
