@@ -236,6 +236,8 @@ class MainDialog(QDialog):
         # 히터 RUN 한 번(상승~하강 엣지) 동안의 이상 이벤트 라벨(중복 없이) — 종료 카드 "특이사항"/❌ 판정. 상승 엣지에서 리셋
         self._heater_run_events: list = []
         self._heater_run_engaged = False       # 이번 런에 유지 모드 holding 이 한 번이라도 됐는가(engaged 시그널)
+        self._heater_run_arrived = False       # 이번 런에 목표 도달 래치가 한 번이라도 섰는가(한 번 올라가면 런 끝까지 유지)
+        self._heater_run_gave_up = None        # 이번 런에 heater_hold 가 낸 give_up 사유(하강 엣지의 release 가 지우기 전에 보관)
         self._refresh_hold_snapshot()
         self.process_controller.set_hold_state_provider(lambda: dict(self._hold_snapshot))
         self.process_controller.request_hold_force.connect(self._on_hold_force)
@@ -1936,7 +1938,11 @@ class MainDialog(QDialog):
         reason = str(info.get("reason") or "")
         action = str(info.get("action") or "")
         log_message_to_monitor("히터(경고)", f"[유지 모드] 진입 실패({action}) — {reason}")
-        self._heater_run_event(f"유지 모드 진입 실패({action})")
+        # tc2_relaxed / dac 는 engaged 쪽 라벨("유지 모드 완화 진입"/"유지 모드 DAC 폴백")이 같은 사건을 더 정확히 적는다
+        if action == "proceed":
+            self._heater_run_event("유지 모드 진입 실패 — 경고 후 진행")
+        elif action == "abort":
+            self._heater_run_event("유지 모드 진입 실패 — 공정 중단")
         if action != "abort":
             # 도달 흐름 안의 실패(완화 tc2 / dac 폴백 / proceed) — 별도 카드 없이 도달 카드가 싣는다
             self._hold_fail_info = dict(info)
@@ -2134,7 +2140,8 @@ class MainDialog(QDialog):
             ctx = self._heater_run_context()
             if run:
                 self._heater_chat_t0 = time.monotonic()
-                self._heater_run_events = []; self._heater_run_engaged = False     # 런 단위 이벤트 리셋
+                self._heater_run_events = []; self._heater_run_engaged = False; self._heater_run_arrived = False   # 런 단위 리셋
+                self._heater_run_gave_up = None
                 tgt = self._heater_final_target(st)
                 fields = {"목표": self._chat_temp(tgt),
                           "램프": self._heater_ramp_rate_text(),
@@ -2154,8 +2161,12 @@ class MainDialog(QDialog):
                 # 종료 카드 아이콘: PLC 이상(fault/ot/tc_err/wd_err) 또는 런 중 이상 이벤트가 있으면 ❌. 시작 카드는 ℹ️ 그대로
                 #  (09-22: 유지 모드 미진입 + DAC 포화 25분인데 PLC 트립이 없어 ✅ 로 떴다)
                 if not run:
-                    if HEATER_HOLD_MODE != "off" and not self._heater_run_engaged:
-                        self._heater_run_event("유지 모드 미진입")
+                    # 유지 모드는 목표 도달이 전제다 — 도달한 적이 없는 런(짧은 수동 런·목표 전 정지·냉각 구간)은 미진입이 이상이 아니다
+                    #  진입 실패 라벨(proceed/abort)이 이미 있으면 같은 사실이라 "미진입" 을 덧붙이지 않는다
+                    if (HEATER_HOLD_MODE != "off" and self._heater_run_arrived and not self._heater_run_engaged
+                            and not any(e.startswith("유지 모드 진입 실패") for e in self._heater_run_events)):
+                        gu = self._heater_run_gave_up
+                        self._heater_run_event("유지 모드 미진입" + (f"({self._chat_short(gu)})" if gu else ""))
                     fields["특이사항"] = self._heater_run_events_text()
                 plc_ok = not (st.get('fault') or st.get('ot') or st.get('tc_err') or st.get('wd_err'))
                 ok = plc_ok and not self._heater_run_events
@@ -3259,6 +3270,10 @@ class MainDialog(QDialog):
         # --- DAC 포화 감시(유지 모드가 출력을 묶고 있지 않을 때만) → 유지 모드(dac / tc2) ---
         self.heater_sat.tick(st, self.heater_hold.is_holding(), self.heater_hold.kind)
         self.heater_hold.tick(st, self._heater_final_target(st))
+        if self.heater_hold.arrived:
+            self._heater_run_arrived = True            # release() 가 래치를 지워도 런 동안은 남는다
+        if self.heater_hold.gave_up:
+            self._heater_run_gave_up = self.heater_hold.gave_up
         self._refresh_hold_snapshot()
 
         # --- 히터 시작/종료 구글챗 카드 (RUN 엣지) ---

@@ -483,3 +483,12 @@ def test_T85c_entry_failure_fallback_still_prefers_window():
     _fail_gates(H)
     assert H.h.force_dac_hold(1150) is True
     assert 1077 <= H.ev[-1][1] <= 1120 and H.h.last_force_source == "마지막 측정 창 평균"
+
+
+def test_T89_arrived_property_mirrors_latch():
+    H = Harness("tc2")
+    assert H.h.arrived is False
+    H.step(**_stable())
+    assert H.h.arrived is True
+    H.step(**_stable(run=False))                                             # release → 래치 해제
+    assert H.h.arrived is False

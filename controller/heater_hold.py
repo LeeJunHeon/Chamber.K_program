@@ -111,6 +111,11 @@ class HeaterHold(QObject):
         return self._h['state'] == 'holding'
 
     @property
+    def arrived(self) -> bool:
+        """도달 래치(|PV−final| ≤ ARRIVE_TOL 에 한 번 들어왔다) — 읽기 전용 노출."""
+        return bool(self._h['arrived'])
+
+    @property
     def gave_up(self):
         """진입 불가 확정 사유(give_up 발행 뒤 보관). 다시 arming 하거나 해제되면 None."""
         return self._h['gave_up']

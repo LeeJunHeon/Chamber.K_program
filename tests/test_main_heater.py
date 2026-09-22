@@ -564,18 +564,26 @@ def stop_card(fresh, monkeypatch):
     w.chat_chk = real
     monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "tc2")
     h = w.heater_hold; h._h = h._fresh(); h.engaged_relaxed = False; h.no_margin_warned = False
-    w._heater_run_events = []; w._heater_run_engaged = False
+    w._heater_run_events = []; w._heater_run_engaged = False; w._heater_run_arrived = False; w._heater_run_gave_up = None
     w._posted = posted
     yield w
     w.chat_chk = MagicMock(); w.process_running = False
     h._h = h._fresh(); h.engaged_relaxed = False
 
 
-def _run(w, **stop_kw):
-    """RUN 상승 엣지 → (테스트가 이벤트를 넣고) → 하강 엣지. 종료 카드 (status, 특이사항) 을 돌려준다."""
+def _run(w, arrive=True):
+    """RUN 상승 엣지 → (arrive 면 도달 래치를 세운다) → 테스트가 이벤트를 넣고 → _stop 으로 하강 엣지."""
     w._posted.clear()
     feed(w, make_heater_st(run=True))
+    if arrive:
+        _arrive(w)
     return w
+
+
+def _arrive(w):
+    """목표 도달 폴링 1회: PV=SV=램프=600 → heater_hold 도달 래치 → _heater_run_arrived."""
+    feed(w, make_heater_st(run=True, pv=600.0, sv=600.0, sv_ramp=600.0, cur_sv=600.0, mv=1000))
+    assert w.heater_hold.arrived and w._heater_run_arrived
 
 
 def _stop(w, **kw):
@@ -600,11 +608,61 @@ def test_T88_normal_run_success(stop_card):
     assert list(f) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유", "특이사항"]
 
 
-def test_T88_dac_fallback_marks_fail(stop_card):
+def test_T88_dac_fallback_marks_fail_single_label(stop_card):
     w = _run(stop_card)
     w._on_heater_hold_failed({"action": "dac", "reason": "…", "tc2_why": "TC2 값 없음"}); _engaged(w, "dac", relaxed=True)
     status, note, _ = _stop(w)
-    assert status == "FAIL" and note == "유지 모드 진입 실패(dac) · 유지 모드 DAC 폴백"
+    assert status == "FAIL" and note == "유지 모드 DAC 폴백"                   # 한 사건 = 라벨 1개
+    assert w._hold_fail_info is not None                                     # 도달 카드용 정보는 그대로 남는다
+    w = _run(stop_card)
+    w._on_heater_hold_failed({"action": "tc2_relaxed", "reason": "…", "sv2": 893.4}); _engaged(w, "tc2", relaxed=True)
+    assert _stop(w)[:2] == ("FAIL", "유지 모드 완화 진입")
+
+
+def test_T88_proceed_and_abort_labels(stop_card):
+    w = _run(stop_card)
+    w._on_heater_hold_failed({"action": "proceed", "reason": "…"})
+    assert _stop(w)[:2] == ("FAIL", "유지 모드 진입 실패 — 경고 후 진행")
+    w = _run(stop_card)
+    w._on_heater_hold_failed({"action": "abort", "reason": "…"})
+    assert _stop(w)[:2] == ("FAIL", "유지 모드 진입 실패 — 공정 중단")
+
+
+def test_T88_not_arrived_runs_are_not_flagged(stop_card):
+    """도달한 적 없는 런: 짧은 수동 런 / 목표 전에 정지 → ✅ "없음" (유지 모드는 도달이 전제)."""
+    w = _run(stop_card, arrive=False)                                        # 켰다 바로 끔
+    assert _stop(w)[:2] == ("SUCCESS", "없음")
+    w = _run(stop_card, arrive=False)
+    for pv in (100.0, 200.0, 300.0):                                         # 승온 중 정지
+        feed(w, make_heater_st(run=True, pv=pv, sv=600.0, sv_ramp=pv + 5, cur_sv=pv + 5))
+    assert not w._heater_run_arrived
+    assert _stop(w, pv=300.0)[:2] == ("SUCCESS", "없음")
+
+
+def test_T88_arrived_but_not_engaged_is_flagged_with_reason(stop_card):
+    w = _run(stop_card)
+    assert _stop(w)[:2] == ("FAIL", "유지 모드 미진입")
+    w = _run(stop_card)
+    w.heater_hold._h["gave_up"] = "도달 시점 출력이 상한에 붙어 있어 고정하지 않음 (평균 MV 1181 ≥ 1200×0.98) — 히터가 목표를 유지할 여유가 없습니다"
+    feed(w, make_heater_st(run=True, pv=600.0, sv=600.0, sv_ramp=600.0, cur_sv=600.0, mv=1181))   # 폴링이 사유를 보관
+    status, note, _ = _stop(w)
+    assert status == "FAIL" and note.startswith("유지 모드 미진입(도달 시점 출력이 상한에 붙어 있어 고정하지 않음") and note.endswith("…)")
+    assert len(note) <= len("유지 모드 미진입(") + 61 + 1
+
+
+def test_T88_mode_off_never_flags_not_engaged(stop_card, monkeypatch):
+    monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "off")
+    w = _run(stop_card)
+    assert _stop(w)[:2] == ("SUCCESS", "없음")
+
+
+def test_T88_arrived_flag_resets_between_runs(stop_card):
+    w = _run(stop_card)
+    assert w._heater_run_arrived
+    _stop(w)
+    w = _run(stop_card, arrive=False)
+    assert w._heater_run_arrived is False
+    assert _stop(w)[:2] == ("SUCCESS", "없음")
 
 
 def test_T88_demotion_saturation_no_margin(stop_card):
@@ -632,10 +690,11 @@ def test_T88_more_than_four_events_and_dedup(stop_card):
     w._on_heater_hold_failed({"action": "proceed", "reason": "…"})
     w._on_heater_hold_alert("demoted", {}); w._on_heater_hold_alert("demote_failed", {})
     w._on_heater_saturated({"clamp": None})
-    status, note, _ = _stop(w)
+    w._on_heater_hold_alert("demoted", {"why": "x"}); w.heater_hold.alert.emit("no_margin", {})   # 중복
+    status, note, _ = _stop(w)                                               # 진입 실패 라벨이 있으니 "미진입" 은 안 붙는다
     ev = w._heater_run_events
-    assert len(ev) == 6 and ev.count("출력 여유 없음(MV ≥ 상한 98%)") == 1
-    assert note == " · ".join(ev[:4]) + " 외 2건" and status == "FAIL"
+    assert len(ev) == 5 and ev.count("출력 여유 없음(MV ≥ 상한 98%)") == 1 and "유지 모드 미진입" not in ev
+    assert note == " · ".join(ev[:4]) + " 외 1건" and status == "FAIL"
 
 
 def test_T88_events_reset_on_next_run(stop_card):
@@ -662,5 +721,5 @@ def test_T88_0922_replay_not_engaged_plus_saturation(stop_card):
     w = _run(stop_card)
     w._on_heater_saturated({"pv": 529.0, "pv2": 952.0, "mv": 1200, "sec": 120.0, "clamp": 1077, "src": "포화 직전 60초 평균", "owner": "guard", "limit": 1200})
     status, note, f = _stop(w, pv=559.6, pv2=952.0)
-    assert status == "FAIL" and note == "DAC 출력 포화 · 유지 모드 미진입" and f["사유"] == "정지"
+    assert status == "FAIL" and note == "DAC 출력 포화 · 유지 모드 미진입" and f["사유"] == "정지"   # 두 건만
     assert f["마지막 TC1"] == "559.6°C"
