@@ -78,6 +78,7 @@ class HeaterHold(QObject):
         self._ring: deque = deque()          # (t, mv, pv, pv2)
         self._last_st: dict = {}
         self.engaged_relaxed: bool = False   # 마지막 holding 진입이 완화 경로(force_tc2_hold)였는가
+        self.no_margin_warned: bool = False  # tc2 캡처 시 "출력 여유 없음(MV ≥ 상한 98%)" 안내가 떴는가(운전/목표 바뀌면 리셋)
         self.last_force_reason: str = ""     # force_*_hold 가 False 를 돌려준 사유
 
     # ───────────────────────── 상태 ─────────────────────────
@@ -227,6 +228,7 @@ class HeaterHold(QObject):
             self._msg("히터", f"유지 모드 대기 취소 ({why})")
         # 해제 뒤 다시 운전하면 경고들을 다시 낼 수 있어야 하고, 도달 래치도 처음부터 다시 잰다
         self._reset(keep_arrived=False)
+        self.no_margin_warned = False
 
     # ───────────────────────── kind ─────────────────────────
     def _effective_kind(self, st: dict):
@@ -304,6 +306,7 @@ class HeaterHold(QObject):
                      and abs(float(sv) - final) <= 0.05)
         if base_ok and final is not None and h['arrived'] and h['arr_sv'] is not None and abs(final - float(h['arr_sv'])) > 0.05:
             h.update(arrived=False, arr_sv=None, samples=[], t0=0.0, state='idle')
+            self.no_margin_warned = False                     # 목표가 바뀌었다 — 여유 없음 안내도 새로
         if ramp_done and not h['arrived'] and abs(float(pv) - final) <= self.arrive_tol:
             h['arrived'] = True; h['arr_sv'] = final
             self._msg("히터", f"목표 도달 확인 — 유지 모드 측정 시작 (TC1 {float(pv):.1f} / SV {final:.1f})")
@@ -380,6 +383,7 @@ class HeaterHold(QObject):
                 why = (f"도달 시점 출력이 상한의 {MV_SAT_REL * 100:.0f}% 이상입니다 (평균 MV {value} / 상한 {int(self.mv_limit)}) "
                        f"— 히터에 여유가 없습니다. TC2 추종으로 현재 상태를 고정합니다")
                 self._msg("히터(경고)", why)
+                self.no_margin_warned = True
                 self.alert.emit("no_margin", {"mv": value, "limit": int(self.mv_limit), "why": why})
         if value <= int(self.mv_min) + 20:
             if not h['floor_warned']:

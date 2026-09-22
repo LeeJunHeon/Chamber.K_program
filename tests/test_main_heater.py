@@ -406,10 +406,13 @@ def test_T58_heater_cards_tc1_tc2_fields(fresh):
         assert list(posted[1][2]) == ["마지막 TC1", "마지막 TC2", "운전 시간", "사유"]
         assert posted[1][2]["마지막 TC1"] == "590.0°C" and posted[1][2]["마지막 TC2"] == "--.-"
         posted.clear(); w.process_running = True
+        w.heater_hold._h.update(state="holding", kind="tc2", sv2=1052.3)        # 엄격 캡처로 tc2 진입한 상태
+        w.heater_hold.engaged_relaxed = False
         w.process_controller.heater_reached.emit({"pv": 599.6, "pv2": 1051.0, "target": 600.0, "took_sec": 65, "next": "압력 안정화"})
         spin(50)
-        assert posted == [("히터 도달", "INFO", {"목표": "600.0°C", "도달 TC1": "599.6°C", "도달 TC2": "1051.0°C",
-                                                 "승온 소요": "1분 5초", "다음 단계": "압력 안정화"})]
+        assert posted == [("히터 도달", "SUCCESS", {"목표": "600.0°C", "도달 TC1": "599.6°C", "도달 TC2": "1051.0°C",
+                                                    "유지 모드": "TC2 추종 (SV2 1052.3°C)",
+                                                    "승온 소요": "1분 5초", "다음 단계": "압력 안정화"})]
         posted.clear()
         w.process_controller.heater_reached.emit({"pv": 599.6, "pv2": None, "target": 600.0, "took_sec": 5, "next": ""})
         spin(50)
@@ -418,6 +421,7 @@ def test_T58_heater_cards_tc1_tc2_fields(fresh):
     finally:
         w.process_running = False
         w.chat_chk = MagicMock()
+        w.heater_hold._h = w.heater_hold._fresh()
     import inspect, controller.process_controller as PC
     assert "\"pv2\": _pv2" in inspect.getsource(PC.SputterProcessController._heater_wait)
 
@@ -433,3 +437,97 @@ def test_T59_plc_link_initial_down_no_warning_then_transition_warns(fresh, monke
     w._on_plc_link(False)
     assert [m for l, m in logs if l == "경고"] == ["PLC 링크 다운 — 수동 조작 잠금, 표시 초기화"]
     w._on_plc_link(True)
+
+
+# ═══════════════ 도달 카드에 유지 모드 결과 합치기 ═══════════════
+def _reached(w):
+    w.chat_chk.notify_heater_reached.reset_mock(); w.chat_chk.notify_heater_alert.reset_mock()
+    w.process_controller.heater_reached.emit({"pv": 599.6, "pv2": 893.4, "target": 600.0, "took_sec": 65, "next": "압력 안정화"})
+    spin(50)
+    assert w.chat_chk.notify_heater_reached.call_count == 1
+    args, kw = w.chat_chk.notify_heater_reached.call_args
+    return kw.get("ok"), args[1]["유지 모드"], list(args[1])
+
+
+@pytest.fixture
+def hold_card(fresh, monkeypatch):
+    w = fresh
+    w.process_running = True; w._chat_reset_run_state()
+    h = w.heater_hold
+    h._h = h._fresh(); h.engaged_relaxed = False; h.no_margin_warned = False
+    monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "tc2")
+    yield w
+    w.process_running = False; h._h = h._fresh(); h.engaged_relaxed = False; h.no_margin_warned = False
+
+
+def _set_hold(w, kind, relaxed=False, **kw):
+    w.heater_hold._h.update(state="holding", kind=kind, **kw); w.heater_hold.engaged_relaxed = relaxed
+
+
+def test_T84_reached_card_strict_tc2(hold_card):
+    w = hold_card; _set_hold(w, "tc2", sv2=893.4)
+    ok, txt, keys = _reached(w)
+    assert ok is True and txt == "TC2 추종 (SV2 893.4°C)"
+    assert keys[:4] == ["목표", "도달 TC1", "도달 TC2", "유지 모드"]         # "도달 TC2" 바로 다음
+    assert w.chat_chk.notify_heater_alert.call_count == 0
+
+
+def test_T84_reached_card_relaxed_tc2(hold_card):
+    w = hold_card; _set_hold(w, "tc2", relaxed=True, sv2=893.4)
+    w._on_heater_hold_failed({"action": "tc2_relaxed", "reason": "유지 모드 진입 대기 600s 초과", "sv2": 893.4, "why": "정착 창 미확보"})
+    assert w.chat_chk.notify_heater_alert.call_count == 0                  # 별도 카드 없음
+    ok, txt, _ = _reached(w)
+    assert ok is False and txt == "TC2 추종 — 완화 조건 (SV2 893.4°C, 정착 창 미확보)"
+    assert w._hold_fail_info is None                                        # 쓴 뒤 비운다
+
+
+def test_T84_reached_card_dac_fallback(hold_card):
+    w = hold_card; _set_hold(w, "dac", relaxed=True, value=1113)
+    w._on_heater_hold_failed({"action": "dac", "reason": "…", "tc2_why": "TC2 값 없음(D00011=-1) — DAC 상한 고정으로 대체"})
+    assert w.chat_chk.notify_heater_alert.call_count == 0
+    ok, txt, _ = _reached(w)
+    assert ok is False and txt == "DAC 상한 고정 1113 — TC2 추종 불가 (TC2 값 없음(D00011=-1) — DAC 상한 고정으로 대체)"
+
+
+def test_T84_reached_card_proceed_and_truncation(hold_card):
+    w = hold_card
+    long = "유지 모드 진입 대기 600s 초과 (상태: arming) — 완화 tc2 불가(TC2 표본 부족(0개 < 4)) / dac 불가(측정 창 평균도 현재 MV 도 없음)"
+    w._on_heater_hold_failed({"action": "proceed", "reason": long})
+    assert w.chat_chk.notify_heater_alert.call_count == 0
+    ok, txt, _ = _reached(w)
+    assert ok is False and txt.startswith("진입 실패 — 경고 후 진행 (") and txt.endswith("…)")
+    assert len(txt) <= len("진입 실패 — 경고 후 진행 (") + 61 + 1
+
+
+def test_T84_reached_card_mode_off_and_dac_setting(hold_card, monkeypatch):
+    w = hold_card
+    monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "off")
+    ok, txt, _ = _reached(w)
+    assert ok is True and txt == "사용 안 함 (HEATER_HOLD_MODE=off)"
+    monkeypatch.setattr(MAIN, "HEATER_HOLD_MODE", "dac"); _set_hold(w, "dac", value=1113)
+    ok, txt, _ = _reached(w)
+    assert ok is True and txt == "DAC 상한 고정 1113 (설정값)"
+
+
+def test_T84_reached_card_no_margin_appends(hold_card):
+    w = hold_card; _set_hold(w, "tc2", sv2=893.4); w.heater_hold.no_margin_warned = True
+    ok, txt, _ = _reached(w)
+    assert ok is False and txt == "TC2 추종 (SV2 893.4°C) · 출력 여유 없음(MV ≥ 상한 98%)"
+
+
+def test_T84_abort_still_sends_alert_card_once(hold_card):
+    w = hold_card
+    w._on_heater_hold_failed({"action": "abort", "reason": "둘 다 실패"})
+    w._on_heater_hold_failed({"action": "abort", "reason": "둘 다 실패"})
+    assert w.chat_chk.notify_heater_alert.call_count == 1
+    assert w.chat_chk.notify_heater_alert.call_args.args[0] == "히터 유지 모드 진입 실패"
+    assert w._hold_fail_info is None
+
+
+def test_T84_previous_process_failure_not_carried_over(hold_card):
+    w = hold_card
+    w._on_heater_hold_failed({"action": "proceed", "reason": "앞 공정 실패"})
+    w._chat_reset_run_state()                                               # 다음 공정 시작
+    _set_hold(w, "tc2", sv2=893.4)
+    ok, txt, _ = _reached(w)
+    assert ok is True and txt == "TC2 추종 (SV2 893.4°C)"

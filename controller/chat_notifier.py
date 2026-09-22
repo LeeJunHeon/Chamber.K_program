@@ -399,9 +399,11 @@ class ChatNotifier(QObject):
         self._post_card(title, subtitle=subtitle, status=("INFO" if ok else "FAIL"),
                         fields=dict(fields or {}), urgent=True)
 
-    def notify_heater_reached(self, subtitle: str, fields: dict):
-        """공정이 소유한 히터의 승온 대기 통과 카드("히터 도달", ℹ️). notify_heater_run 과 같은 형식·규칙(urgent)."""
-        self._post_card("히터 도달", subtitle=subtitle, status="INFO", fields=dict(fields or {}), urgent=True)
+    def notify_heater_reached(self, subtitle: str, fields: dict, ok: bool = True):
+        """공정이 소유한 히터의 승온 대기 통과 카드("히터 도달"). 정상 ✅ / 유지 모드가 정상 경로가 아니면 ❌.
+        notify_heater_run 과 같은 형식·규칙(urgent). "유지 모드" 필드가 결과를 싣는다."""
+        self._post_card("히터 도달", subtitle=subtitle, status=("SUCCESS" if ok else "FAIL"),
+                        fields=dict(fields or {}), urgent=True)
 
     @Slot(bool, dict)
     def notify_process_finished_detail(self, ok: bool, detail: dict):

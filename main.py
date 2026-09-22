@@ -232,6 +232,7 @@ class MainDialog(QDialog):
         self.heater_hold.alert.connect(self._on_heater_hold_alert)
         # process_controller 는 main 속성을 직접 읽지 않는다 — 스냅샷 dict 를 돌려주는 콜러블을 주입한다
         self._hold_snapshot: dict = {}
+        self._hold_fail_info = None            # 도달 흐름 안의 유지 모드 실패 정보 — 도달 카드가 싣고 비운다(공정마다 리셋)
         self._refresh_hold_snapshot()
         self.process_controller.set_hold_state_provider(lambda: dict(self._hold_snapshot))
         self.process_controller.request_hold_force.connect(self._on_hold_force)
@@ -1039,7 +1040,8 @@ class MainDialog(QDialog):
         self._chat_user_stopped = False
         self._chat_emergency_stopped = False   # ALL STOP(비상 정지)으로 끝남 — 사용자 STOP 과 구분
         self._fault_abort_active = False       # _abort_process_by_fault 가 이미 시작됐다(중복 판정 방지)
-        self._chat_hold_fail_key = None        # 유지 모드 실패 카드 중복 방지(공정당 같은 사유 1장)
+        self._chat_hold_fail_key = None        # 유지 모드 실패 카드 중복 방지(abort 경로만)
+        self._hold_fail_info = None            # 공정마다 새로 — 지난 공정의 실패가 도달 카드에 남지 않게
         self._hold_force_result = None         # 마지막 폴백(force_*_hold) 결과 — 스냅샷으로 컨트롤러에 전달
         self._chat_hold_alert_sent = set()     # 유지 모드 알림 카드(강등/여유 없음) 공정당 종류별 1장
         self._finish_handled = False           # 새 공정(수동 / CSV STEP 마다) — 종료 처리 아직 안 함
@@ -1885,7 +1887,7 @@ class MainDialog(QDialog):
         h = self.heater_hold
         self._hold_snapshot = {"mode": HEATER_HOLD_MODE, "state": h.state, "kind": h.kind,
                                "holding": h.is_holding(), "sv2": h.sv2, "value": h.value, "gave_up": h.gave_up,
-                               "relaxed": h.engaged_relaxed,
+                               "relaxed": h.engaged_relaxed, "no_margin_warned": h.no_margin_warned,
                                "force_result": getattr(self, "_hold_force_result", None)}
 
     @Slot(str)
@@ -1909,10 +1911,14 @@ class MainDialog(QDialog):
 
     @Slot(dict)
     def _on_heater_hold_failed(self, info: dict) -> None:
-        """유지 모드 진입 실패(공정 소유 히터) — 경고 로그 + 챗 카드 1장(공정당 같은 사유 반복 없음)."""
+        """유지 모드 진입 실패(공정 소유 히터) — 경고 로그. abort 만 별도 카드(도달 카드가 없으므로), 나머지는 도달 카드에 합친다."""
         reason = str(info.get("reason") or "")
         action = str(info.get("action") or "")
         log_message_to_monitor("히터(경고)", f"[유지 모드] 진입 실패({action}) — {reason}")
+        if action != "abort":
+            # 도달 흐름 안의 실패(완화 tc2 / dac 폴백 / proceed) — 별도 카드 없이 도달 카드가 싣는다
+            self._hold_fail_info = dict(info)
+            return
         key = (action, reason[:40])
         if getattr(self, "_chat_hold_fail_key", None) == key:
             return
@@ -1995,13 +2001,51 @@ class MainDialog(QDialog):
             return
         try:
             took = int(d.get("took_sec") or 0)
+            hold_txt, ok = self._heater_hold_result_text()
             fields = {"목표": self._chat_temp(d.get("target")),
                       "도달 TC1": self._chat_temp(d.get("pv")), "도달 TC2": self._chat_temp(d.get("pv2")),
+                      "유지 모드": hold_txt,
                       "승온 소요": f"{took // 60}분 {took % 60}초",
                       "다음 단계": (d.get("next") or "-")}
-            self.chat_chk.notify_heater_reached(self._heater_run_context(), fields)
+            self.chat_chk.notify_heater_reached(self._heater_run_context(), fields, ok=ok)
         except Exception as e:
             log_message_to_monitor("경고", f"히터 도달 카드 실패: {e!r}")
+
+    @staticmethod
+    def _chat_short(text, n: int = 60) -> str:
+        t = str(text or "")
+        return t if len(t) <= n else t[:n] + "…"
+
+    def _heater_hold_result_text(self):
+        """도달 카드의 "유지 모드" 값과 아이콘(ok). heater_hold 상태 + _on_heater_hold_failed 가 남긴 실패 정보로 판정하고,
+        실패 정보는 쓴 뒤 비운다(다음 공정/스텝의 도달 카드가 지난 실패를 물고 가지 않게)."""
+        h = self.heater_hold
+        info = self._hold_fail_info
+        self._hold_fail_info = None
+        action = str((info or {}).get("action") or "")
+        if HEATER_HOLD_MODE == "off":
+            txt, ok = "사용 안 함 (HEATER_HOLD_MODE=off)", True
+        elif action == "tc2_relaxed":
+            sv2 = (info or {}).get("sv2") if (info or {}).get("sv2") is not None else h.sv2
+            txt, ok = f"TC2 추종 — 완화 조건 (SV2 {self._chat_temp(sv2)}, {(info or {}).get('why') or '정착 창 미확보'})", False
+        elif action == "dac":
+            txt, ok = f"DAC 상한 고정 {h.value} — TC2 추종 불가 ({self._chat_short((info or {}).get('tc2_why'))})", False
+        elif action == "proceed":
+            txt, ok = f"진입 실패 — 경고 후 진행 ({self._chat_short((info or {}).get('reason'))})", False
+        elif h.is_holding() and h.kind == "tc2":
+            txt, ok = f"TC2 추종 (SV2 {self._chat_temp(h.sv2)})", not h.engaged_relaxed
+            if h.engaged_relaxed:
+                txt = f"TC2 추종 — 완화 조건 (SV2 {self._chat_temp(h.sv2)}, 정착 창 미확보)"
+        elif h.is_holding() and h.kind == "dac":
+            if HEATER_HOLD_MODE == "dac" and not h.engaged_relaxed:
+                txt, ok = f"DAC 상한 고정 {h.value} (설정값)", True
+            else:
+                txt, ok = f"DAC 상한 고정 {h.value} — TC2 추종 불가", False
+        else:
+            txt, ok = f"미진입 (상태: {h.state})", False
+        if h.no_margin_warned:
+            txt += " · 출력 여유 없음(MV ≥ 상한 98%)"; ok = False
+        return txt, ok
 
     def _heater_run_context(self) -> str:
         """_heater_log_note / _heater_log_prefix 와 같은 판정 — 레시피 > 공정 > 수동."""
