@@ -1,0 +1,92 @@
+# -*- coding: utf-8 -*-
+"""T68~T72 — controller/heater_saturation.HeaterSaturationGuard (clock 주입, 시그널 기록)."""
+import pytest
+
+from conftest import make_heater_st
+from controller.heater_saturation import HeaterSaturationGuard, MV_SAT_FALLBACK_REL
+
+
+class G:
+    def __init__(self, sat_sec=120):
+        self.t = 1000.0
+        self.g = HeaterSaturationGuard(mv_limit=1200, mv_min=400, sat_sec=sat_sec, clock=lambda: self.t)
+        self.ev = []; self.msgs = []; self.sat = []
+        self.g.request_mv_limit.connect(lambda v: self.ev.append(v))
+        self.g.message.connect(lambda l, m: self.msgs.append((l, m)))
+        self.g.saturated.connect(lambda d: self.sat.append(d))
+
+    def step(self, dt=1.0, hold=False, kind=None, **kw):
+        self.t += dt
+        st = make_heater_st(**{"run": True, "pv": 600.0, "sv": 600.0, "mv": 1000, **kw})
+        self.g.tick(st, hold, kind)
+
+
+def test_T68_saturation_warn_and_clamp_once():
+    g = G()
+    for _ in range(60):
+        g.step(mv=1040)                     # 포화 직전 60초 이력
+    for _ in range(120):
+        g.step(mv=1200)                      # 첫 tick 이 t0 → 119초 경과
+    assert g.ev == [] and g.sat == []
+    g.step(mv=1200)                          # 120초 연속
+    assert g.ev == [1040] and len(g.sat) == 1 and g.sat[0]["clamp"] == 1040
+    w = [m for l, m in g.msgs if l == "히터(경고)"]
+    assert len(w) == 1 and "TC1 600.0" in w[0] and "MV 1200" in w[0] and "120초째" in w[0]
+    for _ in range(300):
+        g.step(mv=1040)                      # 같은 에피소드 — 반복 발사 없음
+    assert g.ev == [1040] and len(g.sat) == 1 and len([1 for l, _ in g.msgs if l == "히터(경고)"]) == 1
+
+
+def test_T69_no_history_uses_fallback_and_clamps():
+    g = G(sat_sec=10)
+    for _ in range(11):
+        g.step(mv=1200)
+    assert g.ev == [int(MV_SAT_FALLBACK_REL * 1200)] and "이력 없음" in g.sat[0]["src"]
+
+
+def test_T70_hold_active_does_nothing():
+    g = G(sat_sec=10)
+    for _ in range(60):
+        g.step(mv=1200, hold=True, kind="tc2")
+    assert g.ev == [] and g.sat == [] and g.msgs == []
+    # hold 가 풀린 뒤에는 새로 센다
+    for _ in range(11):
+        g.step(mv=1200)
+    assert len(g.sat) == 1
+
+
+def test_T71_release_on_run_off_target_change_and_hold_entry():
+    g = G(sat_sec=10)
+    for _ in range(11):
+        g.step(mv=1200)
+    assert g.ev[-1] == 1080
+    g.step(run=False)
+    assert g.ev[-1] == 1200 and any("원복 (운전 OFF)" in m for _, m in g.msgs)
+    g2 = G(sat_sec=10)
+    for _ in range(11):
+        g2.step(mv=1200)
+    g2.step(mv=1200, sv=650.0)
+    assert g2.ev[-1] == 1200 and any("목표 변경" in m for _, m in g2.msgs)
+    g3 = G(sat_sec=10)
+    for _ in range(11):
+        g3.step(mv=1200)
+    g3.step(mv=1200, hold=True, kind="tc2")
+    assert g3.ev[-1] == 1200 and any("유지 모드 진입" in m for _, m in g3.msgs)
+    g4 = G(sat_sec=10)
+    for _ in range(11):
+        g4.step(mv=1200)
+    g4.step(mv=1200, hold=True, kind="dac")
+    assert g4.ev[-1] != 1200 and any("이어받음" in m for _, m in g4.msgs)     # dac 유지가 D00018 소유 — 덮어쓰지 않는다
+
+
+def test_T72_0922_scenario_caught_within_120s():
+    """12:50:56 부터 MV 1200 연속(직전 60초 평균 1077) → 120초 안에 경고 + 클램프."""
+    g = G()
+    for _ in range(60):
+        g.step(mv=1077, pv=600.0, pv2=893.4)
+    t_sat = g.t
+    while not g.sat:
+        g.step(mv=1200, pv=560.0, pv2=920.0)
+        assert g.t - t_sat <= 121
+    assert g.t - t_sat == pytest.approx(121.0) and g.ev == [1077]      # 첫 포화 tick + 120초
+    assert "TC2 920.0" in g.msgs[-1][1]

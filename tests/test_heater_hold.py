@@ -227,3 +227,117 @@ def test_T30_dac_regression_matches_old_code(name):
         return [m for _, m in ms if "DAC 상한" in m and "측정 시작" not in m and "대기 취소" not in m]
     assert dac_msgs(new.msgs) == dac_msgs(old.msgs), name
     assert all("지그" not in m for _, m in new.msgs)
+
+
+# ═══════════════ 2026-09-21 / 09-22 실측 창 회귀 (진입 게이트 비율화) ═══════════════
+import math
+import controller.heater_hold as HH
+
+
+def _window(mean, pp, drift, n=61, period=10):
+    """전·후반 평균차 = drift, p-p = pp 인 60초 창(1초 간격). 진동은 반주기 정수 개라 반평균에 영향이 없다."""
+    b = 2.0 * drift / n
+    return [mean - drift / 2.0 + b * i + (pp / 2.0) * math.sin(2 * math.pi * i / period) for i in range(n)]
+
+
+def _run_window(H, mv_w, pv_w, tc2_w, sv=600.0):
+    """도달 래치 뒤 창을 1초씩 먹인다. 캡처(상태 전이)되면 그 시점에 멈춘다."""
+    H.step(**_stable(pv=sv, sv=sv, sv_ramp=sv, cur_sv=sv, mv=int(mv_w[0]), pv2=tc2_w[0]), final=sv)
+    for m, p, t2 in zip(mv_w, pv_w, tc2_w):
+        H.step(**_stable(pv=p, sv=sv, sv_ramp=sv, cur_sv=sv, mv=int(round(m)), pv2=t2), final=sv)
+        if H.h.gave_up is not None or H.h.state not in ("idle", "arming"):
+            break
+    return H.h.state
+
+
+def _legacy(monkeypatch):
+    """수정 전 게이트(절대값 0.5 / 15 / 1.0 만) 재현."""
+    monkeypatch.setattr(HH, "DRIFT_PV_REL", 0.0); monkeypatch.setattr(HH, "DRIFT_MV_REL", 0.0)
+    monkeypatch.setattr(HH, "DRIFT_TC2_REL", 0.0)
+
+
+W_0921 = dict(mv=(1033, 35, 8.9), pv=(600.4, 2.4, 0.47), tc2=(854.7, 1.2, -0.50))
+W_0922 = dict(mv=(1077, 83, 16.5), pv=(599.9, 3.6, -0.76), tc2=(893.4, 7.3, -4.15))
+
+
+def _replay(H, W):
+    return _run_window(H, _window(*W["mv"]), _window(*W["pv"]), _window(*W["tc2"]))
+
+
+def test_T61_0921_window_engages_before_and_after():
+    H = Harness("tc2")
+    assert _replay(H, W_0921) == "engaging_sv2" and H.ev[0][0] == "sv2"
+    assert abs(H.ev[0][1] - 854.7) < 1.0
+
+
+def test_T61_0921_window_engaged_under_legacy_gates_too(monkeypatch):
+    _legacy(monkeypatch)
+    assert _replay(Harness("tc2"), W_0921) == "engaging_sv2"
+
+
+def test_T62_0922_window_engages_after_fix_but_not_before(monkeypatch):
+    H = Harness("tc2")
+    assert _replay(H, W_0922) == "engaging_sv2"                    # 이번 수정의 핵심 목표
+    assert abs(H.ev[0][1] - 893.4) < 3.0                            # 창 평균 TC2(드리프트 -4.15 포함)
+    _legacy(monkeypatch)
+    H2 = Harness("tc2")
+    assert _replay(H2, W_0922) == "arming" and H2.ev == []          # 수정 전: 탈락
+    assert any("정착 전 — 재측정" in m for _, m in H2.msgs)
+
+
+@pytest.mark.parametrize("t,pv,mv,tc2,expect", [
+    ("12:47:48", -1.01, +22.3, -3.60, True),    # 가스·플라즈마 이전 — 여기서 캡처됐어야 했다
+    ("12:48:48", +0.56, -13.8, -3.63, True),
+    ("12:49:48", +1.21, -26.4, +1.15, True),
+    ("12:52:56", -0.32, +12.2, +13.89, True),   # TC2 13.89 는 허용 ~17.9 안
+    ("12:53:56", -1.64, +35.5, -2.91, False),   # PV -1.64 > 유효 허용 1.5 → 탈락이 정상
+    ("12:54:56", +0.56, -14.0, -2.53, True),
+])
+def test_T63_0922_failed_windows_pass_with_ratio_gates(t, pv, mv, tc2, expect):
+    H = Harness("tc2")
+    st = _run_window(H, _window(1077, 20, mv), _window(599.9, 1.0, pv), _window(893.4, 2.0, tc2))
+    assert (st == "engaging_sv2") is expect, (t, st)
+
+
+def test_T64_ramping_window_still_rejected():
+    """6°C/min 램프 중: 60초 창 전·후반 평균차 ≈ 3°C → PV 게이트(1.5°C)에서 탈락(램프값이 SV 에 붙어 있어도)."""
+    H = Harness("tc2")
+    pv_w = [597.0 + 0.1 * i for i in range(61)]                    # 6°C/min 단조 상승, |PV-SV| ≤ 3
+    st = _run_window(H, [1000.0] * 61, pv_w, [890.0] * 61)
+    assert st == "arming" and H.ev == []
+
+
+def test_T65_saturated_window_gives_up_not_capture():
+    H = Harness("tc2")
+    gu = []
+    H.h.give_up.connect(lambda why: gu.append(why))
+    st = _run_window(H, [1180.0] * 61, [600.0] * 61, [890.0] * 61)      # 1180 ≥ 0.98×1200=1176
+    assert st == "idle" and H.ev == [] and len(gu) == 1 and "여유가 없습니다" in gu[0]
+    assert H.h.gave_up == gu[0]
+    # 1170 이면(98% 미만) 캡처한다
+    H2 = Harness("tc2")
+    assert _run_window(H2, [1170.0] * 61, [600.0] * 61, [890.0] * 61) == "engaging_sv2"
+
+
+def test_T66_gate_scale_invariance():
+    H = Harness("tc2")
+    assert H.h.effective_gates(890.0) == (1.5, 60.0, pytest.approx(17.8))
+    H2 = Harness("tc2", enter_tol_c=6.0, mv_limit=600)
+    assert H2.h.effective_gates(445.0) == (3.0, 30.0, pytest.approx(8.9))
+    H3 = Harness("tc2", enter_tol_c=0.5, mv_limit=200)           # 비율이 하한보다 작으면 하한이 남는다
+    assert H3.h.effective_gates(10.0) == (0.5, 15.0, 1.0)
+
+
+def test_T67_force_dac_hold_uses_last_window_or_current_mv():
+    H = Harness("tc2")
+    eng = []; H.h.engaged.connect(lambda k: eng.append(k))
+    _run_window(H, _window(1077, 20, 80.0), _window(599.9, 1.0, 0.0), _window(893.4, 2.0, 0.0))  # MV 드리프트 80 > 60 → 탈락
+    assert H.h.state == "arming" and H.h._h["last_window_mv"] is not None
+    assert H.h.force_dac_hold(None) is True
+    assert H.h.state == "holding" and H.h.kind == "dac" and eng == ["dac"]
+    assert H.ev[-1][0] == "mv" and 1077 <= H.ev[-1][1] <= 1120        # 마지막(드리프트 +80) 창의 평균 MV
+    H2 = Harness("tc2")
+    assert H2.h.force_dac_hold(None) is False                     # 이력도 현재값도 없음
+    assert H2.h.force_dac_hold(1150) is True and H2.ev == [("mv", 1150)]
+    H3 = Harness("tc2")
+    assert H3.h.force_dac_hold(1300) is True and H3.ev == [("mv", 1200)]   # 클램프

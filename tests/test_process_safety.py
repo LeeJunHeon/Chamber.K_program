@@ -243,3 +243,117 @@ def test_T53_all_stop_sets_flags_before_plc_emergency_then_poll_off_no_abort(saf
         w.request_plc_emergency_stop.disconnect()
         w.request_plc_emergency_stop.connect(w.plc_controller.on_emergency_stop)
         MAIN.QMessageBox.reset_mock()
+
+
+# ═══════════════ 유지 모드 진입 대기 (process_controller._heater_wait + _heater_hold_wait) ═══════════════
+from PyQt6.QtCore import QObject, pyqtSignal as Signal
+import controller.process_controller as PC
+
+
+class _FakePlcStatus(QObject):
+    update_heater_status = Signal(dict)
+
+    def __init__(self):
+        super().__init__()
+        self.st = make_heater_st(run=True, pv=600.0, sv=600.0, sv_ramp=600.0, cur_sv=600.0, mv=1077)
+
+    def get_heater_status(self):
+        return dict(self.st)
+
+
+@pytest.fixture
+def pc(qapp, monkeypatch):
+    """테스트 스레드에서 도는 컨트롤러 + 50ms 폴링 흉내. soak 1초, 유지 대기 상한 1초."""
+    plc = _FakePlcStatus()
+    c = PC.SputterProcessController(MagicMock(), MagicMock(), MagicMock(), plc, None)
+    c._running = True; c._stop_pending = False; c._steps = []; c._idx = 0
+    calls = {"next": 0, "abort": [], "msgs": [], "failed": [], "force": []}
+    monkeypatch.setattr(c, "_next_step", lambda: calls.__setitem__("next", calls["next"] + 1))
+    monkeypatch.setattr(c, "_abort_with_error", lambda r: calls["abort"].append(r))
+    c.status_message.connect(lambda l, m: calls["msgs"].append((l, m)))
+    c.heater_hold_failed.connect(lambda d: calls["failed"].append(d))
+    c.request_hold_force_dac.connect(lambda mv: calls["force"].append(mv))
+    monkeypatch.setattr(PC, "HEATER_SOAK_TIME_SEC", 1)
+    monkeypatch.setattr(PC, "HEATER_HOLD_WAIT_SEC", 1.0)
+    monkeypatch.setattr(PC, "HEATER_HOLD_FAIL_ACTION", "dac")
+    hold = {"mode": "tc2", "state": "arming", "kind": None, "holding": False, "sv2": None, "value": None, "gave_up": None}
+    c.set_hold_state_provider(lambda: dict(hold))
+    feeder = QTimer(); feeder.setInterval(50)
+    feeder.timeout.connect(lambda: plc.update_heater_status.emit(dict(plc.st)))
+    feeder.start()
+    c._plc = plc; c._hold = hold; c._calls = calls
+    yield c
+    feeder.stop()
+
+
+def test_T73_hold_wait_passes_when_holding_arrives(pc):
+    QTimer.singleShot(1500, lambda: pc._hold.update(state="holding", kind="tc2", holding=True, sv2=854.9))
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert c["next"] == 1 and c["abort"] == [] and c["failed"] == []
+    assert any("유지 모드 진입 확인 (tc2, SV2 854.9°C)" in m for _, m in c["msgs"])
+    assert any("유지 모드(tc2) 진입 대기 시작" in m for _, m in c["msgs"])
+
+
+def test_T74_hold_wait_timeout_dac_forces_and_continues(pc):
+    def _force(mv):                                    # main 이 force_dac_hold 를 실행한 것처럼
+        pc._hold.update(state="holding", kind="dac", holding=True, value=1077)
+    pc.request_hold_force_dac.connect(_force)
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert c["force"] == [1077] and c["next"] == 1 and c["abort"] == []
+    assert len(c["failed"]) == 1 and c["failed"][0]["action"] == "dac" and c["failed"][0]["forced"] is True
+    assert any(l == "히터(경고)" and "DAC 상한 강제 고정 후 진행" in m for l, m in c["msgs"])
+    assert any("유지 모드 진입 확인 (dac, DAC 상한 1077)" not in m for _, m in c["msgs"])
+
+
+def test_T74b_dac_force_fails_falls_back_to_abort(pc):
+    pc._heater_wait(600.0)                             # force 요청에 아무도 응답하지 않음 → abort
+    c = pc._calls
+    assert c["force"] == [1077] and c["next"] == 0 and len(c["abort"]) == 1
+    assert "유지 모드 진입 실패" in c["abort"][0] and c["failed"][0]["action"] == "abort"
+
+
+def test_T75_fail_action_abort(pc, monkeypatch):
+    monkeypatch.setattr(PC, "HEATER_HOLD_FAIL_ACTION", "abort")
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert c["force"] == [] and c["next"] == 0 and len(c["abort"]) == 1
+    assert c["failed"][0]["action"] == "abort" and "대기 1s 초과" in c["failed"][0]["reason"]
+
+
+def test_T75b_fail_action_proceed_warns(pc, monkeypatch):
+    monkeypatch.setattr(PC, "HEATER_HOLD_FAIL_ACTION", "proceed")
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert c["next"] == 1 and c["abort"] == [] and c["failed"][0]["action"] == "proceed"
+    assert any("경고만 내고 진행" in m for _, m in c["msgs"])
+
+
+def test_T76_mode_off_passes_immediately(pc):
+    pc._hold["mode"] = "off"
+    t0 = time.monotonic()
+    pc._heater_wait(600.0)
+    assert pc._calls["next"] == 1 and time.monotonic() - t0 < 1.8          # soak 1초 + 즉시
+    assert not any("진입 대기" in m for _, m in pc._calls["msgs"])
+
+
+def test_T77_fault_and_stop_during_hold_wait(pc):
+    QTimer.singleShot(1400, lambda: pc._plc.st.update(fault=True))
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert c["next"] == 0 and len(c["abort"]) == 1 and "히터 이상 발생(유지 모드 대기 중)" in c["abort"][0]
+    # 중단 요청
+    pc._calls.update(next=0, abort=[]); pc._plc.st.update(fault=False)
+    QTimer.singleShot(1400, lambda: setattr(pc, "_stop_pending", True))
+    pc._heater_wait(600.0)
+    assert pc._calls["next"] == 0 and pc._calls["abort"] == [] and pc._calls["failed"] == []
+
+
+def test_T78_give_up_ends_wait_early(pc):
+    QTimer.singleShot(1300, lambda: pc._hold.update(gave_up="도달 시점 출력이 상한에 붙어 있어 고정하지 않음"))
+    QTimer.singleShot(1400, lambda: pc._hold.update(state="holding", kind="dac", holding=True, value=1176))
+    pc.request_hold_force_dac.connect(lambda mv: None)
+    pc._heater_wait(600.0)
+    c = pc._calls
+    assert c["failed"] and "상한에 붙어" in c["failed"][0]["reason"] and c["next"] == 1

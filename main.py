@@ -42,7 +42,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
                         HEATER_HOLD_MODE, HEATER_HOLD_MV_ENTER_TOL_C, HEATER_HOLD_MV_ENTER_SEC,
                         HEATER_HOLD_MV_ARRIVE_TOL_C, HEATER_HOLD_MV_DRIFT_PV_C, HEATER_HOLD_MV_DRIFT_MV,
-                        HEATER_HOLD_TC2_MARGIN_C, HEATER_HOLD_TC2_DRIFT_C,
+                        HEATER_HOLD_TC2_MARGIN_C, HEATER_HOLD_TC2_DRIFT_C, HEATER_MV_SAT_SEC,
                         COMM_PROBE_MS, HEATER_STALE_SEC, HEATER_STALE_FG,
                         HEATER_LOG_PERIOD_MS, HEATER_RECIPE_DIR,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE,
@@ -56,6 +56,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from controller.heater_hold import HeaterHold
+from controller.heater_saturation import HeaterSaturationGuard
 from controller.heater_ramp import RampProfiler
 from controller.heater_atmosphere import HeaterAtmosphere
 from lib.heater_logger import HeaterCsvLogger
@@ -226,6 +227,20 @@ class MainDialog(QDialog):
         self.heater_hold.request_sv2.connect(self.request_heater_sv2)
         self.heater_hold.request_pv_sel.connect(self.request_heater_pv_sel)
         self.heater_hold.message.connect(log_message_to_monitor)
+        self.heater_hold.engaged.connect(self._on_heater_hold_engaged)
+        self.heater_hold.give_up.connect(lambda why: self._refresh_hold_snapshot())
+        # process_controller 는 main 속성을 직접 읽지 않는다 — 스냅샷 dict 를 돌려주는 콜러블을 주입한다
+        self._hold_snapshot: dict = {}
+        self._refresh_hold_snapshot()
+        self.process_controller.set_hold_state_provider(lambda: dict(self._hold_snapshot))
+        self.process_controller.request_hold_force_dac.connect(self._on_hold_force_dac)
+        self.process_controller.heater_hold_failed.connect(self._on_heater_hold_failed)
+        # DAC 포화 감시 — 유지 모드와 독립된 안전망(HEATER_HOLD_MODE 가 off 여도 돈다)
+        self.heater_sat = HeaterSaturationGuard(mv_limit=HEATER_MV_LIMIT, mv_min=HEATER_MV_MIN,
+                                                sat_sec=HEATER_MV_SAT_SEC, parent=self)
+        self.heater_sat.request_mv_limit.connect(self.request_heater_mv_limit)
+        self.heater_sat.message.connect(log_message_to_monitor)
+        self.heater_sat.saturated.connect(self._on_heater_saturated)
         # 히터 시작 카드의 운전 시간 계산용(상승 엣지 시각)
         self._heater_chat_t0 = 0.0
         # 가스·압력 준비가 끝나면 무엇을 이어서 할지. ("manual_on", 목표온도) 또는
@@ -1023,6 +1038,7 @@ class MainDialog(QDialog):
         self._chat_user_stopped = False
         self._chat_emergency_stopped = False   # ALL STOP(비상 정지)으로 끝남 — 사용자 STOP 과 구분
         self._fault_abort_active = False       # _abort_process_by_fault 가 이미 시작됐다(중복 판정 방지)
+        self._chat_hold_fail_key = None        # 유지 모드 실패 카드 중복 방지(공정당 같은 사유 1장)
         self._finish_handled = False           # 새 공정(수동 / CSV STEP 마다) — 종료 처리 아직 안 함
         self._chat_errors = []
         self._chat_fail_notified = False
@@ -1859,6 +1875,67 @@ class MainDialog(QDialog):
         except Exception:
             pass
         return "HEATER"
+
+    # ==================== 유지 모드 ↔ 공정 / DAC 포화 ====================
+    def _refresh_hold_snapshot(self) -> None:
+        """process_controller(다른 스레드)가 읽는 유지 모드 스냅샷 — main 스레드에서만 갱신한다."""
+        h = self.heater_hold
+        self._hold_snapshot = {"mode": HEATER_HOLD_MODE, "state": h.state, "kind": h.kind,
+                               "holding": h.is_holding(), "sv2": h.sv2, "value": h.value, "gave_up": h.gave_up}
+
+    @Slot(str)
+    def _on_heater_hold_engaged(self, kind: str) -> None:
+        self._refresh_hold_snapshot()
+        h = self.heater_hold
+        desc = f"SV2 {float(h.sv2):.1f}°C" if (kind == 'tc2' and h.sv2 is not None) else f"DAC 상한 {h.value}"
+        log_message_to_monitor("히터", f"[유지 모드] 진입 — {kind} ({desc})")
+
+    @Slot(object)
+    def _on_hold_force_dac(self, mv) -> None:
+        """process_controller 가 진입 대기를 포기했다 — 마지막 측정 창(없으면 현재 MV)로 dac 강제 진입."""
+        ok = self.heater_hold.force_dac_hold(mv)
+        if not ok:
+            log_message_to_monitor("히터(경고)", "[유지 모드] DAC 강제 고정 불가 — 측정 창도 현재 MV 도 없음")
+        self._refresh_hold_snapshot()
+
+    @Slot(dict)
+    def _on_heater_hold_failed(self, info: dict) -> None:
+        """유지 모드 진입 실패(공정 소유 히터) — 경고 로그 + 챗 카드 1장(공정당 같은 사유 반복 없음)."""
+        reason = str(info.get("reason") or "")
+        action = str(info.get("action") or "")
+        log_message_to_monitor("히터(경고)", f"[유지 모드] 진입 실패({action}) — {reason}")
+        key = (action, reason[:40])
+        if getattr(self, "_chat_hold_fail_key", None) == key:
+            return
+        self._chat_hold_fail_key = key
+        if not self.chat_chk:
+            return
+        try:
+            st = self.plc_controller.get_heater_status() or {}
+            act_txt = {"dac": "DAC 상한 강제 고정 후 진행", "abort": "공정 중단",
+                       "proceed": "경고만 내고 진행"}.get(action, action)
+            fields = {"사유": reason, "조치": act_txt,
+                      "경과": f"{int(info.get('elapsed') or 0)}초", "상태": str(info.get("state")),
+                      "TC1": self._chat_temp(st.get('pv')), "TC2": self._chat_temp(st.get('pv2')),
+                      "MV": str(st.get('mv'))}
+            if info.get("forced") and self.heater_hold.value is not None:
+                fields["DAC 상한"] = str(self.heater_hold.value)
+            self.chat_chk.notify_heater_alert("히터 유지 모드 진입 실패", self._heater_run_context(), fields, ok=False)
+        except Exception as e:
+            log_message_to_monitor("경고", f"유지 모드 실패 카드 전송 실패: {e!r}")
+
+    @Slot(dict)
+    def _on_heater_saturated(self, d: dict) -> None:
+        """DAC 포화 판정(HeaterSaturationGuard 가 에피소드당 1회) — 챗 카드 1장."""
+        if not self.chat_chk:
+            return
+        try:
+            fields = {"TC1": self._chat_temp(d.get("pv")), "TC2": self._chat_temp(d.get("pv2")),
+                      "MV": str(d.get("mv")), "경과": f"{float(d.get('sec') or 0):.0f}초",
+                      "클램프": f"D00018 ← {d.get('clamp')} ({d.get('src')})"}
+            self.chat_chk.notify_heater_alert("히터 DAC 출력 포화", self._heater_run_context(), fields, ok=False)
+        except Exception as e:
+            log_message_to_monitor("경고", f"DAC 포화 카드 전송 실패: {e!r}")
 
     # ==================== 히터 시작/종료/도달 구글챗 카드 ====================
     @staticmethod
@@ -3054,8 +3131,10 @@ class MainDialog(QDialog):
         # --- 이상 상승 엣지 → RUN OFF 명시 전송(에피소드당 1회) ---
         self._heater_fault_off_tick(st)
 
-        # --- 목표 도달 후 유지 모드(dac / tc2) — 레시피/수동/공정 어느 경로든 여기서 동일하게 ---
+        # --- DAC 포화 감시(유지 모드가 출력을 묶고 있지 않을 때만) → 유지 모드(dac / tc2) ---
+        self.heater_sat.tick(st, self.heater_hold.is_holding(), self.heater_hold.kind)
         self.heater_hold.tick(st, self._heater_final_target(st))
+        self._refresh_hold_snapshot()
 
         # --- 히터 시작/종료 구글챗 카드 (RUN 엣지) ---
         self._heater_chat_tick(st, edge)

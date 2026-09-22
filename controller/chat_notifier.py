@@ -393,6 +393,12 @@ class ChatNotifier(QObject):
                         status=("INFO" if started else ("SUCCESS" if ok else "FAIL")),
                         fields=dict(fields or {}), urgent=True)
 
+    def notify_heater_alert(self, title: str, subtitle: str, fields: dict, ok: bool = False):
+        """히터 경고 카드(유지 모드 진입 실패 / DAC 포화 등). notify_heater_run 과 같은 형식·urgent 규칙.
+        ok=False 면 ❌(FAIL), True 면 ℹ️(INFO). 같은 사유의 반복 발사는 호출부가 막는다."""
+        self._post_card(title, subtitle=subtitle, status=("INFO" if ok else "FAIL"),
+                        fields=dict(fields or {}), urgent=True)
+
     def notify_heater_reached(self, subtitle: str, fields: dict):
         """공정이 소유한 히터의 승온 대기 통과 카드("히터 도달", ℹ️). notify_heater_run 과 같은 형식·규칙(urgent)."""
         self._post_card("히터 도달", subtitle=subtitle, status="INFO", fields=dict(fields or {}), urgent=True)

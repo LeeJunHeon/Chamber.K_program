@@ -124,11 +124,19 @@ HEATER_HOLD_MV_ENTER_SEC   = get('HEATER_HOLD_MV_ENTER_SEC',   60)      # 이만
 #  B: PV 가 분당 5.6°C 로 목표를 스쳐 지나가는 구간에서 582 를 고정(실제 유지 430~460)
 #  C: MV 가 최소치(400)에 붙어 있을 때 캡처되면 D00018=420 이 박혀 히터가 죽는다
 HEATER_HOLD_MV_ARRIVE_TOL_C = get('HEATER_HOLD_MV_ARRIVE_TOL_C', 1.0)   # 이 안에 한 번은 들어와야 고정을 잰다 [°C]
-HEATER_HOLD_MV_DRIFT_PV_C   = get('HEATER_HOLD_MV_DRIFT_PV_C',   0.5)   # 창 후반부 평균 PV − 전반부 평균 PV 허용 [°C]
-HEATER_HOLD_MV_DRIFT_MV     = get('HEATER_HOLD_MV_DRIFT_MV',     15)    # 창 후반부 평균 MV − 전반부 평균 MV 허용 [카운트]
+#  ※ 아래 세 드리프트 값은 2026-09-22 이후 '하한(floor)' 이다 — 실제 판정 폭은 heater_hold 의 비율 허용치
+#    max(하한, DRIFT_PV_REL×ENTER_TOL / DRIFT_MV_REL×MV_LIMIT / DRIFT_TC2_REL×TC2 평균) 다.
+HEATER_HOLD_MV_DRIFT_PV_C   = get('HEATER_HOLD_MV_DRIFT_PV_C',   0.5)   # 창 후반부 평균 PV − 전반부 평균 PV 허용 하한 [°C]
+HEATER_HOLD_MV_DRIFT_MV     = get('HEATER_HOLD_MV_DRIFT_MV',     15)    # 창 후반부 평균 MV − 전반부 평균 MV 허용 하한 [카운트]
 # tc2 전용
 HEATER_HOLD_TC2_MARGIN_C    = get('HEATER_HOLD_TC2_MARGIN_C',    50.0)  # TC2 목표 ≤ OT2 − 마진 [°C] (최소 20)
-HEATER_HOLD_TC2_DRIFT_C     = get('HEATER_HOLD_TC2_DRIFT_C',     1.0)   # 창 후반부 평균 TC2 − 전반부 평균 TC2 허용 [°C] (최소 0.1)
+HEATER_HOLD_TC2_DRIFT_C     = get('HEATER_HOLD_TC2_DRIFT_C',     1.0)   # 창 후반부 평균 TC2 − 전반부 평균 TC2 허용 하한 [°C] (최소 0.1)
+# 공정이 유지 모드 진입을 기다리는 상한(초). 0 이면 추가 대기 없음(2026-09-22 이전 동작)
+HEATER_HOLD_WAIT_SEC        = get('HEATER_HOLD_WAIT_SEC',        600)
+# 대기 상한 안에 진입하지 못했을 때: "dac"(측정값으로 DAC 상한 강제 고정 후 진행) | "abort"(공정 중단) | "proceed"(경고만)
+HEATER_HOLD_FAIL_ACTION     = get('HEATER_HOLD_FAIL_ACTION',     "dac")
+# DAC 포화 감시(controller/heater_saturation): 상한에 이만큼 연속으로 물려 있으면 포화(초, 최소 10)
+HEATER_MV_SAT_SEC           = get('HEATER_MV_SAT_SEC',           120)
 # 히터 패널 stale 표시 — 마지막 폴링 뒤 이만큼(초) 지나면 "PLC 응답 없음 · n초 전 값" 으로 바꾼다
 HEATER_STALE_SEC            = get('HEATER_STALE_SEC',            5.0)
 HEATER_STALE_FG             = "#9e9e9e"   # stale 표시 시 PV/SV 글자색(스타일의 color 만 바꾼다)
@@ -342,6 +350,24 @@ def _validate_heater_config() -> None:
     """JSON 값이 위험하거나 앞뒤가 안 맞으면 안전한 쪽으로 클램프한다.
     예외는 던지지 않는다 — 설정이 틀려도 프로그램은 떠야 한다."""
     global HEATER_MV_LIMIT, HEATER_OT_LIMIT_C, HEATER_MAX_TEMP, HEATER_OT2_LIMIT_C
+    global HEATER_HOLD_WAIT_SEC, HEATER_HOLD_FAIL_ACTION, HEATER_MV_SAT_SEC
+    # 0) 유지 모드 대기/실패 처리/포화 감시
+    try:
+        HEATER_HOLD_WAIT_SEC = max(0.0, float(HEATER_HOLD_WAIT_SEC))
+    except Exception:
+        print(f"[Config] HEATER_HOLD_WAIT_SEC {HEATER_HOLD_WAIT_SEC!r} → 600"); HEATER_HOLD_WAIT_SEC = 600.0
+    _fa = str(HEATER_HOLD_FAIL_ACTION or "").strip().lower()
+    if _fa not in ("dac", "abort", "proceed"):
+        print(f"[Config] HEATER_HOLD_FAIL_ACTION {HEATER_HOLD_FAIL_ACTION!r} → \"dac\" (허용: dac / abort / proceed)")
+        _fa = "dac"
+    HEATER_HOLD_FAIL_ACTION = _fa
+    try:
+        _ss = float(HEATER_MV_SAT_SEC)
+        if _ss < 10:
+            print(f"[Config] HEATER_MV_SAT_SEC {HEATER_MV_SAT_SEC} → 120 (최소 10초)"); _ss = 120.0
+    except Exception:
+        print(f"[Config] HEATER_MV_SAT_SEC {HEATER_MV_SAT_SEC!r} → 120"); _ss = 120.0
+    HEATER_MV_SAT_SEC = _ss
     global HEATER_RAMP_RATE_C_PER_MIN, HEATER_SLOW_RATE_C_PER_MIN
     global HEATER_APPROACH_ZONE_C, HEATER_APPROACH_MIN_RATE_C_PER_MIN
     global HEATER_APPROACH_LEAD_C

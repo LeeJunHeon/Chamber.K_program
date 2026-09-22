@@ -1,7 +1,7 @@
 # device/process_controller.py  (Chamber-K, PLC version — chamber2 스타일, IG/OES/RGA 제거)
 
 from __future__ import annotations
-from typing import Optional, List, Tuple, Dict, Any, TYPE_CHECKING
+from typing import Callable, Optional, List, Tuple, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum
 
@@ -12,6 +12,7 @@ from PyQt6.QtCore import (
 )
 from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
+                        HEATER_HOLD_MODE, HEATER_HOLD_WAIT_SEC, HEATER_HOLD_FAIL_ACTION,
                         HEATER_WAIT_TIMEOUT_SEC, POWER_WAIT_TIMEOUT_SEC,
                         POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
                         DC_RAMP_STEP_A)
@@ -287,6 +288,8 @@ class SputterProcessController(QObject):
     set_heater_ramp       = Signal(int)      # ★ 램프 속도(counts/s, 1=6°C/min)
     set_heater_ramp_c     = Signal(float)    # ★ 같은 값의 °C/min — 감속 접근 램프용
     heater_reached        = Signal(dict)     # 공정 소유 히터의 승온 대기 통과 {"pv","target","took_sec","next"} → 챗 카드
+    heater_hold_failed    = Signal(dict)     # 유지 모드 진입 실패 {"action","reason","state","elapsed","forced"} → main 이 경고 로그+챗 카드
+    request_hold_force_dac = Signal(object)  # main → HeaterHold.force_dac_hold(현재 MV). PLC 스레드에서 main 객체를 직접 부르지 않는다
 
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
@@ -300,6 +303,9 @@ class SputterProcessController(QObject):
         self.plc: PLCController = plc_controller
         # RF Pulse 는 선택 장비다. 없으면(None) 관련 스텝을 건너뛴다.
         self.rfpulse = rfpulse_controller
+        # 유지 모드(HeaterHold) 상태 조회 — main 이 set_hold_state_provider 로 주입한다(main 속성 직접 접근 금지).
+        #  반환 dict: {"mode","state","kind","holding","sv2","value","gave_up"}. None 이면 유지 모드 대기 없음
+        self._hold_state: Optional[Callable[[], dict]] = None
 
         # 내부 상태
         self._steps: List[ProcessStep] = []
@@ -957,6 +963,10 @@ class SputterProcessController(QObject):
         _sec = min(_sec, float(POWER_WAIT_TIMEOUT_MAX_SEC))
         return _sec, est
 
+    def set_hold_state_provider(self, fn) -> None:
+        """유지 모드 상태 조회 콜러블 주입(main 이 스냅샷 dict 를 돌려주는 함수를 넘긴다)."""
+        self._hold_state = fn
+
     # ==================== 히터 온도 도달 대기 ====================
     def _heater_wait(self, target_c: float):
         """PLC 히터 상태 폴링을 구독해 목표 ±tol 이 N초 연속 유지되면 통과."""
@@ -1069,6 +1079,10 @@ class SputterProcessController(QObject):
             self._abort_with_error(f"{self._step_tag()} | 히터 승온 timeout — 공정 중단")
             return
 
+        # ── 유지 모드 진입 대기(2026-09-22) — 온도만 맞았다고 넘어가면 캡처가 공정과 경주한다(09-22: 도달 3분 뒤 RF 점화) ──
+        if not self._heater_hold_wait(target_c):
+            return
+
         self.status_message.emit("정보", "히터 온도 도달 완료.")
         _took = int(total_clock.elapsed() // 1000)
         _pv = state.get('last_pv')
@@ -1086,6 +1100,116 @@ class SputterProcessController(QObject):
             _pv2 = None
         self.heater_reached.emit({"pv": _pv, "pv2": _pv2, "target": float(target_c), "took_sec": _took, "next": _nxt})
         self._next_step()
+
+    def _hold_snapshot(self) -> dict:
+        try:
+            d = self._hold_state() if self._hold_state is not None else None
+        except Exception:
+            d = None
+        return dict(d or {})
+
+    def _heater_hold_wait(self, target_c: float) -> bool:
+        """온도 조건 통과 뒤, 유지 모드(HeaterHold)가 holding 이 될 때까지 최대 HEATER_HOLD_WAIT_SEC 기다린다.
+        True 면 다음으로 진행, False 면 이미 중단(_abort_with_error) 했거나 stop 중이다.
+        mode "off" / WAIT 0 / 주입 없음 → 즉시 통과(이전 동작). 어떤 경우에도 무알림 진행은 없다."""
+        wait_sec = float(HEATER_HOLD_WAIT_SEC)
+        snap = self._hold_snapshot()
+        mode = str(snap.get("mode") or HEATER_HOLD_MODE or "off")
+        if self._hold_state is None or mode == "off" or wait_sec <= 0:
+            return True
+        if snap.get("holding"):
+            self.status_message.emit("히터", f"유지 모드 진입 확인 ({snap.get('kind')}, {self._hold_desc(snap)})")
+            return True
+
+        loop = QEventLoop()
+        st_ = {'fault': False, 'result': None, 'last_log': 0, 'last_st': None, 'gave_up': None}
+        clock = QElapsedTimer(); clock.start()
+
+        def _on_status(st: dict):
+            if not self._running or self._stop_pending:
+                loop.quit(); return
+            st_['last_st'] = st
+            if st.get('fault'):
+                st_['fault'] = True; loop.quit(); return
+            snap = self._hold_snapshot()
+            if snap.get("holding"):
+                st_['result'] = snap; loop.quit(); return
+            if snap.get("gave_up"):
+                st_['gave_up'] = snap.get("gave_up"); loop.quit(); return
+            el = clock.elapsed() // 1000
+            if el - st_['last_log'] >= 20:
+                st_['last_log'] = el
+                self.status_message.emit(
+                    "히터", f"유지 모드 진입 대기 — 경과 {el}s / 상한 {wait_sec:.0f}s (상태: {snap.get('state')})")
+
+        self.plc.update_heater_status.connect(_on_status)
+        self._active_loops = [("heater_hold", loop)]
+        self.status_message.emit("히터", f"목표 도달 — 유지 모드({mode}) 진입 대기 시작 (상한 {wait_sec:.0f}s)")
+        self._exec_loop_with_timeout(loop, int(wait_sec * 1000))
+        try:
+            self.plc.update_heater_status.disconnect(_on_status)
+        except Exception:
+            pass
+        self._active_loops = []
+
+        if not self._running or self._stop_pending:
+            return False
+        if st_['fault']:
+            self._abort_with_error(f"{self._step_tag()} | 히터 이상 발생(유지 모드 대기 중)")
+            return False
+        if st_['result']:
+            snap = st_['result']
+            self.status_message.emit("히터", f"유지 모드 진입 확인 ({snap.get('kind')}, {self._hold_desc(snap)})")
+            return True
+
+        # ── 진입 실패: HEATER_HOLD_FAIL_ACTION ──
+        elapsed = int(round(clock.elapsed() / 1000.0))
+        reason = st_['gave_up'] or f"유지 모드 진입 대기 {elapsed}s 초과 (상태: {self._hold_snapshot().get('state')})"
+        action = str(HEATER_HOLD_FAIL_ACTION)
+        forced = False
+        if action == "dac":
+            mv = (st_['last_st'] or {}).get('mv')
+            self.request_hold_force_dac.emit(mv)
+            # main 스레드가 force_dac_hold 를 실행하고 다음 폴링이 holding 을 비춘다 — 최대 3초 기다린다
+            loop2 = QEventLoop()
+
+            def _on_status2(st: dict):
+                if self._hold_snapshot().get("holding") or not self._running or self._stop_pending:
+                    loop2.quit()
+            self.plc.update_heater_status.connect(_on_status2)
+            self._active_loops = [("heater_hold_force", loop2)]
+            self._exec_loop_with_timeout(loop2, 3000)
+            try:
+                self.plc.update_heater_status.disconnect(_on_status2)
+            except Exception:
+                pass
+            self._active_loops = []
+            if not self._running or self._stop_pending:
+                return False
+            forced = bool(self._hold_snapshot().get("holding"))
+            if not forced:
+                action = "abort"
+                reason += " — DAC 강제 고정도 실패(측정 창·현재 MV 없음)"
+        info = {"action": action, "reason": reason, "state": self._hold_snapshot().get("state"),
+                "elapsed": elapsed, "forced": forced, "target": float(target_c)}
+        self.heater_hold_failed.emit(info)
+        if action == "abort":
+            self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 공정 중단: {reason}")
+            self._abort_with_error(f"{self._step_tag()} | 유지 모드 진입 실패 — {reason}")
+            return False
+        if action == "dac":
+            self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 → DAC 상한 강제 고정 후 진행: {reason}")
+        else:
+            self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 경고만 내고 진행(HEATER_HOLD_FAIL_ACTION=proceed): {reason}")
+        return True
+
+    @staticmethod
+    def _hold_desc(snap: dict) -> str:
+        if snap.get("kind") == "tc2" and snap.get("sv2") is not None:
+            return f"SV2 {float(snap['sv2']):.1f}°C"
+        if snap.get("value") is not None:
+            return f"DAC 상한 {int(snap['value'])}"
+        return "-"
 
     def _exec_loop_with_timeout(
         self,
