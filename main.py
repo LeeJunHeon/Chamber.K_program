@@ -714,6 +714,22 @@ class MainDialog(QDialog):
                         "tcErr": bool((getattr(self, "_erp_heater", {}) or {}).get("tc_err")),
                         "wdErr": bool((getattr(self, "_erp_heater", {}) or {}).get("wd_err")),
                         "ot": bool((getattr(self, "_erp_heater", {}) or {}).get("ot")),
+                        # 장비 LCD 에 떠 있는 것을 텍스트 그대로 보낸다(웹은 해석하지 않는다).
+                        #  sv   : heater_sv_big — 운전 cur_sv / 정지 sv / TC2 추종 중 sv(TC1 목표)
+                        #  dev  : heater_dev_label — "Δ+1.2", 정지 중 ""
+                        #  tc2  : heater_pv2_label — "TC2 382.3 °C" / "TC2 --.-" / "TC2 a → b"
+                        #  badge: FAULT / ITL / HOLD / RUN / STOP (_update_heater_lcd 우선순위 그대로)
+                        "lcd": {
+                            "sv": _w("heater_sv_big"),
+                            "dev": _w("heater_dev_label"),
+                            "devOk": bool(getattr(self, "_erp_heater_dev_ok", False)),
+                            "tc2": _w("heater_pv2_label"),
+                            "tc2Hold": bool(
+                                getattr(self, "heater_hold", None) is not None
+                                and self.heater_hold.is_holding()
+                                and self.heater_hold.kind == "tc2"),
+                            "badge": getattr(self, "_heater_badge", None) or "",
+                        },
                         "recipeRunning": bool(
                             getattr(getattr(self, "heater_recipe", None), "is_running", lambda: False)()
                         ),
@@ -2572,6 +2588,7 @@ class MainDialog(QDialog):
                 dev = float(pv) - float(dev_ref)
                 ui.heater_dev_label.setText(f"\u0394{dev:+.1f}")
                 col = "#2e7d32" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#6b7280"
+                self._erp_heater_dev_ok = abs(dev) <= HEATER_SOAK_TOLERANCE   # ERP: 편차 색 판단
                 if getattr(self, "_heater_dev_col", None) != col:
                     self._heater_dev_col = col
                     ui.heater_dev_label.setStyleSheet(
@@ -2579,6 +2596,7 @@ class MainDialog(QDialog):
                         f"color: {col}; font-size: 9pt;}}")
             else:
                 ui.heater_dev_label.setText("")
+                self._erp_heater_dev_ok = False
 
             # 운전 배지 (우선순위: FAULT > ITL > HOLD > RUN > STOP)
             held = False
