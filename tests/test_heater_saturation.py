@@ -90,3 +90,35 @@ def test_T72_0922_scenario_caught_within_120s():
         assert g.t - t_sat <= 121
     assert g.t - t_sat == pytest.approx(121.0) and g.ev == [1077]      # 첫 포화 tick + 120초
     assert "TC2 920.0" in g.msgs[-1][1]
+
+
+def test_T72b_demoted_dac_hold_is_not_overwritten_by_guard():
+    """tc2 → dac 강등으로 dac holding 이 되면 포화 감시는 소유권을 넘기고 D00018 을 덮어쓰지 않는다."""
+    from controller.heater_hold import HeaterHold
+    g = G(sat_sec=10)
+    hold = HeaterHold("tc2", mv_limit=1200, mv_min=400, enter_tol_c=3.0, enter_sec=60, arrive_tol_c=1.0,
+                      drift_pv_c=0.5, drift_mv=15, tc2_margin_c=50.0, tc2_drift_c=1.0, clock=lambda: g.t)
+    hev = []; hold.request_mv_limit.connect(lambda v: hev.append(v))
+    hold.request_sv2.connect(lambda v: None); hold.request_pv_sel.connect(lambda v: None)
+    base = dict(run=True, pv=600.0, sv=600.0, sv_ramp=600.0, cur_sv=600.0, mv=1200, pv2=893.4,
+                sv2=0.0, sv2_max=1100.0, ot2_limit=1150.0, pv_sel_eff=False)
+    def tick(**kw):
+        g.t += 1.0
+        st = make_heater_st(**{**base, **kw})
+        g.g.tick(st, hold.is_holding(), hold.kind)
+        hold.tick(st, 600.0)
+    for _ in range(70):
+        tick(mv=1000)                                    # 도달·창 → tc2 캡처
+        if hold.state == "engaging_sv2":
+            break
+    assert hold.state == "engaging_sv2"
+    tick(mv=1000, sv2=hold.sv2); tick(mv=1000, sv2=hold.sv2, pv_sel_eff=True)
+    assert hold.is_holding() and hold.kind == "tc2"
+    for _ in range(30):
+        tick(mv=1200, sv2=hold.sv2, pv_sel_eff=True)     # tc2 유지 중 MV 상한 — hold_active 라 감시는 판정하지 않는다
+    assert g.ev == []
+    tick(mv=1200, sv2=hold.sv2, pv_sel_eff=True, pv2=None)   # TC2 상실 → dac 강등
+    assert hold.is_holding() and hold.kind == "dac" and hev == [1000]
+    for _ in range(60):
+        tick(mv=1000, mv_limit=1000, pv2=None, pv_sel_eff=False)      # PLC 가 D00018=1000 을 비춘다
+    assert g.ev == [] and hold.value == 1000 and hev == [1000]   # 감시는 dac 유지의 D00018 을 건드리지 않는다

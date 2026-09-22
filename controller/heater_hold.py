@@ -57,7 +57,8 @@ class HeaterHold(QObject):
     request_pv_sel   = Signal(bool)
     message          = Signal(str, str)     # (레벨, 문구) → main 이 log_message_to_monitor 에 연결
     engaged          = Signal(str)          # 'tc2' | 'dac' — holding 전이 순간 1회 (완화 경로 여부는 engaged_relaxed 로 조회)
-    give_up          = Signal(str)          # 진입 불가 확정(창 평균 MV 가 상한 98% 이상 등) 사유 1회. mode='off' 는 해당 없음
+    give_up          = Signal(str)          # 진입 불가 확정(dac: 창 평균 MV 가 상한 98% 이상) 사유 1회. mode='off' 는 해당 없음
+    alert            = Signal(str, dict)    # 챗 카드가 필요한 사건: "demoted"(tc2→dac 강등) / "demote_failed" / "no_margin"(MV≥98%)
 
     def __init__(self, mode: str, *, mv_limit: int, mv_min: int,
                  enter_tol_c: float, enter_sec: float, arrive_tol_c: float,
@@ -361,16 +362,25 @@ class HeaterHold(QObject):
             return
         value = int(round(sum(s[0] for s in h['samples']) / n))
         if value >= MV_SAT_REL * float(self.mv_limit):
-            # 히터가 목표를 유지할 능력이 없다 — 재시도로 해결되지 않는다. 공정이 알 수 있게 give_up 으로 올린다
-            why = (f"도달 시점 출력이 상한에 붙어 있어 고정하지 않음 (평균 MV {value} ≥ {int(self.mv_limit)}×{MV_SAT_REL:g}) "
-                   f"— 히터가 목표를 유지할 여유가 없습니다")
+            if kind == 'dac':
+                # 상한 근처에서 상한을 고정하는 것은 의미가 없다 — 재시도로 해결되지 않는다. 공정이 알 수 있게 give_up
+                why = (f"도달 시점 출력이 상한에 붙어 있어 고정하지 않음 (평균 MV {value} ≥ {int(self.mv_limit)}×{MV_SAT_REL:g}) "
+                       f"— 히터가 목표를 유지할 여유가 없습니다")
+                if not h['limit_warned']:
+                    h['limit_warned'] = True
+                    self._msg("히터(경고)", why)
+                    h['gave_up'] = why
+                    self.give_up.emit(why)
+                h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)   # arrived 유지
+                return
+            # tc2: 여유가 없을수록 능동 조절이 더 필요하다 — 포기하지 않고 현재 상태를 TC2 로 고정한다(안내 1회)
+            #  (목표 도달 실패는 승온 타임아웃이 판단할 일이지 유지 모드가 판단할 일이 아니다)
             if not h['limit_warned']:
                 h['limit_warned'] = True
+                why = (f"도달 시점 출력이 상한의 {MV_SAT_REL * 100:.0f}% 이상입니다 (평균 MV {value} / 상한 {int(self.mv_limit)}) "
+                       f"— 히터에 여유가 없습니다. TC2 추종으로 현재 상태를 고정합니다")
                 self._msg("히터(경고)", why)
-                h['gave_up'] = why
-                self.give_up.emit(why)
-            h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)   # arrived 유지
-            return
+                self.alert.emit("no_margin", {"mv": value, "limit": int(self.mv_limit), "why": why})
         if value <= int(self.mv_min) + 20:
             if not h['floor_warned']:
                 h['floor_warned'] = True
@@ -378,8 +388,9 @@ class HeaterHold(QObject):
                                      f"— PID 가 출력을 내지 않는 상태입니다")
             h.update(state='idle', samples=[], t0=0.0, sv=None, value=None, last_push=0.0)   # arrived 유지
             return
-        h['limit_warned'] = False; h['floor_warned'] = False
+        h['floor_warned'] = False
         if kind == 'dac':
+            h['limit_warned'] = False
             self._capture_dac(h, now, value, pv, sv)
         else:
             self._capture_tc2(h, st, now, final, pv)
@@ -430,11 +441,33 @@ class HeaterHold(QObject):
         self.engaged_relaxed = False
         self.request_sv2.emit(float(sv2))
 
+    def _demote_to_dac(self, why: str) -> None:
+        """tc2 유지/진입 중 TC2 를 못 쓰게 됐다(D00011=-1 / M0004B OFF): TC1 제어로 조용히 복귀하면 셔터가 열린 공정에서
+        PID 가 즉시 DAC 를 상한까지 민다(2026-09-22). M0004A OFF → D00035=0 순서로 tc2 를 끊은 뒤 dac 유지로 강등한다.
+        OT2 과온 보호도 함께 사라지므로 반드시 알린다. dac 도 불가하면 그때만 완전 해제하되 역시 알린다."""
+        h = self._h
+        was = h['state']
+        self.request_pv_sel.emit(False)
+        self.request_sv2.emit(0.0)
+        self._reset(keep_arrived=True)
+        ok = self.force_dac_hold(None if not self._last_st else self._last_st.get('mv'))
+        base = f"{why} — TC2 추종 → DAC 상한 고정으로 강등"
+        if ok:
+            self.alert.emit("demoted", {"why": why, "value": self._h['value'], "from": was})
+            self._msg("히터(경고)", f"{base} (D00018 {self._h['value']}). OT2 과온 보호도 함께 사라졌습니다. TC2 배선을 확인하십시오")
+        else:
+            self._msg("히터(경고)", f"{base} 실패({self.last_force_reason}) → TC1 제어로 복귀. 출력 상한이 {int(self.mv_limit)} 그대로입니다 — 확인 필요")
+            self.alert.emit("demote_failed", {"why": why, "reason": self.last_force_reason, "from": was})
+
     def _tick_engaging(self, st: dict, now: float, final) -> None:
         h = self._h
         why = self._tc2_release_reason(st, final, check_eff=False)
         if why:
-            self.release(why); return
+            if self._tc2_lost(why):
+                self._demote_to_dac(why)
+            else:
+                self.release(why)
+            return
         if h['state'] == 'engaging_sv2':
             try:
                 back = float(st.get('sv2'))
@@ -461,6 +494,11 @@ class HeaterHold(QObject):
             if warn:
                 self._msg("히터(경고)", f"TC2 추종 진입 실패 — {step} {ENGAGE_TIMEOUT_SEC:.0f}초 초과, TC1 제어로 되돌림")
 
+    @staticmethod
+    def _tc2_lost(why: str) -> bool:
+        """(가) TC2 를 못 쓰게 된 사유(강등 대상) vs (나) 목표 변경/RUN OFF/fault(기존 해제)."""
+        return why.startswith("TC2 값 없음") or why.startswith("래더가 TC2 제어를 해제")
+
     def _tc2_release_reason(self, st: dict, final, check_eff: bool):
         h = self._h
         if final is None or h['final'] is None or abs(float(final) - float(h['final'])) > 0.05:
@@ -475,7 +513,11 @@ class HeaterHold(QObject):
         h = self._h
         why = self._tc2_release_reason(st, final, check_eff=True)
         if why:
-            self.release(why); return
+            if self._tc2_lost(why):
+                self._demote_to_dac(why)
+            else:
+                self.release(why)
+            return
         # 재적용 — D00035 가 되돌아간 상태가 5초 이상이면 다시 쓴다
         try:
             back = float(st.get('sv2'))

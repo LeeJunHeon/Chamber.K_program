@@ -229,6 +229,7 @@ class MainDialog(QDialog):
         self.heater_hold.message.connect(log_message_to_monitor)
         self.heater_hold.engaged.connect(self._on_heater_hold_engaged)
         self.heater_hold.give_up.connect(lambda why: self._refresh_hold_snapshot())
+        self.heater_hold.alert.connect(self._on_heater_hold_alert)
         # process_controller 는 main 속성을 직접 읽지 않는다 — 스냅샷 dict 를 돌려주는 콜러블을 주입한다
         self._hold_snapshot: dict = {}
         self._refresh_hold_snapshot()
@@ -1040,6 +1041,7 @@ class MainDialog(QDialog):
         self._fault_abort_active = False       # _abort_process_by_fault 가 이미 시작됐다(중복 판정 방지)
         self._chat_hold_fail_key = None        # 유지 모드 실패 카드 중복 방지(공정당 같은 사유 1장)
         self._hold_force_result = None         # 마지막 폴백(force_*_hold) 결과 — 스냅샷으로 컨트롤러에 전달
+        self._chat_hold_alert_sent = set()     # 유지 모드 알림 카드(강등/여유 없음) 공정당 종류별 1장
         self._finish_handled = False           # 새 공정(수동 / CSV STEP 마다) — 종료 처리 아직 안 함
         self._chat_errors = []
         self._chat_fail_notified = False
@@ -1938,6 +1940,34 @@ class MainDialog(QDialog):
             self.chat_chk.notify_heater_alert("히터 유지 모드 진입 실패", self._heater_run_context(), fields, ok=False)
         except Exception as e:
             log_message_to_monitor("경고", f"유지 모드 실패 카드 전송 실패: {e!r}")
+
+    @Slot(str, dict)
+    def _on_heater_hold_alert(self, kind: str, d: dict) -> None:
+        """HeaterHold 의 알림 사건 → 챗 카드(공정당 같은 종류 1장): tc2→dac 강등 / 강등 실패 / 상한 여유 없음."""
+        self._refresh_hold_snapshot()
+        sent = getattr(self, "_chat_hold_alert_sent", None)
+        if sent is None:
+            sent = self._chat_hold_alert_sent = set()
+        if kind in sent or not self.chat_chk:
+            return
+        sent.add(kind)
+        try:
+            st = self.plc_controller.get_heater_status() or {}
+            common = {"TC1": self._chat_temp(st.get('pv')), "TC2": self._chat_temp(st.get('pv2')), "MV": str(st.get('mv'))}
+            if kind == "demoted":
+                title = "히터 TC2 추종 → DAC 고정 강등"
+                fields = {"사유": str(d.get("why")), "조치": f"D00018 ← {d.get('value')} (마지막 측정 창/현재 MV)",
+                          "주의": "OT2 과온 보호도 함께 사라졌습니다. TC2 배선을 확인하십시오", **common}
+            elif kind == "demote_failed":
+                title = "히터 TC2 추종 해제 — DAC 고정 실패"
+                fields = {"사유": str(d.get("why")), "DAC 고정 불가": str(d.get("reason")),
+                          "상태": f"TC1 제어 복귀, 출력 상한 {HEATER_MV_LIMIT} 그대로 — 확인 필요", **common}
+            else:
+                title = "히터 출력 여유 없음 — TC2 추종으로 고정"
+                fields = {"평균 MV": f"{d.get('mv')} / 상한 {d.get('limit')}", "안내": str(d.get("why")), **common}
+            self.chat_chk.notify_heater_alert(title, self._heater_run_context(), fields, ok=False)
+        except Exception as e:
+            log_message_to_monitor("경고", f"유지 모드 알림 카드 전송 실패: {e!r}")
 
     @Slot(dict)
     def _on_heater_saturated(self, d: dict) -> None:

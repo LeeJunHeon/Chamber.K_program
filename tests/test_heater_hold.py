@@ -96,18 +96,58 @@ def _engage(H):
 
 @pytest.mark.parametrize("kw,final,why", [
     (dict(), 650.0, "목표 변경"),
-    (dict(pv2=None), 600.0, "TC2 값 없음"),
     (dict(fault=True), 600.0, "히터 이상"),
     (dict(run=False), 600.0, "운전 OFF"),
-    (dict(pv_sel_eff=False), 600.0, "M0004B OFF"),
 ])
 def test_T26_tc2_release_order(kw, final, why):
+    """(나) 목표 변경 / RUN OFF / fault → 기존 release(강등 아님). pv_sel(False) 가 sv2(0.0) 보다 먼저."""
     H = Harness("tc2")
     _engage(H)
     H.step(final=final, **_stable(**{"sv2": 1052.3, "pv_sel_eff": True, **kw}))
-    assert H.ev == [("sel", False), ("sv2", 0.0)]              # pv_sel(False) 가 먼저
+    assert H.ev == [("sel", False), ("sv2", 0.0)]              # pv_sel(False) 가 먼저, dac 강등 없음
     assert H.h.state == "idle"
     assert any("TC2 추종 해제 → TC1 제어 복귀" in m and why in m for _, m in H.msgs)
+
+
+@pytest.mark.parametrize("kw,why", [
+    (dict(pv2=None), "TC2 값 없음(D00011=-1)"),
+    (dict(pv_sel_eff=False), "래더가 TC2 제어를 해제(M0004B OFF)"),
+])
+def test_T26b_tc2_lost_demotes_to_dac(kw, why):
+    """(가) TC2 를 못 쓰게 되면 완전 해제가 아니라 dac 유지로 강등: sel False → sv2 0.0 → mv_limit(마지막 창 평균)."""
+    H = Harness("tc2")
+    eng = []; al = []
+    H.h.engaged.connect(lambda k: eng.append(k)); H.h.alert.connect(lambda k, d: al.append((k, d)))
+    _engage(H)
+    assert eng == ["tc2"] and H.h._h["last_window_mv"] == 800.0
+    H.step(**_stable(**{"sv2": 1052.3, "pv_sel_eff": True, **kw}))
+    assert H.ev == [("sel", False), ("sv2", 0.0), ("mv", 800)]
+    assert H.h.state == "holding" and H.h.kind == "dac" and H.h.value == 800 and eng == ["tc2", "dac"]
+    assert al and al[0][0] == "demoted" and al[0][1]["why"] == why and al[0][1]["value"] == 800
+    w = [m for l, m in H.msgs if l == "히터(경고)" and "강등" in m]
+    assert len(w) == 1 and why in w[0] and "OT2 과온 보호도 함께 사라졌습니다" in w[0]
+    # 강등된 dac 유지는 이후 재적용도 dac 규칙대로 (D00018 이 되돌아가면 5초 뒤 재적용)
+    for _ in range(7):
+        H.step(**_stable(**{"mv_limit": 1200, "pv2": None, "pv_sel_eff": False}))
+    assert H.ev[-1] == ("mv", 800) and H.h.state == "holding"
+
+
+def test_T26c_engaging_tc2_lost_also_demotes_and_failure_is_announced():
+    H = Harness("tc2"); al = []
+    H.h.alert.connect(lambda k, d: al.append(k))
+    _arm(H)
+    assert H.h.state == "engaging_sv2"
+    H.step(**_stable(pv2=None))                                   # 진입 중 TC2 상실
+    assert H.ev == [("sv2", 1052.3), ("sel", False), ("sv2", 0.0), ("mv", 800)]
+    assert H.h.state == "holding" and H.h.kind == "dac" and al == ["demoted"]
+    # dac 도 불가하면(창 평균·현재 MV 없음) 완전 해제 + 알림
+    H2 = Harness("tc2"); al2 = []
+    H2.h.alert.connect(lambda k, d: al2.append(k))
+    _engage(H2)
+    H2.h._h["last_window_mv"] = None
+    H2.step(**_stable(sv2=1052.3, pv_sel_eff=True, pv2=None, mv=None))
+    assert H2.h.state == "idle" and al2 == ["demote_failed"] and H2.ev[-2:] == [("sel", False), ("sv2", 0.0)]
+    assert any("TC1 제어로 복귀" in m and "확인 필요" in m for l, m in H2.msgs if l == "히터(경고)")
 
 
 def test_T27_tc2_clamp_to_ot2_minus_margin():
@@ -311,16 +351,25 @@ def test_T64_ramping_window_still_rejected():
     assert st == "arming" and H.ev == []
 
 
-def test_T65_saturated_window_gives_up_not_capture():
-    H = Harness("tc2")
-    gu = []
-    H.h.give_up.connect(lambda why: gu.append(why))
+def test_T65_saturated_window_tc2_still_captures_with_warning():
+    """tc2: 창 평균 MV ≥ 98% 상한이어도 포기하지 않는다 — 여유가 없을수록 능동 조절이 더 필요하다. 안내 1회."""
+    H = Harness("tc2"); gu = []; al = []
+    H.h.give_up.connect(lambda why: gu.append(why)); H.h.alert.connect(lambda k, d: al.append((k, d)))
     st = _run_window(H, [1180.0] * 61, [600.0] * 61, [890.0] * 61)      # 1180 ≥ 0.98×1200=1176
-    assert st == "idle" and H.ev == [] and len(gu) == 1 and "여유가 없습니다" in gu[0]
-    assert H.h.gave_up == gu[0]
-    # 1170 이면(98% 미만) 캡처한다
-    H2 = Harness("tc2")
-    assert _run_window(H2, [1170.0] * 61, [600.0] * 61, [890.0] * 61) == "engaging_sv2"
+    assert st == "engaging_sv2" and H.ev == [("sv2", 890.0)] and gu == [] and H.h.gave_up is None
+    w = [m for l, m in H.msgs if l == "히터(경고)"]
+    assert w == ["도달 시점 출력이 상한의 98% 이상입니다 (평균 MV 1180 / 상한 1200) — 히터에 여유가 없습니다. TC2 추종으로 현재 상태를 고정합니다"]
+    assert al == [("no_margin", {"mv": 1180, "limit": 1200, "why": w[0]})]
+
+
+def test_T65b_saturated_window_dac_gives_up():
+    """dac: 상한 근처에서 상한을 고정하는 것은 의미가 없다 — 기존대로 give_up."""
+    H = Harness("dac"); gu = []
+    H.h.give_up.connect(lambda why: gu.append(why))
+    st = _run_window(H, [1180.0] * 61, [600.0] * 61, [890.0] * 61)
+    assert st == "idle" and H.ev == [] and len(gu) == 1 and "여유가 없습니다" in gu[0] and H.h.gave_up == gu[0]
+    H2 = Harness("dac")
+    assert _run_window(H2, [1170.0] * 61, [600.0] * 61, [890.0] * 61) == "holding" and H2.ev == [("mv", 1170)]
 
 
 def test_T66_gate_scale_invariance():
