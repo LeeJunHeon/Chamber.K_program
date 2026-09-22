@@ -136,3 +136,24 @@ def test_T13_coil_cache_written_only_by_polling():
                     and node.func.value.attr in ("_last_button_states", "_bit_last"):
                 writers.add(fn.name)
     assert writers == {"_poll_status", "_emit_bit_change", "_on_link_up"}, writers
+
+
+def test_T90_no_nas_path_reachable_during_tests(isolate_logs_and_ports):
+    """안전망: 테스트 중 로거가 볼 수 있는 경로 어디에도 운영 NAS(VanaM_NAS)가 남아 있으면 실패."""
+    import lib.logger as LG
+    import lib.heater_logger as HL
+    from lib.heater_logger import HeaterCsvLogger
+    root = isolate_logs_and_ports
+    for name in ("NAS_LOG_DIR", "NAS_PROCESS_LOG_DIR", "NAS_HEATER_LOG_DIR", "NAS_PLC_LOG_DIR", "NAS_COMM_LOG_DIR"):
+        p = str(getattr(LG, name))
+        assert "VanaM_NAS" not in p and p.startswith(str(root)), (name, p)
+    assert "VanaM_NAS" not in str(HL.NAS_HEATER_LOG_DIR) and str(HL.NAS_HEATER_LOG_DIR).startswith(str(root))
+    assert "VanaM_NAS" not in os.getcwd()
+    import lib.config as CFG
+    assert "VanaM_NAS" not in str(CFG.CHK_CSV_PATH) and "VanaM_NAS" not in str(getattr(LG, "CHK_CSV_PATH", ""))
+    # 실제로 로거를 열어 파일이 tmp 아래에 생기는지
+    lg = HeaterCsvLogger(); path = lg.start("TESTONLY"); lg.stop()
+    assert path is not None and str(path).startswith(str(root)) and "VanaM_NAS" not in str(path)
+    # 이름으로 NAS 경로를 바인딩한 모듈이 conftest 목록 밖에 더 있으면 실패
+    hits = _grep(r"^from lib\.logger import .*NAS_|^\s*NAS_[A-Z_]*_DIR\s*=", [f for f in PY_FILES if not f.endswith("logger.py")])
+    assert all("heater_logger.py" in h for h in hits), hits
