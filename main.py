@@ -944,6 +944,8 @@ class MainDialog(QDialog):
         # 시리얼 장비 공통 통신 두절 정책 — DC / RF 펄스 / MFC 이벤트 기록 + 복구 후 안전 상태
         self.dcpower_controller.comm_event.connect(lambda r: self._on_comm_event("DC", r))
         self.dcpower_controller.dc_recovered.connect(self._on_dc_recovered)
+        self.dcpower_controller.off_unconfirmed.connect(self._on_dc_off_unconfirmed)
+        self.dcpower_controller.off_confirmed.connect(self._on_dc_off_confirmed)
         self.rfpulse_controller.comm_event.connect(lambda r: self._on_comm_event("RFPulse", r))
         self.rfpulse_controller.rfpulse_recovered.connect(self._on_rfpulse_recovered)
         self.mfc_controller.mfc_comm_event.connect(lambda r: self._on_comm_event("MFC", r))
@@ -1324,6 +1326,31 @@ class MainDialog(QDialog):
         return (bool(getattr(self, "process_running", False))
                 or bool(getattr(self, "csv_mode", False))
                 or bool(getattr(self, "_csv_delay_active", False)))
+
+    @Slot(str)
+    def _on_dc_off_unconfirmed(self, where: str):
+        """DC 출력 OFF 를 확인하지 못했다(에피소드 시작 1회) — 로그 + 구글챗 텍스트 1줄."""
+        log_message_to_monitor(
+            "경고", f"[DC] 출력 OFF 미확인 ({where}) — 장비 전면에서 확인 필요, 통신되면 자동 재시도")
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(
+                    f"❌ CHK DC 출력 OFF 미확인 ({where}) — 장비 전면에서 DC 출력이 꺼졌는지 확인하세요. "
+                    f"통신이 되면 자동으로 다시 끄고 알립니다.")
+                self.chat_chk.flush()
+        except Exception:
+            pass
+
+    @Slot(str, float)
+    def _on_dc_off_confirmed(self, where: str, sec: float):
+        """미확인이던 DC 출력 OFF 가 확인됐다(에피소드 종료 1회)."""
+        log_message_to_monitor("정보", f"[DC] 출력 OFF 확인 ({where}, 미확인 {sec:.0f}초 뒤)")
+        try:
+            if self.chat_chk:
+                self.chat_chk.notify_text(f"✅ CHK DC 출력 OFF 확인 ({where}, 미확인 {sec:.0f}초 뒤)")
+                self.chat_chk.flush()
+        except Exception:
+            pass
 
     @Slot(float)
     def _on_dc_recovered(self, lost: float):
@@ -1783,6 +1810,13 @@ class MainDialog(QDialog):
             self.request_plc_emergency_stop.emit()
         except Exception:
             pass
+        # DC 파워는 PLC 를 거치지 않는 직결 시리얼 — 비상정지로 안 꺼진다.
+        #  공정 상태와 무관하게 직접 끈다(확인형). 공정 중이면 공정 정지 경로의 DC OFF 와 두 번 가지만 무해.
+        try:
+            QMetaObject.invokeMethod(
+                self.dcpower_controller, "emergency_off", Qt.ConnectionType.QueuedConnection)
+        except Exception:
+            pass
         if _proc_active or _csv_active or _csv_delay:
             try:
                 self._chat_notify_failed_now("ALL STOP(비상 정지)으로 중단", send_text=False)
@@ -1811,7 +1845,6 @@ class MainDialog(QDialog):
                 pass
         # CESAR(RF Pulse)는 PLC 를 거치지 않는 직결 시리얼이라 비상정지로 안 꺼진다.
         #  공정이 안 돌고 있어도 펄스가 켜져 있을 수 있으니 드라이버를 직접 한 번 더 끈다.
-        #  ※ DC 도 직결이라 동일한 보완이 필요하다(다음 작업에서 다룬다).
         try:
             QMetaObject.invokeMethod(
                 self.rfpulse_controller, "stop_process", Qt.ConnectionType.QueuedConnection)

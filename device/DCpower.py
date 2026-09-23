@@ -27,6 +27,9 @@ from lib.config import (
 #  재연결은 무응답이 이어지는 동안 DC_COMM_REOPEN_SEC 마다 한 번씩만.
 DC_COMM_FAIL_RECONNECT_STREAK = 3
 DC_COMM_REOPEN_SEC = 3.0
+# OFF 미확인 에피소드의 재시도 간격 — 실패할 때마다 2배, COMM_OUTAGE_LOG_SEC 에서 캡.
+#  "_is_running=False 동안 출력 OFF" 는 언제나 맞는 상태라 공정 활성 여부와 무관하게 재시도해도 안전하다.
+DC_OFF_RETRY_START_SEC = 10.0
 from lib.dc_control import power_step_current, is_at_current_cap
 
 class DCPowerController(QObject):
@@ -37,6 +40,8 @@ class DCPowerController(QObject):
     comm_event   = Signal(dict)    # COMM_events.csv 1행 (파일 I/O 는 main 스레드의 lib.logger)
     dc_recovered = Signal(float)   # 단절 뒤 첫 성공 (단절 초) — main 이 안전 상태 재적용 여부 판단
     comm_long_outage = Signal(str, float)   # 장기두절 진입(장치명, 단절 초) — 두절당 1회
+    off_unconfirmed = Signal(str)           # OFF 미확인 에피소드 시작(where) — 에피소드당 1회
+    off_confirmed   = Signal(str, float)    # 그 에피소드가 확인으로 끝남(where, 미확인 지속 초) — 1회
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -80,6 +85,18 @@ class DCPowerController(QObject):
         self._want_connected: bool = False
         self._comm_last_fail_log_t: float = 0.0
         self._comm_last_reopen_t: float = -1e9
+        # ── 출력 OFF 추적 ──
+        #  "_is_running=False 동안 출력은 OFF" 가 불변식이다. OFF 를 확인하지 못했으면 기억하고 재시도한다.
+        self._output_maybe_on: bool = False        # OUTP ON 을 보낸 뒤 OFF 가 확인되기 전까지 True
+        self._off_unconfirmed: bool = False        # OFF 를 시도했지만 확인 못 한 에피소드(출력을 켠 적 있을 때만)
+        self._off_unconfirmed_since: float = 0.0
+        self._off_retry_next: float = 0.0
+        self._off_retry_sec: float = DC_OFF_RETRY_START_SEC
+        self._off_last_log_t: float = 0.0          # 에피소드 중 경고·이벤트 솎음(COMM_OUTAGE_LOG_SEC)
+        self._io_depth: int = 0                    # _readline_blocking 중첩 깊이(재진입 판정)
+        self._verify_pending: bool = False         # _verify_output_off 재예약이 걸려 있는가
+        self._emg_restore = None                   # ALL STOP 이 임시로 포트를 연 경우 되돌릴 상태
+
         # 두절 중단 뒤에는 제어 타이머가 멈춰 쿼리가 없다 → 2초마다 가벼운 프로브로 복구를 감지한다
         self._outage_probe = QTimer(self)
         self._outage_probe.setInterval(2000)
@@ -226,49 +243,132 @@ class DCPowerController(QObject):
                 self._outage_probe.start()
 
     def _outage_probe_tick(self) -> None:
-        """두절 중단 상태에서만 돈다. 응답이 오면 _comm_ok → dc_recovered → main 이 safe_off 를 부른다."""
-        if not self._outage_abort:
+        """두절 중단(_outage_abort) 또는 OFF 미확인(_off_unconfirmed) 동안 돈다.
+        전자는 복구 감지(main 이 safe_off 를 부른다), 후자는 드라이버가 직접 OFF 를 재시도한다."""
+        if not (self._outage_abort or self._off_unconfirmed):
             self._outage_probe.stop()
             return
-        if self._is_running:
-            return          # 공정이 다시 돌면 제어 루프의 쿼리가 대신한다
+        if self._is_running or self._io_depth > 0:
+            return          # 공정이 다시 돌면 제어 루프의 쿼리가 대신한다 / 읽기 중이면 다음 틱에
         if not (self.serial and self.serial.isOpen()):
             self._schedule_reconnect()
             return
-        self._query("MEAS:VOLT?", timeout_ms=800)
+        if self._outage_abort:
+            self._query("MEAS:VOLT?", timeout_ms=800)
+            return
+        if time.monotonic() >= self._off_retry_next:
+            self._output_off_confirmed("OFF 재시도")
 
-    def _output_off_confirmed(self, where: str) -> bool:
-        """OUTP OFF 를 보내고, 단절 상태였거나 쓰기가 실패하면 OUTP? 로 확인한다.
-        확인 못 하면 로그·이벤트로 남긴다(조용히 넘기지 않는다). 반환: 확인/전송 여부."""
-        sent = False
+    # ---------------- 출력 OFF (쓰기 / 확인 분리) ----------------
+    def _send_output_off(self, where: str) -> bool:
+        """"OUTP OFF" 쓰기만 한다(읽기 없음 — 중첩 중에도 안전)."""
         try:
-            if self.serial and self.serial.isOpen():
-                self.status_message.emit("DCpower > 전송", "OUTP OFF")
-                sent = self._write_line("OUTP OFF")
-                self.serial.waitForBytesWritten(200)
-        except Exception:
-            sent = False
-        if not sent:
-            self.status_message.emit("DCpower(경고)", f"DC OFF 전송 실패 — 출력 상태 미확인 ({where})")
-            self._emit_event("OFF미확인", f"{where}: 전송 실패")
-            return False
-        if self._outage_abort or self._comm_fail_streak > 0:
-            ans = self._query("OUTP?", timeout_ms=800)
-            if ans is None or ans.strip() not in ("0", "OFF"):
-                self.status_message.emit(
-                    "DCpower(경고)", f"DC OFF 전송 실패 — 출력 상태 미확인 ({where}, 응답 {ans!r})")
-                self._emit_event("OFF미확인", f"{where}: OUTP? 응답 {ans!r}")
+            if not (self.serial and self.serial.isOpen()):
                 return False
-            self.status_message.emit("DCpower", "DC 출력 OFF 확인(OUTP?=0)")
-        return True
+            self.status_message.emit("DCpower > 전송", "OUTP OFF")
+            ok = self._write_line("OUTP OFF")
+            self.serial.waitForBytesWritten(200)
+            return bool(ok)
+        except Exception:
+            return False
+
+    def _verify_output_off(self, where: str):
+        """OUTP? 로 확인한다. True=확인 / False=미확인 / None=확인 보류(읽기 중이라 뒤로 미룸).
+        매뉴얼 7-8절: OUTP? 는 "0"=출력 차단, "1"=출력 허용."""
+        if self._io_depth > 0:
+            # 중첩 읽기 중에 또 _query 를 하면 두 on_ready 가 같은 readyRead 를 나눠 갖는다 — 읽기가 끝난 뒤로 미룬다
+            if not self._verify_pending:
+                self._verify_pending = True
+                QTimer.singleShot(50, lambda: self._verify_retry(where))
+            return None
+        if self._is_running:
+            return None          # 그 사이 새 공정이 시작됐다 — 출력의 주인이 바뀌었으니 건드리지 않는다
+        ans = self._query("OUTP?", timeout_ms=800)
+        if ans is not None and ans.strip() in ("0", "OFF"):
+            self._mark_off_confirmed(where)
+            return True
+        # 무응답·"1"·기타 → 한 번 더 쓰고 다시 확인
+        time.sleep(0.3)
+        if self._is_running:
+            return None
+        self._send_output_off(where)
+        ans2 = self._query("OUTP?", timeout_ms=800)
+        if ans2 is not None and ans2.strip() in ("0", "OFF"):
+            self._mark_off_confirmed(where)
+            return True
+        self._mark_off_unconfirmed(where, f"OUTP? 응답 {ans!r}/{ans2!r}")
+        return False
+
+    def _verify_retry(self, where: str) -> None:
+        """중첩 때문에 미뤘던 확인을 다시 시도한다(읽기가 끝날 때까지 50ms 간격)."""
+        self._verify_pending = False
+        if self._is_running:
+            return
+        r = self._verify_output_off(where)
+        if r is not None:
+            self._emg_restore_if_needed()
+
+    def _output_off_confirmed(self, where: str):
+        """OUTP OFF 쓰기 + 확인. True=확인 / False=미확인 / None=확인 보류(읽기 중)."""
+        if not self._send_output_off(where):
+            self._mark_off_unconfirmed(where, "전송 실패")
+            return False
+        return self._verify_output_off(where)
+
+    def _mark_off_confirmed(self, where: str) -> None:
+        """OFF 확인 — 에피소드가 열려 있었으면 닫고 1회 알린다."""
+        self._output_maybe_on = False
+        if self._off_unconfirmed:
+            sec = time.monotonic() - self._off_unconfirmed_since
+            self._off_unconfirmed = False
+            self._off_retry_sec = DC_OFF_RETRY_START_SEC
+            self._off_retry_next = 0.0
+            self._off_last_log_t = 0.0
+            self.status_message.emit("DCpower", f"DC 출력 OFF 확인(OUTP?=0, {where})")
+            self._emit_event("OFF확인", f"{where}: 미확인 {sec:.0f}초 뒤")
+            self.off_confirmed.emit(where, float(sec))
+        else:
+            self.status_message.emit("DCpower", f"DC 출력 OFF 확인(OUTP?=0, {where})")
+        if not self._outage_abort and self._outage_probe.isActive():
+            self._outage_probe.stop()
+
+    def _mark_off_unconfirmed(self, where: str, detail: str) -> None:
+        """OFF 미확인. 출력을 켠 적이 없으면 에피소드가 아니라 정보 1줄로 끝낸다
+        (그날 첫 공정의 "PRE: DC Power OFF" 가 포트 미연결로 내던 거짓 경고가 여기에 해당한다)."""
+        if not self._output_maybe_on:
+            self.status_message.emit(
+                "DCpower", f"DC OFF 생략/미확인 ({where}: {detail}) — 이번 실행에서 DC 출력을 켠 적 없음")
+            return
+        now = time.monotonic()
+        first = not self._off_unconfirmed
+        if first:
+            self._off_unconfirmed = True
+            self._off_unconfirmed_since = now
+            self._off_retry_sec = DC_OFF_RETRY_START_SEC
+            self._off_retry_next = now + self._off_retry_sec
+        else:
+            self._off_retry_sec = min(float(COMM_OUTAGE_LOG_SEC), self._off_retry_sec * 2.0)
+            self._off_retry_next = now + self._off_retry_sec
+        if first or (now - self._off_last_log_t) >= float(COMM_OUTAGE_LOG_SEC):
+            self._off_last_log_t = now
+            self.status_message.emit(
+                "DCpower(경고)",
+                f"DC 출력 OFF 미확인 ({where}: {detail}) — 장비 전면에서 확인 필요, 통신되면 자동 재시도")
+            self._emit_event("OFF미확인", f"{where}: {detail}")
+        if first:
+            self.off_unconfirmed.emit(where)
+        if not self._outage_probe.isActive():
+            self._outage_probe.start()
 
     @Slot()
     def safe_off(self):
         """복구 후 안전 상태 재적용 — 공정이 돌지 않을 때 main 이 부른다. OUTP OFF 1회(확인형)."""
-        ok = self._output_off_confirmed("복구 후 안전 상태")
-        self._emit_event("안전상태재적용", "OUTP OFF " + ("확인" if ok else "미확인"))
+        r = self._output_off_confirmed("복구 후 안전 상태")
+        self._emit_event("안전상태재적용",
+                         "OUTP OFF " + ("확인" if r is True else ("확인 보류" if r is None else "미확인")))
         self._outage_abort = False
-        self._outage_probe.stop()
+        if r is True:
+            self._outage_probe.stop()      # 미확인·보류면 프로브가 계속 돌며 재시도한다
 
     @Slot()
     def arm_power_monitor(self):
@@ -292,6 +392,10 @@ class DCPowerController(QObject):
     def start_process(self, target_power: float):
         if self._is_running:
             self.status_message.emit("DCpower", "경고: DC 파워가 이미 동작 중입니다.")
+            return
+        if self._io_depth > 0:
+            # 읽기(중첩 이벤트루프) 도중에 *RST/APPLy/OUTP ON 이 끼어들면 응답이 뒤섞인다 — 뒤로 미룬다
+            QTimer.singleShot(50, lambda: self.start_process(target_power))
             return
 
         if self.serial is None or not self.serial.isOpen():
@@ -323,8 +427,12 @@ class DCPowerController(QObject):
         if not self._is_running:
             self.control_timer.stop()
             return
+        if self._io_depth > 0:
+            return          # 앞 틱의 읽기가 아직 안 끝났다 — 겹친 틱은 건너뛴다(응답 뒤섞임 방지)
 
         now_power, now_v, now_i = self.read_dc_power()  # MEAS:ALL?
+        if not self._is_running:
+            return          # 읽는 동안(중첩 이벤트루프) 정지가 끼어들었다 — 제어·CURR 전송 금지
         if now_power is None or now_v is None or now_i is None:
             # ★ 측정 실패를 0 W 로 위장하지 않는다 — 이 틱은 건너뛴다(파워 이탈·램프업 무응답·
             #   저전류 카운터를 올리지 않음). 화면은 마지막 값 유지. 중단 여부는 통신 예산이 정한다.
@@ -554,6 +662,7 @@ class DCPowerController(QObject):
         if not self._send("*CLS"): return False
         # 전압·전류 동시에 설정(APPLy v,i), 메뉴얼 7-3절
         if not self._send(f"APPLy {voltage:.2f},{current:.4f}"): return False
+        self._output_maybe_on = True        # 부분 전송도 출력이 켜졌을 수 있다 — 보내기 전에 세운다
         if not self._send("OUTP ON"): return False
         self.current_voltage = voltage
         self.current_current = current
@@ -566,10 +675,9 @@ class DCPowerController(QObject):
         except Exception:
             pass
 
-    @Slot()
-    def stop_process(self):
+    def _reset_run_state(self) -> bool:
+        """공정 실행 상태 초기화(stop_process / emergency_off 공용). 돌고 있었는지 돌려준다."""
         was_running = self._is_running
-
         self._is_running = False
         self.state = "IDLE"
         self.error_count = 0
@@ -577,9 +685,13 @@ class DCPowerController(QObject):
         self._fail_no_output_ticks = 0
         self._min_current_abort_count = 0
         self._limit_stall_ticks = 0
-        self._power_monitor_armed = False   # ▼ NEW
-
+        self._power_monitor_armed = False
         self._stop_control_timer()
+        return was_running
+
+    @Slot()
+    def stop_process(self):
+        was_running = self._reset_run_state()
 
         self._output_off_confirmed("stop_process")
 
@@ -587,6 +699,41 @@ class DCPowerController(QObject):
 
         if was_running:
             self.status_message.emit("DCpower", "출력 OFF, 대기 상태로 전환")
+
+    @Slot()
+    def emergency_off(self):
+        """ALL STOP — 공정 상태와 무관하게 DC 출력을 직접 끈다(확인형).
+        DC 서플라이는 PLC 를 거치지 않는 직결 시리얼이라 PLC 비상정지로는 꺼지지 않는다."""
+        self._reset_run_state()
+        opened_here = False
+        want_before = self._want_connected
+        streak_before = self._comm_fail_streak
+        if not (self.serial and self.serial.isOpen()) and self._io_depth == 0:
+            opened_here = bool(self.connect_dcpower_device())
+        self._emg_restore = ({"want": want_before, "streak": streak_before}
+                             if (opened_here and not self._output_maybe_on) else None)
+        if self.serial and self.serial.isOpen():
+            self.status_message.emit("DCpower", "ALL STOP — DC 출력 OFF 요청")
+            r = self._output_off_confirmed("ALL STOP")
+        else:
+            self._mark_off_unconfirmed("ALL STOP", "포트 연결 불가")
+            r = False
+        self.update_dc_status_display.emit(0.0, 0.0, 0.0)
+        if r is not None:
+            self._emg_restore_if_needed()      # 보류(None)면 _verify_retry 가 끝낸 뒤 되돌린다
+
+    def _emg_restore_if_needed(self) -> None:
+        """ALL STOP 이 임시로 연 포트를 원래대로 — 대기 중 재연결 루프·장기두절 알림이 생기면 안 된다."""
+        st = self._emg_restore
+        if not st:
+            return
+        self._emg_restore = None
+        try:
+            self._close_port_for_reconnect()
+        except Exception:
+            pass
+        self._want_connected = bool(st["want"])
+        self._comm_fail_streak = int(st["streak"])
 
     @Slot()
     def cleanup(self):
@@ -645,7 +792,8 @@ class DCPowerController(QObject):
             # ★ 실패를 0 W 로 위장하지 않는다 — 화면은 마지막 값 유지, 호출자는 틱을 건너뛴다
             return (None, None, None)
         p = v * i
-        self.update_dc_status_display.emit(p, v, i)
+        if self._is_running:
+            self.update_dc_status_display.emit(p, v, i)   # 정지 중이면 0 표시를 덮지 않는다
         return (p, v, i)
 
     # ---------------- 전송/수신 (QtSerialPort 동기 래핑) ----------------
@@ -709,9 +857,17 @@ class DCPowerController(QObject):
         return True
 
     def _readline_blocking(self, timeout_ms: int = 500) -> Optional[str]:
-        """readyRead를 기다려 '\n' 또는 '\r'까지 한 줄을 동기적으로 읽는다."""
+        """readyRead를 기다려 '\n' 또는 '\r'까지 한 줄을 동기적으로 읽는다.
+        중첩 QEventLoop 라 이 안에서 다른 슬롯·타이머가 돈다 — _io_depth 로 재진입을 막는다."""
         if not (self.serial and self.serial.isOpen()):
             return None
+        self._io_depth += 1
+        try:
+            return self._readline_blocking_impl(timeout_ms)
+        finally:
+            self._io_depth -= 1
+
+    def _readline_blocking_impl(self, timeout_ms: int = 500) -> Optional[str]:
 
         buf = bytearray()
         line_value: Optional[str] = None

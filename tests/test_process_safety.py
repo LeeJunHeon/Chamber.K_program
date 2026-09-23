@@ -424,3 +424,63 @@ def test_T79_0922_end_to_end_strict_fail_then_relaxed_tc2(pc):
     assert [e[0] for e in H.ev] == ["sv2", "sel"]                                # D00035 → M0004A 순서
     assert c["next"] == 1 and c["failed"][0]["action"] == "tc2_relaxed"
     assert any("완화 조건으로 TC2 추종 진입 — SV2" in m and "정착 창 미확보" in m for l, m in H.msgs)
+
+
+# ═══════════════ ALL STOP 이 DC 를 직접 끈다 · DC OFF 미확인 알림 ═══════════════
+@pytest.fixture
+def allstop(safe, monkeypatch):
+    """QMetaObject.invokeMethod 를 기록용으로 바꿔 ALL STOP 의 직결 OFF 호출을 본다."""
+    w = safe
+    calls = []
+    monkeypatch.setattr(MAIN, "QMetaObject",
+                        type("MO", (), {"invokeMethod": staticmethod(lambda obj, name, *a: calls.append((obj, name)))}))
+    emg = []
+    w.request_plc_emergency_stop.disconnect()
+    w.request_plc_emergency_stop.connect(lambda: emg.append(len(calls)))
+    w._emg = emg; w._invokes = calls
+    monkeypatch.setattr(w, "_chat_notify_failed_now", lambda *a, **k: None)
+    monkeypatch.setattr(w.heater_recipe, "is_running", lambda: False, raising=False)
+    yield w
+    w.request_plc_emergency_stop.disconnect()
+    w.request_plc_emergency_stop.connect(w.plc_controller.on_emergency_stop)
+
+
+def _names(w, obj):
+    return [n for o, n in w._invokes if o is obj]
+
+
+def test_T102_all_stop_without_process_still_kills_dc(allstop):
+    w = allstop
+    w.process_running = False; w.csv_mode = False; w._csv_delay_active = False
+    w._on_all_stop_clicked()
+    assert _names(w, w.dcpower_controller) == ["emergency_off"]          # 공정 상태와 무관
+    assert _names(w, w.rfpulse_controller) == ["stop_process"]
+    assert w._emg == [0] and w._stops == []                              # PLC 비상정지가 DC 보다 먼저
+    assert w._invokes[0][1] == "emergency_off"
+
+
+def test_T103_all_stop_during_process(allstop):
+    w = allstop
+    w.process_running = True; w._chat_reset_run_state(); w._chk_process_ok = True
+    w._on_plc_bit_changed("MV_button", True, None)
+    w._on_all_stop_clicked()
+    assert _names(w, w.dcpower_controller) == ["emergency_off"]
+    assert _names(w, w.rfpulse_controller) == ["stop_process"] and w._stops == [1]
+    # T53 규칙: 플래그가 PLC 비상정지보다 먼저, 이후 폴링의 MV OFF 에 이중 중단 없음
+    assert w._chat_emergency_stopped is True and w._chk_process_ok is False
+    w._on_plc_bit_changed("MV_button", False, True)
+    assert w._aborts == []
+
+
+def test_T104_dc_off_unconfirmed_and_confirmed_chat(safe):
+    w = safe
+    w.chat_chk.reset_mock()
+    w._on_dc_off_unconfirmed("ALL STOP")
+    txt = [c.args[0] for c in w.chat_chk.notify_text.call_args_list]
+    assert len(txt) == 1 and txt[0].startswith("❌ CHK DC 출력 OFF 미확인 (ALL STOP)") and "장비 전면" in txt[0]
+    assert w.chat_chk.flush.called
+    w.chat_chk.reset_mock()
+    w._on_dc_off_confirmed("OFF 재시도", 73.0)
+    txt = [c.args[0] for c in w.chat_chk.notify_text.call_args_list]
+    assert txt == ["✅ CHK DC 출력 OFF 확인 (OFF 재시도, 미확인 73초 뒤)"]
+    w.chat_chk = MagicMock()
