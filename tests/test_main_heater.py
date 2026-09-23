@@ -380,7 +380,7 @@ def test_T57_heater_stop_card_icon_ok_vs_fault(fresh, monkeypatch):
         posted.clear()
         feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False))
         assert posted[1][1] == "SUCCESS" and posted[1][2]["사유"] == "정지"
-        posted.clear(); w.process_running = True
+        posted.clear(); w.process_running = True; w._chat_reset_run_state(); w._chk_process_ok = True
         feed(w, make_heater_st(run=True)); feed(w, make_heater_st(run=False))
         assert posted[1][1] == "SUCCESS" and posted[1][2]["사유"] == "공정 종료"
     finally:
@@ -723,3 +723,80 @@ def test_T88_0922_replay_not_engaged_plus_saturation(stop_card):
     status, note, f = _stop(w, pv=559.6, pv2=952.0)
     assert status == "FAIL" and note == "DAC 출력 포화 · 유지 모드 미진입" and f["사유"] == "정지"   # 두 건만
     assert f["마지막 TC1"] == "559.6°C"
+
+
+# ═══════════════ 종료 카드 "사유": 정상 완료 vs 중단 구분 ═══════════════
+def _proc(w, **flags):
+    """공정 소유 히터 런: 상승 엣지 → 도달 → 종료 플래그 세팅 → 하강 엣지."""
+    w.process_running = True
+    w._chat_reset_run_state()                                   # _chk_process_ok 는 공정 시작에서 True
+    w._chk_process_ok = True
+    w = _run(w)
+    _engaged(w, "tc2")
+    for k, v in flags.items():
+        setattr(w, k, v)
+    return w
+
+
+def test_T91_normal_completion_reason(stop_card):
+    w = _proc(stop_card)
+    status, note, f = _stop(w)
+    assert (status, f["사유"], note) == ("SUCCESS", "공정 종료", "없음")
+
+
+def test_T91_user_stop_is_success_with_distinct_reason(stop_card):
+    w = _proc(stop_card, _chat_user_stopped=True, _chk_process_ok=False)
+    status, note, f = _stop(w)
+    assert (status, f["사유"], note) == ("SUCCESS", "공정 중단 — 사용자 STOP", "없음")
+
+
+def test_T91_emergency_and_fault_and_error_are_fail(stop_card):
+    w = _proc(stop_card, _chat_emergency_stopped=True, _chk_process_ok=False)
+    status, note, f = _stop(w)
+    assert (status, f["사유"], note) == ("FAIL", "공정 중단 — 비상 정지", "공정 중단 — 비상 정지")
+    w = _proc(stop_card, _fault_abort_active=True, _chk_process_ok=False)
+    status, note, f = _stop(w)
+    assert (status, f["사유"], note) == ("FAIL", "공정 중단 — 장비 이상", "공정 중단 — 장비 이상")
+    w = _proc(stop_card, _chk_process_ok=False)
+    status, note, f = _stop(w)
+    assert (status, f["사유"], note) == ("FAIL", "공정 중단 — 오류", "공정 중단 — 오류")
+    short = "MFC 압력 이상"
+    w = _proc(stop_card, _chk_process_ok=False, _chat_fail_reason=short)
+    status, note, f = _stop(w)
+    assert (status, f["사유"]) == ("FAIL", f"공정 중단 — 오류 ({short})") and note == f["사유"]
+    long = "RF Pulse 설정 불일치(듀티): 요청 20kHz·50% / 장비 20kHz·80% — 공정 중단(RFPULSE_VERIFY_PULSE_CONFIG)"
+    w = _proc(stop_card, _chk_process_ok=False, _chat_fail_reason=long)
+    status, note, f = _stop(w)
+    assert status == "FAIL" and f["사유"].startswith("공정 중단 — 오류 (RF Pulse 설정 불일치") and f["사유"].endswith("…)")
+    assert len(f["사유"]) == len("공정 중단 — 오류 (") + 61 + 1 and note == f["사유"]
+
+
+def test_T91_plc_fault_wins_over_process_flags(stop_card):
+    w = _proc(stop_card, _chat_user_stopped=True, _chk_process_ok=False)
+    status, note, f = _stop(w, fault=True, ot=True)
+    assert (status, f["사유"], note) == ("FAIL", "이상 — 과온", "없음")
+
+
+def test_T91_manual_and_recipe_reasons_unchanged(stop_card, monkeypatch):
+    w = _run(stop_card); _engaged(w, "tc2")                      # 수동 런(process_running False)
+    assert _stop(w)[2]["사유"] == "정지"
+    w = stop_card
+    monkeypatch.setattr(w.heater_recipe, "is_running", lambda: True, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "current_step_no", lambda: 1, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "total_steps", lambda: 3, raising=False)
+    w = _run(w); _engaged(w, "tc2")
+    assert _stop(w)[2]["사유"] == "레시피 종료"
+
+
+def test_T91_0923_replay_user_stop_during_ramp(stop_card):
+    """2026-09-23 06:26 CeO2 #2-1: 승온 81초 만에 사용자 STOP → ✅ "공정 중단 — 사용자 STOP", 특이사항 없음."""
+    w = stop_card
+    w.process_running = True; w._chat_reset_run_state(); w._chk_process_ok = True
+    w._posted.clear()
+    feed(w, make_heater_st(run=True, pv=40.0, sv=600.0, sv_ramp=45.0, cur_sv=45.0))
+    for pv in (50.0, 60.0, 69.8):                                 # 승온 중(도달 전)
+        feed(w, make_heater_st(run=True, pv=pv, sv=600.0, sv_ramp=pv + 5, cur_sv=pv + 5, pv2=89.6))
+    w._chat_user_stopped = True; w._chk_process_ok = False        # _on_sputter_stop_clicked
+    status, note, f = _stop(w, pv=69.8, pv2=89.6)
+    assert (status, f["사유"], note) == ("SUCCESS", "공정 중단 — 사용자 STOP", "없음")
+    assert f["마지막 TC1"] == "69.8°C" and f["마지막 TC2"] == "89.6°C"

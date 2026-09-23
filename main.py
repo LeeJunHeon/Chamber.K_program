@@ -1923,6 +1923,25 @@ class MainDialog(QDialog):
         elif kind == 'dac' and HEATER_HOLD_MODE != "dac":
             self._heater_run_event("유지 모드 DAC 폴백")
 
+    def _heater_stop_process_reason(self) -> str:
+        """공정 소유 히터의 종료 사유. 정상 완료와 중단을 구분한다(2026-09-23 06:26: 사용자 STOP 인데 "공정 종료" 로 떠
+        바로 아래 공정 카드 "사용자 Stop으로 종료" 와 말이 달랐다). 플래그는 종료 시퀀스에서 먼저 서고
+        _chat_reset_run_state 는 다음 공정 시작 때 불리므로 하강 엣지 시점에 살아 있다.
+        비정상 중단은 특이사항에도 같은 라벨을 남겨 ❌ 가 된다 — 사용자 STOP 은 히터가 정상이었으므로 ✅ 유지."""
+        if getattr(self, "_chat_emergency_stopped", False):
+            why = "공정 중단 — 비상 정지"
+        elif getattr(self, "_fault_abort_active", False):
+            why = "공정 중단 — 장비 이상"
+        elif getattr(self, "_chat_user_stopped", False):
+            return "공정 중단 — 사용자 STOP"          # 운전자가 직접 멈췄고 히터는 정상 — 공정 카드가 이미 ❌ 다
+        elif not getattr(self, "_chk_process_ok", True):
+            r = getattr(self, "_chat_fail_reason", "") or ""
+            why = "공정 중단 — 오류" + (f" ({self._chat_short(r)})" if r else "")
+        else:
+            return "공정 종료"
+        self._heater_run_event(why)
+        return why
+
     def _heater_run_event(self, label: str) -> None:
         """이번 히터 런의 이상 이벤트 기록(같은 라벨은 한 번만) — 종료 카드가 요약한다."""
         if label not in self._heater_run_events:
@@ -2167,7 +2186,7 @@ class MainDialog(QDialog):
                 elif st.get('tc_err'):  why = "이상 — 온도센서"
                 elif st.get('wd_err'):  why = "이상 — 통신 워치독"
                 elif st.get('fault'):   why = "이상"
-                elif self.process_running or self.csv_mode: why = "공정 종료"
+                elif self.process_running or self.csv_mode: why = self._heater_stop_process_reason()
                 elif ctx.startswith("레시피"):               why = "레시피 종료"
                 else:                                        why = "정지"
                 fields = {"마지막 TC1": pv_txt, "마지막 TC2": pv2_txt,
