@@ -2338,6 +2338,8 @@ class MainDialog(QDialog):
                 except Exception:
                     pass
 
+            elif self._process_active() or self._process_heater_claimed:
+                _emit("공정 운전 (히터 레시피 없음)")
             else:
                 _emit("수동 운전 (레시피 없음)")
         except Exception:
@@ -2377,12 +2379,31 @@ class MainDialog(QDialog):
                         return fmt.format(float(v)) + unit
                     except Exception:
                         return str(v)
+                # 램프는 "실제로 SV 를 올리는 속도" 를 적는다. 파이썬 램프(RampProfiler)가 돌면 그 속도이고,
+                #  D00020(ramp_rate)은 래더가 열어 둔 상한이라 따로 적는다(2026-09-27: 머리말 12 vs 실제 6).
+                _py_rate, _py_src = None, ""
+                try:
+                    if self.heater_ramp.is_active():
+                        _py_rate, _py_src = float(self.heater_ramp.rate()), "파이썬"
+                    elif self.heater_recipe.is_running():
+                        _rr = self.heater_recipe.resolved_rate()
+                        if _rr:
+                            _py_rate, _py_src = float(_rr), "파이썬·레시피"
+                except Exception:
+                    _py_rate = None
+                if _py_rate:
+                    _ramp_txt = (f"{_py_rate:g}°C/min({_py_src}, 접근 {HEATER_APPROACH_ZONE_C:g}°C→"
+                                 f"{HEATER_APPROACH_MIN_RATE_C_PER_MIN:g}°C/min)"
+                                 f" · 래더 상한 {_n('ramp_rate', '{:.0f}', '°C/min')}")
+                else:
+                    _ramp_txt = f"{_n('ramp_rate', '{:.0f}', '°C/min')}(래더)"
+                _ot2 = st.get('ot2_limit')
+                _ot2_txt = f" · OT2(TC2) {_n('ot2_limit', unit='°C')}" if _ot2 else ""
                 _emit(f"설정: DAC상한 {_n('mv_limit', '{:.0f}')}"
-                      f" · 램프 {_n('ramp_rate', '{:.0f}', '°C/min')}"
+                      f" · 램프 {_ramp_txt}"
                       f" · 홀드백 {_n('holdback', unit='°C')}"
-                      f" · 접근 {HEATER_APPROACH_ZONE_C:g}°C→"
-                      f"{HEATER_APPROACH_MIN_RATE_C_PER_MIN:g}°C/min"
-                      f" · OT {_n('ot_limit', unit='°C')}")
+                      f" · OT(TC1) {_n('ot_limit', unit='°C')}{_ot2_txt}"
+                      f" · 유지 모드 {HEATER_HOLD_MODE}")
         except Exception:
             pass
 

@@ -800,3 +800,52 @@ def test_T91_0923_replay_user_stop_during_ramp(stop_card):
     status, note, f = _stop(w, pv=69.8, pv2=89.6)
     assert (status, f["사유"], note) == ("SUCCESS", "공정 중단 — 사용자 STOP", "없음")
     assert f["마지막 TC1"] == "69.8°C" and f["마지막 TC2"] == "89.6°C"
+
+
+# ═══════════════ 히터 로그 머리말 문구 ═══════════════
+@pytest.fixture
+def header(fresh, monkeypatch):
+    w = fresh
+    lines = []
+    monkeypatch.setattr(MAIN, "log_message_to_monitor", lambda lvl, msg: lines.append((lvl, msg)))
+    monkeypatch.setattr(w.heater_recipe, "is_running", lambda: False, raising=False)
+    monkeypatch.setattr(w.heater_atmosphere, "is_active", lambda: False, raising=False)
+    w.plc_controller._heater_last = dict(make_heater_st(
+        run=True, mv_limit=1200, ramp_rate=12, holdback=10.0, ot_limit=750.0, ot2_limit=1150.0))
+    w._lines = lines
+    yield w
+    w.process_running = False; w._process_heater_claimed = False
+    w.heater_ramp.stop(restore_rate=False)
+
+
+def _hdr(w, key):
+    return [m for _, m in w._lines if m.startswith(key)]
+
+
+def test_T112_header_ramp_python_vs_ladder(header, monkeypatch):
+    w = header
+    monkeypatch.setattr(w.heater_ramp, "is_active", lambda: True, raising=False)
+    monkeypatch.setattr(w.heater_ramp, "rate", lambda: 6.0, raising=False)
+    w._write_heater_log_header()
+    line = _hdr(w, "설정:")[0]
+    assert "램프 6°C/min(파이썬, 접근 20°C→1°C/min) · 래더 상한 12°C/min" in line
+    assert "OT(TC1) 750.0°C · OT2(TC2) 1150.0°C" in line and "유지 모드 tc2" in line
+    assert "DAC상한 1200" in line and "홀드백 10.0°C" in line
+    # 파이썬 램프가 없으면 래더 값만
+    w._lines.clear()
+    monkeypatch.setattr(w.heater_ramp, "is_active", lambda: False, raising=False)
+    w._write_heater_log_header()
+    assert "램프 12°C/min(래더)" in _hdr(w, "설정:")[0]
+
+
+def test_T113_header_process_vs_manual(header):
+    w = header
+    w.process_running = False; w._process_heater_claimed = False
+    w._write_heater_log_header()
+    assert _hdr(w, "수동 운전 (레시피 없음)") and not _hdr(w, "공정 운전")
+    w._lines.clear(); w.process_running = True
+    w._write_heater_log_header()
+    assert _hdr(w, "공정 운전 (히터 레시피 없음)") and not _hdr(w, "수동 운전")
+    w._lines.clear(); w.process_running = False; w._process_heater_claimed = True
+    w._write_heater_log_header()
+    assert _hdr(w, "공정 운전 (히터 레시피 없음)")

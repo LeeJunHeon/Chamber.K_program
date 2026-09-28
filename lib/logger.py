@@ -198,7 +198,7 @@ def log_message_to_monitor(level, message):
     """
     try:
         now = datetime.datetime.now().strftime("%H:%M:%S")
-        msg = f"[{now}][{level}] {message}"
+        msg = f"[{now}][{level}] {_strip_dup_prefix(level, message)}"
     except Exception:
         return
 
@@ -231,6 +231,19 @@ def log_message_to_monitor(level, message):
         except Exception:
             pass
 
+def _strip_dup_prefix(level, message) -> str:
+    """level 이 "히터…" 인데 메시지도 "[히터] " 로 시작하면 말머리를 한 번만 찍는다(표시 전용).
+    level 이 "히터…" 가 아닌 줄(예: "경고" + "[히터] …")은 절대 떼지 않는다 —
+    그 말머리가 히터 로그로 보내는 유일한 표시다(log_message_to_file 의 is_heater)."""
+    try:
+        lv, msg = str(level or ""), str(message or "")
+        if lv.startswith("히터") and msg.lstrip().startswith("[히터] "):
+            return msg.lstrip()[len("[히터] "):]
+        return msg
+    except Exception:
+        return message
+
+
 def log_message_to_file(level, message):
     """
     로그 한 줄을 파일에 남긴다.
@@ -244,7 +257,8 @@ def log_message_to_file(level, message):
     """
     try:
         now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"[{now}] [{level}] {message}\n"
+        # 라우팅(is_heater)은 아래에서 원래 메시지로 판정한다 — 여기서는 찍는 줄만 다듬는다
+        line = f"[{now}] [{level}] {_strip_dup_prefix(level, message)}\n"
     except Exception:
         return          # 메시지를 문자열로 못 만들면 남길 것도 없다
 

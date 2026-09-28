@@ -513,8 +513,9 @@ class SputterProcessController(QObject):
         if self._heater_used:
             steps.append(ProcessStep(
                 ActionType.HEATER_WAIT,
-                f"히터 온도 도달 대기 (±{HEATER_SOAK_TOLERANCE:.1f}°C, "
-                f"{HEATER_SOAK_TIME_SEC}s 유지, timeout {HEATER_WAIT_TIMEOUT_SEC}s)",
+                # 타임아웃은 _heater_wait 이 이번 승온 거리·속도로 다시 계산한다 — 여기 고정값을 적으면
+                #  실제로 적용되지 않은 숫자가 stage_monitor·히터 CSV note 에 남는다(2026-09-27: 5400s vs 129분).
+                f"히터 온도 도달 대기 (±{HEATER_SOAK_TOLERANCE:.1f}°C, {HEATER_SOAK_TIME_SEC}s 유지)",
                 value=heater_temp))
 
         # --- 6~8) 영점 → 가스 밸브 Open → 유량 설정/Flow ON ---
@@ -747,7 +748,8 @@ class SputterProcessController(QObject):
                 #  래더 카운트로 반올림하기 전 값이어야 한다.
                 self.set_heater_ramp_c.emit(rate)
                 self.set_heater_ramp.emit(max(1, round(rate / 6.0)))
-                self.status_message.emit("히터", f"히터 램프 속도 {rate:.0f}°C/min 설정")
+                # 이 raw 쓰기는 감속 접근(RampProfiler)을 못 쓸 때의 폴백 속도다 — 실제 램프는 main 의 프로파일러가 정한다
+                self.status_message.emit("히터", f"히터 램프 속도 {rate:.0f}°C/min (공정 램프)")
                 QTimer.singleShot(200, self._next_step)
 
             elif step.action == ActionType.HEATER_SET:
@@ -983,6 +985,9 @@ class SputterProcessController(QObject):
             _cur = None
 
         _timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)
+        _to_why = "기본값 HEATER_WAIT_TIMEOUT_SEC"      # 셋 중 무엇이 적용됐는지 그대로 적는다(계산은 그대로)
+        if _cur is None:
+            _to_why = "현재 온도 미상 → 기본값 HEATER_WAIT_TIMEOUT_SEC"
         if _cur is not None:
             try:
                 _rate = float(getattr(self, "_heater_ramp_c_per_min", 0.0) or 0.0)
@@ -993,8 +998,16 @@ class SputterProcessController(QObject):
                 _timeout_sec = min(
                     max(float(HEATER_WAIT_TIMEOUT_SEC), _need + WAIT_TIMEOUT_MARGIN_SEC),
                     WAIT_TIMEOUT_MAX_SEC)
+                if _timeout_sec >= WAIT_TIMEOUT_MAX_SEC:
+                    _to_why = f"상한 WAIT_TIMEOUT_MAX_SEC({WAIT_TIMEOUT_MAX_SEC / 60:.0f}분)"
+                elif _need + WAIT_TIMEOUT_MARGIN_SEC >= float(HEATER_WAIT_TIMEOUT_SEC):
+                    _to_why = (f"예상 승온 {_need / 60:.0f}분 + 여유 {WAIT_TIMEOUT_MARGIN_SEC / 60:.0f}분"
+                               f" ({_rate:g}°C/min 기준)")
+                else:
+                    _to_why = "기본값 HEATER_WAIT_TIMEOUT_SEC"
             except Exception:
                 _timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)
+                _to_why = "계산 실패 → 기본값 HEATER_WAIT_TIMEOUT_SEC"
         timeout_ms = int(_timeout_sec * 1000)
 
         loop = QEventLoop()
@@ -1057,7 +1070,7 @@ class SputterProcessController(QObject):
             "히터",
             f"히터 승온 대기 시작 — 현재 "
             f"{('%.1f' % _cur) if _cur is not None else '--.-'}°C, 목표 {target_c:.1f}°C"
-            f" (타임아웃 {_timeout_sec / 60:.0f}분)")
+            f" (타임아웃 {_timeout_sec / 60:.0f}분 = {_to_why})")
 
         ok = self._exec_loop_with_timeout(
             loop, timeout_ms,

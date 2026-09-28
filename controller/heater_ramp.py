@@ -139,7 +139,8 @@ class RampProfiler(QObject):
             f"[히터] 램프{_lb}: {base:.1f}→{target:.1f}°C · {rate:g}°C/min"
             f" · 접근 {float(HEATER_APPROACH_ZONE_C):g}°C→"
             f"{float(HEATER_APPROACH_MIN_RATE_C_PER_MIN):g}°C/min"
-            f" · 예상 {ramp_minutes(target - base, rate):.1f}분")
+            f" · 예상 {ramp_minutes(target - base, rate):.1f}분"
+            f" (실제 SV 는 파이썬이 {rate:g}°C/min 로 올림 — 래더 D00020 은 {counts * 6}°C/min 로 열어 둠)")
         return True
 
     def tick(self, dt_sec=None):

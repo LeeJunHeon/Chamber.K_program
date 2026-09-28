@@ -1143,7 +1143,9 @@ class PLCController(QObject):
         try:
             v = max(1, min(100, int(counts_per_sec)))
             self._mb("히터 램프", self.instrument.write_register, HEATER_REG_RAMP_RATE, v, functioncode=6)
-            self.status_message.emit("히터", f"램프 속도 {v * 6}°C/min 설정 (raw={v})")
+            # D00020 은 "래더가 D00019 를 올리는 속도" 다. 파이썬(RampProfiler)이 SV 를 올릴 때는
+            #  래더를 더 빠르게 열어 두므로, 이 값이 곧 실제 램프 속도는 아니다.
+            self.status_message.emit("히터", f"래더 램프 속도(D00020) {v * 6}°C/min (raw={v})")
         except Exception as e:
             self.status_message.emit("PLC(오류)", f"히터 램프 속도 쓰기 실패: {e}")
         finally:

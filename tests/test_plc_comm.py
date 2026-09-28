@@ -574,3 +574,9 @@ def test_T51_emergency_stop_cache_untouched_then_poll_emits_on_to_off(plc):
     assert sorted(ch) == sorted([("Rotary_button", False, True), ("MV_button", False, True),
                                  ("Ar_Button", False, True), ("Doorup_button", False, True),
                                  ("Door_Button", False, True)])
+
+
+def test_T111_ramp_rate_message_names_register(plc):
+    plc.set_heater_ramp_rate(2)
+    assert plc.instrument.calls[-1] == ("write_register", CFG.HEATER_REG_RAMP_RATE, 2)
+    assert any(m.startswith("래더 램프 속도(D00020) 12°C/min (raw=2)") for _, m in plc._msgs)
