@@ -1,0 +1,457 @@
+{
+ "timeline": [
+  [
+   "sig.clear_plc_fault",
+   []
+  ],
+  [
+   "logfile.set",
+   [],
+   {
+    "prefix": "CHK"
+   }
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "=== CHK 공정 시작 ==="
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "[히터] 미사용"
+   ]
+  ],
+  [
+   "chat.notify_process_started",
+   [
+    {
+     "use_ar_gas": true,
+     "use_o2_gas": false,
+     "ar_flow": 20.0,
+     "o2_flow": 0.0,
+     "selected_gas": "Ar",
+     "mfc_flow": 20.0,
+     "sp1_set": 5.0,
+     "dc_power": 100.0,
+     "shutter_delay": 1.0,
+     "process_time": 1.0,
+     "rf_offset": 6.79,
+     "rf_param": 1.0395,
+     "use_g1": true,
+     "use_g2": false,
+     "use_dc_delay": false,
+     "use_heater": false,
+     "heater_temp": 0.0,
+     "g1_target_name": "CeO2",
+     "g2_target_name": "",
+     "ch": "CHK",
+     "prefix": "CHK Sputter",
+     "process_note": "Single CHK",
+     "Process_name": "Single CHK",
+     "G1_target_name": "CeO2",
+     "use_dc_power": true,
+     "use_rf_power": false
+    }
+   ]
+  ],
+  [
+   "chat.flush",
+   []
+  ],
+  [
+   "erp.run_start",
+   [
+    "Single CHK",
+    {
+     "use_ar_gas": true,
+     "use_o2_gas": false,
+     "ar_flow": 20.0,
+     "o2_flow": 0.0,
+     "selected_gas": "Ar",
+     "mfc_flow": 20.0,
+     "sp1_set": 5.0,
+     "dc_power": 100.0,
+     "rf_power": 0,
+     "shutter_delay": 1.0,
+     "process_time": 1.0,
+     "rf_offset": 6.79,
+     "rf_param": 1.0395,
+     "use_rf_pulse": false,
+     "rf_pulse_power": 0.0,
+     "rf_pulse_freq": null,
+     "rf_pulse_duty": null,
+     "use_g1": true,
+     "use_g2": false,
+     "use_dc_delay": false,
+     "use_heater": false,
+     "heater_temp": 0.0,
+     "g1_target_name": "CeO2",
+     "g2_target_name": ""
+    }
+   ]
+  ],
+  [
+   "sig.request_process_start",
+   [
+    {
+     "use_ar_gas": true,
+     "use_o2_gas": false,
+     "ar_flow": 20.0,
+     "o2_flow": 0.0,
+     "selected_gas": "Ar",
+     "mfc_flow": 20.0,
+     "sp1_set": 5.0,
+     "dc_power": 100.0,
+     "rf_power": 0,
+     "shutter_delay": 1.0,
+     "process_time": 1.0,
+     "rf_offset": 6.79,
+     "rf_param": 1.0395,
+     "use_rf_pulse": false,
+     "rf_pulse_power": 0.0,
+     "rf_pulse_freq": null,
+     "rf_pulse_duty": null,
+     "use_g1": true,
+     "use_g2": false,
+     "use_dc_delay": false,
+     "use_heater": false,
+     "heater_temp": 0.0,
+     "g1_target_name": "CeO2",
+     "g2_target_name": ""
+    }
+   ]
+  ],
+  [
+   "steps",
+   [
+    [
+     {
+      "action": "DC_POWER_STOP",
+      "message": "PRE: DC Power OFF",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "RF_POWER_STOP",
+      "message": "PRE: RF Power OFF",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "RF_PULSE_STOP",
+      "message": "PRE: RF Pulse OFF",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "PRE: Power OFF settle",
+      "params": null,
+      "value": null,
+      "duration_sec": 1,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 Flow OFF",
+      "params": [
+       "FLOW_OFF",
+       {
+        "channel": 1
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "MFC Valve Open",
+      "params": [
+       "VALVE_OPEN",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 ZEROING",
+      "params": [
+       "MFC_ZEROING",
+       {
+        "channel": 1
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "PS ZEROING",
+      "params": [
+       "PS_ZEROING",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "PLC_CMD",
+      "message": "Ar Valve Open",
+      "params": [
+       "Ar_Button",
+       true
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 20.00sccm 설정",
+      "params": [
+       "FLOW_SET",
+       {
+        "channel": 1,
+        "value": 20.0
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 Flow ON",
+      "params": [
+       "FLOW_ON",
+       {
+        "channel": 1
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "SP4 ON",
+      "params": [
+       "SP4_ON",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "압력 안정화 대기(60초)",
+      "params": null,
+      "value": null,
+      "duration_sec": 60,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "PLC_CMD",
+      "message": "Gun Shutter 1 Open",
+      "params": [
+       "S1_button",
+       true
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "POWER_WAIT",
+      "message": "파워 목표치 도달 대기",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage1(SP3): SP3_SET=15.00 설정",
+      "params": [
+       "SP3_SET",
+       {
+        "value": 15.0
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage1(SP3): SP3_ON",
+      "params": [
+       "SP3_ON",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage1(SP3): 압력 도달 대기 (target=15.00, ±10%, timeout=180s)",
+      "params": [
+       "WAIT_PRESSURE",
+       {
+        "target": 15.0,
+        "tolerance_ratio": 0.1,
+        "stable_count": 3,
+        "timeout_sec": 180.0,
+        "fail_on_timeout": false
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage3(SP1=5.00): SP1_SET=5.00 설정",
+      "params": [
+       "SP1_SET",
+       {
+        "value": 5.0
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage3(SP1=5.00): SP1_ON",
+      "params": [
+       "SP1_ON",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage3(SP1=5.00): 압력 도달 대기 (target=5.00, ±10%, timeout=300s, FAIL ON TIMEOUT)",
+      "params": [
+       "WAIT_PRESSURE",
+       {
+        "target": 5.0,
+        "tolerance_ratio": 0.1,
+        "stable_count": 3,
+        "timeout_sec": 300.0,
+        "fail_on_timeout": true
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "Shutter Delay 60s",
+      "params": null,
+      "value": null,
+      "duration_sec": 60,
+      "timer_purpose": "shutter",
+      "polling": true
+     },
+     {
+      "action": "PLC_CMD",
+      "message": "Main Shutter Open",
+      "params": [
+       "MS_button",
+       true
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "메인 공정 60s 진행",
+      "params": null,
+      "value": null,
+      "duration_sec": 60,
+      "timer_purpose": "process",
+      "polling": true
+     }
+    ]
+   ]
+  ],
+  [
+   "msgbox.warning",
+   [
+    "종료 불가",
+    "공정 진행 중에는 프로그램을 종료할 수 없습니다.\n먼저 STOP으로 공정을 종료한 뒤 다시 닫아주세요."
+   ]
+  ],
+  [
+   "close_event_accepted",
+   [
+    false
+   ]
+  ],
+  [
+   "check",
+   [
+    "종료 요청 뒤",
+    {
+     "stage": "",
+     "start_enabled": false,
+     "stop_enabled": true,
+     "select_csv_enabled": false,
+     "process_running": true,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": "Single CHK"
+    }
+   ]
+  ]
+ ]
+}

@@ -26,6 +26,15 @@ def win(qapp):
     w.heater_atmosphere.release = MagicMock()
     w.heater_atmosphere.is_active = MagicMock(return_value=False)
     yield w
+    # 모듈이 끝나면 이 창의 장치 스레드를 먼저 세운다. 돌고 있는 QThread 가 GC 로 파괴되면 Qt 가
+    #  "QThread: Destroyed while thread 'PLCThread' is still running"(qFatal)로 프로세스를 죽인다(0xC0000409) —
+    #  이 창을 쓰는 모듈이 늘면 GC 시점이 당겨져 실행 도중에, 아니면 종료 때 났다.
+    threads = (w.process_thread, w.plc_thread, w.mfc_thread,
+               w.dcpower_thread, w.rfpower_thread, w.rfpulse_thread)
+    for t in threads:
+        t.quit()
+    for t in threads:
+        t.wait(5000)
 
 
 @pytest.fixture

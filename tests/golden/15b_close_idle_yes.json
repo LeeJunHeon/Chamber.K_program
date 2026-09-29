@@ -1,0 +1,239 @@
+{
+ "timeline": [
+  [
+   "msgbox.question",
+   [
+    "종료 확인",
+    "정말로 프로그램을 종료하시겠습니까?"
+   ]
+  ],
+  [
+   "heater.ramp_stop",
+   [],
+   {
+    "restore_rate": false
+   }
+  ],
+  [
+   "heater.recipe_stop",
+   [
+    "프로그램 종료"
+   ]
+  ],
+  [
+   "logfile.clear_heater",
+   []
+  ],
+  [
+   "sig.request_heater_run",
+   [
+    false
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "프로그램 종료를 시작합니다..."
+   ]
+  ],
+  [
+   "invoke",
+   [
+    "SputterProcessController",
+    "teardown"
+   ]
+  ],
+  [
+   "invoke",
+   [
+    "PLCController",
+    "cleanup"
+   ]
+  ],
+  [
+   "invoke",
+   [
+    "MFCController",
+    "cleanup"
+   ]
+  ],
+  [
+   "invoke",
+   [
+    "DCPowerController",
+    "close_connection"
+   ]
+  ],
+  [
+   "invoke",
+   [
+    "RFPowerController",
+    "close_connection"
+   ]
+  ],
+  [
+   "invoke",
+   [
+    "RFPulseController",
+    "cleanup"
+   ]
+  ],
+  [
+   "thread.quit",
+   [
+    "ProcessThread"
+   ]
+  ],
+  [
+   "thread.quit",
+   [
+    "PLCThread"
+   ]
+  ],
+  [
+   "thread.quit",
+   [
+    "MFCThread"
+   ]
+  ],
+  [
+   "thread.quit",
+   [
+    "DCPowerThread"
+   ]
+  ],
+  [
+   "thread.quit",
+   [
+    "RFPowerThread"
+   ]
+  ],
+  [
+   "thread.quit",
+   [
+    "RFPulseThread"
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "ProcessThread 스레드 종료 대기 중..."
+   ]
+  ],
+  [
+   "thread.wait",
+   [
+    "ProcessThread",
+    3000
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "PLCThread 스레드 종료 대기 중..."
+   ]
+  ],
+  [
+   "thread.wait",
+   [
+    "PLCThread",
+    3000
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "MFCThread 스레드 종료 대기 중..."
+   ]
+  ],
+  [
+   "thread.wait",
+   [
+    "MFCThread",
+    3000
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "DCPowerThread 스레드 종료 대기 중..."
+   ]
+  ],
+  [
+   "thread.wait",
+   [
+    "DCPowerThread",
+    3000
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "RFPowerThread 스레드 종료 대기 중..."
+   ]
+  ],
+  [
+   "thread.wait",
+   [
+    "RFPowerThread",
+    3000
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "RFPulseThread 스레드 종료 대기 중..."
+   ]
+  ],
+  [
+   "thread.wait",
+   [
+    "RFPulseThread",
+    3000
+   ]
+  ],
+  [
+   "chat.shutdown",
+   []
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "모든 스레드가 종료되었습니다. 프로그램을 닫습니다."
+   ]
+  ],
+  [
+   "close_event_accepted",
+   [
+    true
+   ]
+  ],
+  [
+   "check",
+   [
+    "종료 확인 Yes 뒤",
+    {
+     "stage": "",
+     "start_enabled": true,
+     "stop_enabled": false,
+     "select_csv_enabled": false,
+     "process_running": false,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": ""
+    }
+   ]
+  ]
+ ]
+}
