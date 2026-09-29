@@ -155,5 +155,11 @@ def test_T90_no_nas_path_reachable_during_tests(isolate_logs_and_ports):
     lg = HeaterCsvLogger(); path = lg.start("TESTONLY"); lg.stop()
     assert path is not None and str(path).startswith(str(root)) and "VanaM_NAS" not in str(path)
     # 이름으로 NAS 경로를 바인딩한 모듈이 conftest 목록 밖에 더 있으면 실패
-    hits = _grep(r"^from lib\.logger import .*NAS_|^\s*NAS_[A-Z_]*_DIR\s*=", [f for f in PY_FILES if not f.endswith("logger.py")])
-    assert all("heater_logger.py" in h for h in hits), hits
+    #  (정의는 lib/paths.py 한 곳, 가져다 쓰는 곳은 lib/logger.py·lib/heater_logger.py 뿐)
+    import lib.paths as PA
+    for name in ("NAS_LOG_DIR", "NAS_PROCESS_LOG_DIR", "NAS_HEATER_LOG_DIR", "NAS_PLC_LOG_DIR", "NAS_COMM_LOG_DIR"):
+        assert str(getattr(PA, name)).startswith(str(root)), name
+    assert "VanaM_NAS" not in str(PA.CHK_CSV_PATH)
+    hits = _grep(r"^from lib\.(logger|paths) import .*NAS_|^\s*NAS_[A-Z_]*_DIR\s*=",
+                 [f for f in PY_FILES if not f.endswith("logger.py")])
+    assert all(("heater_logger.py" in h) or (os.path.join("lib", "paths.py") in h) for h in hits), hits

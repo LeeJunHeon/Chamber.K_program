@@ -14,6 +14,7 @@ try:
     from lib import config_local as _cfg  # lib/config_local.py
 except Exception:
     _cfg = None
+from lib.paths import DEV_MODE, chat_webhook
 
 
 class ChatNotifier(QObject):
@@ -39,17 +40,12 @@ class ChatNotifier(QObject):
     def __init__(self, webhook_url: Optional[str] = None, parent=None):
         super().__init__(parent)
 
-        # 단일 웹훅 URL
-        cfg_url = ""
-        if _cfg is not None:
-            cfg_url = (getattr(_cfg, "CHAT_WEBHOOK_URL", "") or "").strip()
-        self.webhook_default = (webhook_url or cfg_url).strip()
+        # 단일 웹훅 URL. 개발 모드면 넘겨받은 주소까지 전부 비운다(전송 안 함).
+        cfg_url = chat_webhook(_cfg, DEV_MODE)
+        self.webhook_default = "" if DEV_MODE else (webhook_url or cfg_url).strip()
 
         # ★ PLC 끊김/재연결 전용 채널
-        plc_url = ""
-        if _cfg is not None:
-            plc_url = (getattr(_cfg, "CHAT_WEBHOOK_PLC_DISCONNECT_URL", "") or "").strip()
-        self.webhook_plc_disconnect = plc_url
+        self.webhook_plc_disconnect = chat_webhook(_cfg, DEV_MODE, "CHAT_WEBHOOK_PLC_DISCONNECT_URL")
 
         # 지연 전송 & 버퍼 (payload, webhook_url) 튜플로 저장
         self._defer: bool = True

@@ -773,8 +773,8 @@ MFC_COMMANDS = {
     'SP4_SET': lambda value: f"S4 {value}",
 }
 
-# === Chamber-K NAS CSV 로그 경로 (고정) ===
-CHK_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database\ChK_log.csv"
+# === Chamber-K NAS CSV 로그 경로 (lib/paths.py 에서 정한다. 개발 모드면 저장소 _dev_logs) ===
+from lib.paths import CHK_CSV_PATH  # noqa: E402
 
 CHK_CSV_COLUMNS = [
     "Timestamp",

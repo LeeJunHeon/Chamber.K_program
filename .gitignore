@@ -225,3 +225,6 @@ $RECYCLE.BIN/
 
 ### ERP Reporter ###
 reporter_spool.jsonl
+
+### 개발 모드 기록 (lib/config_local.py 의 DEV_MODE = True) ###
+_dev_logs/

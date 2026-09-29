@@ -41,12 +41,15 @@ def isolate_logs_and_ports(tmp_path_factory):
     import lib.heater_logger as HL
     root = Path(tmp_path_factory.mktemp("chk_logs"))
     mp = pytest.MonkeyPatch()
+    import lib.paths as PA                           # 경로를 정하는 한 곳(개발 모드면 _dev_logs)
     for name in _NAS_ATTRS:
         sub = root if name == "NAS_LOG_DIR" else root / name.replace("NAS_", "").replace("_LOG_DIR", "").lower()
         mp.setattr(LG, name, sub)
+        mp.setattr(PA, name, sub)
     mp.setattr(HL, "NAS_HEATER_LOG_DIR", LG.NAS_HEATER_LOG_DIR)
-    # ChK_log.csv(공정 요약, lib.config.CHK_CSV_PATH → lib.logger 가 이름으로 바인딩) 도 NAS 다
+    # ChK_log.csv(공정 요약, lib.paths → lib.config → lib.logger 가 이름으로 바인딩) 도 NAS 다
     import lib.config as CFG
+    mp.setattr(PA, "CHK_CSV_PATH", str(root / "ChK_log.csv"))
     mp.setattr(CFG, "CHK_CSV_PATH", str(root / "ChK_log.csv"))
     if hasattr(LG, "CHK_CSV_PATH"):
         mp.setattr(LG, "CHK_CSV_PATH", str(root / "ChK_log.csv"))

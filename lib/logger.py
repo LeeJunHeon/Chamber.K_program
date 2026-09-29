@@ -23,15 +23,11 @@ _current_log_file: Optional[Path] = None
 #  히터 CSV 와 같은 이름/타임스탬프로 짝을 이룬다.
 _heater_log_file: Optional[Path] = None
 
-# NAS 로그 기본 경로 (UNC 경로)
-NAS_LOG_DIR = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK")
-
-# 종류별 하위 폴더. 한 폴더에 공정/히터 파일이 섞이면 찾기 어렵다.
-#  log.txt(어디에도 속하지 않는 로그)는 지금처럼 CHK 루트에 그대로 둔다.
-NAS_PROCESS_LOG_DIR = NAS_LOG_DIR / "process"
-NAS_HEATER_LOG_DIR  = NAS_LOG_DIR / "heater"
-NAS_PLC_LOG_DIR     = NAS_LOG_DIR / "plc"        # PLC 블랙박스(2026-09-16 CPU 정지 사고 대응)
-NAS_COMM_LOG_DIR    = NAS_LOG_DIR / "comm"       # 시리얼 장비 공통 통신 이벤트(COMM_events.csv)
+# NAS 로그 경로(UNC). 경로는 lib/paths.py 한 곳에서 정한다(개발 모드면 저장소 _dev_logs).
+#  종류별 하위 폴더: process / heater / plc(PLC 블랙박스, 2026-09-16 CPU 정지 사고 대응) /
+#  comm(시리얼 장비 공통 통신 이벤트 COMM_events.csv). log.txt 는 CHK 루트에 그대로 둔다.
+from lib.paths import (NAS_LOG_DIR, NAS_PROCESS_LOG_DIR, NAS_HEATER_LOG_DIR,  # noqa: E402
+                       NAS_PLC_LOG_DIR, NAS_COMM_LOG_DIR)
 
 # NAS 폴백 경고는 프로그램 실행당 1회만. 공정마다 반복되면 로그가 지저분해진다.
 _nas_fallback_warned: bool = False

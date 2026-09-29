@@ -29,6 +29,7 @@ from lib.logger import (
     append_comm_event,
     write_plc_blackbox,
 )
+from lib.paths import DEV_MODE, DEV_MODE_BANNER, DEV_MODE_TITLE_TAG, chat_webhook, erp_settings
 from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
@@ -102,10 +103,15 @@ class MainDialog(QDialog):
             f"(대기 시간은 config_user.json의 DC_POWER_DELAY_SEC로 조정)"
         )
 
+        # 개발 모드(lib/config_local.py 의 DEV_MODE = True): ERP·구글챗 끄고 기록은 _dev_logs
+        if DEV_MODE:
+            self.setWindowTitle(self.windowTitle() + DEV_MODE_TITLE_TAG)
+            log_message_to_monitor("정보", DEV_MODE_BANNER)
+
         # === Google Chat Notifier (CH.K) ===
         try:
             from lib import config_local as cfgl
-            url = (getattr(cfgl, 'CHAT_WEBHOOK_URL', '') or '').strip()
+            url = chat_webhook(cfgl, DEV_MODE)
         except Exception:
             url = ''
 
@@ -132,8 +138,7 @@ class MainDialog(QDialog):
         # === ERP Reporter (CH.K) ===
         try:
             from lib import config_local as _cfgl
-            _erp_url = (getattr(_cfgl, "ERP_INGEST_URL", "") or "").strip()
-            _erp_token = (getattr(_cfgl, "ERP_INGEST_TOKEN", "") or "").strip()
+            _erp_url, _erp_token = erp_settings(_cfgl, DEV_MODE)
         except Exception:
             _erp_url, _erp_token = "", ""
         self.erp = ErpReporter(_erp_url, _erp_token, equipment="CHK")

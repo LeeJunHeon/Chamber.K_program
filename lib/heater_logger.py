@@ -4,7 +4,7 @@
 PLC 폴링(200ms)으로 올라오는 히터 상태 딕셔너리를 일정 주기로 CSV에 남긴다.
 솎아내기(주기 판정)는 호출자(main.update_heater_display)가 한다.
 
-저장 위치는 lib/logger.py 의 NAS_HEATER_LOG_DIR(<CHK>/heater)을 쓰고,
+저장 위치는 lib/paths.py 의 NAS_HEATER_LOG_DIR(<CHK>/heater)을 쓰고,
 접근 실패 시 ./Logs/heater 로 폴백한다 (set_process_log_file 과 동일한 정책).
 """
 
@@ -16,7 +16,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from lib.logger import NAS_HEATER_LOG_DIR, log_message_to_monitor
+from lib.logger import log_message_to_monitor
+from lib.paths import NAS_HEATER_LOG_DIR
 
 # NAS 폴백 경고는 프로그램 실행당 1회만(인스턴스가 아니라 모듈 전역).
 _nas_fallback_warned: bool = False
