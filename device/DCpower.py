@@ -711,7 +711,9 @@ class DCPowerController(QObject):
     def stop_process(self):
         was_running = self._reset_run_state()
 
-        self._output_off_confirmed("공정 종료")
+        # stop_process 는 공정 종료뿐 아니라 시작 첫 스텝("PRE: DC Power OFF")에서도 불린다 —
+        #  호출 맥락과 무관하게 맞는 표기를 쓴다.
+        self._output_off_confirmed("DC 정지")
 
         self.update_dc_status_display.emit(0.0, 0.0, 0.0)
 
@@ -847,11 +849,11 @@ class DCPowerController(QObject):
         # 잔여 입력을 readAll()로 비움 (clear(Input) 대신)
         if self.serial and self.serial.bytesAvailable() > 0:
             try:
-                _dropped = bytes(self.serial.readAll())
+                _dropped = bytes(self.serial.readAll()).decode("ascii", "replace").strip()
                 if _dropped:
-                    # 늦게 온 응답이 있었는지 다음 로그로 알 수 있게 남긴다(버린 것 자체는 기존과 같다)
-                    self.status_message.emit(
-                        "DCpower", f"이전 응답 폐기: {_dropped.decode('ascii', 'replace').strip()!r}")
+                    # 늦게 온 응답이 있었는지 다음 로그로 알 수 있게 남긴다(버린 것 자체는 기존과 같다).
+                    #  앞 응답의 CRLF 가 쪼개져 오면 공백만 버려지는데, 그건 알릴 내용이 아니다.
+                    self.status_message.emit("DCpower", f"이전 응답 폐기: {_dropped!r}")
             except Exception:
                 pass
 

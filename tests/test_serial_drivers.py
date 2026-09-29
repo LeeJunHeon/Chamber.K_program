@@ -340,7 +340,7 @@ def test_T114_stop_process_confirms_on_first_try_with_gap(qapp, monkeypatch):
     assert h.unconf == [] and h.c._off_unconfirmed is False and h.c._output_maybe_on is False
     assert h.c._comm_fail_streak == 0                            # 확인 때문에 실패 카운트가 늘지 않는다
     assert h.c.serial.isOpen() and not any(fn for _, fn in h.shots if getattr(fn, "__name__", "") == "_try_reconnect")
-    assert any("DC 출력 OFF 확인(OUTP?=0, 공정 종료)" in m for _, m in h.msgs)
+    assert any("DC 출력 OFF 확인(OUTP?=0, DC 정지)" in m for _, m in h.msgs)
 
 
 def test_T115_old_behavior_would_have_failed(qapp, monkeypatch):
@@ -404,23 +404,34 @@ def test_T120_read_dc_power_skips_fallback_after_stop(qapp, monkeypatch):
 
 
 def test_T121_query_logs_dropped_bytes(qapp, monkeypatch):
-    h = DCHarness(monkeypatch, replies=["0"])
-    class _S(DCFakeSerial):
-        def __init__(self): super().__init__(); self._n = 1
-        def bytesAvailable(self): return self._n
-        def readAll(self): self._n = 0; return b"0\r\n"
-    h.c.serial = _S(); h.c.serial.open()
-    h.c._query("OUTP?")
-    assert any(l == "DCpower" and "이전 응답 폐기: '0'" in m for l, m in h.msgs)
+    def _run(payload):
+        h = DCHarness(monkeypatch, replies=["0"])
+
+        class _S(DCFakeSerial):
+            def __init__(self):
+                super().__init__(); self._n = 1
+
+            def bytesAvailable(self):
+                return self._n
+
+            def readAll(self):
+                self._n = 0; return payload
+        h.c.serial = _S(); h.c.serial.open()
+        h.c._query("OUTP?")
+        return [m for l, m in h.msgs if l == "DCpower" and "이전 응답 폐기" in m]
+
+    assert _run(b"0" + b"\r\n") == ["이전 응답 폐기: '0'"]
+    assert _run(b"\r\n") == []          # 앞 응답의 CRLF 조각만 버리면 알릴 내용이 없다
+    assert _run(b"  " + b"\n") == []
 
 
 def test_T122_where_labels_are_human_readable(qapp, monkeypatch):
     import inspect
     src = inspect.getsource(DCM.DCPowerController)
-    assert '_output_off_confirmed("공정 종료")' in src and '"stop_process"' not in src
-    for w in ("공정 종료", "ALL STOP", "복구 후 안전 상태", "OFF 재시도"):
+    assert '_output_off_confirmed("DC 정지")' in src and '"stop_process"' not in src
+    for w in ("DC 정지", "ALL STOP", "복구 후 안전 상태", "OFF 재시도"):
         assert f'"{w}"' in src
     h = GapHarness(monkeypatch, outp=[])
     h.c._output_maybe_on = True
     h.c.stop_process()
-    assert h.unconf == ["공정 종료"]
+    assert h.unconf == ["DC 정지"]          # 공정 시작 첫 스텝(PRE: DC Power OFF)에서도 맞는 표기
