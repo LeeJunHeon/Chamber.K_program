@@ -162,6 +162,7 @@ class DCHarness:
 
     def _write(self, line):
         self.sent.append(line)
+        self.c._last_write_t = self.t          # 실제 _write_line 이 하는 일(간격 계산의 기준)
         return True
 
     def _read(self):
@@ -253,7 +254,7 @@ def test_T97_verify_aborts_when_new_process_started(qapp, monkeypatch):
     def _steal(cmd, timeout_ms=500):
         h2.c._is_running = True
         return "1"
-    monkeypatch.setattr(h2.c, "_query", lambda cmd, timeout_ms=500: (h2.sent.append(cmd), _steal(cmd))[1])
+    monkeypatch.setattr(h2.c, "_query", lambda cmd, timeout_ms=500, count_fail=True: (h2.sent.append(cmd), _steal(cmd))[1])
     assert h2.c._verify_output_off("stop_process") is None
     assert h2.sent.count("OUTP OFF") == 0                   # 1 응답이어도 재전송 안 함
 
@@ -302,3 +303,124 @@ def test_T101_stop_process_without_output_is_info_only(qapp, monkeypatch):
     assert h.events == [] and h.unconf == []
     assert not any(l == "DCpower(경고)" for l, _ in h.msgs)
     assert any("이번 실행에서 DC 출력을 켠 적 없음" in m for _, m in h.msgs)
+
+
+# ═══════════════ T114~ OFF 확인은 명령 간격을 둔 뒤 (2026-09-28 거짓 "OFF 미확인") ═══════════════
+class GapHarness(DCHarness):
+    """직전 쓰기로부터 DC_CMD_GAP_MS 안에 온 질의는 무시하는 장비(2026-09-28 실기 동작).
+    가짜 시계: msleep 이 시간을 흘려보낸다."""
+    def __init__(self, monkeypatch, outp="0", **kw):
+        super().__init__(monkeypatch, **kw)
+        self.outp = outp if isinstance(outp, list) else [outp]
+        self.queries = []; self._prev_write_t = 0.0; self._gap_at_write = 1e9
+        monkeypatch.setattr(DCM.QThread, "msleep", lambda ms: setattr(self, "t", self.t + ms / 1000.0))
+        monkeypatch.setattr(self.c, "_readline_blocking", self._read_gap)
+
+    def _read_gap(self, timeout_ms=500):
+        """질의가 '직전 명령으로부터 얼마 뒤' 도착했는지로 응답 여부를 정한다(실기 장비 동작)."""
+        self.queries.append(round(self._gap_at_write))
+        if self._gap_at_write < DCM.DC_CMD_GAP_MS:
+            self.t += timeout_ms / 1000.0          # 무응답 — 타임아웃까지 기다린 셈
+            return None
+        return self.outp.pop(0) if self.outp else None
+
+    def _write(self, line):                        # 쓰기도 시간을 조금 쓴다
+        self.t += 0.01
+        self._gap_at_write = (self.t - self._prev_write_t) * 1000.0 if self._prev_write_t else 1e9
+        self._prev_write_t = self.t
+        return super()._write(line)
+
+
+def test_T114_stop_process_confirms_on_first_try_with_gap(qapp, monkeypatch):
+    h = GapHarness(monkeypatch, outp="0")
+    h.c._output_maybe_on = True
+    h.c.stop_process()
+    assert h.sent == ["OUTP OFF", "OUTP?"]                       # 재전송 없이 한 번에 확인
+    assert h.queries[0] >= DCM.DC_CMD_GAP_MS                     # 질의 전 간격 보장
+    assert h.unconf == [] and h.c._off_unconfirmed is False and h.c._output_maybe_on is False
+    assert h.c._comm_fail_streak == 0                            # 확인 때문에 실패 카운트가 늘지 않는다
+    assert h.c.serial.isOpen() and not any(fn for _, fn in h.shots if getattr(fn, "__name__", "") == "_try_reconnect")
+    assert any("DC 출력 OFF 확인(OUTP?=0, 공정 종료)" in m for _, m in h.msgs)
+
+
+def test_T115_old_behavior_would_have_failed(qapp, monkeypatch):
+    """간격 없이 바로 물으면(수정 전) 같은 장비가 무응답이다 — 거짓 ❌ 의 원인."""
+    h = GapHarness(monkeypatch, outp="0")
+    h.c._output_maybe_on = True
+    h.c._send_output_off("공정 종료")
+    ans = h.c._query("OUTP?", timeout_ms=800, count_fail=False)   # 간격 없이 즉시
+    assert ans is None and h.queries[0] < DCM.DC_CMD_GAP_MS
+
+
+def test_T116_retries_on_one_then_confirms(qapp, monkeypatch):
+    h = GapHarness(monkeypatch, outp=["1", "1", "0"])
+    h.c._output_maybe_on = True
+    assert h.c._output_off_confirmed("공정 종료") is True
+    assert h.sent == ["OUTP OFF", "OUTP?", "OUTP OFF", "OUTP?", "OUTP OFF", "OUTP?"]
+    assert h.unconf == [] and h.c._comm_fail_streak == 0
+
+
+def test_T117_all_tries_fail_marks_once_and_counts_one_comm_fail(qapp, monkeypatch):
+    h = GapHarness(monkeypatch, outp=[])                          # 항상 무응답
+    h.c._output_maybe_on = True
+    assert h.c._output_off_confirmed("공정 종료") is False
+    assert h.sent.count("OUTP?") == DCM.DC_OFF_VERIFY_TRIES
+    assert h.unconf == ["공정 종료"] and h.c._comm_fail_streak == 1     # 확인 실패는 1회만 반영
+    detail = [m for l, m in h.msgs if l == "DCpower(경고)" and "OFF 미확인" in m][0]
+    assert "None/None/None" in detail
+
+
+def test_T118_no_send_after_start_during_verify(qapp, monkeypatch):
+    h = GapHarness(monkeypatch, outp=[])
+    h.c._output_maybe_on = True
+    h.c._send_output_off("공정 종료")
+    n = len(h.sent)
+    h.c._is_running = True
+    assert h.c._verify_output_off("공정 종료") is None and len(h.sent) == n
+
+
+def test_T119_no_double_waitforbyteswritten_and_timeout_error_ignored(qapp, monkeypatch):
+    import inspect
+    def _code(fn):                                    # 주석은 빼고 코드 줄만 본다
+        return chr(10).join(l.split("#")[0] for l in inspect.getsource(fn).splitlines())
+    assert "waitForBytesWritten" not in _code(DCM.DCPowerController._send_output_off)
+    assert "waitForBytesWritten" not in _code(DCM.DCPowerController.cleanup)
+    assert "waitForBytesWritten" in _code(DCM.DCPowerController._write_line)   # 한 곳에서만 한다
+    h = DCHarness(monkeypatch)
+    h.c._on_serial_error(DCM.QSerialPort.SerialPortError.TimeoutError)
+    assert h.msgs == [] and h.events == []
+
+
+def test_T120_read_dc_power_skips_fallback_after_stop(qapp, monkeypatch):
+    h = DCHarness(monkeypatch)
+    h.c._is_running = True
+    def _q(cmd, timeout_ms=500, count_fail=True):
+        h.sent.append(cmd)
+        h.c._is_running = False              # 읽는 도중 사용자 STOP
+        return None
+    monkeypatch.setattr(h.c, "_query", _q)
+    assert h.c.read_dc_power() == (None, None, None)
+    assert h.sent == ["MEAS:ALL?"]           # 폴백 MEAS:VOLT?/MEAS:CURR? 를 보내지 않는다
+
+
+def test_T121_query_logs_dropped_bytes(qapp, monkeypatch):
+    h = DCHarness(monkeypatch, replies=["0"])
+    class _S(DCFakeSerial):
+        def __init__(self): super().__init__(); self._n = 1
+        def bytesAvailable(self): return self._n
+        def readAll(self): self._n = 0; return b"0\r\n"
+    h.c.serial = _S(); h.c.serial.open()
+    h.c._query("OUTP?")
+    assert any(l == "DCpower" and "이전 응답 폐기: '0'" in m for l, m in h.msgs)
+
+
+def test_T122_where_labels_are_human_readable(qapp, monkeypatch):
+    import inspect
+    src = inspect.getsource(DCM.DCPowerController)
+    assert '_output_off_confirmed("공정 종료")' in src and '"stop_process"' not in src
+    for w in ("공정 종료", "ALL STOP", "복구 후 안전 상태", "OFF 재시도"):
+        assert f'"{w}"' in src
+    h = GapHarness(monkeypatch, outp=[])
+    h.c._output_maybe_on = True
+    h.c.stop_process()
+    assert h.unconf == ["공정 종료"]

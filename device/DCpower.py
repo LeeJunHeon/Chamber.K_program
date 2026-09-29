@@ -30,6 +30,12 @@ DC_COMM_REOPEN_SEC = 3.0
 # OFF 미확인 에피소드의 재시도 간격 — 실패할 때마다 2배, COMM_OUTAGE_LOG_SEC 에서 캡.
 #  "_is_running=False 동안 출력 OFF" 는 언제나 맞는 상태라 공정 활성 여부와 무관하게 재시도해도 안전하다.
 DC_OFF_RETRY_START_SEC = 10.0
+# 이 장비는 직전 명령을 처리하는 동안 들어온 질의에 답하지 않는다 — 2026-09-28 실기: "OUTP OFF" 직후의
+#  OUTP? 는 13번 중 13번 무응답이었고, 약 1초 틈이 있던 21:52:50 한 번만 "0" 을 받았다(MEAS:ALL? 는 1초 주기로 정상).
+#  매뉴얼(EX Series)에 명령 간격 규정은 없어 _send() 의 기존 여유(120ms)보다 넉넉히 잡는다.
+DC_CMD_GAP_MS = 500              # 쓰기 명령 뒤 다음 질의까지 최소 간격
+DC_OFF_QUERY_TIMEOUT_MS = 1500   # OUTP? 대기(MEAS:ALL? 와 같은 수준)
+DC_OFF_VERIFY_TRIES = 3          # 최악 ≈ 3 × (0.5 + 1.5) = 6초
 from lib.dc_control import power_step_current, is_at_current_cap
 
 class DCPowerController(QObject):
@@ -94,6 +100,7 @@ class DCPowerController(QObject):
         self._off_retry_sec: float = DC_OFF_RETRY_START_SEC
         self._off_last_log_t: float = 0.0          # 에피소드 중 경고·이벤트 솎음(COMM_OUTAGE_LOG_SEC)
         self._io_depth: int = 0                    # _readline_blocking 중첩 깊이(재진입 판정)
+        self._last_write_t: float = 0.0            # 마지막 쓰기 시각 — 질의 전 DC_CMD_GAP_MS 를 보장한다
         self._verify_pending: bool = False         # _verify_output_off 재예약이 걸려 있는가
         self._emg_restore = None                   # ALL STOP 이 임시로 포트를 연 경우 되돌릴 상태
 
@@ -220,6 +227,9 @@ class DCPowerController(QObject):
     def _on_serial_error(self, err) -> None:
         if err == QSerialPort.SerialPortError.NoError:
             return
+        if err == QSerialPort.SerialPortError.TimeoutError:
+            # waitFor* 시간 초과(보낼 게 없을 때도 난다) — 포트 이상이 아니다. 2026-09-28 21:52:51 의 거짓 경고
+            return
         serr = self.serial.errorString() if self.serial else ""
         self.status_message.emit("DCpower(경고)", f"시리얼 오류: {serr} (err={err})")
         self._emit_event("시리얼오류", f"{serr} (err={err})")
@@ -266,14 +276,21 @@ class DCPowerController(QObject):
             if not (self.serial and self.serial.isOpen()):
                 return False
             self.status_message.emit("DCpower > 전송", "OUTP OFF")
-            ok = self._write_line("OUTP OFF")
-            self.serial.waitForBytesWritten(200)
+            ok = self._write_line("OUTP OFF")      # _write_line 이 flush + waitForBytesWritten 까지 한다
             return bool(ok)
         except Exception:
             return False
 
+    def _wait_cmd_gap(self) -> None:
+        """마지막 쓰기로부터 DC_CMD_GAP_MS 를 채운다 — 장비가 직전 명령을 처리할 시간을 준다.
+        (중첩 때문에 확인을 미룬 경우엔 이미 지나 있어 거의 안 기다린다.)"""
+        rest = float(DC_CMD_GAP_MS) / 1000.0 - (time.monotonic() - self._last_write_t)
+        if rest > 0:
+            QThread.msleep(int(rest * 1000))
+
     def _verify_output_off(self, where: str):
-        """OUTP? 로 확인한다. True=확인 / False=미확인 / None=확인 보류(읽기 중이라 뒤로 미룸).
+        """간격을 둔 뒤 OUTP? 로 최대 DC_OFF_VERIFY_TRIES 번 확인한다.
+        True=확인 / False=미확인 / None=확인 보류(읽기 중이라 뒤로 미룸).
         매뉴얼 7-8절: OUTP? 는 "0"=출력 차단, "1"=출력 허용."""
         if self._io_depth > 0:
             # 중첩 읽기 중에 또 _query 를 하면 두 on_ready 가 같은 readyRead 를 나눠 갖는다 — 읽기가 끝난 뒤로 미룬다
@@ -281,22 +298,23 @@ class DCPowerController(QObject):
                 self._verify_pending = True
                 QTimer.singleShot(50, lambda: self._verify_retry(where))
             return None
-        if self._is_running:
-            return None          # 그 사이 새 공정이 시작됐다 — 출력의 주인이 바뀌었으니 건드리지 않는다
-        ans = self._query("OUTP?", timeout_ms=800)
-        if ans is not None and ans.strip() in ("0", "OFF"):
-            self._mark_off_confirmed(where)
-            return True
-        # 무응답·"1"·기타 → 한 번 더 쓰고 다시 확인
-        time.sleep(0.3)
-        if self._is_running:
-            return None
-        self._send_output_off(where)
-        ans2 = self._query("OUTP?", timeout_ms=800)
-        if ans2 is not None and ans2.strip() in ("0", "OFF"):
-            self._mark_off_confirmed(where)
-            return True
-        self._mark_off_unconfirmed(where, f"OUTP? 응답 {ans!r}/{ans2!r}")
+        answers = []
+        for attempt in range(int(DC_OFF_VERIFY_TRIES)):
+            if self._is_running:
+                return None      # 그 사이 새 공정이 시작됐다 — 출력의 주인이 바뀌었으니 건드리지 않는다
+            if attempt > 0:
+                self._send_output_off(where)      # "1"·무응답이면 한 번 더 쓰고 다시 확인
+                if self._is_running:
+                    return None
+            self._wait_cmd_gap()
+            # 확인용 질의의 무응답은 통신 두절 판정에 넣지 않는다 — 진짜 두절은 제어 루프의 MEAS 쿼리가 잡는다
+            ans = self._query("OUTP?", timeout_ms=DC_OFF_QUERY_TIMEOUT_MS, count_fail=False)
+            answers.append(ans)
+            if ans is not None and ans.strip() in ("0", "OFF"):
+                self._mark_off_confirmed(where)
+                return True
+        self._comm_fail(f"OUTP? 확인 {len(answers)}회 실패")   # 끝까지 못 받았을 때만 1회 반영
+        self._mark_off_unconfirmed(where, "OUTP? 응답 " + "/".join(repr(a) for a in answers))
         return False
 
     def _verify_retry(self, where: str) -> None:
@@ -693,7 +711,7 @@ class DCPowerController(QObject):
     def stop_process(self):
         was_running = self._reset_run_state()
 
-        self._output_off_confirmed("stop_process")
+        self._output_off_confirmed("공정 종료")
 
         self.update_dc_status_display.emit(0.0, 0.0, 0.0)
 
@@ -755,8 +773,7 @@ class DCPowerController(QObject):
 
         try:
             if self.serial and self.serial.isOpen():
-                self._send_noresp("OUTP OFF")
-                self.serial.waitForBytesWritten(200)
+                self._send_noresp("OUTP OFF")      # _write_line 이 flush + waitForBytesWritten 까지 한다
         except Exception:
             pass
 
@@ -783,7 +800,9 @@ class DCPowerController(QObject):
         resp = self._query("MEAS:ALL?", timeout_ms=1500)
         v, i = self._parse_meas_all(resp)
 
-        # ② 실패 시 개별 쿼리 폴백
+        # ② 실패 시 개별 쿼리 폴백 — 그 사이 정지가 들어왔으면 더 보내지 않는다(사용자 STOP 뒤 "전송 실패" 방지)
+        if (v is None or i is None) and not self._is_running:
+            return (None, None, None)
         if v is None or i is None:
             v = self._to_float(self._query("MEAS:VOLT?", timeout_ms=1200))
             i = self._to_float(self._query("MEAS:CURR?", timeout_ms=1200))
@@ -824,22 +843,30 @@ class DCPowerController(QObject):
         except Exception as e:
             self.status_message.emit("DCpower(경고)", f"전송 오류(무응답): {e}")
 
-    def _query(self, command: str, timeout_ms: int = 500) -> Optional[str]:
+    def _query(self, command: str, timeout_ms: int = 500, count_fail: bool = True) -> Optional[str]:
         # 잔여 입력을 readAll()로 비움 (clear(Input) 대신)
         if self.serial and self.serial.bytesAvailable() > 0:
-            try: self.serial.readAll()
-            except Exception: pass
+            try:
+                _dropped = bytes(self.serial.readAll())
+                if _dropped:
+                    # 늦게 온 응답이 있었는지 다음 로그로 알 수 있게 남긴다(버린 것 자체는 기존과 같다)
+                    self.status_message.emit(
+                        "DCpower", f"이전 응답 폐기: {_dropped.decode('ascii', 'replace').strip()!r}")
+            except Exception:
+                pass
 
         self.status_message.emit("DCpower > 전송", command)
         if not self._write_line(command):
             self.status_message.emit("DCpower", "전송 실패")
-            self._comm_fail(f"{command} 전송 실패")
+            if count_fail:
+                self._comm_fail(f"{command} 전송 실패")
             return None
 
         line = self._readline_blocking(timeout_ms)
         if line is None:
             self.status_message.emit("DCpower", "수신 타임아웃")
-            self._comm_fail(f"{command} 수신 타임아웃")
+            if count_fail:
+                self._comm_fail(f"{command} 수신 타임아웃")
         else:
             self.status_message.emit("DCpower < 응답", line)
             self._comm_ok()
@@ -854,6 +881,7 @@ class DCPowerController(QObject):
             return False
         self.serial.flush()
         self.serial.waitForBytesWritten(200)  # 실제 송신 보장
+        self._last_write_t = time.monotonic()
         return True
 
     def _readline_blocking(self, timeout_ms: int = 500) -> Optional[str]:
