@@ -480,21 +480,8 @@ class MainDialog(QDialog):
                 self._start_csv_process_from_path(path)
 
             elif name == "RECIPE_HEATER_RUN":
-                # UI 경로(_on_heater_recipe_clicked)와 같은 가드.
-                #  HeaterRecipeRunner.start() 는 공정이 도는지 알지 못하므로
-                #  여기서 막지 않으면 공정과 레시피가 같은 D00012/M00040 을
-                #  서로 덮어쓴다.
-                _proc_active = (self.process_running or self.csv_mode
-                                or getattr(self, "_csv_delay_active", False))
-                # CSV 리스트 공정은 뒤 STEP 에서 히터를 켤 수 있으므로 목록 전체를 본다
-                _list_owns = (bool(getattr(self, "csv_file_path", ""))
-                              and self._csv_list_uses_heater())
-                if _proc_active and (self._process_heater_claimed or _list_owns):
-                    _tail = (" (공정 목록의 뒤 STEP 에 히터 목표값이 있습니다)"
-                             if (_list_owns and not self._process_heater_claimed) else "")
-                    raise RuntimeError("현재 공정이 히터를 제어하고 있습니다. "
-                                       "공정 레시피에 히터 목표값이 없을 때만 함께 실행할 수 있습니다."
-                                       + _tail)
+                # 노트북 [레시피] 버튼과 같은 경로로 실행한다(가드·가스 준비·스텝 목록·램프 정지 포함).
+                #  예전에는 여기서 load/start 만 해 레시피의 가스·압력이 무시됐다.
                 import csv as _csv, tempfile, os as _os
                 rows = args.get("rows") or []
                 if not rows:
@@ -510,10 +497,7 @@ class MainDialog(QDialog):
                     w.writeheader()
                     for r in rows:
                         w.writerow({c: r.get(c, "") for c in cols})
-                if not self.heater_recipe.load(path):
-                    raise RuntimeError("히터 레시피 검증 실패 (로그 확인)")
-                if not self.heater_recipe.start():
-                    raise RuntimeError("히터 레시피 시작 실패")
+                self._run_heater_recipe_file(path, confirm=False)
 
             elif name == "RECIPE_PROCESS_START":
                 # 적재된 CSV 레시피로 공정을 시작한다(장비 앞 Start 버튼과 동일 경로)
@@ -594,6 +578,7 @@ class MainDialog(QDialog):
                         # 원격 실행 동안에는 경고창을 띄우지 않는다 — 문구는 _remote_alerts 에 모여 실패 사유가 된다
                         self._remote_exec = True
                         self._remote_alerts = []
+                        self._remote_notes = []
                         try:
                             _erp_exec_one(c)
                         finally:
@@ -601,7 +586,13 @@ class MainDialog(QDialog):
                         _why = self._remote_alert_reason()
                         if not _why:
                             _why = self._erp_silent_failure(_name, c)
-                        for _k, _t, _x in self._remote_alerts:
+                            if _why:
+                                # 조용한 실패인데 처리 중 알림이 있었으면 그 문구가 더 정확하다
+                                _note = " / ".join(f"{t}: " + " ".join(str(x).split())
+                                                   for k, t, x in self._remote_notes if k != "information")
+                                if _note:
+                                    _why = _note
+                        for _k, _t, _x in list(self._remote_alerts) + list(self._remote_notes):
                             if _k == "information":
                                 log_message_to_monitor("정보", f"[원격] {_name} 안내 — {_t}: " + " ".join(str(_x).split()))
                         if _why:
@@ -936,6 +927,10 @@ class MainDialog(QDialog):
         #  창 문구는 _remote_alerts 에 모아 그 명령의 실패 사유로 보낸다(검사 규칙은 기존 함수 한 곳이 기준).
         self._remote_exec = False
         self._remote_alerts: list = []
+        self._remote_notes: list = []          # 원격 명령 처리 중 생긴 알림(실패 사유가 아니다 — 조작 기록용)
+        # 작업 출처 = 그 작업을 시작한 쪽. 끝날 때까지 유지하고, 중간에 다른 쪽이 STOP 해도 바뀌지 않는다.
+        self._proc_origin = "local"
+        self._heater_origin = "local"
         self._erp_main_remain_sec = -1            # ERP: 메인 공정 잔여 초(-1 = 미진입), 총 초
         self._erp_main_total_sec = 0
         self._mv_itl_timer = QTimer(self)         # MV_INTERLOCK OFF 1초 지속 판정
@@ -1586,10 +1581,12 @@ class MainDialog(QDialog):
                 if not self._heater_gas_start_guard():
                     self._revert_heater_onoff()
                     return
+                self._heater_origin = "erp" if getattr(self, "_remote_exec", False) else "local"
                 self._heater_pending = ("manual_on", v)
                 self._show_heater_pending_button()
                 self._sync_heater_gas_inputs()
                 return
+            self._heater_origin = "erp" if getattr(self, "_remote_exec", False) else "local"
             self._heater_manual_go(v)          # 버튼 표시는 폴링(update_heater_display)이 맞춘다
         else:
             # 준비 중이면 [취소] 다. 히터는 아직 안 켜졌으니 OFF 를 보내지 않고
@@ -1825,6 +1822,11 @@ class MainDialog(QDialog):
                 if not (self.process_running or self.csv_mode
                         or getattr(self, "_csv_delay_active", False)):
                     return "공정이 시작되지 않았습니다 (장비 로그 확인)"
+            elif name == "RECIPE_HEATER_RUN":
+                pend = getattr(self, "_heater_pending", None)
+                waiting = bool(pend and str(pend[0]) == "recipe_start")
+                if not (self.heater_recipe.is_running() or waiting):
+                    return "히터 레시피를 시작하지 못했습니다 (장비 로그 확인)"
             elif name == "RECIPE_PROCESS_RUN":
                 want = str((c or {}).get("_csv_path") or "")
                 cur = str(getattr(self, "csv_file_path", "") or "")
@@ -1833,6 +1835,45 @@ class MainDialog(QDialog):
         except Exception:
             pass
         return ""
+
+    def _notice(self, source: str, kind: str, title: str, text: str) -> None:
+        """장비가 자동으로 내는 알림 한 곳. 출처(노트북/ERP)에 따라 창 여부가 갈리고, ERP 알림은 두 경우 모두 나간다.
+        원격 명령 처리 중이면 창도 ERP 알림도 없이 _remote_notes 에만 남긴다(그 명령의 조작 기록).
+        어떤 경우에도 예외를 밖으로 내보내지 않는다."""
+        try:
+            body = " ".join(str(text).split())
+            lv = {"critical": "ERROR", "warning": "경고"}.get(kind, "정보")
+            log_message_to_monitor(lv, f"[알림] {title}: {body}")
+        except Exception:
+            pass
+        try:
+            if getattr(self, "_remote_exec", False):
+                self._remote_notes.append((kind, str(title), str(text)))
+                return
+        except Exception:
+            return
+        origin = self._proc_origin if source == "process" else self._heater_origin
+        try:
+            if self.erp is not None:
+                self.erp.notice({"critical": "error", "warning": "warn"}.get(kind, "info"),
+                                title, text, origin, source)
+        except Exception:
+            pass
+        if origin != "local":
+            return                      # ERP 에서 시작한 작업 — 노트북에는 창을 띄우지 않는다
+        def _show():
+            try:
+                if self._is_closing:
+                    return
+                fn = {"critical": QMessageBox.critical, "information": QMessageBox.information}.get(
+                    kind, QMessageBox.warning)
+                fn(self, title, text)
+            except Exception:
+                pass
+        try:
+            QTimer.singleShot(0, _show)   # 지금 처리(정리·기록)가 끝난 뒤에 띄운다
+        except Exception:
+            pass
 
     def _remote_alert_reason(self) -> str:
         """모인 경고창 문구를 ERP 실패 사유 한 줄로. warning/critical 만 사유가 된다."""
@@ -2497,6 +2538,20 @@ class MainDialog(QDialog):
         # (실행 중에는 _sync_heater_recipe_buttons 가 이 버튼을 비활성화한다)
         if self.heater_recipe.is_running():
             return
+        start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
+        path, _ = QFileDialog.getOpenFileName(
+            self, "히터 레시피 파일 선택", start_dir,
+            "레시피 파일 (*.xlsx *.xlsm *.csv *.tsv);;Excel (*.xlsx *.xlsm);;CSV (*.csv *.tsv);;All Files (*)")
+        if not path:
+            return
+        self._run_heater_recipe_file(path, confirm=True)
+
+    def _run_heater_recipe_file(self, path: str, confirm: bool) -> None:
+        """히터 레시피 실행 경로 한 곳 — 노트북 [레시피] 버튼과 원격 RECIPE_HEATER_RUN 이 같이 쓴다.
+        (원격 경로에 가스·압력 준비·패널 반영·수동 램프 정지·스텝 목록 갱신이 빠져 있어 웹 레시피의 가스가 무시됐다)"""
+        if self.heater_recipe.is_running():
+            self._alert("warning", "실행 불가", "히터 레시피가 이미 실행 중입니다.")
+            return
 
         # 공정이 히터를 소유할 때만 막는다. 공정 레시피에 히터값이 없으면
         # 히터 레시피를 함께 돌릴 수 있다(제어 주체가 하나면 충돌하지 않는다).
@@ -2514,12 +2569,6 @@ class MainDialog(QDialog):
                                 + _tail)
             return
 
-        start_dir = HEATER_RECIPE_DIR or str(Path.cwd())
-        path, _ = QFileDialog.getOpenFileName(
-            self, "히터 레시피 파일 선택", start_dir,
-            "레시피 파일 (*.xlsx *.xlsm *.csv *.tsv);;Excel (*.xlsx *.xlsm);;CSV (*.csv *.tsv);;All Files (*)")
-        if not path:
-            return
         if not self.heater_recipe.load(path):
             self._alert("warning", "레시피 오류",
                                 "레시피를 불러오지 못했습니다. 로그를 확인하세요.")
@@ -2541,16 +2590,18 @@ class MainDialog(QDialog):
         else:
             self._apply_recipe_gas_to_panel(gas)
 
-        steps = self.heater_recipe.steps()
-        body = "\n".join(f"{i}. {s.describe()}" for i, s in enumerate(steps, 1))
-        reply = self._ask("히터 레시피 실행",
-            f"{Path(path).name}\n\n{body}\n\n분위기: {atm_txt}\n\n이대로 실행할까요?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No)
-        if reply != QMessageBox.StandardButton.Yes:
-            return
+        if confirm:
+            steps = self.heater_recipe.steps()
+            body = "\n".join(f"{i}. {s.describe()}" for i, s in enumerate(steps, 1))
+            reply = self._ask("히터 레시피 실행",
+                f"{Path(path).name}\n\n{body}\n\n분위기: {atm_txt}\n\n이대로 실행할까요?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if reply != QMessageBox.StandardButton.Yes:
+                return
 
         self._rebuild_heater_step_list()
+        self._heater_origin = "erp" if getattr(self, "_remote_exec", False) else "local"
 
         # 가스·압력을 쓰기로 했으면 먼저 준비한다. 레시피는 준비가 끝난 뒤 시작한다.
         if self._heater_gas_wanted() and not self.heater_atmosphere.is_ready():
@@ -3137,17 +3188,13 @@ class MainDialog(QDialog):
         except Exception:
             pass
         try:
-            if not self._is_closing:
-                self._alert("warning", "가스·압력 준비 실패", reason)
-        except Exception:
-            pass
-        try:
             if self.chat_chk:
                 self.chat_chk.notify_text(f"⚠️ CHK 히터 가스·압력 준비 실패: {reason}")
                 self.chat_chk.flush()
         except Exception:
             pass
         self._sync_heater_gas_inputs()
+        self._notice("heater", "warning", "가스·압력 준비 실패", reason)   # 정리 뒤에 알린다
 
     @Slot()
     def _on_heater_atmosphere_released(self):
@@ -3352,9 +3399,9 @@ class MainDialog(QDialog):
             return
 
         if ok:
-            self._alert("information", "히터 레시피", reason)
+            self._notice("heater", "information", "히터 레시피", reason)
         else:
-            self._alert("warning", "히터 레시피", f"중단되었습니다.\n\n{reason}")
+            self._notice("heater", "warning", "히터 레시피", f"중단되었습니다.\n\n{reason}")
 
     @Slot(dict)
     def update_heater_display(self, st: dict):
@@ -3616,6 +3663,9 @@ class MainDialog(QDialog):
         if not self._check_main_valve_open():
             return
         
+        # 출처 = 이 공정을 시작한 쪽(가드를 모두 통과한 지점). CSV 리스트의 뒤 스텝도 이 값을 쓴다.
+        self._proc_origin = "erp" if getattr(self, "_remote_exec", False) else "local"
+
         self.clear_plc_fault.emit()
         
         # === 1) CSV 모드인지 먼저 확인 ===
@@ -3947,13 +3997,12 @@ class MainDialog(QDialog):
 
     @Slot(str)
     def _handle_connection_failure(self, error_message):
-        self._alert("critical", "연결 실패", error_message)
-
         # ✅ 실패 원인 저장만 (종료 카드+실패 원인 일반챗은 _handle_process_finished에서)
         self._chat_notify_failed_now(error_message, send_text=False)
 
         self._chk_process_ok = False  # 연결 실패도 실패 처리
         self._handle_process_finished()
+        self._notice("process", "critical", "연결 실패", error_message)   # 정리 뒤에 알린다
 
     def on_status_message(self, level, message):
         log_message_to_monitor(level, message)
@@ -4642,11 +4691,13 @@ class MainDialog(QDialog):
 
     @Slot(str)
     def _handle_critical_error(self, error_message):
-        self._alert("critical", "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
+        # ★ 실패 표시·정리를 먼저 한다. 창이 먼저면(확인을 늦게 누르면) 그 사이 종료 처리가 돌아
+        #   실패한 스텝이 정상 종료로 기록되고 CSV 다음 스텝이 시작된다 — ALL STOP 과 같은 순서로 맞춘다.
         self._chk_process_ok = False
 
         # ✅ 저장만 (stop 시퀀스 끝나고 finished에서 카드+일반챗 1줄)
         self._chat_notify_failed_now(error_message, send_text=False)
+        self._notice("process", "critical", "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
 
         # ✅ 여기서 _handle_process_finished()를 직접 호출하지 마세요.
         # stop 시퀀스가 끝나면 ProcessController.finished가 1번만 호출해줍니다.
@@ -5429,7 +5480,6 @@ class MainDialog(QDialog):
 
         # 모든 행을 다 돌았으면 종료
         if self.csv_index >= len(self.csv_rows):
-            self._alert("information", "CSV 공정 완료", "CSV에 있는 모든 공정을 완료했습니다.")
             self.csv_mode = False
             self.csv_rows = []
             self.csv_index = -1
@@ -5450,6 +5500,7 @@ class MainDialog(QDialog):
             self._reset_process_ui_fields()
             # 리스트 정상 완료 — 이후 로그가 마지막 STEP 파일에 덧붙지 않게 해제
             clear_process_log_file()
+            self._notice("process", "information", "CSV 공정 완료", "CSV에 있는 모든 공정을 완료했습니다.")
             return
 
         row = self.csv_rows[self.csv_index]
@@ -5491,9 +5542,7 @@ class MainDialog(QDialog):
         try:
             params = self._build_params_from_csv_row(row)
         except Exception as e:
-            self._alert("critical", "CSV 레시피 오류",
-                f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}"
-            )
+            _row_msg = f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}"
             log_message_to_monitor("ERROR", f"CSV 레시피 오류로 리스트 공정을 중단합니다: {e}")
 
             # ✅ 구글챗에도 실패 알림(종료 카드 + 일반챗 1줄) 보장
@@ -5512,6 +5561,7 @@ class MainDialog(QDialog):
 
             # ✅ 여기서는 중복 전송 방지 위해 notify_chat=False
             self._cancel_csv_list_now("CSV 레시피 오류로 중단", notify_chat=False)
+            self._notice("process", "critical", "CSV 레시피 오류", _row_msg)   # 정리 뒤에 알린다
             return
 
         # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해

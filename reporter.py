@@ -65,6 +65,14 @@ class ErpReporter:
         except Exception:
             pass
 
+    def notice(self, level: str, title: str, message: str, origin: str = "local", source: str = "process"):
+        """운전자에게 보일 알림(장비가 자동으로 띄우는 창과 같은 내용).
+        level: "error"|"warn"|"info", origin: 그 작업을 시작한 쪽("local"|"erp"), source: "process"|"heater".
+        event 와 달리 제목이 있고, 스풀·재전송 대상이다."""
+        self._enqueue({"type": "notice", "level": str(level or "info"),
+                       "title": str(title or "")[:100], "message": str(message or "")[:1000],
+                       "origin": str(origin or "local"), "source": str(source or "process")})
+
     def event(self, level: str, message: str):
         self._enqueue({"type": "event", "level": level, "message": str(message)[:500]})
 

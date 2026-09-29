@@ -253,3 +253,179 @@ def test_T135_information_only_is_success(erp, monkeypatch):
                         lambda: (w._alert("information", "안내", "참고 사항"), setattr(w, "process_running", True)))
     ok, why = run_remote(w, "PROCESS_START")
     assert ok is True and why == "" and w._mb.count() == 0
+
+
+# ═══════════════ T136~ 출처(local/erp)별 알림 · 자동 알림 순서 · 히터 레시피 경로 통일 ═══════════════
+def _notices(w):
+    return [c.args for c in w.erp.notice.call_args_list]
+
+
+def test_T136_origin_is_recorded_by_starter(erp, monkeypatch):
+    w = erp; _params(w)
+    monkeypatch.setattr(w.plc_controller, "read_main_valve_state", lambda: (True, True))
+    started = []
+    monkeypatch.setattr(w, "request_process_start",
+                        type("S", (), {"emit": staticmethod(lambda p: started.append(p))})())
+    w._proc_origin = "erp"
+    w._handle_start_process()                                  # 노트북 Start
+    assert w._proc_origin == "local" and started
+    w.process_running = False
+    run_remote(w, "PROCESS_START")
+    assert w._proc_origin == "erp"
+    # 가드에 막힌 시작은 출처를 바꾸지 않는다
+    w.process_running = False; w._proc_origin = "local"
+    monkeypatch.setattr(w.plc_controller, "read_main_valve_state", lambda: (False, True))
+    run_remote(w, "PROCESS_START")
+    assert w._proc_origin == "local"
+
+
+def test_T137_heater_origin(erp, monkeypatch):
+    w = erp
+    feed(w, make_heater_st(run=False, itl=True))
+    w.ui.heater_sv_edit.setText("300")
+    w.ui.heater_ar_check.setChecked(False); w.ui.heater_o2_check.setChecked(False)
+    monkeypatch.setattr(w, "_heater_manual_go", lambda v: None)
+    w._heater_origin = "erp"
+    w._on_heater_onoff_toggled(True)                           # 노트북 ON
+    assert w._heater_origin == "local"
+    run_remote(w, "HEATER_ONOFF", {"on": True})
+    assert w._heater_origin == "erp"
+
+
+def test_T138_critical_error_order_and_origin(erp, monkeypatch):
+    """실패 표시·정리가 먼저, 창은 마지막(QTimer). 창을 띄우기 전에 종료 처리가 돌아도 실패로 남는다."""
+    w = erp
+    w._proc_origin = "local"; w.process_running = True; w._chat_reset_run_state(); w._chk_process_ok = True
+    monkeypatch.setattr(w, "_chat_notify_failed_now", lambda *a, **k: None)
+    w._handle_critical_error("RF 이상")
+    assert w._chk_process_ok is False                          # 창보다 먼저
+    assert w._mb.count() == 0                                  # 아직 창 없음(singleShot 대기)
+    n = _notices(w)[-1]
+    assert n[0] == "error" and n[1] == "공정 중단" and n[3] == "local" and n[4] == "process"
+    spin(50)
+    assert w._mb.count("critical") == 1 and w._mb.calls[-1][1] == "공정 중단"
+    # erp 출처면 창이 없다
+    w._mb.calls.clear(); w.erp.notice.reset_mock()
+    w._proc_origin = "erp"; w._chk_process_ok = True
+    w._handle_critical_error("MFC 이상")
+    spin(50)
+    assert w._mb.count() == 0 and w._chk_process_ok is False
+    assert _notices(w)[-1][3] == "erp"
+
+
+def test_T139_connection_failure_and_csv_notices_order(erp, monkeypatch):
+    w = erp; w._proc_origin = "local"
+    done = []
+    monkeypatch.setattr(w, "_handle_process_finished", lambda: done.append(w._mb.count()))
+    monkeypatch.setattr(w, "_chat_notify_failed_now", lambda *a, **k: None)
+    w._handle_connection_failure("PLC 연결 실패")
+    assert done == [0] and w._chk_process_ok is False           # 정리가 창보다 먼저
+    spin(50)
+    assert w._mb.count("critical") == 1
+    # CSV 완료
+    w._mb.calls.clear()
+    w.csv_mode = True; w.csv_rows = [{"Process_name": "A"}]; w.csv_index = 0
+    w._start_next_csv_step()
+    assert w.csv_mode is False and w._mb.count() == 0
+    spin(50)
+    assert w._mb.count("information") == 1
+    assert _notices(w)[-1][1] == "CSV 공정 완료"
+
+
+def test_T140_csv_row_error_cancels_before_notice(erp, monkeypatch):
+    w = erp; w._proc_origin = "local"
+    cancels = []
+    monkeypatch.setattr(w, "_cancel_csv_list_now", lambda *a, **k: cancels.append(w._mb.count()))
+    monkeypatch.setattr(w, "_build_params_from_csv_row",
+                        lambda row: (_ for _ in ()).throw(ValueError("wp 오류")))
+    w.csv_mode = True; w.csv_rows = _rows(2); w.csv_index = -1
+    w._start_next_csv_step()
+    assert cancels == [0]                                      # 정리가 창보다 먼저
+    spin(50)
+    assert w._mb.count("critical") == 1 and "CSV 레시피 오류" in w._mb.calls[-1][1]
+    w.csv_mode = False; w.csv_rows = []
+
+
+def test_T141_notice_suppressed_inside_remote_command(erp, monkeypatch):
+    w = erp
+    w.erp.notice.reset_mock()
+    monkeypatch.setattr(w, "_handle_start_process",
+                        lambda: (w._notice("process", "warning", "안내 제목", "본문"),
+                                 setattr(w, "process_running", True)))
+    ok, why = run_remote(w, "PROCESS_START")
+    spin(50)
+    assert ok is True and why == ""                            # 알림은 실패 사유가 아니다
+    assert w._mb.count() == 0 and w.erp.notice.call_count == 0
+    assert w._remote_notes and w._remote_notes[0][1] == "안내 제목"
+
+
+def test_T142_remote_recipe_stop_reports_success(erp, monkeypatch):
+    """공정 밖 히터 레시피 정지 — _on_heater_recipe_finished 의 문구가 실패로 둔갑하지 않는다."""
+    w = erp
+    monkeypatch.setattr(w.heater_recipe, "is_running", lambda: True, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "was_user_stopped", lambda: True, raising=False)
+
+    def _stop(reason=""):
+        w._on_heater_recipe_finished(False, "사용자 중단")
+    monkeypatch.setattr(w.heater_recipe, "stop", _stop, raising=False)
+    ok, why = run_remote(w, "RECIPE_HEATER_STOP")
+    assert ok is True and why == "" and w._mb.count() == 0
+
+
+def test_T143_remote_heater_recipe_uses_common_path(erp, monkeypatch):
+    w = erp
+    rows = [{"step": 1, "target_c": 300, "ramp_c_per_min": 6, "soak_min": 10,
+             "use_ar": 1, "ar_flow": 20, "use_o2": 0, "o2_flow": 0, "wp_mtorr": 5}]
+    calls = {"guard": 0, "start": 0, "ramp_stop": 0, "panel": 0, "rebuild": 0}
+    monkeypatch.setattr(w.heater_recipe, "load", lambda p: True, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "recipe_gas",
+                        lambda: {"use_ar": True, "ar_flow": 20.0, "sp1": 5.0}, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "describe_gas", lambda: "Ar 20 sccm", raising=False)
+    monkeypatch.setattr(w.heater_recipe, "steps", lambda: [], raising=False)
+    running = {"v": False}
+    monkeypatch.setattr(w.heater_recipe, "is_running", lambda: running["v"], raising=False)
+
+    def _start():
+        calls["start"] += 1; running["v"] = True; return True
+    monkeypatch.setattr(w.heater_recipe, "start", _start, raising=False)
+    monkeypatch.setattr(w, "_apply_recipe_gas_to_panel", lambda g: calls.__setitem__("panel", calls["panel"] + 1))
+    monkeypatch.setattr(w, "_rebuild_heater_step_list", lambda: calls.__setitem__("rebuild", calls["rebuild"] + 1))
+    monkeypatch.setattr(w, "_heater_gas_wanted", lambda: True)
+    monkeypatch.setattr(w, "_heater_gas_start_guard",
+                        lambda: (calls.__setitem__("guard", calls["guard"] + 1), True)[1])
+    monkeypatch.setattr(w.heater_atmosphere, "is_ready", lambda: False, raising=False)
+    ok, why = run_remote(w, "RECIPE_HEATER_RUN", {"rows": rows})
+    assert ok is True and w._mb.count() == 0                   # 확인창 없이(confirm=False)
+    assert calls["panel"] == 1 and calls["rebuild"] == 1 and calls["guard"] == 1   # 가스가 무시되지 않는다
+    assert w._heater_pending and w._heater_pending[0] == "recipe_start" and w._heater_origin == "erp"
+    # 가스가 없으면 램프 정지 후 바로 start
+    w._heater_pending = None
+    monkeypatch.setattr(w, "_heater_gas_wanted", lambda: False)
+    monkeypatch.setattr(w.heater_ramp, "stop",
+                        lambda *a, **k: calls.__setitem__("ramp_stop", calls["ramp_stop"] + 1), raising=False)
+    ok, why = run_remote(w, "RECIPE_HEATER_RUN", {"rows": rows})
+    assert ok is True and calls["ramp_stop"] == 1 and calls["start"] == 1
+
+
+def test_T144_remote_heater_recipe_blocked_by_process(erp):
+    w = erp
+    w.process_running = True; w._process_heater_claimed = True
+    rows = [{"step": 1, "target_c": 300, "ramp_c_per_min": 6, "soak_min": 10}]
+    ok, why = run_remote(w, "RECIPE_HEATER_RUN", {"rows": rows})
+    assert ok is False and w._mb.count() == 0 and "현재 공정이 히터를 제어하고 있습니다" in why
+    w.process_running = False; w._process_heater_claimed = False
+
+
+def test_T145_local_recipe_path_asks_once(erp, monkeypatch):
+    w = erp
+    monkeypatch.setattr(w.heater_recipe, "load", lambda p: True, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "is_running", lambda: False, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "recipe_gas", lambda: None, raising=False)
+    monkeypatch.setattr(w.heater_recipe, "describe_gas", lambda: "-", raising=False)
+    monkeypatch.setattr(w.heater_recipe, "steps", lambda: [], raising=False)
+    monkeypatch.setattr(w, "_heater_gas_wanted", lambda: False)
+    started = []
+    monkeypatch.setattr(w.heater_recipe, "start", lambda: started.append(1) or True, raising=False)
+    monkeypatch.setattr(w.heater_ramp, "stop", lambda *a, **k: None, raising=False)
+    w._run_heater_recipe_file("x.csv", confirm=True)           # _MB.question → No
+    assert w._mb.count("question") == 1 and started == []
