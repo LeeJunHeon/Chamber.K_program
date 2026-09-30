@@ -31,6 +31,7 @@ from lib.logger import (
 )
 from lib.paths import DEV_MODE, DEV_MODE_BANNER, DEV_MODE_TITLE_TAG, chat_webhook, erp_settings
 from core.params import ManualInputs, build_manual_params, build_csv_params, check_rfpulse_range
+from core.state import ProcessState
 from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
@@ -75,6 +76,12 @@ def _fmt_hms_sec(sec: float) -> str:
     return f"{h}:{m:02d}:{ss:02d}" if h else f"{m}:{ss:02d}"
 
 
+def _state_field(name: str) -> property:
+    """MainDialog 의 옛 이름(self.process_running 등)을 self.proc_state 의 필드로 잇는다(읽기·쓰기)."""
+    return property(lambda self: getattr(self.proc_state, name),
+                    lambda self, v: setattr(self.proc_state, name, v))
+
+
 class MainDialog(QDialog):
     shutdown_requested = Signal()
     request_process_stop = Signal()
@@ -90,8 +97,28 @@ class MainDialog(QDialog):
     clear_plc_fault = Signal()  # 새 공정 시작 시 PLC 통신 실패 래치 해제
 
     """메인 UI 및 전체 공정/장치 연결 클래스"""
+
+    # 공정 상태 값 — 실제 값은 self.proc_state(core/state.py ProcessState). 옛 이름은 그대로 쓸 수 있다.
+    process_running = _state_field("running")
+    csv_file_path = _state_field("csv_file_path")
+    csv_rows = _state_field("csv_rows")
+    csv_index = _state_field("csv_index")
+    csv_mode = _state_field("csv_mode")
+    csv_cancelled = _state_field("csv_cancelled")
+    _csv_delay_active = _state_field("delay_active")
+    _csv_delay_total_sec = _state_field("delay_total_sec")
+    _csv_delay_remaining_sec = _state_field("delay_remaining_sec")
+    _csv_delay_name = _state_field("delay_name")
+    current_process_name = _state_field("current_name")
+    _last_params = _state_field("last_params")
+    _chk_process_ok = _state_field("step_ok")
+    _proc_origin = _state_field("origin")
+    _finish_handled = _state_field("finish_handled")
+    _process_heater_claimed = _state_field("heater_claimed")
+
     def __init__(self):
         super().__init__()
+        self.proc_state = ProcessState()      # 공정 상태 값(기본값 포함) — 아래 옛 이름 property 가 이리로 이어진다
         self.ui = Ui_Dialog()
         self.ui.setupUi(self)
         set_monitor_widget(self.ui.error_monitor)
@@ -127,8 +154,6 @@ class MainDialog(QDialog):
         # 공정 알림 상태
         self._chat_user_stopped: bool = False
         self._chat_emergency_stopped: bool = False
-        # 이번 공정의 종료 처리(카드 + CSV 판정)를 이미 했는가. 시작한 적이 없으면 True.
-        self._finish_handled: bool = True
         self._chat_errors: list[str] = []
         self._chat_fail_notified: bool = False   # ✅ 실패 원인 일반채팅 중복 방지
         # 설비 이상 상세 카드는 공정 1회당 1장만. 같은 이상이 PLC fault 와
@@ -156,9 +181,6 @@ class MainDialog(QDialog):
         # === ERP Reporter (CH.K) ===
 
         # === Google Chat Notifier (CH.K) ===
-
-        # ★ 이번 공정 이름(단일/CSV 공정 공통)
-        self.current_process_name: str = ""
 
         # --- [최종] 모든 컨트롤러를 Worker-Object 패턴으로 생성 ---
 
@@ -263,10 +285,6 @@ class MainDialog(QDialog):
         self._atm_progress = ""
         # 히터가 꺼진 뒤에도 식을 때까지 가스를 물고 있는 중인가
         self._atm_hold = False
-        # 이번 공정이 히터를 '소유'하는가 (use_heater 且 heater_temp>0).
-        #  히터를 제어하는 주체는 한 번에 하나여야 한다 — 공정이 소유하면
-        #  히터 레시피를 못 띄우고, 소유하지 않으면 둘이 함께 돌 수 있다.
-        self._process_heater_claimed = False
         # 공정 레시피가 HEATER_RAMP 로 지정한 램프 속도(°C/min).
         #  HEATER_SET 이 왔을 때 감속 접근 램프에 그대로 넘긴다.
         self._process_heater_rate_c = 0.0
@@ -278,27 +296,12 @@ class MainDialog(QDialog):
 
         self._connect_signals()
 
-        # --- CSV 기반 Process List 상태 ---
-        self.csv_file_path: str | None = None         # 선택한 CSV 파일 전체 경로
-        self.csv_rows: list[dict] = []                # CSV 한 줄 = dict
-        self.csv_index: int = -1                      # 현재 실행 중인 줄 index
-        self.csv_mode: bool = False                  # True면 '리스트 공정 모드'
-        self.csv_cancelled: bool = False              # ✅ STOP 시 리스트 전체 취소 플래그
-
         # --- CSV Delay(공정 사이 대기) 상태 ---
         self._csv_delay_timer: QTimer | None = None
         self._csv_delay_clock: QElapsedTimer | None = None   # ✅ 추가
-        self._csv_delay_active: bool = False
-        self._csv_delay_total_sec: int = 0
-        self._csv_delay_remaining_sec: int = 0
-        self._csv_delay_name: str = ""
 
         # --- ChK CSV용 평균값 누적 변수 초기화 ---
         self._reset_chk_stats()
-        self._chk_process_ok: bool = False  # 이번 공정이 정상 종료되었는지 여부
-
-        # CSV 상태 아래에 추가
-        self._last_params: dict | None = None
 
         # 종료/파일선택 다이얼로그 상태
         self._is_closing: bool = False
@@ -317,7 +320,6 @@ class MainDialog(QDialog):
         QMetaObject.invokeMethod(
             self.rfpulse_controller, "connect_device", Qt.ConnectionType.QueuedConnection)
 
-        self.process_running = False
         self.ui.Sputter_Stop_Button.setEnabled(False)
 
         # === ERP 원격 명령 실행 (메인 스레드 전용) ===
@@ -935,7 +937,7 @@ class MainDialog(QDialog):
         self._remote_alerts: list = []
         self._remote_notes: list = []          # 원격 명령 처리 중 생긴 알림(실패 사유가 아니다 — 조작 기록용)
         # 작업 출처 = 그 작업을 시작한 쪽. 끝날 때까지 유지하고, 중간에 다른 쪽이 STOP 해도 바뀌지 않는다.
-        self._proc_origin = "local"
+        #  (공정 출처 _proc_origin 의 첫 값 "local" 은 ProcessState.origin 기본값)
         self._heater_origin = "local"
         self._erp_main_remain_sec = -1            # ERP: 메인 공정 잔여 초(-1 = 미진입), 총 초
         self._erp_main_total_sec = 0
@@ -1346,9 +1348,7 @@ class MainDialog(QDialog):
             log_message_to_monitor("경고", f"장기두절 챗 알림 실패({device}): {e!r}")
 
     def _process_active(self) -> bool:
-        return (bool(getattr(self, "process_running", False))
-                or bool(getattr(self, "csv_mode", False))
-                or bool(getattr(self, "_csv_delay_active", False)))
+        return self.proc_state.is_active()
 
     @Slot(str)
     def _on_dc_off_unconfirmed(self, where: str):
@@ -1433,9 +1433,7 @@ class MainDialog(QDialog):
                 self.chat_chk.flush()
         except Exception:
             pass
-        _active = (bool(getattr(self, "process_running", False))
-                   or bool(getattr(self, "csv_mode", False))
-                   or bool(getattr(self, "_csv_delay_active", False)))
+        _active = self._process_active()
         if _active:
             # 펌프·밸브 출력이 초기화됐으므로 공정은 "재시작" 경로로 중단한다
             self.on_status_message("재시작", "PLC 재기동 감지 — 펌프·밸브 출력이 초기화되어 공정을 중단합니다")
@@ -1447,9 +1445,7 @@ class MainDialog(QDialog):
         plc = getattr(self, "plc_controller", None)
         if plc is None or not bool(getattr(plc, "_outage_abort", False)):
             return          # 짧은 단절(중단 아님) — 아무것도 하지 않는다
-        _active = (bool(getattr(self, "process_running", False))
-                   or bool(getattr(self, "csv_mode", False))
-                   or bool(getattr(self, "_csv_delay_active", False)))
+        _active = self._process_active()
         if _active:
             log_message_to_monitor("정보", f"PLC 통신 복구({lost:.0f}초) — 공정 진행 중이라 안전 상태 재적용 생략")
             plc._outage_abort = False
@@ -1714,8 +1710,7 @@ class MainDialog(QDialog):
         전용이고, 설비 이상은 '실패'로 기록되어야 한다.
         """
         try:
-            if not (self.process_running or self.csv_mode
-                    or getattr(self, "_csv_delay_active", False)):
+            if not self._process_active():
                 return
         except Exception:
             return
@@ -1825,8 +1820,7 @@ class MainDialog(QDialog):
         """경고창 없이 조용히 return 한 경로를 결과로 확인한다. 실패면 사유, 아니면 ""."""
         try:
             if name in ("PROCESS_START", "RECIPE_PROCESS_START"):
-                if not (self.process_running or self.csv_mode
-                        or getattr(self, "_csv_delay_active", False)):
+                if not self._process_active():
                     return "공정이 시작되지 않았습니다 (장비 로그 확인)"
             elif name == "RECIPE_HEATER_RUN":
                 pend = getattr(self, "_heater_pending", None)
@@ -2561,8 +2555,7 @@ class MainDialog(QDialog):
 
         # 공정이 히터를 소유할 때만 막는다. 공정 레시피에 히터값이 없으면
         # 히터 레시피를 함께 돌릴 수 있다(제어 주체가 하나면 충돌하지 않는다).
-        _proc_active = (self.process_running or self.csv_mode
-                        or getattr(self, "_csv_delay_active", False))
+        _proc_active = self._process_active()
         # CSV 리스트 공정은 뒤 STEP 에서 히터를 켤 수 있으므로 목록 전체를 본다
         _list_owns = (bool(getattr(self, "csv_file_path", ""))
                       and self._csv_list_uses_heater())
@@ -2653,8 +2646,7 @@ class MainDialog(QDialog):
                         "히터",
                         f"[히터] 히터 OFF — 가스·압력은 PV {thr:g}°C 이하가 될 때까지"
                         f" 유지합니다 (현재 {pv_txt})")
-                    if not (self.process_running or self.csv_mode
-                            or getattr(self, "_csv_delay_active", False)):
+                    if not self._process_active():
                         self.update_stage_monitor(
                             f"[가스 유지] 냉각 대기 — PV ≤ {thr:g}°C 에서 해제")
 
@@ -3101,8 +3093,7 @@ class MainDialog(QDialog):
 
         MFC 는 공정과 공유하는 자원이라 소유자가 하나여야 한다.
         """
-        if (self.process_running or self.csv_mode
-                or getattr(self, "_csv_delay_active", False)):
+        if self._process_active():
             self._alert("warning", "가스 사용 불가",
                 "공정이 MFC를 사용 중입니다.\n공정이 끝난 뒤에 사용하세요.")
             return False
@@ -3135,8 +3126,7 @@ class MainDialog(QDialog):
         elif detail.startswith("오류"):
             txt = "오류"
         # 공정이 stage monitor 를 쓰는 중에는 덮어쓰지 않는다
-        if not (self.process_running or self.csv_mode
-                or getattr(self, "_csv_delay_active", False)):
+        if not self._process_active():
             try:
                 # 해제가 끝나 IDLE 로 돌아오면 단계 표시를 비운다 —
                 #  가스 제어를 쓰기 전과 같은 모습이어야 한다.
@@ -3253,8 +3243,7 @@ class MainDialog(QDialog):
         """[정지] 레시피를 중단한다. 공정이 돌고 있어도 공정은 건드리지 않는다."""
         if not self.heater_recipe.is_running():
             return
-        _in_process = (self.process_running or self.csv_mode
-                       or getattr(self, "_csv_delay_active", False))
+        _in_process = self._process_active()
         msg = ("히터 레시피를 중단하고 히터를 끕니다.\n"
                "공정은 계속 진행됩니다.\n"
                "계속할까요?") if _in_process else (
@@ -3287,8 +3276,7 @@ class MainDialog(QDialog):
         self._sync_heater_recipe_buttons()
         # 공정 중에는 stage monitor 를 공정이 쓴다. 히터 진행은 히터 패널에
         # 자체 표시(STEP/남은시간/진행률/스텝목록)가 있으므로 덮어쓰지 않는다.
-        if not (self.process_running or self.csv_mode
-                or getattr(self, "_csv_delay_active", False)):
+        if not self._process_active():
             self.update_stage_monitor(self._heater_recipe_stage_text(cur, total, desc))
 
     def _heater_recipe_stage_text(self, cur: int, total: int, desc: str) -> str:
@@ -3321,8 +3309,7 @@ class MainDialog(QDialog):
         # ★ 중단 여부를 맨 앞에서 확정한다. 아래 표시 갱신이 무엇을 하든
         #   공정 중단은 반드시 실행되어야 한다.
         try:
-            in_process = bool(self.process_running or self.csv_mode
-                              or getattr(self, "_csv_delay_active", False))
+            in_process = bool(self._process_active())
         except Exception:
             in_process = False
         # stop() 으로 끝난 경우는 의도적 중단이다. 설비 이상(_abort)과 달리
@@ -3771,7 +3758,7 @@ class MainDialog(QDialog):
             return
 
         # UI 경로는 대화상자 앞에서 이미 막지만, 원격 호출은 여기서 막아야 한다
-        if self.process_running or self.csv_mode or self._csv_delay_active:
+        if self._process_active():
             self._alert("warning",
                 "변경 불가",
                 "공정 진행 중에는 CSV 파일을 변경할 수 없습니다."
@@ -3823,7 +3810,7 @@ class MainDialog(QDialog):
         if self._is_closing:
             return
 
-        if self.process_running or self.csv_mode or self._csv_delay_active:
+        if self._process_active():
             self._alert("warning",
                 "변경 불가",
                 "공정 진행 중에는 CSV 파일을 변경할 수 없습니다."
@@ -4358,12 +4345,7 @@ class MainDialog(QDialog):
         self._csv_delay_clock = None
 
         self.csv_cancelled = False
-        self.csv_mode = False
-        self.csv_rows = []
-        self.csv_index = -1
-        self.csv_file_path = None
-        self.current_process_name = ""
-        self._last_params = None
+        self.proc_state.clear_csv_list()
 
         self.process_running = False
         self.ui.Sputter_Start_Button.setEnabled(True)
@@ -4472,9 +4454,7 @@ class MainDialog(QDialog):
         #   스텝 시작에서 리셋되지 않으면 2번째 STEP 부터 종료 처리가 통째로 사라지므로
         #   리셋 위치를 옮기지 말 것.
         if getattr(self, "_finish_handled", False):
-            _alive = (bool(getattr(self, "process_running", False))
-                      or bool(getattr(self, "csv_mode", False))
-                      or bool(getattr(self, "_csv_delay_active", False)))
+            _alive = self._process_active()
             log_message_to_monitor(
                 "정보",
                 "finished 무시 — 이번 공정의 종료 처리는 이미 끝났음"
@@ -4520,12 +4500,7 @@ class MainDialog(QDialog):
                 self.csv_cancelled = False
 
                 # CSV 상태 전체 초기화
-                self.csv_mode = False
-                self.csv_rows = []
-                self.csv_index = -1
-                self.csv_file_path = None          # ★ CSV 파일 선택도 해제
-                self.current_process_name = ""     # (선택) 이름 흔적 제거
-                self._last_params = None           # (선택) 파라미터 흔적 제거
+                self.proc_state.clear_csv_list()
 
                 # ▶ 공정 상태 및 UI 초기화
                 self.ui.Sputter_Start_Button.setEnabled(True)
@@ -4549,12 +4524,7 @@ class MainDialog(QDialog):
                 )
 
                 # CSV 상태 전체 초기화
-                self.csv_mode = False
-                self.csv_rows = []
-                self.csv_index = -1
-                self.csv_file_path = None
-                self.current_process_name = ""
-                self._last_params = None
+                self.proc_state.clear_csv_list()
 
                 # 공정 상태 및 UI 초기화
                 self.process_running = False
@@ -4877,7 +4847,7 @@ class MainDialog(QDialog):
             event.ignore()
             return
 
-        if self.process_running or self.csv_mode or self._csv_delay_active:
+        if self._process_active():
             self._alert("warning",
                 "종료 불가",
                 "공정 진행 중에는 프로그램을 종료할 수 없습니다.\n먼저 STOP으로 공정을 종료한 뒤 다시 닫아주세요."
@@ -5141,15 +5111,8 @@ class MainDialog(QDialog):
 
         # 모든 행을 다 돌았으면 종료
         if self.csv_index >= len(self.csv_rows):
-            self.csv_mode = False
-            self.csv_rows = []
-            self.csv_index = -1
+            self.proc_state.clear_csv_list()     # 이번 CSV 회차 공정 이름/파라미터/파일 선택 흔적도 함께 제거
             self.process_running = False
-
-            # ✅ 이번 CSV 회차 공정 이름/파라미터 흔적 제거
-            self.current_process_name = ""
-            self._last_params = None
-            self.csv_file_path = None      # ★ CSV 파일 선택도 해제
 
             # ✅ UI도 대기 상태로 정리
             self.ui.Sputter_Start_Button.setEnabled(True)
