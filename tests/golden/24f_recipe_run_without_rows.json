@@ -1,0 +1,61 @@
+{
+ "timeline": [
+  [
+   "erp.pop_commands",
+   []
+  ],
+  [
+   "log",
+   [
+    "ERROR",
+    "[원격] RECIPE_PROCESS_RUN 실패: 레시피 행이 없습니다"
+   ]
+  ],
+  [
+   "erp.cmd_result",
+   [
+    31,
+    false,
+    "레시피 행이 없습니다"
+   ]
+  ],
+  [
+   "erp.pop_commands",
+   []
+  ],
+  [
+   "log",
+   [
+    "ERROR",
+    "[원격] RECIPE_PROCESS_RUN 실패: 레시피 행이 없습니다"
+   ]
+  ],
+  [
+   "erp.cmd_result",
+   [
+    32,
+    false,
+    "레시피 행이 없습니다"
+   ]
+  ],
+  [
+   "check",
+   [
+    "뒤",
+    {
+     "stage": "",
+     "start_enabled": true,
+     "stop_enabled": false,
+     "select_csv_enabled": true,
+     "process_running": false,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": ""
+    }
+   ]
+  ]
+ ]
+}

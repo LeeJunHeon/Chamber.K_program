@@ -1,0 +1,61 @@
+{
+ "timeline": [
+  [
+   "erp.pop_commands",
+   []
+  ],
+  [
+   "erp.cmd_result",
+   [
+    11,
+    false,
+    "장비에 확인 대화상자가 열려 있습니다. 현장에서 닫아주세요."
+   ]
+  ],
+  [
+   "erp.cmd_result",
+   [
+    12,
+    false,
+    "장비에 확인 대화상자가 열려 있습니다. 현장에서 닫아주세요."
+   ]
+  ],
+  [
+   "log",
+   [
+    "WARN",
+    "[원격] 대화상자가 열려 있어 명령을 거부했습니다"
+   ]
+  ],
+  [
+   "buttons",
+   [
+    "거부 뒤",
+    {
+     "MV_button": false,
+     "Door_Button": false,
+     "ION_button": false
+    }
+   ]
+  ],
+  [
+   "check",
+   [
+    "거부 뒤",
+    {
+     "stage": "",
+     "start_enabled": true,
+     "stop_enabled": false,
+     "select_csv_enabled": true,
+     "process_running": false,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": ""
+    }
+   ]
+  ]
+ ]
+}
