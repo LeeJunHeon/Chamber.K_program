@@ -92,7 +92,7 @@ def test_T43_mv_interlock_off_1s_aborts_but_short_glitch_does_not(safe):
 def test_T44_csv_delay_mv_off_cancels_list_and_no_next_step(safe, monkeypatch):
     w = safe
     starts = []
-    monkeypatch.setattr(w, "_start_next_csv_step", lambda: starts.append(1))
+    monkeypatch.setattr(w.proc, "start_next_csv_step", lambda: starts.append(1))
     w.csv_mode = True; w.csv_rows = [{"Process_name": "A"}, {"Process_name": "B"}]; w.csv_index = 0
     w.csv_cancelled = False; w.process_running = False
     w._chat_reset_run_state()

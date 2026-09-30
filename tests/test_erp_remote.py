@@ -335,7 +335,7 @@ def test_T139_connection_failure_and_csv_notices_order(erp, monkeypatch):
 def test_T140_csv_row_error_cancels_before_notice(erp, monkeypatch):
     w = erp; w._proc_origin = "local"
     cancels = []
-    monkeypatch.setattr(w, "_cancel_csv_list_now", lambda *a, **k: cancels.append(w._mb.count()))
+    monkeypatch.setattr(w.proc, "cancel_csv_list_now", lambda *a, **k: cancels.append(w._mb.count()))
     monkeypatch.setattr(w, "_build_params_from_csv_row",
                         lambda row: (_ for _ in ()).throw(ValueError("wp 오류")))
     w.csv_mode = True; w.csv_rows = _rows(2); w.csv_index = -1

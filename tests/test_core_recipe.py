@@ -2,7 +2,15 @@
 """core.recipe — Qt 없이. 딜레이 행 해석, 빈 행 판정, 레시피 히터 사용 판정."""
 import pytest
 
-from core.recipe import CSV_DELAY_RE, csv_rows_use_heater, parse_delay_seconds, row_has_content
+from core.recipe import CSV_DELAY_RE, csv_rows_use_heater, fmt_hms, parse_delay_seconds, row_has_content
+
+
+@pytest.mark.parametrize("sec,text", [
+    (0, "00:00"), (59, "00:59"), (60, "01:00"), (3599, "59:59"), (3600, "1:00:00"),
+    (7199, "1:59:59"), (36000, "10:00:00"), (-5, "00:00"), (None, "00:00"), (59.9, "00:59"),
+])
+def test_fmt_hms(sec, text):
+    assert fmt_hms(sec) == text
 
 
 @pytest.mark.parametrize("name,sec", [

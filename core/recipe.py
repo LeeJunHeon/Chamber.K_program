@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """공정 레시피(CSV/엑셀 행) 해석 — 화면 없이 도는 순수 함수.
 
-main.py 의 MainDialog._CSV_DELAY_RE / _parse_csv_delay_seconds / _load_csv_process_list 안의 _has_content /
+main.py 의 MainDialog._CSV_DELAY_RE / _parse_csv_delay_seconds / _fmt_hms / _load_csv_process_list 안의 _has_content /
 _csv_list_uses_heater 본문을 그대로 옮겼다. PyQt6·UI·main·controller·device·reporter·lib.logger 를 import 하지 않는다.
 """
 import re
@@ -32,6 +32,14 @@ def parse_delay_seconds(process_name: str) -> Optional[int]:
 
     sec = int(num * mult)
     return max(sec, 0)
+
+
+def fmt_hms(seconds: int) -> str:
+    """초 → "MM:SS" (1시간 이상이면 "H:MM:SS"). 음수·None 은 0. CSV 딜레이 남은 시간 표시용."""
+    seconds = max(int(seconds or 0), 0)
+    h, r = divmod(seconds, 3600)
+    m, s = divmod(r, 60)
+    return f"{h:d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
 
 def row_has_content(row: dict) -> bool:

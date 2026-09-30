@@ -152,8 +152,55 @@ class _MainProcessPorts:
     def erp_run_start(self, name, params):
         self.w.erp.run_start(name, params)
 
-    def start_next_csv_step(self):
-        self.w._start_next_csv_step()
+    def chat_enabled(self):
+        return bool(getattr(self.w, "chat_chk", None))
+
+    def chat_text(self, msg):
+        self.w.chat_chk.notify_text(msg)
+        self.w.chat_chk.flush()
+
+    def chat_notify_failed_now(self, reason, send_text=False):
+        self.w._chat_notify_failed_now(reason, send_text=send_text)
+
+    def chat_add_error(self, text):
+        self.w._chat_add_error(text)
+
+    def chat_notify_finished(self, ok):
+        self.w._chat_notify_finished(ok)
+
+    def chat_user_stopped(self):
+        return getattr(self.w, "_chat_user_stopped", False)
+
+    def notice(self, source, kind, title, text):
+        self.w._notice(source, kind, title, text)
+
+    def reset_process_ui_fields(self):
+        self.w._reset_process_ui_fields()
+
+    def close_process_log(self):
+        clear_process_log_file()
+
+    def delay_timer_start(self):
+        t = QTimer(self.w)
+        t.setInterval(1000)
+        t.setTimerType(Qt.TimerType.PreciseTimer)  # ✅ 권장
+        t.timeout.connect(self.w._on_csv_delay_tick)
+        self.w._csv_delay_timer = t
+        t.start()
+
+    def delay_timer_stop(self):
+        self.w._stop_csv_delay_timer()
+
+    def delay_clock_start(self):
+        self.w._csv_delay_clock = QElapsedTimer()
+        self.w._csv_delay_clock.start()
+
+    def delay_elapsed_ms(self):
+        clock = self.w._csv_delay_clock
+        return None if clock is None else clock.elapsed()
+
+    def delay_clock_clear(self):
+        self.w._csv_delay_clock = None
 
 
 def _state_field(name: str) -> property:
@@ -4156,12 +4203,6 @@ class MainDialog(QDialog):
         """Process_name이 'delay 60m' 같은 형태면 대기 시간(초)을 반환, 아니면 None. 규칙은 core.recipe."""
         return parse_delay_seconds(process_name)
 
-    def _fmt_hms(self, seconds: int) -> str:
-        seconds = max(int(seconds or 0), 0)
-        h, r = divmod(seconds, 3600)
-        m, s = divmod(r, 60)
-        return f"{h:d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
-
     def _stop_csv_delay_timer(self) -> None:
         t = getattr(self, "_csv_delay_timer", None)
         if t is not None:
@@ -4180,138 +4221,17 @@ class MainDialog(QDialog):
         notify_chat: bool = True,
         reason: str | None = None,
     ) -> None:
-        """CSV 리스트 공정을 즉시 정리(딜레이/스텝 사이/즉시 취소 등에서 공통 사용)."""
-
-        # ✅ (추가) finished 시그널을 안 거치는 케이스에서도 구글챗 종료/실패 알림 보장
-        if notify_chat and getattr(self, "chat_chk", None):
-            try:
-                # reason이 있으면 그걸 '실패 원인'으로 저장
-                if reason:
-                    self._chat_notify_failed_now(reason, send_text=False)
-                else:
-                    # STOP이면 stage_text를 굳이 error로 넣지 않게(카드가 깔끔)
-                    if not getattr(self, "_chat_user_stopped", False):
-                        self._chat_add_error(stage_text)
-
-                # 카드에 찍힐 공정명 보정
-                if not (getattr(self, "current_process_name", "") or "").strip():
-                    self.current_process_name = stage_text
-
-                # 종료 카드 + (실패면) 일반챗 1줄(단, STOP이면 일반챗 추가 전송 안 함)
-                self._chat_notify_finished(False)
-                # 이 공정의 종료 처리는 여기서 끝났다 — 뒤늦게 finished 가 와도 카드를 또 내지 않는다
-                self._finish_handled = True
-            except Exception:
-                pass
-
-        # === 기존 정리 로직 그대로 ===
-        self._stop_csv_delay_timer()
-        self._csv_delay_active = False
-        self._csv_delay_total_sec = 0
-        self._csv_delay_remaining_sec = 0
-        self._csv_delay_name = ""
-        self._csv_delay_clock = None
-
-        self.csv_cancelled = False
-        self.proc_state.clear_csv_list()
-
-        self.process_running = False
-        self.ui.Sputter_Start_Button.setEnabled(True)
-        self.ui.Sputter_Stop_Button.setEnabled(False)
-        self.ui.select_csv_button.setEnabled(True)
-        self.update_stage_monitor(stage_text)
-        self._reset_process_ui_fields()
-        # 반드시 맨 끝 — 중단 사유 로그는 해당 공정 파일에 남아야 한다
-        clear_process_log_file()
+        """CSV 리스트 공정을 즉시 정리(딜레이/스텝 사이/즉시 취소 등에서 공통 사용). 본문은 ProcessService.cancel_csv_list_now."""
+        self.proc.cancel_csv_list_now(stage_text, notify_chat=notify_chat, reason=reason)
 
     def _start_csv_delay_step(self, delay_sec: int, raw_name: str) -> None:
-        """CSV 리스트 중 'delay Xm' 스텝 실행: UI는 멈추지 않고(타이머로) 카운트다운."""
-        self._stop_csv_delay_timer()
-
-        self._csv_delay_active = True
-        self._csv_delay_total_sec = max(int(delay_sec), 0)
-        self._csv_delay_remaining_sec = self._csv_delay_total_sec
-        self._csv_delay_name = raw_name
-
-        # ✅ 시작시간(모노토닉) 기록
-        self._csv_delay_clock = QElapsedTimer()
-        self._csv_delay_clock.start()
-
-        step_no = self.csv_index + 1
-        total = len(self.csv_rows)
-
-        # 공정처럼 보이게 UI 버튼 상태 유지
-        self.process_running = True
-        self.ui.Sputter_Start_Button.setEnabled(False)
-        self.ui.Sputter_Stop_Button.setEnabled(True)
-
-        log_message_to_monitor(
-            "Process",
-            f"CSV DELAY STEP {step_no}/{total} 시작: {raw_name} (총 {self._fmt_hms(self._csv_delay_total_sec)})",
-        )
-
-        # 즉시 1회 표시 (UI에 알아보기 쉽게)
-        self.update_stage_monitor(
-            f"CSV {step_no}/{total} - {raw_name} (남은 {self._fmt_hms(self._csv_delay_remaining_sec)})"
-        )
-        
-        # ✅ 구글챗(딜레이 시작 1회)
-        try:
-            if self.chat_chk:
-                name = self.current_process_name or f"CSV {step_no}/{total} - {raw_name}"
-                self.chat_chk.notify_text(
-                    f"⏳ CHK 딜레이 시작: {name} | 총 {self._fmt_hms(self._csv_delay_total_sec)}"
-                )
-                self.chat_chk.flush()
-        except Exception:
-            pass
-
-        # 1초마다 카운트다운
-        self._csv_delay_timer = QTimer(self)
-        self._csv_delay_timer.setInterval(1000)
-        self._csv_delay_timer.setTimerType(Qt.TimerType.PreciseTimer)  # ✅ 권장
-        self._csv_delay_timer.timeout.connect(self._on_csv_delay_tick)
-        self._csv_delay_timer.start()
+        """CSV 리스트 중 'delay Xm' 스텝 실행. 본문은 ProcessService.start_delay_step."""
+        self.proc.start_delay_step(delay_sec, raw_name)
 
     @Slot()
     def _on_csv_delay_tick(self) -> None:
-        # 외부에서 취소/종료된 경우
-        if (not self.csv_mode) or self.csv_cancelled or (not self._csv_delay_active):
-            self._stop_csv_delay_timer()
-            return
-
-        # ✅ elapsed 기반으로 남은 시간 재계산 (UI 렉이 있어도 누적오차 없음)
-        if self._csv_delay_clock is not None:
-            elapsed_sec = int(self._csv_delay_clock.elapsed() // 1000)
-            self._csv_delay_remaining_sec = max(self._csv_delay_total_sec - elapsed_sec, 0)
-        else:
-            # 혹시 모를 fallback
-            self._csv_delay_remaining_sec = max(self._csv_delay_remaining_sec - 1, 0)
-
-        step_no = self.csv_index + 1
-        total = len(self.csv_rows)
-
-        if self._csv_delay_remaining_sec <= 0:
-            self._stop_csv_delay_timer()
-            self._csv_delay_active = False
-            self.process_running = False
-            log_message_to_monitor("정보", f"CSV DELAY 완료: {self._csv_delay_name}")
-
-            # ✅ 구글챗(딜레이 완료 1회)
-            try:
-                if self.chat_chk:
-                    name = self.current_process_name or f"CSV {step_no}/{total} - {self._csv_delay_name}"
-                    self.chat_chk.notify_text(f"✅ CHK 딜레이 완료: {name}")
-                    self.chat_chk.flush()
-            except Exception:
-                pass
-
-            self._start_next_csv_step()
-            return
-
-        self.update_stage_monitor(
-            f"CSV {step_no}/{total} - {self._csv_delay_name} (남은 {self._fmt_hms(self._csv_delay_remaining_sec)})"
-        )
+        """CSV 딜레이 1초 틱(타이머가 부른다). 본문은 ProcessService.on_delay_tick."""
+        self.proc.on_delay_tick()
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
@@ -4965,163 +4885,8 @@ class MainDialog(QDialog):
                 self.ui.heater_sv_edit.setText(f"{ht:g}")   # QLineEdit
     
     def _start_next_csv_step(self):
-        """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료."""
-        # ✅ STOP 등으로 CSV 리스트 전체가 취소된 뒤에
-        #    _start_next_csv_step 이 호출되면 아무 것도 하지 않고 무시
-        if not self.csv_mode or not self.csv_rows or self.csv_cancelled:
-            log_message_to_monitor(
-                "정보",
-                "_start_next_csv_step 호출됐지만 CSV 모드가 아니거나 취소 플래그가 켜져 있어서 무시합니다.",
-            )
-            return
-
-        self.csv_index += 1
-
-        # 모든 행을 다 돌았으면 종료
-        if self.csv_index >= len(self.csv_rows):
-            self.proc_state.clear_csv_list()     # 이번 CSV 회차 공정 이름/파라미터/파일 선택 흔적도 함께 제거
-            self.process_running = False
-
-            # ✅ UI도 대기 상태로 정리
-            self.ui.Sputter_Start_Button.setEnabled(True)
-            self.ui.Sputter_Stop_Button.setEnabled(False)
-            self.ui.select_csv_button.setEnabled(True)
-            self.update_stage_monitor("CSV 공정 완료")
-
-            # ▶ 공통 UI 초기화
-            self._reset_process_ui_fields()
-            # 리스트 정상 완료 — 이후 로그가 마지막 STEP 파일에 덧붙지 않게 해제
-            clear_process_log_file()
-            self._notice("process", "information", "CSV 공정 완료", "CSV에 있는 모든 공정을 완료했습니다.")
-            return
-
-        row = self.csv_rows[self.csv_index]
-
-        # ✅ 여기서 step_no/total 먼저 고정(딜레이 포함 모든 분기에서 동일하게 쓰기)
-        step_no = self.csv_index + 1
-        total   = len(self.csv_rows)
-
-        raw_name = (row.get("Process_name") or "").strip()
-        delay_sec = self._parse_csv_delay_seconds(raw_name)
-        if delay_sec is not None:
-            if delay_sec <= 0:
-                log_message_to_monitor("정보", f"CSV DELAY 스킵: {raw_name} (0초)")
-                self._start_next_csv_step()
-                return
-
-            # ✅ 딜레이도 "현재 공정명"을 CSV 1/3 형태로 잡아두면 STOP/실패 텍스트가 안 헷갈림
-            self.current_process_name = f"CSV {step_no}/{total} - {raw_name}"
-
-            self._start_csv_delay_step(delay_sec, raw_name)
-            return
-
-        # (안전) '#'(번호)만 채워진 빈 행은 그냥 스킵
-        def _is_blank_row(r: dict) -> bool:
-            for k, v in (r or {}).items():
-                if (k or "").strip() == "#":
-                    continue
-                if v is None:
-                    continue
-                if str(v).strip() != "":
-                    return False
-            return True
-
-        if _is_blank_row(row):
-            log_message_to_monitor("정보", f"CSV 빈 행 스킵: index={self.csv_index + 1}")
-            self._start_next_csv_step()
-            return
-
-        try:
-            params = self._build_params_from_csv_row(row)
-        except Exception as e:
-            _row_msg = f"CSV {self.csv_index + 1}번째 행 파라미터가 잘못되었습니다:\n{e}"
-            log_message_to_monitor("ERROR", f"CSV 레시피 오류로 리스트 공정을 중단합니다: {e}")
-
-            # ✅ 구글챗에도 실패 알림(종료 카드 + 일반챗 1줄) 보장
-            self._chk_process_ok = False
-            try:
-                # 이 케이스는 '공정 started'를 안 보냈을 수도 있으니, 상태를 새로 잡아줌
-                self._chat_reset_run_state()
-
-                # 위에서 step_no/total을 이미 만든 상태(네 코드 기준)라서 그대로 사용
-                reason = f"CSV 레시피 오류: {e}"
-                self.current_process_name = f"CSV {step_no}/{total} - (레시피 오류)"
-                self._chat_notify_failed_now(reason, send_text=False)
-                self._chat_notify_finished(False)
-            except Exception:
-                pass
-
-            # ✅ 여기서는 중복 전송 방지 위해 notify_chat=False
-            self._cancel_csv_list_now("CSV 레시피 오류로 중단", notify_chat=False)
-            self._notice("process", "critical", "CSV 레시피 오류", _row_msg)   # 정리 뒤에 알린다
-            return
-
-        # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해
-        #    파라미터 저장 + 평균값 누적 초기화
-        self._last_params = dict(params)
-        self._reset_chk_stats()
-        self._chk_process_ok = True   # 이 STEP이 정상 종료했을 때만 CSV에 기록
-
-        # ✅ 이 단계의 파라미터를 UI에 반영 (CH1/CH2처럼 보이게)
-        self._apply_params_to_ui(params)
-
-        # ★★★ 이 CSV STEP 전용 로그 파일 생성 ★★★
-        set_process_log_file(prefix="CHK")
-
-        # 이번 STEP 이 히터를 소유하는가 (히터 레시피와의 충돌 판정 기준)
-        self._process_heater_claimed = bool(
-            params.get("use_heater") and float(params.get("heater_temp") or 0) > 0)
-        if HEATER_ENABLED and self.heater_recipe.is_running() \
-                and not self._process_heater_claimed:
-            log_message_to_monitor(
-                "정보",
-                "[히터] 히터 레시피가 제어 중입니다. 이번 공정은 히터를 제어하지 않습니다.")
-
-        # 이번 공정의 히터 설정을 로그 머리말에 남긴다
-        self._log_heater_header(params)
-
-        # ✅ (위에서 step_no/total을 이미 만들었다면 여기 재정의 필요 없음)
-        # step_no = self.csv_index + 1
-        # total   = len(self.csv_rows)
-
-        log_message_to_monitor("정보", f"=== CHK CSV STEP {step_no}/{total} 시작 ===")
-
-        # 로그/스테이지 표시
-        base_name = (
-            params.get("process_name")
-            or params.get("Process_name")
-            or f"STEP {step_no}/{total}"
-        )
-
-        # ✅ 이 STEP의 표시명(=CSV 1/3 포함)으로 통일
-        display = f"CSV {step_no}/{total} - {base_name}"
-
-        # ✅ 공정 종료 카드/실패 텍스트가 이 값을 보게 됨 → CSV 1/3이 항상 유지됨
-        self.current_process_name = display
-
-        self._chat_reset_run_state()
-        self._chat_notify_started(params, display)
-
-        log_message_to_monitor("Process", f"CSV 공정 리스트 {step_no}/{total} 실행: {display}")
-        self.update_stage_monitor(display)
-
-        # 실제 공정 시작
-        self.process_running = True
-        self.ui.Sputter_Start_Button.setEnabled(False)
-        self.ui.Sputter_Stop_Button.setEnabled(True)
-        self.ui.select_csv_button.setEnabled(False)
-
-        self.clear_plc_fault.emit()              # ✅ 추가: 스텝 시작마다 PLC 실패 래치 초기화
-
-        try:
-            self.erp.run_start(
-                self.current_process_name or params.get("process_note", "") or "CHK 공정",
-                params,
-            )
-        except Exception:
-            pass
-
-        self.request_process_start.emit(params)
+        """csv_rows[csv_index+1] 공정을 하나 실행하거나, 모두 끝났으면 CSV 모드 종료. 본문은 ProcessService.start_next_csv_step."""
+        self.proc.start_next_csv_step()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

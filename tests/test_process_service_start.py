@@ -67,6 +67,21 @@ class FakePorts:
     def chat_notify_started(self, params, name): self._r("chat_notify_started", params, name)
     def erp_run_start(self, name, params): self._r("erp_run_start", name, params)
     def start_next_csv_step(self): self._r("start_next_csv_step")
+    # 3b 에서 추가된 port
+    def chat_enabled(self): return self._r("chat_enabled")
+    def chat_text(self, msg): self._r("chat_text", msg)
+    def chat_notify_failed_now(self, reason, send_text=False): self._r("chat_notify_failed_now", reason, send_text)
+    def chat_add_error(self, text): self._r("chat_add_error", text)
+    def chat_notify_finished(self, ok): self._r("chat_notify_finished", ok)
+    def chat_user_stopped(self): return self._r("chat_user_stopped")
+    def notice(self, source, kind, title, text): self._r("notice", source, kind, title, text)
+    def reset_process_ui_fields(self): self._r("reset_process_ui_fields")
+    def close_process_log(self): self._r("close_process_log")
+    def delay_timer_start(self): self._r("delay_timer_start")
+    def delay_timer_stop(self): self._r("delay_timer_stop")
+    def delay_clock_start(self): self._r("delay_clock_start")
+    def delay_elapsed_ms(self): return self._r("delay_elapsed_ms")
+    def delay_clock_clear(self): self._r("delay_clock_clear")
 
     def names(self):
         return [c[0] for c in self.calls]
@@ -172,6 +187,7 @@ def test_csv_branch_load_then_mode_then_next_step():
     svc, p = _svc(st, load_table=rows)
     seen = {}
     p.ret["start_next_csv_step"] = lambda: seen.update(mode=st.csv_mode, rows=list(st.csv_rows))
+    svc.start_next_csv_step = lambda: p._r("start_next_csv_step")   # 3b: 다음 스텝은 port 가 아니라 서비스 메서드
     svc.start()
     assert p.names() == ["heater_recipe_running", "heater_gas_guard", "main_valve_open", "command_origin",
                          "clear_plc_fault", "load_table", "start_next_csv_step"]
