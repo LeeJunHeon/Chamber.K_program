@@ -34,6 +34,7 @@ from core.params import ManualInputs, build_manual_params, build_csv_params, che
 from core.state import ProcessState
 from core.recipe import parse_delay_seconds, csv_rows_use_heater
 from core.process_service import ProcessService
+from integrations.erp_commands import ErpCommandRunner, write_recipe_csv, HEATER_RECIPE_COLS
 from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
@@ -251,6 +252,82 @@ class _MainProcessPorts:
 
     def append_chk_csv_row(self, row):
         return append_chk_csv_row(row)
+
+
+class _MainErpHost:
+    """integrations.erp_commands.ErpCommandHost 구현 — 각 메서드는 옮기기 전 코드가 하던 호출 한 줄이다.
+    모듈 이름(QApplication·log_message_to_monitor)과 self.w 의 속성은 부를 때마다 찾는다."""
+
+    def __init__(self, w: "MainDialog"):
+        self.w = w
+
+    def erp_rejected(self):
+        return getattr(self.w.erp, "rejected", False)
+
+    def erp_pop_commands(self):
+        return self.w.erp.pop_commands()
+
+    def erp_cmd_result(self, *args):
+        self.w.erp.cmd_result(*args)
+
+    def rejected_shown(self):
+        return getattr(self.w, "_erp_rejected_shown", False)
+
+    def set_rejected_shown(self, v):
+        self.w._erp_rejected_shown = v
+
+    def log(self, level, msg):
+        log_message_to_monitor(level, msg)
+
+    def modal_open(self):
+        return QApplication.activeModalWidget() is not None
+
+    def begin_remote(self):
+        self.w._remote_exec = True
+        self.w._remote_alerts = []
+        self.w._remote_notes = []
+
+    def end_remote(self):
+        self.w._remote_exec = False
+
+    def remote_alerts(self):
+        return self.w._remote_alerts
+
+    def remote_notes(self):
+        return self.w._remote_notes
+
+    def widget(self, name):
+        return getattr(self.w.ui, name, None)
+
+    def start_process(self):
+        self.w._handle_start_process()
+
+    def stop_process(self):
+        self.w._on_sputter_stop_clicked()
+
+    def all_stop(self):
+        self.w._on_all_stop_clicked()
+
+    def load_recipe_file(self, path):
+        self.w._start_csv_process_from_path(path)
+
+    def csv_rows(self):
+        return getattr(self.w, "csv_rows", None)
+
+    def csv_file_path(self):
+        return getattr(self.w, "csv_file_path", "")
+
+    def process_active(self):
+        return self.w._process_active()
+
+    def heater_pending(self):
+        return getattr(self.w, "_heater_pending", None)
+
+    def heater_recipe_running(self):
+        return self.w.heater_recipe.is_running()
+
+    def exec_heater_command(self, name, args):
+        return self.w._erp_exec_heater_command(name, args)
 
 
 def _state_field(name: str) -> property:
@@ -501,301 +578,11 @@ class MainDialog(QDialog):
         self.ui.Sputter_Stop_Button.setEnabled(False)
 
         # === ERP 원격 명령 실행 (메인 스레드 전용) ===
-        # 안전: 아래 화이트리스트에 없는 명령은 실행하지 않는다.
-        #       PLC 버튼은 setChecked로 처리해 로컬 UI 상태와 항상 일치시킨다.
-        _PLC_BTNS = {
-            "Rotary_button", "RV_button", "FV_button", "MV_button", "Vent_button",
-            "Turbo_button", "Ar_Button", "O2_Button", "MS_button",
-            "S1_button", "S2_button", "BuzzStop_Button",
-            "Door_Button",  # 도어는 상승/하강이 이 버튼 하나로 통합되어 있다
-            "ION_button",   # 이오나이저 Remote On
-        }
-
-        def _erp_exec_one(c: dict):
-            name = str(c.get("command", ""))
-            args = c.get("args") or {}
-            if name in _PLC_BTNS:
-                btn = getattr(self.ui, name, None)
-                if btn is None:
-                    raise RuntimeError(f"버튼 없음: {name}")
-                btn.setChecked(bool(args.get("on")))
-            elif name == "PROCESS_START":
-                def _set_text(widget_name: str, value):
-                    w = getattr(self.ui, widget_name, None)
-                    if w is None or value is None:
-                        return
-                    s = str(value)
-                    if hasattr(w, "setPlainText"):
-                        w.setPlainText(s)
-                    elif hasattr(w, "setText"):
-                        w.setText(s)
-
-                def _set_check(widget_name: str, value):
-                    w = getattr(self.ui, widget_name, None)
-                    if w is not None and value is not None:
-                        w.setChecked(bool(value))
-
-                if args:
-                    _set_check("G1_checkbox", args.get("useG1"))
-                    _set_text("G1_edit", args.get("g1"))
-                    _set_check("G2_checkbox", args.get("useG2"))
-                    _set_text("G2_edit", args.get("g2"))
-                    _set_check("Ar_gas_radio", args.get("useAr"))
-                    _set_text("Ar_flow_edit", args.get("arFlow"))
-                    _set_check("O2_gas_radio", args.get("useO2"))
-                    _set_text("O2_flow_edit", args.get("o2Flow"))
-                    _set_text("working_pressure_edit", args.get("workingPressure"))
-                    _set_check("rf_power_checkbox", args.get("useRf"))
-                    _set_text("RF_power_edit", args.get("rfPower"))
-                    # RF Pulse — 전용 칸을 쓴다. 웹 폼이 안 보내면 키가 없어 미사용.
-                    #  RF power 와 독립이므로 offset/param 을 건드리지 않는다.
-                    _set_check("rf_pulse_checkbox", args.get("useRfPulse"))
-                    _set_text("rfp_power_edit", args.get("rfPulsePower"))
-                    _set_text("rfp_freq_edit", args.get("rfPulseFreq"))
-                    _set_text("rfp_duty_edit", args.get("rfPulseDuty"))
-                    _set_check("dc_power_checkbox", args.get("useDc"))
-                    _set_text("DC_power_edit", args.get("dcPower"))
-                    _set_check("dc_delay_checkbox", args.get("dcDelay"))
-                    _set_text("Shutter_delay_edit", args.get("shutterDelay"))
-                    _set_text("process_time_edit", args.get("processTime"))
-                    _set_text("offset_edit", args.get("offset"))
-                    _set_text("param_edit", args.get("param"))
-
-                self._handle_start_process()
-            elif name == "PROCESS_STOP":
-                self._on_sputter_stop_clicked()
-            elif name == "ALL_STOP":
-                self._on_all_stop_clicked()
-            elif name == "HEATER_SV":
-                if HEATER_ENABLED and self.heater_recipe.is_running():
-                    raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
-                val = args.get("value")
-                if val is None:
-                    raise RuntimeError("목표 온도 없음")
-                self.ui.heater_sv_edit.setPlainText(str(val)) \
-                    if hasattr(self.ui.heater_sv_edit, "setPlainText") \
-                    else self.ui.heater_sv_edit.setText(str(val))
-                self._on_heater_apply_clicked()
-            elif name == "HEATER_ONOFF":
-                if HEATER_ENABLED and self.heater_recipe.is_running():
-                    raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
-                want = bool(args.get("on"))
-                # 이미 원하는 상태인지는 버튼이 아니라 PLC(마지막 폴링)로 판단한다.
-                # 가스 준비 중(_heater_pending)도 'ON 진행 중' 으로 본다: ON 은 거부, OFF 는 취소 경로.
-                run = bool((self.plc_controller.get_heater_status() or {}).get("run"))
-                pending = self._heater_pending is not None
-                if want and pending:
-                    raise RuntimeError("히터가 이미 준비 중입니다(가스·압력 대기)")
-                if (run or pending) == want:
-                    raise RuntimeError(f"히터가 이미 {'ON' if want else 'OFF'} 상태입니다")
-                if want:
-                    # 목표 온도가 함께 왔으면 먼저 반영한다(빈 SV로 인한 팝업 방지)
-                    val = args.get("value")
-                    if val is not None and str(val).strip() != "":
-                        w = self.ui.heater_sv_edit
-                        if hasattr(w, "setPlainText"):
-                            w.setPlainText(str(val))
-                        else:
-                            w.setText(str(val))
-                    # 가스·압력 입력이 함께 왔으면 히터 패널에 반영한다.
-                    # 키가 없으면 장비 패널의 현재 설정을 그대로 쓴다.
-                    def _set_chk(wn, v):
-                        w_ = getattr(self.ui, wn, None)
-                        if w_ is not None and v is not None:
-                            w_.setChecked(bool(v))
-
-                    def _set_txt(wn, v):
-                        w_ = getattr(self.ui, wn, None)
-                        if w_ is not None and v is not None:
-                            w_.setText(str(v))
-
-                    if "useAr" in args:
-                        _set_chk("heater_ar_check", args.get("useAr"))
-                        _set_txt("heater_ar_flow_edit", args.get("arFlow"))
-                    if "useO2" in args:
-                        _set_chk("heater_o2_check", args.get("useO2"))
-                        _set_txt("heater_o2_flow_edit", args.get("o2Flow"))
-                    if "wp" in args:
-                        _set_txt("heater_wp_edit", args.get("wp"))
-                    try:
-                        self._sync_heater_gas_inputs()
-                    except Exception:
-                        pass
-                    # 사전 검증 — 실패하면 팝업 대신 예외로 웹에 사유를 보고한다
-                    sv_txt = ""
-                    try:
-                        sv_w = self.ui.heater_sv_edit
-                        sv_txt = (sv_w.toPlainText() if hasattr(sv_w, "toPlainText")
-                                  else sv_w.text()).strip()
-                    except Exception:
-                        pass
-                    if sv_txt == "":
-                        raise RuntimeError("히터 목표 온도가 설정되지 않았습니다")
-                    try:
-                        float(sv_txt)
-                    except ValueError:
-                        raise RuntimeError(f"히터 목표 온도가 숫자가 아닙니다: {sv_txt}")
-                    st = self.plc_controller.get_heater_status() or {}
-                    if not st.get("itl"):
-                        raise RuntimeError("히터 인터락 미충족 (TC/DAC 모듈 상태 확인 필요)")
-
-                # 버튼을 눌러 흉내내지 않고(P3) 핸들러를 직접 부른다 — 표시는 폴링이 맞춘다
-                self._on_heater_onoff_toggled(want)
-
-            elif name == "RECIPE_PROCESS_RUN":
-                # 웹에서 만든 공정 레시피를 CSV로 저장하고 기존 CSV 실행 경로를 그대로 사용한다
-                import csv as _csv, tempfile, os as _os
-                rows = args.get("rows") or []
-                if not rows:
-                    raise RuntimeError("레시피 행이 없습니다")
-                cols = ["Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
-                        "working_pressure", "process_time", "shutter_delay",
-                        "use_rf_power", "rf_power", "use_dc_power", "dc_power",
-                        "use_rf_pulse", "rf_pulse_power", "rf_pulse_freq", "rf_pulse_duty",
-                        "use_dc_delay", "use_heater", "heater_temp", "heater_ramp",
-                        "gun1", "gun2", "G1 Target", "G2 Target"]
-                d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
-                _os.makedirs(d, exist_ok=True)
-                path = _os.path.join(d, "process_web.csv")
-                with open(path, "w", encoding="utf-8-sig", newline="") as f:
-                    w = _csv.DictWriter(f, fieldnames=cols)
-                    w.writeheader()
-                    for r in rows:
-                        w.writerow({c: r.get(c, "") for c in cols})
-                c["_csv_path"] = path        # 적재 결과 확인용(경고창 없이 조용히 return 하는 경로 대비)
-                self._start_csv_process_from_path(path)
-
-            elif name == "RECIPE_HEATER_RUN":
-                # 노트북 [레시피] 버튼과 같은 경로로 실행한다(가드·가스 준비·스텝 목록·램프 정지 포함).
-                #  예전에는 여기서 load/start 만 해 레시피의 가스·압력이 무시됐다.
-                import csv as _csv, tempfile, os as _os
-                rows = args.get("rows") or []
-                if not rows:
-                    raise RuntimeError("레시피 행이 없습니다")
-                cols = ["step", "target_c", "ramp_c_per_min", "ramp_min",
-                        "soak_min", "repeat",
-                        "use_ar", "ar_flow", "use_o2", "o2_flow", "wp_mtorr"]
-                d = _os.path.join(tempfile.gettempdir(), "vanam_recipe")
-                _os.makedirs(d, exist_ok=True)
-                path = _os.path.join(d, "heater_web.csv")
-                with open(path, "w", encoding="utf-8-sig", newline="") as f:
-                    w = _csv.DictWriter(f, fieldnames=cols)
-                    w.writeheader()
-                    for r in rows:
-                        w.writerow({c: r.get(c, "") for c in cols})
-                self._run_heater_recipe_file(path, confirm=False)
-
-            elif name == "RECIPE_PROCESS_START":
-                # 적재된 CSV 레시피로 공정을 시작한다(장비 앞 Start 버튼과 동일 경로)
-                if not getattr(self, "csv_rows", None):
-                    raise RuntimeError("적재된 레시피가 없습니다. 먼저 레시피를 적재하세요.")
-                self._handle_start_process()
-
-            elif name == "HEATER_RESET":
-                # PLC 래치된 히터 이상(M00043) 해제. 확인은 웹이 이미 받았다.
-                st = self.plc_controller.get_heater_status() or {}
-                if not st.get("fault"):
-                    raise RuntimeError("히터 이상 상태가 아닙니다")
-                log_message_to_monitor("히터", "[원격] 히터 이상 리셋 요청")
-                self.request_heater_reset.emit()
-
-            elif name == "HEATER_GAS_RELEASE":
-                # 냉각 대기 중 유지되는 가스·압력을 지금 해제한다.
-                if not (HEATER_ENABLED and self.heater_atmosphere.is_active()):
-                    raise RuntimeError("유지 중인 가스·압력이 없습니다")
-                self._atm_hold = False
-                log_message_to_monitor("히터", "[원격] 가스·압력 해제")
-                self.heater_atmosphere.release("원격 해제")
-
-            elif name == "RECIPE_HEATER_STOP":
-                self.heater_recipe.stop("원격 중단")
-
-            elif name == "HEATER_RECIPE_HOLD":
-                # args: on=true → 일시정지, on=false → 재개
-                if not self.heater_recipe.is_running():
-                    raise RuntimeError("실행 중인 히터 레시피가 없습니다")
-                if bool(args.get("on", True)):
-                    if not self.heater_recipe.hold():
-                        raise RuntimeError("일시정지에 실패했습니다")
-                else:
-                    if not self.heater_recipe.resume():
-                        raise RuntimeError("일시정지 상태가 아닙니다")
-
-            elif name == "HEATER_RECIPE_STEP":
-                if not self.heater_recipe.is_running():
-                    raise RuntimeError("실행 중인 히터 레시피가 없습니다")
-                if not self.heater_recipe.skip_step():
-                    raise RuntimeError("스텝 건너뛰기에 실패했습니다")
-
-            else:
-                raise RuntimeError(f"허용되지 않은 명령: {name}")
-
-        def _erp_drain_commands():
-            try:
-                # ERP 는 장비당 한 인스턴스만 받는다. 다른 챔버K 가 이미 붙어 있으면
-                #  리포터가 409 를 받고 보고를 잠시 멈춘 뒤 60초마다 hello 로 재연결을
-                #  시도한다 — 사용자에게 멈춤/재개를 각 1회만 알린다.
-                if getattr(self.erp, "rejected", False) and not getattr(self, "_erp_rejected_shown", False):
-                    self._erp_rejected_shown = True
-                    log_message_to_monitor(
-                        "WARN",
-                        "[ERP] 다른 챔버K 프로그램이 ERP 에 연결되어 있어 보고를 잠시 멈춥니다. "
-                        "60초마다 재연결을 시도합니다.")
-                elif not getattr(self.erp, "rejected", False) and getattr(self, "_erp_rejected_shown", False):
-                    self._erp_rejected_shown = False
-                    log_message_to_monitor("정보", "[ERP] 보고를 재개했습니다.")
-
-                cmds = self.erp.pop_commands()
-                if not cmds:
-                    return
-                # 장비에 모달 대화상자가 떠 있으면 조작이 막히므로 원인을 보고하고 중단한다
-                if QApplication.activeModalWidget() is not None:
-                    for c in cmds:
-                        self.erp.cmd_result(
-                            c.get("id"), False,
-                            "장비에 확인 대화상자가 열려 있습니다. 현장에서 닫아주세요.")
-                    log_message_to_monitor(
-                        "WARN", "[원격] 대화상자가 열려 있어 명령을 거부했습니다")
-                    return
-                for c in cmds:
-                    cid = c.get("id")
-                    _name = str(c.get("command", ""))
-                    try:
-                        # 원격 실행 동안에는 경고창을 띄우지 않는다 — 문구는 _remote_alerts 에 모여 실패 사유가 된다
-                        self._remote_exec = True
-                        self._remote_alerts = []
-                        self._remote_notes = []
-                        try:
-                            _erp_exec_one(c)
-                        finally:
-                            self._remote_exec = False
-                        _why = self._remote_alert_reason()
-                        if not _why:
-                            _why = self._erp_silent_failure(_name, c)
-                            if _why:
-                                # 조용한 실패인데 처리 중 알림이 있었으면 그 문구가 더 정확하다
-                                _note = " / ".join(f"{t}: " + " ".join(str(x).split())
-                                                   for k, t, x in self._remote_notes if k != "information")
-                                if _note:
-                                    _why = _note
-                        for _k, _t, _x in list(self._remote_alerts) + list(self._remote_notes):
-                            if _k == "information":
-                                log_message_to_monitor("정보", f"[원격] {_name} 안내 — {_t}: " + " ".join(str(_x).split()))
-                        if _why:
-                            log_message_to_monitor("ERROR", f"[원격] {_name} 실패: {_why}")
-                            self.erp.cmd_result(cid, False, _why)
-                        else:
-                            log_message_to_monitor("정보", f"[원격] {_name} 실행")
-                            self.erp.cmd_result(cid, True)
-                    except Exception as ex:
-                        log_message_to_monitor(
-                            "ERROR", f"[원격] {_name} 실패: {ex}")
-                        self.erp.cmd_result(cid, False, str(ex))
-            except Exception:
-                pass
+        # 명령 처리는 integrations.erp_commands.ErpCommandRunner(화이트리스트·결과 보고). 히터 명령은 _erp_exec_heater_command.
+        self.erp_cmds = ErpCommandRunner(_MainErpHost(self))
 
         self._erp_cmd_timer = QTimer(self)
-        self._erp_cmd_timer.timeout.connect(_erp_drain_commands)
+        self._erp_cmd_timer.timeout.connect(self.erp_cmds.drain)
         self._erp_cmd_timer.start(500)
 
         # === ERP 상태 스냅샷 (1초) ===
@@ -1909,25 +1696,134 @@ class MainDialog(QDialog):
             default = QMessageBox.StandardButton.No
         return QMessageBox.question(self, title, text, buttons, default)
 
-    def _erp_silent_failure(self, name: str, c: dict) -> str:
-        """경고창 없이 조용히 return 한 경로를 결과로 확인한다. 실패면 사유, 아니면 ""."""
-        try:
-            if name in ("PROCESS_START", "RECIPE_PROCESS_START"):
-                if not self._process_active():
-                    return "공정이 시작되지 않았습니다 (장비 로그 확인)"
-            elif name == "RECIPE_HEATER_RUN":
-                pend = getattr(self, "_heater_pending", None)
-                waiting = bool(pend and str(pend[0]) == "recipe_start")
-                if not (self.heater_recipe.is_running() or waiting):
-                    return "히터 레시피를 시작하지 못했습니다 (장비 로그 확인)"
-            elif name == "RECIPE_PROCESS_RUN":
-                want = str((c or {}).get("_csv_path") or "")
-                cur = str(getattr(self, "csv_file_path", "") or "")
-                if not getattr(self, "csv_rows", None) or (want and cur != want):
-                    return "레시피를 적재하지 못했습니다 (장비 로그 확인)"
-        except Exception:
-            pass
-        return ""
+    def _erp_exec_heater_command(self, name: str, args: dict) -> bool:
+        """ERP 원격 히터 명령 — 처리했으면 True, 히터 명령이 아니면 False(실패는 예외로 사유를 보고한다).
+        원격 명령 처리(integrations.erp_commands.ErpCommandRunner.exec_one)에서 꺼내 둔 것 — 5단계(히터 서비스)에서 옮긴다.
+        """
+        if name == "HEATER_SV":
+            if HEATER_ENABLED and self.heater_recipe.is_running():
+                raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
+            val = args.get("value")
+            if val is None:
+                raise RuntimeError("목표 온도 없음")
+            self.ui.heater_sv_edit.setPlainText(str(val)) \
+                if hasattr(self.ui.heater_sv_edit, "setPlainText") \
+                else self.ui.heater_sv_edit.setText(str(val))
+            self._on_heater_apply_clicked()
+        elif name == "HEATER_ONOFF":
+            if HEATER_ENABLED and self.heater_recipe.is_running():
+                raise RuntimeError("히터 레시피 실행 중입니다. 레시피를 먼저 중단하세요.")
+            want = bool(args.get("on"))
+            # 이미 원하는 상태인지는 버튼이 아니라 PLC(마지막 폴링)로 판단한다.
+            # 가스 준비 중(_heater_pending)도 'ON 진행 중' 으로 본다: ON 은 거부, OFF 는 취소 경로.
+            run = bool((self.plc_controller.get_heater_status() or {}).get("run"))
+            pending = self._heater_pending is not None
+            if want and pending:
+                raise RuntimeError("히터가 이미 준비 중입니다(가스·압력 대기)")
+            if (run or pending) == want:
+                raise RuntimeError(f"히터가 이미 {'ON' if want else 'OFF'} 상태입니다")
+            if want:
+                # 목표 온도가 함께 왔으면 먼저 반영한다(빈 SV로 인한 팝업 방지)
+                val = args.get("value")
+                if val is not None and str(val).strip() != "":
+                    w = self.ui.heater_sv_edit
+                    if hasattr(w, "setPlainText"):
+                        w.setPlainText(str(val))
+                    else:
+                        w.setText(str(val))
+                # 가스·압력 입력이 함께 왔으면 히터 패널에 반영한다.
+                # 키가 없으면 장비 패널의 현재 설정을 그대로 쓴다.
+                def _set_chk(wn, v):
+                    w_ = getattr(self.ui, wn, None)
+                    if w_ is not None and v is not None:
+                        w_.setChecked(bool(v))
+
+                def _set_txt(wn, v):
+                    w_ = getattr(self.ui, wn, None)
+                    if w_ is not None and v is not None:
+                        w_.setText(str(v))
+
+                if "useAr" in args:
+                    _set_chk("heater_ar_check", args.get("useAr"))
+                    _set_txt("heater_ar_flow_edit", args.get("arFlow"))
+                if "useO2" in args:
+                    _set_chk("heater_o2_check", args.get("useO2"))
+                    _set_txt("heater_o2_flow_edit", args.get("o2Flow"))
+                if "wp" in args:
+                    _set_txt("heater_wp_edit", args.get("wp"))
+                try:
+                    self._sync_heater_gas_inputs()
+                except Exception:
+                    pass
+                # 사전 검증 — 실패하면 팝업 대신 예외로 웹에 사유를 보고한다
+                sv_txt = ""
+                try:
+                    sv_w = self.ui.heater_sv_edit
+                    sv_txt = (sv_w.toPlainText() if hasattr(sv_w, "toPlainText")
+                              else sv_w.text()).strip()
+                except Exception:
+                    pass
+                if sv_txt == "":
+                    raise RuntimeError("히터 목표 온도가 설정되지 않았습니다")
+                try:
+                    float(sv_txt)
+                except ValueError:
+                    raise RuntimeError(f"히터 목표 온도가 숫자가 아닙니다: {sv_txt}")
+                st = self.plc_controller.get_heater_status() or {}
+                if not st.get("itl"):
+                    raise RuntimeError("히터 인터락 미충족 (TC/DAC 모듈 상태 확인 필요)")
+
+            # 버튼을 눌러 흉내내지 않고(P3) 핸들러를 직접 부른다 — 표시는 폴링이 맞춘다
+            self._on_heater_onoff_toggled(want)
+
+        elif name == "RECIPE_HEATER_RUN":
+            # 노트북 [레시피] 버튼과 같은 경로로 실행한다(가드·가스 준비·스텝 목록·램프 정지 포함).
+            #  예전에는 여기서 load/start 만 해 레시피의 가스·압력이 무시됐다.
+            rows = args.get("rows") or []
+            if not rows:
+                raise RuntimeError("레시피 행이 없습니다")
+            path = write_recipe_csv(rows, HEATER_RECIPE_COLS, "heater_web.csv")
+            self._run_heater_recipe_file(path, confirm=False)
+
+        elif name == "HEATER_RESET":
+            # PLC 래치된 히터 이상(M00043) 해제. 확인은 웹이 이미 받았다.
+            st = self.plc_controller.get_heater_status() or {}
+            if not st.get("fault"):
+                raise RuntimeError("히터 이상 상태가 아닙니다")
+            log_message_to_monitor("히터", "[원격] 히터 이상 리셋 요청")
+            self.request_heater_reset.emit()
+
+        elif name == "HEATER_GAS_RELEASE":
+            # 냉각 대기 중 유지되는 가스·압력을 지금 해제한다.
+            if not (HEATER_ENABLED and self.heater_atmosphere.is_active()):
+                raise RuntimeError("유지 중인 가스·압력이 없습니다")
+            self._atm_hold = False
+            log_message_to_monitor("히터", "[원격] 가스·압력 해제")
+            self.heater_atmosphere.release("원격 해제")
+
+        elif name == "RECIPE_HEATER_STOP":
+            self.heater_recipe.stop("원격 중단")
+
+        elif name == "HEATER_RECIPE_HOLD":
+            # args: on=true → 일시정지, on=false → 재개
+            if not self.heater_recipe.is_running():
+                raise RuntimeError("실행 중인 히터 레시피가 없습니다")
+            if bool(args.get("on", True)):
+                if not self.heater_recipe.hold():
+                    raise RuntimeError("일시정지에 실패했습니다")
+            else:
+                if not self.heater_recipe.resume():
+                    raise RuntimeError("일시정지 상태가 아닙니다")
+
+        elif name == "HEATER_RECIPE_STEP":
+            if not self.heater_recipe.is_running():
+                raise RuntimeError("실행 중인 히터 레시피가 없습니다")
+            if not self.heater_recipe.skip_step():
+                raise RuntimeError("스텝 건너뛰기에 실패했습니다")
+
+        else:
+            return False
+        return True
 
     def _notice(self, source: str, kind: str, title: str, text: str) -> None:
         """장비가 자동으로 내는 알림 한 곳. 출처(노트북/ERP)에 따라 창 여부가 갈리고, ERP 알림은 두 경우 모두 나간다.
@@ -1967,16 +1863,6 @@ class MainDialog(QDialog):
             QTimer.singleShot(0, _show)   # 지금 처리(정리·기록)가 끝난 뒤에 띄운다
         except Exception:
             pass
-
-    def _remote_alert_reason(self) -> str:
-        """모인 경고창 문구를 ERP 실패 사유 한 줄로. warning/critical 만 사유가 된다."""
-        bits = []
-        for kind, title, text in self._remote_alerts:
-            if kind == "information":
-                continue
-            body = " ".join(str(text).split())
-            bits.append(f"{title}: {body}" if title else body)
-        return " / ".join(bits)
 
     @Slot()
     def _on_all_stop_clicked(self):
