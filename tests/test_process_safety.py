@@ -23,8 +23,8 @@ def safe(fresh, monkeypatch):
     logs = []
     monkeypatch.setattr(MAIN, "log_message_to_monitor", lambda lvl, msg: logs.append((lvl, msg)))
     aborts = []
-    orig = w._abort_process_by_fault
-    monkeypatch.setattr(w, "_abort_process_by_fault",
+    orig = w.proc.abort_by_fault
+    monkeypatch.setattr(w.proc, "abort_by_fault",
                         lambda reason, detail="": (aborts.append((reason, detail)), orig(reason, detail)))
     w._logs = logs; w._aborts = aborts
     monkeypatch.setattr(w, "_chat_send_fault_detail", lambda *a, **k: None)

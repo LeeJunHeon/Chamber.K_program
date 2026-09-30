@@ -202,6 +202,56 @@ class _MainProcessPorts:
     def delay_clock_clear(self):
         self.w._csv_delay_clock = None
 
+    def status_message(self, level, msg):
+        self.w.on_status_message(level, msg)
+
+    def mark_user_stopped(self):
+        self.w._chat_user_stopped = True
+
+    def mark_emergency_stopped(self):
+        self.w._chat_emergency_stopped = True
+
+    def mark_fault_abort(self):
+        self.w._fault_abort_active = True
+
+    def chat_fault_detail_sent(self):
+        return getattr(self.w, "_chat_fault_detail_sent", False)
+
+    def mark_chat_fault_detail_sent(self):
+        self.w._chat_fault_detail_sent = True
+
+    def chat_send_fault_detail(self, reason, detail):
+        self.w._chat_send_fault_detail(reason, detail)
+
+    def process_controller_present(self):
+        return bool(self.w.process_controller)
+
+    def request_stop(self):
+        self.w.request_process_stop.emit()
+
+    def plc_emergency_stop(self):
+        self.w.request_plc_emergency_stop.emit()
+
+    def dc_emergency_off(self):
+        QMetaObject.invokeMethod(
+            self.w.dcpower_controller, "emergency_off", Qt.ConnectionType.QueuedConnection)
+
+    def rfpulse_stop(self):
+        QMetaObject.invokeMethod(
+            self.w.rfpulse_controller, "stop_process", Qt.ConnectionType.QueuedConnection)
+
+    def heater_recipe_stop(self, reason):
+        self.w.heater_recipe.stop(reason)
+
+    def clear_erp_meas(self):
+        self.w._erp_meas = {}
+
+    def build_chk_csv_row(self):
+        return self.w._build_chk_csv_row()
+
+    def append_chk_csv_row(self, row):
+        return append_chk_csv_row(row)
+
 
 def _state_field(name: str) -> property:
     """MainDialog 의 옛 이름(self.process_running 등)을 self.proc_state 의 필드로 잇는다(읽기·쓰기)."""
@@ -1830,68 +1880,8 @@ class MainDialog(QDialog):
             pass
 
     def _abort_process_by_fault(self, reason: str, detail: str = ""):
-        """설비 이상으로 공정을 즉시 중단한다(사용자 STOP 과 구분).
-
-        온도가 무너진 시점에 그 시료는 이미 버린 것이라, 계속 돌리면
-        타겟과 시간만 더 쓴다. 즉시 종료가 맞다.
-        _chat_user_stopped 는 건드리지 않는다 — 그 플래그는 사용자 STOP
-        전용이고, 설비 이상은 '실패'로 기록되어야 한다.
-        """
-        try:
-            if not self._process_active():
-                return
-        except Exception:
-            return
-
-        self._fault_abort_active = True
-        try:
-            self._chk_process_ok = False
-        except Exception:
-            pass
-        try:
-            log_message_to_monitor("경고", f"[공정 중단] {reason}")
-            if detail:
-                for _l in str(detail).splitlines():
-                    log_message_to_monitor("경고", f"  {_l}")
-        except Exception:
-            pass
-        try:
-            self._chat_add_error(reason)
-            self._chat_notify_failed_now(reason, send_text=False)
-        except Exception:
-            pass
-        # 상세 카드는 공정 1회당 1장. 첫 사유가 대표 사유다.
-        #  (중단 동작 자체는 아래에서 가드 없이 계속 수행된다)
-        try:
-            if not getattr(self, "_chat_fault_detail_sent", False):
-                self._chat_fault_detail_sent = True     # 발송 전에 세운다
-                self._chat_send_fault_detail(reason, detail)
-            else:
-                log_message_to_monitor(
-                    "경고", f"[공정 중단] 추가 사유(챗 중복 발송 안 함): {reason}")
-        except Exception:
-            pass
-
-        # CSV 리스트면 뒤 STEP 을 모두 취소한다
-        try:
-            if self.csv_mode:
-                self.csv_cancelled = True
-                log_message_to_monitor("정보", "설비 이상 → CSV 리스트 전체 취소 플래그 설정")
-            if getattr(self, "_csv_delay_active", False):
-                log_message_to_monitor("정보", "CSV Delay 중 설비 이상 → 딜레이 중단 및 리스트 취소")
-                self._cancel_csv_list_now("CSV 공정 중단됨(설비 이상)")
-                return
-            if self.csv_mode and (not self.process_running):
-                self._cancel_csv_list_now("CSV 공정 중단됨(설비 이상)")
-                return
-        except Exception:
-            pass
-
-        try:
-            if self.process_controller and self.process_running:
-                self.request_process_stop.emit()
-        except Exception:
-            pass
+        """설비 이상으로 공정을 즉시 중단한다(사용자 STOP 과 구분). 본문은 ProcessService.abort_by_fault."""
+        self.proc.abort_by_fault(reason, detail)
 
     def _csv_list_uses_heater(self) -> bool:
         """적재된 CSV 공정 목록의 어느 행이든 히터를 쓰면 True. 규칙은 core.recipe.csv_rows_use_heater."""
@@ -1990,79 +1980,8 @@ class MainDialog(QDialog):
 
     @Slot()
     def _on_all_stop_clicked(self):
-        """ALL STOP — 히터 레시피도 함께 멈춘다.
-
-        레시피는 공정과 무관하게 돌 수 있으므로, 비상정지 뒤에도 레시피가
-        살아 있으면 다음 스텝에서 히터를 다시 켜 버린다.
-        (공정 STOP(정상 종료)에서는 레시피를 건드리지 않는다)
-        """
-        # ALL STOP 은 어떤 예외에도 멈추지 않아야 한다 — 단계마다 따로 감싼다.
-        try:
-            if HEATER_ENABLED and self.heater_recipe.is_running():
-                self.heater_recipe.stop("비상 정지")
-        except Exception:
-            pass
-        # 공정 상태머신도 세운다 — PLC 비상정지만으로는 컨트롤러가 다음 스텝을 계속 밟는다.
-        #  ★ 비상정지로 끝난 공정은 '실패'로 기록되어야 한다. 그냥 request_process_stop 만
-        #    보내면 _chk_process_ok 가 True 로 남아 구글챗에 "정상 종료" 카드가 나가고
-        #    ChK_log.csv 에도 정상 공정으로 기록됐다. 사용자 STOP(_chat_user_stopped)과는
-        #    구분해야 하므로 그 플래그는 건드리지 않고 별도 플래그로 "긴급 중단" 카드를 낸다.
-        #  ★ 플래그는 request_plc_emergency_stop 보다 먼저 선다 — 비상정지로 코일이 전부 OFF 되면
-        #    다음 폴링이 MV_button False 를 내는데, 그때 _mv_safety_armed() 가 이미 False 여야 이중 중단이 없다.
-        _proc_active = bool(getattr(self, "process_running", False))
-        _csv_active = bool(getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None))
-        _csv_delay = bool(getattr(self, "_csv_delay_active", False))
-        _handled_by_cancel = False
-        if _proc_active or _csv_active or _csv_delay:
-            try:
-                self._chk_process_ok = False
-                self._chat_emergency_stopped = True
-            except Exception:
-                pass
-        try:
-            self.request_plc_emergency_stop.emit()
-        except Exception:
-            pass
-        # DC 파워는 PLC 를 거치지 않는 직결 시리얼 — 비상정지로 안 꺼진다.
-        #  공정 상태와 무관하게 직접 끈다(확인형). 공정 중이면 공정 정지 경로의 DC OFF 와 두 번 가지만 무해.
-        try:
-            QMetaObject.invokeMethod(
-                self.dcpower_controller, "emergency_off", Qt.ConnectionType.QueuedConnection)
-        except Exception:
-            pass
-        if _proc_active or _csv_active or _csv_delay:
-            try:
-                self._chat_notify_failed_now("ALL STOP(비상 정지)으로 중단", send_text=False)
-            except Exception:
-                pass
-            # CSV 리스트면 뒤 STEP 을 모두 막는다("재시작" 경로와 같은 처리)
-            try:
-                if _csv_active:
-                    self.csv_cancelled = True
-                    # 딜레이 스텝은 process_running=True 로 두지만 컨트롤러는 안 돈다.
-                    #  여기서 리스트를 정리하면 종료 카드가 이미 나가므로, 뒤의
-                    #  request_process_stop 은 보내지 않는다("재시작" 경로의 return 과 같다).
-                    #  보내면 _stop_impl 의 '이미 정지' 분기가 finished 를 한 번 더 내서
-                    #  카드가 2장 나간다.
-                    if _csv_delay or not _proc_active:
-                        self._cancel_csv_list_now("CSV 공정 취소", reason="ALL STOP(비상 정지)으로 중단")
-                        _handled_by_cancel = True
-            except Exception:
-                pass
-        # 실제 공정 스텝이 돌고 있을 때만 컨트롤러를 세운다. 안 돌고 있는데 보내면
-        #  컨트롤러가 '이미 정지' 로 finished 를 내고 엉뚱한 종료 카드가 나간다.
-        if _proc_active and not _handled_by_cancel:
-            try:
-                self.request_process_stop.emit()
-            except Exception:
-                pass
-        # CESAR(RF Pulse)는 PLC 를 거치지 않는 직결 시리얼이라 비상정지로 안 꺼진다.
-        #  공정이 안 돌고 있어도 펄스가 켜져 있을 수 있으니 드라이버를 직접 한 번 더 끈다.
-        try:
-            QMetaObject.invokeMethod(
-                self.rfpulse_controller, "stop_process", Qt.ConnectionType.QueuedConnection)
-        except Exception:
-            pass
+        """ALL STOP — 히터 레시피도 함께 멈춘다. 본문은 ProcessService.all_stop."""
+        self.proc.all_stop()
 
     def _log_heater_header(self, params: dict):
         """공정 로그 머리말에 히터 설정 한 줄. 히터를 안 쓰면 '미사용'."""
@@ -3812,35 +3731,14 @@ class MainDialog(QDialog):
 
     @Slot(str)
     def _handle_connection_failure(self, error_message):
-        # ✅ 실패 원인 저장만 (종료 카드+실패 원인 일반챗은 _handle_process_finished에서)
-        self._chat_notify_failed_now(error_message, send_text=False)
-
-        self._chk_process_ok = False  # 연결 실패도 실패 처리
-        self._handle_process_finished()
-        self._notice("process", "critical", "연결 실패", error_message)   # 정리 뒤에 알린다
+        """공정 컨트롤러 connection_failed. 본문은 ProcessService.on_connection_failed."""
+        self.proc.on_connection_failed(error_message)
 
     def on_status_message(self, level, message):
         log_message_to_monitor(level, message)
 
         if level == "재시작":
-            self._chk_process_ok = False
-
-            # ✅ 실제 원인(message)을 그대로 남김 (CH1/CH2처럼)
-            reason = (message or "").strip() or "PLC 통신 이상(재시작)"
-            self._chat_notify_failed_now(reason, send_text=False)   # 저장만(카드+일반챗은 finished에서)
-
-            # ✅ CSV 리스트가 진행중이면, 다음 스텝이 이어지지 않도록 취소 플래그부터 세팅
-            if getattr(self, "csv_mode", False) and getattr(self, "csv_rows", None):
-                self.csv_cancelled = True
-
-                # (1) 딜레이 중이거나, 스텝 사이(=process_running False)면: 바로 리스트 취소
-                if getattr(self, "_csv_delay_active", False) or (not self.process_running):
-                    self._cancel_csv_list_now("CSV 공정 취소", reason=reason)
-                    return
-
-            # (2) 실제 공정 스텝이 돌고 있으면: stop_process로 안전 종료
-            if self.process_controller and self.process_running:
-                self.request_process_stop.emit()
+            self.proc.on_restart_required(message)
 
     @Slot(str, bool)
     def set_indicator(self, name, state):
@@ -3977,33 +3875,8 @@ class MainDialog(QDialog):
 
     @Slot()
     def _on_sputter_stop_clicked(self):
-        """STOP 버튼 공통 처리: 현재 STEP 중단 + CSV 모드면 전체 리스트 취소."""
-        # STOP으로 중단된 공정은 정상 종료로 보지 않는다.
-        self._chk_process_ok = False
-        self._chat_user_stopped = True
-        self._chat_add_error("사용자 STOP")
-        self.on_status_message("경고", "STOP 버튼 클릭됨")
-
-        # ✅ CSV 리스트 공정 중이면, 이후 STEP들을 모두 취소하도록 플래그 설정
-        if self.csv_mode:
-            self.csv_cancelled = True
-            log_message_to_monitor("정보", "사용자 STOP → CSV 리스트 전체 취소 플래그 설정")
-
-        # ✅ CSV Delay(대기) 중이면 즉시 타이머 끊고 리스트 정리
-        if getattr(self, "_csv_delay_active", False):
-            log_message_to_monitor("정보", "CSV Delay 중 STOP → 딜레이 즉시 중단 및 리스트 공정 취소")
-            self._cancel_csv_list_now("CSV 공정 취소됨")   # ✅ 여기서 구글챗도 같이 보내게 됨(아래 _cancel_csv_list_now 수정)
-            return
-
-        # ✅ [추가] CSV 리스트인데 '스텝 사이'(process_running=False)라면 즉시 리스트 취소
-        if self.csv_mode and (not self.process_running):
-            log_message_to_monitor("정보", "CSV STEP 사이 STOP → 리스트 공정 즉시 취소")
-            self._cancel_csv_list_now("CSV 공정 취소됨")
-            return
-
-        # 실제 공정이 돌고 있으면 프로세스 스레드 쪽에 중단 요청
-        if self.process_controller and self.process_running:
-            self.request_process_stop.emit()
+        """STOP 버튼 공통 처리: 현재 STEP 중단 + CSV 모드면 전체 리스트 취소. 본문은 ProcessService.stop."""
+        self.proc.stop()
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _build_chk_csv_row(self) -> dict:
@@ -4235,121 +4108,13 @@ class MainDialog(QDialog):
 
     # ==================== ChK CSV 로그용 헬퍼 ====================
     def _handle_process_finished(self):
-        # ★ 중복/헛호출 가드. 컨트롤러 _stop_impl 의 '이미 정지' 분기는 request_stop 을
-        #   부르는 어느 경로에서든 finished 를 낼 수 있어, 호출부 하나를 막아도 다른
-        #   경로에서 종료 카드 2장 / 엉뚱한 카드가 재발한다. 여기서 뿌리를 막는다.
-        #   플래그는 _chat_reset_run_state(수동 시작 / CSV STEP 시작마다)에서 False 가 된다 —
-        #   스텝 시작에서 리셋되지 않으면 2번째 STEP 부터 종료 처리가 통째로 사라지므로
-        #   리셋 위치를 옮기지 말 것.
-        if getattr(self, "_finish_handled", False):
-            _alive = self._process_active()
-            log_message_to_monitor(
-                "정보",
-                "finished 무시 — 이번 공정의 종료 처리는 이미 끝났음"
-                + ("" if _alive else " (시작된 공정 없음)"))
-            return
-        self._finish_handled = True
-
-        self.on_status_message("정보", "프로세스 종료중.")
-        # 히터 소유권 해제 — 다음 공정/레시피 판정에 남지 않게 한다
-        self._process_heater_claimed = False
-        # MFC 폴링이 멈추므로 실측값도 함께 버린다(죽은 값 보고 방지)
-        self._erp_meas = {}
-
-        # ★ 이번 STEP이 정상 종료됐는지 여부를 먼저 보관
-        last_step_ok = getattr(self, "_chk_process_ok", False)
-        self._chat_notify_finished(last_step_ok)
-
-        # ★ 정상적으로 완료된 공정만 ChK_log.csv 에 한 줄 추가
-        try:
-            if last_step_ok:
-                row = self._build_chk_csv_row()
-                ok = append_chk_csv_row(row)
-                if ok:
-                    log_message_to_monitor("정보", "ChK CSV 로그 저장 완료")
-                else:
-                    log_message_to_monitor("경고", "ChK CSV 로그 저장 실패")
-            else:
-                log_message_to_monitor("정보", "이번 공정은 비정상 종료 → ChK CSV에 기록하지 않음")
-        except Exception as e:
-            log_message_to_monitor("경고", f"ChK CSV 로그 처리 중 예외 발생: {e!r}")
-        finally:
-            # 다음 공정을 위해 평균 누적값/상태 초기화
-            self._reset_chk_stats()
-            self._chk_process_ok = False
-
-        # ✅ 1) CSV 리스트 공정 모드인 경우
-        if self.csv_mode and self.csv_rows:
-            self.process_running = False
-
-            # ✅ (1) 사용자가 STOP을 눌러 전체 리스트 취소한 경우
-            if getattr(self, "csv_cancelled", False):
-                # 플래그 리셋
-                self.csv_cancelled = False
-
-                # CSV 상태 전체 초기화
-                self.proc_state.clear_csv_list()
-
-                # ▶ 공정 상태 및 UI 초기화
-                self.ui.Sputter_Start_Button.setEnabled(True)
-                self.ui.Sputter_Stop_Button.setEnabled(False)
-                self.ui.select_csv_button.setEnabled(True)
-                self.update_stage_monitor("CSV 공정 취소됨")
-                self._reset_process_ui_fields()
-                clear_process_log_file()   # 리스트 종료 — 이후 로그는 log.txt 로
-                return
-
-            # ✅ (2) STOP이 아닌 경우: 성공/실패에 따라 분기
-            if last_step_ok:
-                # 이전 STEP이 정상 종료된 경우에만 다음 STEP으로 진행
-                self._start_next_csv_step()
-                return
-            else:
-                # ❌ 실패/에러로 끝난 경우 → 이후 STEP들은 실행하지 않고 CSV 리스트 공정 종료
-                log_message_to_monitor(
-                    "경고",
-                    "CSV 공정 중 실패 발생 → 다음 공정을 실행하지 않고 리스트 공정을 종료합니다.",
-                )
-
-                # CSV 상태 전체 초기화
-                self.proc_state.clear_csv_list()
-
-                # 공정 상태 및 UI 초기화
-                self.process_running = False
-                self.ui.Sputter_Start_Button.setEnabled(True)
-                self.ui.Sputter_Stop_Button.setEnabled(False)
-                self.ui.select_csv_button.setEnabled(True)
-                self.update_stage_monitor("CSV 공정 실패로 중단됨")
-                self._reset_process_ui_fields()
-                clear_process_log_file()   # 리스트 종료 — 이후 로그는 log.txt 로
-                return
-
-        # 🔻 여기 이하(단일 공정 종료 처리)는 그대로 유지
-        self.process_running = False
-        self.ui.Sputter_Start_Button.setEnabled(True)
-        self.ui.Sputter_Stop_Button.setEnabled(False)
-        self.ui.select_csv_button.setEnabled(True)
-        self.update_stage_monitor("공정 종료")
-        
-        # ▶ 공통 UI 초기화
-        self._reset_process_ui_fields()
-
-        # 공정 로그 파일 해제 — 반드시 종료 처리의 맨 마지막.
-        #  해제하지 않으면 공정이 끝난 뒤의 모든 로그(히터만 돌려도)가 이미 끝난
-        #  공정의 .txt 에 계속 덧붙는다.
-        #  CSV 리스트가 이어지는 중(_start_next_csv_step)에는 해제하지 않는다 —
-        #  다음 STEP 이 set_process_log_file 로 새 파일을 만든다.
-        clear_process_log_file()
+        """공정 컨트롤러 finished. 본문은 ProcessService.on_finished."""
+        self.proc.on_finished()
 
     @Slot(str)
     def _handle_critical_error(self, error_message):
-        # ★ 실패 표시·정리를 먼저 한다. 창이 먼저면(확인을 늦게 누르면) 그 사이 종료 처리가 돌아
-        #   실패한 스텝이 정상 종료로 기록되고 CSV 다음 스텝이 시작된다 — ALL STOP 과 같은 순서로 맞춘다.
-        self._chk_process_ok = False
-
-        # ✅ 저장만 (stop 시퀀스 끝나고 finished에서 카드+일반챗 1줄)
-        self._chat_notify_failed_now(error_message, send_text=False)
-        self._notice("process", "critical", "공정 중단", f"공정이 중단되었습니다.\n\n사유: {error_message}")
+        """공정 컨트롤러 critical_error. 본문은 ProcessService.on_critical_error."""
+        self.proc.on_critical_error(error_message)
 
         # ✅ 여기서 _handle_process_finished()를 직접 호출하지 마세요.
         # stop 시퀀스가 끝나면 ProcessController.finished가 1번만 호출해줍니다.

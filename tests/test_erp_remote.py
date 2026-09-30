@@ -316,7 +316,7 @@ def test_T138_critical_error_order_and_origin(erp, monkeypatch):
 def test_T139_connection_failure_and_csv_notices_order(erp, monkeypatch):
     w = erp; w._proc_origin = "local"
     done = []
-    monkeypatch.setattr(w, "_handle_process_finished", lambda: done.append(w._mb.count()))
+    monkeypatch.setattr(w.proc, "on_finished", lambda: done.append(w._mb.count()))
     monkeypatch.setattr(w, "_chat_notify_failed_now", lambda *a, **k: None)
     w._handle_connection_failure("PLC 연결 실패")
     assert done == [0] and w._chk_process_ok is False           # 정리가 창보다 먼저

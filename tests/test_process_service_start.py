@@ -66,7 +66,6 @@ class FakePorts:
     def chat_reset_run_state(self): self._r("chat_reset_run_state")
     def chat_notify_started(self, params, name): self._r("chat_notify_started", params, name)
     def erp_run_start(self, name, params): self._r("erp_run_start", name, params)
-    def start_next_csv_step(self): self._r("start_next_csv_step")
     # 3b 에서 추가된 port
     def chat_enabled(self): return self._r("chat_enabled")
     def chat_text(self, msg): self._r("chat_text", msg)
@@ -82,6 +81,23 @@ class FakePorts:
     def delay_clock_start(self): self._r("delay_clock_start")
     def delay_elapsed_ms(self): return self._r("delay_elapsed_ms")
     def delay_clock_clear(self): self._r("delay_clock_clear")
+    # 3c 에서 추가된 port
+    def status_message(self, level, msg): self._r("status_message", level, msg)
+    def mark_user_stopped(self): self._r("mark_user_stopped")
+    def mark_emergency_stopped(self): self._r("mark_emergency_stopped")
+    def mark_fault_abort(self): self._r("mark_fault_abort")
+    def chat_fault_detail_sent(self): return self._r("chat_fault_detail_sent")
+    def mark_chat_fault_detail_sent(self): self._r("mark_chat_fault_detail_sent")
+    def chat_send_fault_detail(self, reason, detail): self._r("chat_send_fault_detail", reason, detail)
+    def process_controller_present(self): return self._r("process_controller_present")
+    def request_stop(self): self._r("request_stop")
+    def plc_emergency_stop(self): self._r("plc_emergency_stop")
+    def dc_emergency_off(self): self._r("dc_emergency_off")
+    def rfpulse_stop(self): self._r("rfpulse_stop")
+    def heater_recipe_stop(self, reason): self._r("heater_recipe_stop", reason)
+    def clear_erp_meas(self): self._r("clear_erp_meas")
+    def build_chk_csv_row(self): return self._r("build_chk_csv_row")
+    def append_chk_csv_row(self, row): return self._r("append_chk_csv_row", row)
 
     def names(self):
         return [c[0] for c in self.calls]
