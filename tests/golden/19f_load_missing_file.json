@@ -1,0 +1,204 @@
+{
+ "timeline": [
+  [
+   "msgbox.warning",
+   [
+    "파일 오류",
+    "선택한 CSV 파일을 찾을 수 없습니다."
+   ]
+  ],
+  [
+   "check",
+   [
+    "적재 뒤",
+    {
+     "stage": "",
+     "start_enabled": true,
+     "stop_enabled": false,
+     "select_csv_enabled": true,
+     "process_running": false,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": ""
+    }
+   ]
+  ],
+  [
+   "erp.update_state",
+   [
+    {
+     "status": "idle",
+     "stage": "",
+     "groups": [
+      {
+       "label": "전원",
+       "items": [
+        {
+         "label": "DC Power",
+         "value": "",
+         "setpoint": "200",
+         "unit": "W"
+        },
+        {
+         "label": "Voltage",
+         "value": "",
+         "unit": "V"
+        },
+        {
+         "label": "Current",
+         "value": "",
+         "unit": "A"
+        }
+       ]
+      },
+      {
+       "label": "RF",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "200",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "offset / param",
+         "value": "6.79 / 1.0395"
+        }
+       ]
+      },
+      {
+       "label": "RF Pulse",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "Freq",
+         "value": "",
+         "unit": "kHz"
+        },
+        {
+         "label": "Duty",
+         "value": "",
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "label": "가스",
+       "items": [
+        {
+         "label": "Ar",
+         "value": null,
+         "setpoint": "5",
+         "unit": "sccm"
+        },
+        {
+         "label": "O₂",
+         "value": null,
+         "setpoint": "",
+         "unit": "sccm"
+        }
+       ]
+      },
+      {
+       "label": "압력 · 시간",
+       "items": [
+        {
+         "label": "챔버 압력",
+         "value": null,
+         "unit": "mTorr"
+        },
+        {
+         "label": "Working P",
+         "setpoint": "2",
+         "unit": "mTorr"
+        },
+        {
+         "label": "공정 시간",
+         "setpoint": "10",
+         "unit": "분"
+        },
+        {
+         "label": "셔터 딜레이",
+         "setpoint": "5",
+         "unit": "분"
+        }
+       ]
+      }
+     ],
+     "heater": {
+      "pv": "",
+      "sv": "",
+      "status": "PLC 응답 없음 · 0초 전 값",
+      "output": "정지 (DAC 0)",
+      "atmosphere": {
+       "state": "IDLE"
+      },
+      "on": false,
+      "curSv": null,
+      "pidErr": null,
+      "otLimit": null,
+      "run": false,
+      "fault": false,
+      "tcErr": false,
+      "wdErr": false,
+      "ot": false,
+      "lcd": {
+       "sv": "---",
+       "dev": "",
+       "devOk": false,
+       "tc2": "TC2 --.-",
+       "tc2Hold": false,
+       "badge": ""
+      },
+      "recipeRunning": false
+     },
+     "heaterRecipe": {
+      "running": false,
+      "state": "IDLE",
+      "stepNo": 0,
+      "total": 0,
+      "soakRemainSec": 0,
+      "stepRemainSec": -1,
+      "phase": "",
+      "remainSec": 0,
+      "steps": [],
+      "cycle": 1,
+      "repeat": 1,
+      "held": false,
+      "elapsedSec": 0,
+      "totalEstSec": 0,
+      "percent": 0.0
+     },
+     "csvRecipe": null,
+     "ion": {
+      "run": false,
+      "lamp": false,
+      "overtime": false
+     },
+     "indicators": {},
+     "mvInterlock": null,
+     "valves": {},
+     "plc_link": true
+    }
+   ]
+  ]
+ ]
+}

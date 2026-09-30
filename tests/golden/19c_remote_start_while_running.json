@@ -1,0 +1,1163 @@
+{
+ "timeline": [
+  [
+   "sig.clear_plc_fault",
+   []
+  ],
+  [
+   "logfile.set",
+   [],
+   {
+    "prefix": "CHK"
+   }
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "=== CHK 공정 시작 ==="
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "[히터] 미사용"
+   ]
+  ],
+  [
+   "chat.notify_process_started",
+   [
+    {
+     "use_ar_gas": true,
+     "use_o2_gas": false,
+     "ar_flow": 20.0,
+     "o2_flow": 0.0,
+     "selected_gas": "Ar",
+     "mfc_flow": 20.0,
+     "sp1_set": 5.0,
+     "dc_power": 100.0,
+     "shutter_delay": 1.0,
+     "process_time": 1.0,
+     "rf_offset": 6.79,
+     "rf_param": 1.0395,
+     "use_g1": true,
+     "use_g2": false,
+     "use_dc_delay": false,
+     "use_heater": false,
+     "heater_temp": 0.0,
+     "g1_target_name": "CeO2",
+     "g2_target_name": "",
+     "ch": "CHK",
+     "prefix": "CHK Sputter",
+     "process_note": "Single CHK",
+     "Process_name": "Single CHK",
+     "G1_target_name": "CeO2",
+     "use_dc_power": true,
+     "use_rf_power": false
+    }
+   ]
+  ],
+  [
+   "chat.flush",
+   []
+  ],
+  [
+   "erp.run_start",
+   [
+    "Single CHK",
+    {
+     "use_ar_gas": true,
+     "use_o2_gas": false,
+     "ar_flow": 20.0,
+     "o2_flow": 0.0,
+     "selected_gas": "Ar",
+     "mfc_flow": 20.0,
+     "sp1_set": 5.0,
+     "dc_power": 100.0,
+     "rf_power": 0,
+     "shutter_delay": 1.0,
+     "process_time": 1.0,
+     "rf_offset": 6.79,
+     "rf_param": 1.0395,
+     "use_rf_pulse": false,
+     "rf_pulse_power": 0.0,
+     "rf_pulse_freq": null,
+     "rf_pulse_duty": null,
+     "use_g1": true,
+     "use_g2": false,
+     "use_dc_delay": false,
+     "use_heater": false,
+     "heater_temp": 0.0,
+     "g1_target_name": "CeO2",
+     "g2_target_name": ""
+    }
+   ]
+  ],
+  [
+   "sig.request_process_start",
+   [
+    {
+     "use_ar_gas": true,
+     "use_o2_gas": false,
+     "ar_flow": 20.0,
+     "o2_flow": 0.0,
+     "selected_gas": "Ar",
+     "mfc_flow": 20.0,
+     "sp1_set": 5.0,
+     "dc_power": 100.0,
+     "rf_power": 0,
+     "shutter_delay": 1.0,
+     "process_time": 1.0,
+     "rf_offset": 6.79,
+     "rf_param": 1.0395,
+     "use_rf_pulse": false,
+     "rf_pulse_power": 0.0,
+     "rf_pulse_freq": null,
+     "rf_pulse_duty": null,
+     "use_g1": true,
+     "use_g2": false,
+     "use_dc_delay": false,
+     "use_heater": false,
+     "heater_temp": 0.0,
+     "g1_target_name": "CeO2",
+     "g2_target_name": ""
+    }
+   ]
+  ],
+  [
+   "steps",
+   [
+    [
+     {
+      "action": "DC_POWER_STOP",
+      "message": "PRE: DC Power OFF",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "RF_POWER_STOP",
+      "message": "PRE: RF Power OFF",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "RF_PULSE_STOP",
+      "message": "PRE: RF Pulse OFF",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "PRE: Power OFF settle",
+      "params": null,
+      "value": null,
+      "duration_sec": 1,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 Flow OFF",
+      "params": [
+       "FLOW_OFF",
+       {
+        "channel": 1
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "MFC Valve Open",
+      "params": [
+       "VALVE_OPEN",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 ZEROING",
+      "params": [
+       "MFC_ZEROING",
+       {
+        "channel": 1
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "PS ZEROING",
+      "params": [
+       "PS_ZEROING",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "PLC_CMD",
+      "message": "Ar Valve Open",
+      "params": [
+       "Ar_Button",
+       true
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 20.00sccm 설정",
+      "params": [
+       "FLOW_SET",
+       {
+        "channel": 1,
+        "value": 20.0
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Ch1 Flow ON",
+      "params": [
+       "FLOW_ON",
+       {
+        "channel": 1
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "SP4 ON",
+      "params": [
+       "SP4_ON",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "압력 안정화 대기(60초)",
+      "params": null,
+      "value": null,
+      "duration_sec": 60,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "PLC_CMD",
+      "message": "Gun Shutter 1 Open",
+      "params": [
+       "S1_button",
+       true
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "POWER_WAIT",
+      "message": "파워 목표치 도달 대기",
+      "params": null,
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage1(SP3): SP3_SET=15.00 설정",
+      "params": [
+       "SP3_SET",
+       {
+        "value": 15.0
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage1(SP3): SP3_ON",
+      "params": [
+       "SP3_ON",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage1(SP3): 압력 도달 대기 (target=15.00, ±10%, timeout=180s)",
+      "params": [
+       "WAIT_PRESSURE",
+       {
+        "target": 15.0,
+        "tolerance_ratio": 0.1,
+        "stable_count": 3,
+        "timeout_sec": 180.0,
+        "fail_on_timeout": false
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage3(SP1=5.00): SP1_SET=5.00 설정",
+      "params": [
+       "SP1_SET",
+       {
+        "value": 5.0
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage3(SP1=5.00): SP1_ON",
+      "params": [
+       "SP1_ON",
+       {}
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "MFC_CMD",
+      "message": "Stage3(SP1=5.00): 압력 도달 대기 (target=5.00, ±10%, timeout=300s, FAIL ON TIMEOUT)",
+      "params": [
+       "WAIT_PRESSURE",
+       {
+        "target": 5.0,
+        "tolerance_ratio": 0.1,
+        "stable_count": 3,
+        "timeout_sec": 300.0,
+        "fail_on_timeout": true
+       }
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "Shutter Delay 60s",
+      "params": null,
+      "value": null,
+      "duration_sec": 60,
+      "timer_purpose": "shutter",
+      "polling": true
+     },
+     {
+      "action": "PLC_CMD",
+      "message": "Main Shutter Open",
+      "params": [
+       "MS_button",
+       true
+      ],
+      "value": null,
+      "duration_sec": null,
+      "timer_purpose": null,
+      "polling": false
+     },
+     {
+      "action": "DELAY",
+      "message": "메인 공정 60s 진행",
+      "params": null,
+      "value": null,
+      "duration_sec": 60,
+      "timer_purpose": "process",
+      "polling": true
+     }
+    ]
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "Sputtering 공정을 시작합니다."
+   ]
+  ],
+  [
+   "stage",
+   [
+    "[1/24] PRE: DC Power OFF"
+   ]
+  ],
+  [
+   "stage",
+   [
+    "[22/24] Shutter Delay 60s"
+   ]
+  ],
+  [
+   "stage",
+   [
+    "[24/24] 메인 공정 60s 진행"
+   ]
+  ],
+  [
+   "check",
+   [
+    "공정 중",
+    {
+     "stage": "[24/24] 메인 공정 60s 진행",
+     "start_enabled": false,
+     "stop_enabled": true,
+     "select_csv_enabled": false,
+     "process_running": true,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": "Single CHK"
+    }
+   ]
+  ],
+  [
+   "erp.update_state",
+   [
+    {
+     "status": "running",
+     "stage": "[24/24] 메인 공정 60s 진행",
+     "groups": [
+      {
+       "label": "전원",
+       "items": [
+        {
+         "label": "DC Power",
+         "value": "99.80",
+         "setpoint": "100",
+         "unit": "W"
+        },
+        {
+         "label": "Voltage",
+         "value": "349.00",
+         "unit": "V"
+        },
+        {
+         "label": "Current",
+         "value": "0.286",
+         "unit": "A"
+        }
+       ]
+      },
+      {
+       "label": "RF",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "0.0",
+         "setpoint": "200",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "0.0",
+         "unit": "W"
+        },
+        {
+         "label": "offset / param",
+         "value": "6.79 / 1.0395"
+        }
+       ]
+      },
+      {
+       "label": "RF Pulse",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "0.0",
+         "setpoint": "",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "0.0",
+         "unit": "W"
+        },
+        {
+         "label": "Freq",
+         "value": "",
+         "unit": "kHz"
+        },
+        {
+         "label": "Duty",
+         "value": "",
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "label": "가스",
+       "items": [
+        {
+         "label": "Ar",
+         "value": 19.8,
+         "setpoint": "19.80",
+         "unit": "sccm"
+        },
+        {
+         "label": "O₂",
+         "value": null,
+         "setpoint": "",
+         "unit": "sccm"
+        }
+       ]
+      },
+      {
+       "label": "압력 · 시간",
+       "items": [
+        {
+         "label": "챔버 압력",
+         "value": 4.9,
+         "unit": "mTorr"
+        },
+        {
+         "label": "Working P",
+         "setpoint": "4.9",
+         "unit": "mTorr"
+        },
+        {
+         "label": "공정 시간",
+         "setpoint": "01:00",
+         "unit": "분"
+        },
+        {
+         "label": "셔터 딜레이",
+         "setpoint": "00:00",
+         "unit": "분"
+        }
+       ]
+      },
+      {
+       "label": "타겟",
+       "items": [
+        {
+         "label": "G1",
+         "value": "CeO2"
+        }
+       ]
+      }
+     ],
+     "heater": {
+      "pv": "",
+      "sv": "",
+      "status": "PLC 응답 없음 · 0초 전 값",
+      "output": "정지 (DAC 0)",
+      "atmosphere": {
+       "state": "IDLE"
+      },
+      "on": false,
+      "curSv": null,
+      "pidErr": null,
+      "otLimit": null,
+      "run": false,
+      "fault": false,
+      "tcErr": false,
+      "wdErr": false,
+      "ot": false,
+      "lcd": {
+       "sv": "---",
+       "dev": "",
+       "devOk": false,
+       "tc2": "TC2 --.-",
+       "tc2Hold": false,
+       "badge": ""
+      },
+      "recipeRunning": false
+     },
+     "heaterRecipe": {
+      "running": false,
+      "state": "IDLE",
+      "stepNo": 0,
+      "total": 0,
+      "soakRemainSec": 0,
+      "stepRemainSec": -1,
+      "phase": "",
+      "remainSec": 0,
+      "steps": [],
+      "cycle": 1,
+      "repeat": 1,
+      "held": false,
+      "elapsedSec": 0,
+      "totalEstSec": 0,
+      "percent": 0.0
+     },
+     "csvRecipe": null,
+     "ion": {
+      "run": false,
+      "lamp": false,
+      "overtime": false
+     },
+     "indicators": {},
+     "mvInterlock": null,
+     "valves": {},
+     "plc_link": true,
+     "process": {
+      "name": "Single CHK",
+      "remainSec": 60,
+      "totalSec": 60,
+      "phase": "main"
+     }
+    }
+   ]
+  ],
+  [
+   "erp.pop_commands",
+   []
+  ],
+  [
+   "log",
+   [
+    "ERROR",
+    "[원격] PROCESS_START 실패: 경고: 이미 공정이 진행 중입니다."
+   ]
+  ],
+  [
+   "erp.cmd_result",
+   [
+    1,
+    false,
+    "경고: 이미 공정이 진행 중입니다."
+   ]
+  ],
+  [
+   "check",
+   [
+    "원격 재시작 요청 뒤",
+    {
+     "stage": "[24/24] 메인 공정 60s 진행",
+     "start_enabled": false,
+     "stop_enabled": true,
+     "select_csv_enabled": false,
+     "process_running": true,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": "Single CHK"
+    }
+   ]
+  ],
+  [
+   "erp.update_state",
+   [
+    {
+     "status": "running",
+     "stage": "[24/24] 메인 공정 60s 진행",
+     "groups": [
+      {
+       "label": "전원",
+       "items": [
+        {
+         "label": "DC Power",
+         "value": "99.80",
+         "setpoint": "150",
+         "unit": "W"
+        },
+        {
+         "label": "Voltage",
+         "value": "349.00",
+         "unit": "V"
+        },
+        {
+         "label": "Current",
+         "value": "0.286",
+         "unit": "A"
+        }
+       ]
+      },
+      {
+       "label": "RF",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "0.0",
+         "setpoint": "200",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "0.0",
+         "unit": "W"
+        },
+        {
+         "label": "offset / param",
+         "value": "6.79 / 1.0395"
+        }
+       ]
+      },
+      {
+       "label": "RF Pulse",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "0.0",
+         "setpoint": "",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "0.0",
+         "unit": "W"
+        },
+        {
+         "label": "Freq",
+         "value": "",
+         "unit": "kHz"
+        },
+        {
+         "label": "Duty",
+         "value": "",
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "label": "가스",
+       "items": [
+        {
+         "label": "Ar",
+         "value": 19.8,
+         "setpoint": "20",
+         "unit": "sccm"
+        },
+        {
+         "label": "O₂",
+         "value": null,
+         "setpoint": "",
+         "unit": "sccm"
+        }
+       ]
+      },
+      {
+       "label": "압력 · 시간",
+       "items": [
+        {
+         "label": "챔버 압력",
+         "value": 4.9,
+         "unit": "mTorr"
+        },
+        {
+         "label": "Working P",
+         "setpoint": "5",
+         "unit": "mTorr"
+        },
+        {
+         "label": "공정 시간",
+         "setpoint": "1",
+         "unit": "분"
+        },
+        {
+         "label": "셔터 딜레이",
+         "setpoint": "1",
+         "unit": "분"
+        }
+       ]
+      },
+      {
+       "label": "타겟",
+       "items": [
+        {
+         "label": "G1",
+         "value": "CeO2"
+        }
+       ]
+      }
+     ],
+     "heater": {
+      "pv": "",
+      "sv": "",
+      "status": "PLC 응답 없음 · 0초 전 값",
+      "output": "정지 (DAC 0)",
+      "atmosphere": {
+       "state": "IDLE"
+      },
+      "on": false,
+      "curSv": null,
+      "pidErr": null,
+      "otLimit": null,
+      "run": false,
+      "fault": false,
+      "tcErr": false,
+      "wdErr": false,
+      "ot": false,
+      "lcd": {
+       "sv": "---",
+       "dev": "",
+       "devOk": false,
+       "tc2": "TC2 --.-",
+       "tc2Hold": false,
+       "badge": ""
+      },
+      "recipeRunning": false
+     },
+     "heaterRecipe": {
+      "running": false,
+      "state": "IDLE",
+      "stepNo": 0,
+      "total": 0,
+      "soakRemainSec": 0,
+      "stepRemainSec": -1,
+      "phase": "",
+      "remainSec": 0,
+      "steps": [],
+      "cycle": 1,
+      "repeat": 1,
+      "held": false,
+      "elapsedSec": 0,
+      "totalEstSec": 0,
+      "percent": 0.0
+     },
+     "csvRecipe": null,
+     "ion": {
+      "run": false,
+      "lamp": false,
+      "overtime": false
+     },
+     "indicators": {},
+     "mvInterlock": null,
+     "valves": {},
+     "plc_link": true,
+     "process": {
+      "name": "Single CHK",
+      "remainSec": 0,
+      "totalSec": 60,
+      "phase": "main"
+     }
+    }
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "종료 시퀀스를 실행합니다."
+   ]
+  ],
+  [
+   "stage",
+   [
+    "M.S. close..."
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "프로세스 종료중."
+   ]
+  ],
+  [
+   "erp.run_end",
+   [
+    "done"
+   ]
+  ],
+  [
+   "chat.notify_process_finished_detail",
+   [
+    true,
+    {
+     "process_name": "Single CHK",
+     "stopped": false,
+     "aborting": false,
+     "errors": []
+    }
+   ]
+  ],
+  [
+   "chat.flush",
+   []
+  ],
+  [
+   "csv_row",
+   [
+    {
+     "Timestamp": "<TS>",
+     "Process Name": "Single CHK",
+     "Shutter Delay": "1.000",
+     "G1 Target": "CeO2",
+     "G2 Target": "",
+     "Ar flow": "20.100",
+     "O2 flow": "0.000",
+     "Working Pressure": "5.000",
+     "Process Time": "1.000",
+     "Heater Temp": "",
+     "RF: For.P": "0.000",
+     "RF: Ref. P": "0.000",
+     "DC: V": "350.000",
+     "DC: I": "0.285",
+     "DC: P": "100.000",
+     "RF Pulse: Freq[kHz]": "",
+     "RF Pulse: Duty[%]": "",
+     "RF Pulse: For.P": "",
+     "RF Pulse: Ref. P": ""
+    }
+   ]
+  ],
+  [
+   "log",
+   [
+    "정보",
+    "ChK CSV 로그 저장 완료"
+   ]
+  ],
+  [
+   "stage",
+   [
+    "공정 종료"
+   ]
+  ],
+  [
+   "logfile.clear",
+   []
+  ],
+  [
+   "check",
+   [
+    "종료 후",
+    {
+     "stage": "공정 종료",
+     "start_enabled": true,
+     "stop_enabled": false,
+     "select_csv_enabled": true,
+     "process_running": false,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 0,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": "Single CHK"
+    }
+   ]
+  ],
+  [
+   "erp.update_state",
+   [
+    {
+     "status": "idle",
+     "stage": "공정 종료",
+     "groups": [
+      {
+       "label": "전원",
+       "items": [
+        {
+         "label": "DC Power",
+         "value": "",
+         "setpoint": "200",
+         "unit": "W"
+        },
+        {
+         "label": "Voltage",
+         "value": "",
+         "unit": "V"
+        },
+        {
+         "label": "Current",
+         "value": "",
+         "unit": "A"
+        }
+       ]
+      },
+      {
+       "label": "RF",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "200",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "offset / param",
+         "value": "6.79 / 1.0395"
+        }
+       ]
+      },
+      {
+       "label": "RF Pulse",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "Freq",
+         "value": "",
+         "unit": "kHz"
+        },
+        {
+         "label": "Duty",
+         "value": "",
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "label": "가스",
+       "items": [
+        {
+         "label": "Ar",
+         "value": null,
+         "setpoint": "5",
+         "unit": "sccm"
+        },
+        {
+         "label": "O₂",
+         "value": null,
+         "setpoint": "",
+         "unit": "sccm"
+        }
+       ]
+      },
+      {
+       "label": "압력 · 시간",
+       "items": [
+        {
+         "label": "챔버 압력",
+         "value": null,
+         "unit": "mTorr"
+        },
+        {
+         "label": "Working P",
+         "setpoint": "2",
+         "unit": "mTorr"
+        },
+        {
+         "label": "공정 시간",
+         "setpoint": "10",
+         "unit": "분"
+        },
+        {
+         "label": "셔터 딜레이",
+         "setpoint": "5",
+         "unit": "분"
+        }
+       ]
+      }
+     ],
+     "heater": {
+      "pv": "",
+      "sv": "",
+      "status": "PLC 응답 없음 · 0초 전 값",
+      "output": "정지 (DAC 0)",
+      "atmosphere": {
+       "state": "IDLE"
+      },
+      "on": false,
+      "curSv": null,
+      "pidErr": null,
+      "otLimit": null,
+      "run": false,
+      "fault": false,
+      "tcErr": false,
+      "wdErr": false,
+      "ot": false,
+      "lcd": {
+       "sv": "---",
+       "dev": "",
+       "devOk": false,
+       "tc2": "TC2 --.-",
+       "tc2Hold": false,
+       "badge": ""
+      },
+      "recipeRunning": false
+     },
+     "heaterRecipe": {
+      "running": false,
+      "state": "IDLE",
+      "stepNo": 0,
+      "total": 0,
+      "soakRemainSec": 0,
+      "stepRemainSec": -1,
+      "phase": "",
+      "remainSec": 0,
+      "steps": [],
+      "cycle": 1,
+      "repeat": 1,
+      "held": false,
+      "elapsedSec": 0,
+      "totalEstSec": 0,
+      "percent": 0.0
+     },
+     "csvRecipe": null,
+     "ion": {
+      "run": false,
+      "lamp": false,
+      "overtime": false
+     },
+     "indicators": {},
+     "mvInterlock": null,
+     "valves": {},
+     "plc_link": true
+    }
+   ]
+  ]
+ ]
+}

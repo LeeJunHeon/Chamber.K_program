@@ -1,0 +1,550 @@
+{
+ "timeline": [
+  [
+   "log",
+   [
+    "정보",
+    "CSV 공정 리스트 파일 선택: <TMP>/recipe.csv"
+   ]
+  ],
+  [
+   "stage",
+   [
+    "CSV 공정: 1/2 - S1"
+   ]
+  ],
+  [
+   "check",
+   [
+    "적재 후",
+    {
+     "stage": "CSV 공정: 1/2 - S1",
+     "start_enabled": true,
+     "stop_enabled": false,
+     "select_csv_enabled": true,
+     "process_running": false,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 2,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": ""
+    }
+   ]
+  ],
+  [
+   "erp.update_state",
+   [
+    {
+     "status": "idle",
+     "stage": "CSV 공정: 1/2 - S1",
+     "groups": [
+      {
+       "label": "전원",
+       "items": [
+        {
+         "label": "DC Power",
+         "value": "",
+         "setpoint": "100.0",
+         "unit": "W"
+        },
+        {
+         "label": "Voltage",
+         "value": "",
+         "unit": "V"
+        },
+        {
+         "label": "Current",
+         "value": "",
+         "unit": "A"
+        }
+       ]
+      },
+      {
+       "label": "RF",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "0",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "offset / param",
+         "value": "6.79 / 1.0395"
+        }
+       ]
+      },
+      {
+       "label": "RF Pulse",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "Freq",
+         "value": "",
+         "unit": "kHz"
+        },
+        {
+         "label": "Duty",
+         "value": "",
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "label": "가스",
+       "items": [
+        {
+         "label": "Ar",
+         "value": null,
+         "setpoint": "20.00",
+         "unit": "sccm"
+        },
+        {
+         "label": "O₂",
+         "value": null,
+         "setpoint": "0.00",
+         "unit": "sccm"
+        }
+       ]
+      },
+      {
+       "label": "압력 · 시간",
+       "items": [
+        {
+         "label": "챔버 압력",
+         "value": null,
+         "unit": "mTorr"
+        },
+        {
+         "label": "Working P",
+         "setpoint": "5.0",
+         "unit": "mTorr"
+        },
+        {
+         "label": "공정 시간",
+         "setpoint": "1.0",
+         "unit": "분"
+        },
+        {
+         "label": "셔터 딜레이",
+         "setpoint": "1.0",
+         "unit": "분"
+        }
+       ]
+      },
+      {
+       "label": "타겟",
+       "items": [
+        {
+         "label": "G1",
+         "value": "CeO2"
+        }
+       ]
+      }
+     ],
+     "heater": {
+      "pv": "",
+      "sv": "",
+      "status": "PLC 응답 없음 · 0초 전 값",
+      "output": "정지 (DAC 0)",
+      "atmosphere": {
+       "state": "IDLE"
+      },
+      "on": false,
+      "curSv": null,
+      "pidErr": null,
+      "otLimit": null,
+      "run": false,
+      "fault": false,
+      "tcErr": false,
+      "wdErr": false,
+      "ot": false,
+      "lcd": {
+       "sv": "---",
+       "dev": "",
+       "devOk": false,
+       "tc2": "TC2 --.-",
+       "tc2Hold": false,
+       "badge": ""
+      },
+      "recipeRunning": true
+     },
+     "heaterRecipe": {
+      "running": true,
+      "state": "IDLE",
+      "stepNo": 0,
+      "total": 0,
+      "soakRemainSec": 0,
+      "stepRemainSec": -1,
+      "phase": "",
+      "remainSec": 0,
+      "steps": [],
+      "cycle": 1,
+      "repeat": 1,
+      "held": false,
+      "elapsedSec": 0,
+      "totalEstSec": 0,
+      "percent": 0.0
+     },
+     "csvRecipe": {
+      "name": "recipe.csv",
+      "stepNo": 0,
+      "total": 2,
+      "active": false,
+      "steps": [
+       "S1",
+       "S2"
+      ],
+      "rows": [
+       {
+        "Process_name": "S1",
+        "Ar": "1",
+        "Ar_flow": "20",
+        "O2": "0",
+        "O2_flow": "0",
+        "working_pressure": "5",
+        "process_time": "1",
+        "shutter_delay": "1",
+        "use_rf_power": "0",
+        "rf_power": "0",
+        "use_dc_power": "1",
+        "dc_power": "100",
+        "use_rf_pulse": "0",
+        "rf_pulse_power": "0",
+        "rf_pulse_freq": "",
+        "rf_pulse_duty": "",
+        "use_heater": "0",
+        "heater_temp": "0",
+        "heater_ramp": "0",
+        "gun1": "1",
+        "gun2": "0",
+        "G1 Target": "CeO2",
+        "G2 Target": ""
+       },
+       {
+        "Process_name": "S2",
+        "Ar": "1",
+        "Ar_flow": "20",
+        "O2": "0",
+        "O2_flow": "0",
+        "working_pressure": "5",
+        "process_time": "1",
+        "shutter_delay": "1",
+        "use_rf_power": "0",
+        "rf_power": "0",
+        "use_dc_power": "1",
+        "dc_power": "100",
+        "use_rf_pulse": "0",
+        "rf_pulse_power": "0",
+        "rf_pulse_freq": "",
+        "rf_pulse_duty": "",
+        "use_heater": "1",
+        "heater_temp": "300",
+        "heater_ramp": "0",
+        "gun1": "1",
+        "gun2": "0",
+        "G1 Target": "CeO2",
+        "G2 Target": ""
+       }
+      ]
+     },
+     "ion": {
+      "run": false,
+      "lamp": false,
+      "overtime": false
+     },
+     "indicators": {},
+     "mvInterlock": null,
+     "valves": {},
+     "plc_link": true
+    }
+   ]
+  ],
+  [
+   "msgbox.warning",
+   [
+    "시작 불가",
+    "히터 레시피가 실행 중입니다.\n이 공정 레시피에는 히터 목표값이 들어 있어 함께 실행할 수 없습니다.\n히터 레시피를 중단하거나, 레시피에서 히터값을 빼세요."
+   ]
+  ],
+  [
+   "check",
+   [
+    "Start 뒤",
+    {
+     "stage": "CSV 공정: 1/2 - S1",
+     "start_enabled": true,
+     "stop_enabled": false,
+     "select_csv_enabled": true,
+     "process_running": false,
+     "csv_mode": false,
+     "csv_index": -1,
+     "csv_rows": 2,
+     "csv_delay_active": false,
+     "proc_origin": "local",
+     "current_process_name": ""
+    }
+   ]
+  ],
+  [
+   "erp.update_state",
+   [
+    {
+     "status": "idle",
+     "stage": "CSV 공정: 1/2 - S1",
+     "groups": [
+      {
+       "label": "전원",
+       "items": [
+        {
+         "label": "DC Power",
+         "value": "",
+         "setpoint": "100.0",
+         "unit": "W"
+        },
+        {
+         "label": "Voltage",
+         "value": "",
+         "unit": "V"
+        },
+        {
+         "label": "Current",
+         "value": "",
+         "unit": "A"
+        }
+       ]
+      },
+      {
+       "label": "RF",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "0",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "offset / param",
+         "value": "6.79 / 1.0395"
+        }
+       ]
+      },
+      {
+       "label": "RF Pulse",
+       "items": [
+        {
+         "label": "for.P",
+         "value": "",
+         "setpoint": "",
+         "unit": "W"
+        },
+        {
+         "label": "ref.P",
+         "value": "",
+         "unit": "W"
+        },
+        {
+         "label": "Freq",
+         "value": "",
+         "unit": "kHz"
+        },
+        {
+         "label": "Duty",
+         "value": "",
+         "unit": "%"
+        }
+       ]
+      },
+      {
+       "label": "가스",
+       "items": [
+        {
+         "label": "Ar",
+         "value": null,
+         "setpoint": "20.00",
+         "unit": "sccm"
+        },
+        {
+         "label": "O₂",
+         "value": null,
+         "setpoint": "0.00",
+         "unit": "sccm"
+        }
+       ]
+      },
+      {
+       "label": "압력 · 시간",
+       "items": [
+        {
+         "label": "챔버 압력",
+         "value": null,
+         "unit": "mTorr"
+        },
+        {
+         "label": "Working P",
+         "setpoint": "5.0",
+         "unit": "mTorr"
+        },
+        {
+         "label": "공정 시간",
+         "setpoint": "1.0",
+         "unit": "분"
+        },
+        {
+         "label": "셔터 딜레이",
+         "setpoint": "1.0",
+         "unit": "분"
+        }
+       ]
+      },
+      {
+       "label": "타겟",
+       "items": [
+        {
+         "label": "G1",
+         "value": "CeO2"
+        }
+       ]
+      }
+     ],
+     "heater": {
+      "pv": "",
+      "sv": "",
+      "status": "PLC 응답 없음 · 0초 전 값",
+      "output": "정지 (DAC 0)",
+      "atmosphere": {
+       "state": "IDLE"
+      },
+      "on": false,
+      "curSv": null,
+      "pidErr": null,
+      "otLimit": null,
+      "run": false,
+      "fault": false,
+      "tcErr": false,
+      "wdErr": false,
+      "ot": false,
+      "lcd": {
+       "sv": "---",
+       "dev": "",
+       "devOk": false,
+       "tc2": "TC2 --.-",
+       "tc2Hold": false,
+       "badge": ""
+      },
+      "recipeRunning": true
+     },
+     "heaterRecipe": {
+      "running": true,
+      "state": "IDLE",
+      "stepNo": 0,
+      "total": 0,
+      "soakRemainSec": 0,
+      "stepRemainSec": -1,
+      "phase": "",
+      "remainSec": 0,
+      "steps": [],
+      "cycle": 1,
+      "repeat": 1,
+      "held": false,
+      "elapsedSec": 0,
+      "totalEstSec": 0,
+      "percent": 0.0
+     },
+     "csvRecipe": {
+      "name": "recipe.csv",
+      "stepNo": 0,
+      "total": 2,
+      "active": false,
+      "steps": [
+       "S1",
+       "S2"
+      ],
+      "rows": [
+       {
+        "Process_name": "S1",
+        "Ar": "1",
+        "Ar_flow": "20",
+        "O2": "0",
+        "O2_flow": "0",
+        "working_pressure": "5",
+        "process_time": "1",
+        "shutter_delay": "1",
+        "use_rf_power": "0",
+        "rf_power": "0",
+        "use_dc_power": "1",
+        "dc_power": "100",
+        "use_rf_pulse": "0",
+        "rf_pulse_power": "0",
+        "rf_pulse_freq": "",
+        "rf_pulse_duty": "",
+        "use_heater": "0",
+        "heater_temp": "0",
+        "heater_ramp": "0",
+        "gun1": "1",
+        "gun2": "0",
+        "G1 Target": "CeO2",
+        "G2 Target": ""
+       },
+       {
+        "Process_name": "S2",
+        "Ar": "1",
+        "Ar_flow": "20",
+        "O2": "0",
+        "O2_flow": "0",
+        "working_pressure": "5",
+        "process_time": "1",
+        "shutter_delay": "1",
+        "use_rf_power": "0",
+        "rf_power": "0",
+        "use_dc_power": "1",
+        "dc_power": "100",
+        "use_rf_pulse": "0",
+        "rf_pulse_power": "0",
+        "rf_pulse_freq": "",
+        "rf_pulse_duty": "",
+        "use_heater": "1",
+        "heater_temp": "300",
+        "heater_ramp": "0",
+        "gun1": "1",
+        "gun2": "0",
+        "G1 Target": "CeO2",
+        "G2 Target": ""
+       }
+      ]
+     },
+     "ion": {
+      "run": false,
+      "lamp": false,
+      "overtime": false
+     },
+     "indicators": {},
+     "mvInterlock": null,
+     "valves": {},
+     "plc_link": true
+    }
+   ]
+  ]
+ ]
+}
