@@ -32,6 +32,8 @@ from lib.logger import (
 from lib.paths import DEV_MODE, DEV_MODE_BANNER, DEV_MODE_TITLE_TAG, chat_webhook, erp_settings
 from core.params import ManualInputs, build_manual_params, build_csv_params, check_rfpulse_range
 from core.state import ProcessState
+from core.recipe import parse_delay_seconds, csv_rows_use_heater
+from core.process_service import ProcessService
 from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
@@ -74,6 +76,84 @@ def _fmt_hms_sec(sec: float) -> str:
     h, rem = divmod(v, 3600)
     m, ss = divmod(rem, 60)
     return f"{h}:{m:02d}:{ss:02d}" if h else f"{m}:{ss:02d}"
+
+
+class _MainProcessPorts:
+    """core.process_service.ProcessPorts 구현 — 각 메서드는 옮기기 전 코드가 하던 호출 한 줄이다.
+    모듈 함수(log_message_to_monitor·set_process_log_file·load_table 등)와 self.w 의 속성은 부를 때마다 찾는다
+    (하니스·테스트가 main 모듈이나 창 인스턴스에서 바꿔 끼운 것이 그대로 쓰이게)."""
+
+    def __init__(self, w: "MainDialog"):
+        self.w = w
+
+    def alert(self, kind, title, text):
+        self.w._alert(kind, title, text)
+
+    def log(self, level, msg):
+        log_message_to_monitor(level, msg)
+
+    def stage(self, text):
+        self.w.update_stage_monitor(text)
+
+    def set_buttons(self, start, stop, select_csv=None):
+        self.w.ui.Sputter_Start_Button.setEnabled(start)
+        self.w.ui.Sputter_Stop_Button.setEnabled(stop)
+        if select_csv is not None:
+            self.w.ui.select_csv_button.setEnabled(select_csv)
+
+    def is_closing(self):
+        return self.w._is_closing
+
+    def read_manual_inputs(self):
+        return self.w._read_manual_inputs()
+
+    def apply_params_to_ui(self, params):
+        self.w._apply_params_to_ui(params)
+
+    def build_csv_params(self, row):
+        return self.w._build_params_from_csv_row(row)
+
+    def open_process_log(self, prefix):
+        set_process_log_file(prefix=prefix)
+
+    def reset_stats(self):
+        self.w._reset_chk_stats()
+
+    def load_table(self, path, preferred_sheets):
+        return load_table(path, preferred_sheets=preferred_sheets)
+
+    def command_origin(self):
+        return "erp" if getattr(self.w, "_remote_exec", False) else "local"
+
+    def main_valve_open(self):
+        return self.w._check_main_valve_open()
+
+    def clear_plc_fault(self):
+        self.w.clear_plc_fault.emit()
+
+    def request_start(self, params):
+        self.w.request_process_start.emit(params)
+
+    def heater_recipe_running(self):
+        return HEATER_ENABLED and self.w.heater_recipe.is_running()
+
+    def heater_gas_guard(self):
+        return self.w._heater_gas_guard_for_process()
+
+    def log_heater_header(self, params):
+        self.w._log_heater_header(params)
+
+    def chat_reset_run_state(self):
+        self.w._chat_reset_run_state()
+
+    def chat_notify_started(self, params, name):
+        self.w._chat_notify_started(params, name)
+
+    def erp_run_start(self, name, params):
+        self.w.erp.run_start(name, params)
+
+    def start_next_csv_step(self):
+        self.w._start_next_csv_step()
 
 
 def _state_field(name: str) -> property:
@@ -119,6 +199,7 @@ class MainDialog(QDialog):
     def __init__(self):
         super().__init__()
         self.proc_state = ProcessState()      # 공정 상태 값(기본값 포함) — 아래 옛 이름 property 가 이리로 이어진다
+        self.proc = ProcessService(self.proc_state, _MainProcessPorts(self))   # 공정 흐름(시작·적재 …)
         self.ui = Ui_Dialog()
         self.ui.setupUi(self)
         set_monitor_widget(self.ui.error_monitor)
@@ -1766,33 +1847,8 @@ class MainDialog(QDialog):
             pass
 
     def _csv_list_uses_heater(self) -> bool:
-        """적재된 CSV 공정 목록의 어느 행이든 히터를 쓰면 True.
-
-        한 행만 보면 안 된다 — 3번째 행에서 히터를 켜는 레시피가 있을 수 있다.
-        판정 규칙은 _build_params_from_csv_row 와 같게 맞춘다. 여기서는 예외를
-        던지지 않는다(실제 검증은 그쪽이 한다).
-        """
-        try:
-            rows = getattr(self, "csv_rows", None) or []
-        except Exception:
-            return False
-        for row in rows:
-            try:
-                use = ""
-                temp = ""
-                for k, v in (row or {}).items():
-                    key = str(k or "").strip().lower()
-                    if key == "use_heater":
-                        use = str(v or "").strip().lower()
-                    elif key == "heater_temp":
-                        temp = str(v or "").strip()
-                if use not in ("1", "y", "yes", "true", "t", "on"):
-                    continue
-                if float(temp) > 0:
-                    return True
-            except Exception:
-                continue        # 값이 비었거나 숫자가 아니면 '히터 미사용'으로 본다
-        return False
+        """적재된 CSV 공정 목록의 어느 행이든 히터를 쓰면 True. 규칙은 core.recipe.csv_rows_use_heater."""
+        return csv_rows_use_heater(self.csv_rows)
 
     def _alert(self, kind: str, title: str, text: str) -> None:
         """경고창 한 곳. 원격 실행 중이면 창 대신 (kind, title, text) 를 모아 실패 사유로 쓴다.
@@ -3663,146 +3719,13 @@ class MainDialog(QDialog):
 
     @Slot()
     def _handle_start_process(self):
-        # 히터 레시피가 돌아도, 이 공정이 히터를 건드리지 않으면 시작을 허용한다.
-        if HEATER_ENABLED and self.heater_recipe.is_running():
-            if self.csv_file_path and self._csv_list_uses_heater():
-                self._alert("warning", "시작 불가",
-                                    "히터 레시피가 실행 중입니다.\n"
-                                    "이 공정 레시피에는 히터 목표값이 들어 있어 함께 실행할 수 없습니다.\n"
-                                    "히터 레시피를 중단하거나, 레시피에서 히터값을 빼세요.")
-                return
-            # 수동 모드는 아래에서 use_heater 를 강제로 끈다
-        if self.process_running:
-            self._alert("warning", "경고", "이미 공정이 진행 중입니다.")
-            return
-        
-        # 히터 전용 가스·압력이 MFC 를 쥐고 있으면 공정이 그 위에 겹칠 수 없다
-        if not self._heater_gas_guard_for_process():
-            return
-
-        # ★ 메인밸브 개방 확인: MV & MV_INTERLOCK 둘 다 ON일 때만 공정 시작 허용
-        if not self._check_main_valve_open():
-            return
-        
-        # 출처 = 이 공정을 시작한 쪽(가드를 모두 통과한 지점). CSV 리스트의 뒤 스텝도 이 값을 쓴다.
-        self._proc_origin = "erp" if getattr(self, "_remote_exec", False) else "local"
-
-        self.clear_plc_fault.emit()
-        
-        # === 1) CSV 모드인지 먼저 확인 ===
-        if self.csv_file_path:
-            # CSV 로딩 & 리스트 공정 모드 진입
-            if not self._load_csv_process_list():
-                return  # 로딩 실패
-            self.csv_mode = True
-            self._start_next_csv_step()
-            return
-    
-        try:
-            params = build_manual_params(self._read_manual_inputs())
-
-        except (ValueError, TypeError) as e:
-            self._alert("warning", "입력 오류", f"공정 파라미터가 잘못되었습니다:\n{e}")
-            return
-        
-        # ★ 단일 공정(수동 Start)일 때의 공정 이름
-        self.current_process_name = "Single CHK"
-
-        # ★ 수동 공정도 CSV 공정과 동일한 로그 포맷을 위해
-        #    이번 공정 파라미터를 저장 + 평균값 누적 초기화
-        self._last_params = dict(params)
-        self._reset_chk_stats()
-        self._chk_process_ok = True   # 이번 공정은 정상 종료로 가정하고 시작
-        
-        # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
-        set_process_log_file(prefix="CHK")
-        log_message_to_monitor("정보", "=== CHK 공정 시작 ===")
-
-        # 이번 공정이 히터를 소유하는가 (히터 레시피와의 충돌 판정 기준)
-        self._process_heater_claimed = bool(
-            params.get("use_heater") and float(params.get("heater_temp") or 0) > 0)
-        if HEATER_ENABLED and self.heater_recipe.is_running() \
-                and not self._process_heater_claimed:
-            log_message_to_monitor(
-                "정보",
-                "[히터] 히터 레시피가 제어 중입니다. 이번 공정은 히터를 제어하지 않습니다.")
-
-        # 이번 공정의 히터 설정을 로그 머리말에 남긴다
-        self._log_heater_header(params)
-
-        self._chat_reset_run_state()
-        self._chat_notify_started(params, self.current_process_name)
-
-        try:
-            self.erp.run_start(
-                self.current_process_name or params.get("process_note", "") or "CHK 공정",
-                params,
-            )
-        except Exception:
-            pass
-
-        self.request_process_start.emit(params)
-
-        self.process_running = True
-        self.ui.Sputter_Start_Button.setEnabled(False)
-        self.ui.Sputter_Stop_Button.setEnabled(True)
-        self.ui.select_csv_button.setEnabled(False)
+        """Start 버튼·원격 시작 공통. 본문은 core.process_service.ProcessService.start."""
+        self.proc.start()
 
     def _start_csv_process_from_path(self, path: str):
-        """파일 대화상자 없이 지정된 CSV/엑셀 레시피를 적재한다(원격 실행용).
-
-        _on_select_csv_clicked 가 경로를 얻은 뒤 수행하는 처리와 동일하다.
-        (UI 경로와 동작을 하나로 유지하기 위해 본문을 이쪽으로 옮겼다)
-        """
-        if self._is_closing:
-            return
-
-        # UI 경로는 대화상자 앞에서 이미 막지만, 원격 호출은 여기서 막아야 한다
-        if self._process_active():
-            self._alert("warning",
-                "변경 불가",
-                "공정 진행 중에는 CSV 파일을 변경할 수 없습니다."
-            )
-            return
-
-        if not path:
-            return
-
-        p = Path(path)
-        if not p.exists():
-            self._alert("warning", "파일 오류", "선택한 CSV 파일을 찾을 수 없습니다.")
-            return
-
-        self.csv_file_path = str(p)
-        log_message_to_monitor("정보", f"CSV 공정 리스트 파일 선택: {p}")
-
-        if not self._load_csv_process_list():
-            return
-
-        if self._is_closing or not self.csv_rows:
-            return
-
-        first_row = self.csv_rows[0]
-        first_name = (first_row.get("Process_name") or "").strip()
-        delay_sec = self._parse_csv_delay_seconds(first_name)
-
-        if delay_sec is not None:
-            self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {first_name} (대기 스텝)")
-            return
-
-        try:
-            params = self._build_params_from_csv_row(first_row)
-        except Exception as e:
-            self._alert("warning", "CSV 레시피 오류", f"첫 번째 공정 파라미터가 잘못되었습니다:\n{e}")
-            self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - (오류)")
-            return
-
-        if self._is_closing:
-            return
-
-        self._apply_params_to_ui(params)
-        name = params.get("process_name") or "STEP 1"
-        self.update_stage_monitor(f"CSV 공정: 1/{len(self.csv_rows)} - {name}")
+        """파일 대화상자 없이 지정된 CSV/엑셀 레시피를 적재한다(원격 실행용·파일 선택 뒤 공통).
+        본문은 ProcessService.load_recipe_file."""
+        self.proc.load_recipe_file(path)
 
     @Slot()
     def _on_select_csv_clicked(self):
@@ -3837,44 +3760,8 @@ class MainDialog(QDialog):
         self._start_csv_process_from_path(path)
 
     def _load_csv_process_list(self) -> bool:
-        """
-        self.csv_file_path 에 지정된 CSV를 읽어서
-        self.csv_rows 에 List[dict] 형태로 저장.
-        성공하면 True, 실패하면 False.
-        """
-        if not self.csv_file_path:
-            self._alert("warning", "CSV 없음", "먼저 CSV 파일을 선택해 주세요.")
-            return False
-
-        try:
-            # 입력 소스만 바뀐다 — CSV/TSV/XLSX 를 같은 list[dict] 로 받는다.
-            reader = load_table(
-                self.csv_file_path,
-                preferred_sheets=("Recipe", "recipe", "공정", "Sheet1"))
-
-            def _has_content(row: dict) -> bool:
-                for k, v in (row or {}).items():
-                    if (k or "").strip() == "#":
-                        continue
-                    if v is None:
-                        continue
-                    if str(v).strip() != "":
-                        return True
-                return False
-
-            rows = [row for row in reader if _has_content(row)]
-
-        except Exception as ex:
-            self._alert("critical", "CSV 읽기 오류", f"CSV 파일을 읽는 중 오류가 발생했습니다.\n\n{ex}")
-            return False
-
-        if not rows:
-            self._alert("warning", "CSV 비어있음", "CSV 파일에 유효한 공정 행이 없습니다.")
-            return False
-
-        self.csv_rows = rows
-        self.csv_index = -1
-        return True
+        """csv_file_path 의 레시피를 읽어 csv_rows 에 담는다. 본문은 ProcessService.load_csv_list."""
+        return self.proc.load_csv_list()
 
     @Slot(str)
     def _handle_connection_failure(self, error_message):
@@ -4265,28 +4152,9 @@ class MainDialog(QDialog):
         self.ui.ref_p_edit.setPlainText("0.0")
 
     # ============= CSV Delay (공정 사이 대기) =============
-    _CSV_DELAY_RE = re.compile(r"^\s*delay\s+(\d+(?:\.\d+)?)\s*([smhd])\s*$", re.IGNORECASE)
-
     def _parse_csv_delay_seconds(self, process_name: str) -> int | None:
-        """Process_name이 'delay 60m' 같은 형태면 대기 시간(초)을 반환, 아니면 None."""
-        if not process_name:
-            return None
-        m = self._CSV_DELAY_RE.match(process_name)
-        if not m:
-            return None
-
-        try:
-            num = float(m.group(1))
-        except Exception:
-            return None
-
-        unit = (m.group(2) or "m").lower()
-        mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}.get(unit)
-        if mult is None:
-            return None
-
-        sec = int(num * mult)
-        return max(sec, 0)
+        """Process_name이 'delay 60m' 같은 형태면 대기 시간(초)을 반환, 아니면 None. 규칙은 core.recipe."""
+        return parse_delay_seconds(process_name)
 
     def _fmt_hms(self, seconds: int) -> str:
         seconds = max(int(seconds or 0), 0)

@@ -156,7 +156,7 @@ def test_T127_recipe_load_failures(erp, monkeypatch):
 
 def test_T128_recipe_load_empty_and_bad_first_row(erp, monkeypatch):
     w = erp
-    monkeypatch.setattr(w, "_load_csv_process_list", lambda: False)
+    monkeypatch.setattr(w.proc, "load_csv_list", lambda: False)
     ok, why = run_remote(w, "RECIPE_PROCESS_RUN", {"rows": _rows()})
     assert ok is False and w._mb.count() == 0 and why == "레시피를 적재하지 못했습니다 (장비 로그 확인)"
     monkeypatch.undo()
