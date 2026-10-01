@@ -17,6 +17,8 @@
     26h 대기 중 적재 있음 / 적재 없음 / 공정 중
   B6 원격 PLC 버튼은 PLC 통신이 끊겨 있을 때만 거부
     26i PLC 링크 끊김 중 원격 PLC 버튼 → 거부, 링크 복구 뒤 → 실행
+  적재 실패·적재 해제 때 입력칸도 초기 상태로(공정 종료 때와 같은 초기화)
+    26j 정상 적재 뒤 RECIPE_CLEAR / 적재 없음 RECIPE_CLEAR / 없는 파일 적재 / 공정 중 RECIPE_CLEAR 거부 — 입력칸 전후
 """
 import os
 import re
@@ -196,6 +198,36 @@ def s26i_plc_buttons_need_link(h):
     h.remote("Rotary_button", {"on": True}, cid=3)                # 공정 중에도 막지 않는다
     h.ctrl_run()
     h.ctrl_finish()
+
+
+def s26j_input_fields_reset_on_fail_and_clear(h):
+    good = h.write_csv([csv_row("G1", dc_power="120")], name="good.csv")
+    # ① 정상 적재 → 원격 RECIPE_CLEAR → 입력칸이 초기 상태
+    h.w._start_csv_process_from_path(good)
+    _notebook(h)
+    _fields(h, "① 해제 전")
+    h.remote("RECIPE_CLEAR", {}, cid=1)
+    _fields(h, "① 해제 뒤")
+    # ② 적재 없음 → 원격 RECIPE_CLEAR → 입력칸 그대로
+    _notebook(h, DC_power_edit="90")
+    _fields(h, "② 해제 전")
+    h.remote("RECIPE_CLEAR", {}, cid=2)
+    _fields(h, "② 해제 뒤")
+    # ③ 없는 파일 적재 → 입력칸이 초기 상태
+    _notebook(h, Ar_flow_edit="33")
+    _fields(h, "③ 적재 전")
+    h.w._start_csv_process_from_path(str(h.tmp / "없는_파일.csv"))
+    h.flush()
+    _fields(h, "③ 적재 실패 뒤")
+    # ④ 정상 적재 → Start → 공정 중 원격 RECIPE_CLEAR 거부 → 입력칸 그대로 → 공정을 끝내 정리
+    h.w._start_csv_process_from_path(good)
+    h.w.ui.Sputter_Start_Button.click()
+    h.ctrl_run()
+    _fields(h, "④ 거부 전")
+    h.remote("RECIPE_CLEAR", {}, cid=3)
+    _fields(h, "④ 거부 뒤")
+    h.ctrl_finish()
+    h.check("④ 리스트 완료", snapshot=True)
 
 
 SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())

@@ -89,7 +89,8 @@ def test_b2_failures_clear_previous_recipe(case, recipe_file, tmp_path):
     st = _loaded()
     svc, p = _svc(st, **ret)
     svc.load_recipe_file(str(tmp_path / "없음.csv") if case == "missing" else recipe_file)
-    assert p.calls[-1] == ["stage", "레시피 적재 실패"] and p.names()[-2] == "alert"
+    assert p.calls[-2] == ["stage", "레시피 적재 실패"] and p.names()[-3] == "alert"
+    assert p.names()[-1] == "reset_process_ui_fields"                # 입력칸도 초기 상태로
     assert (st.csv_file_path, st.csv_rows, st.csv_index, st.csv_mode, st.current_name, st.last_params) == \
         (None, [], -1, False, "", None)
 
@@ -203,7 +204,8 @@ def test_b5_clear_recipe_loaded():
     st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)], recipe_name="웹 A")
     svc, p = _svc(st)
     svc.clear_recipe()
-    assert p.calls == [["stage", "레시피 적재 해제됨"], ["log", "정보", "[레시피] 적재 해제: 웹 A"]]
+    assert p.calls == [["stage", "레시피 적재 해제됨"], ["reset_process_ui_fields"],
+                       ["log", "정보", "[레시피] 적재 해제: 웹 A"]]
     assert (st.csv_file_path, st.csv_rows, st.recipe_name) == (None, [], "")
 
 
@@ -260,3 +262,39 @@ def test_b6_drain_reports_link_down_reason():
     h = FakeHost(link=False, cmds=[{"id": 4, "command": "Door_Button", "args": {"on": True}}])
     ErpCommandRunner(h).drain()
     assert h.calls[-1] == ["erp_cmd_result", 4, False, "PLC 통신이 끊겨 있어 실행할 수 없습니다"]
+
+
+# ───────────────────────── 적재 실패·해제 때 입력칸 초기화 ─────────────────────────
+@pytest.mark.parametrize("case", ["missing", "read_error", "no_rows", "bad_first_row"])
+def test_reset_inputs_on_each_load_failure(case, recipe_file, tmp_path):
+    ret = {"missing": {}, "read_error": dict(load_table=RuntimeError("깨짐")),
+           "no_rows": dict(load_table=[{"#": "1"}]), "bad_first_row": dict(build_csv_params=ValueError("wp"))}[case]
+    svc, p = _svc(ProcessState(), **ret)
+    svc.load_recipe_file(str(tmp_path / "없음.csv") if case == "missing" else recipe_file)
+    assert p.names()[-2:] == ["stage", "reset_process_ui_fields"] and p.names().count("reset_process_ui_fields") == 1
+
+
+def test_reset_inputs_on_clear_with_recipe():
+    svc, p = _svc(ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)]))
+    svc.clear_recipe()
+    assert p.names() == ["stage", "reset_process_ui_fields", "log"]
+
+
+@pytest.mark.parametrize("make,call", [
+    (lambda: ProcessState(), "clear"),                                                     # 적재 없음 해제
+    (lambda: ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)], running=True), "clear"),  # 공정 중 해제 거부
+    (lambda: ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)], csv_mode=True,
+                          running=True), "load"),                                          # 공정 중 적재 거부("변경 불가")
+    (lambda: ProcessState(), "load_closing"),                                             # 종료 중
+    (lambda: ProcessState(), "load_empty"),                                               # 빈 경로(선택 창 취소)
+])
+def test_no_reset_inputs_when_nothing_changes(make, call, recipe_file):
+    st = make()
+    svc, p = _svc(st, is_closing=(call == "load_closing"))
+    if call == "clear":
+        svc.clear_recipe()
+    elif call == "load_empty":
+        svc.load_recipe_file("")
+    else:
+        svc.load_recipe_file(recipe_file)
+    assert "reset_process_ui_fields" not in p.names()

@@ -361,6 +361,8 @@ class ProcessService:
         이전에 적재돼 있던 레시피도 해제된다(실패한 파일로 Start 가 이어지지 않게)."""
         self.st.clear_csv_list()
         self.ports.stage("레시피 적재 실패")
+        # 입력칸에 남은 이전 레시피 미리보기 값으로 노트북 Start 가 수동 공정을 돌리지 않게 — 공정 종료 때와 같은 초기화
+        self.ports.reset_process_ui_fields()
 
     def clear_recipe(self) -> None:
         """레시피 적재 해제(원격 RECIPE_CLEAR, B5). 공정 중이면 거부, 적재된 레시피가 없으면 로그 한 줄만."""
@@ -374,6 +376,7 @@ class ProcessService:
         name = self.recipe_display_name()
         st.clear_csv_list()
         ports.stage("레시피 적재 해제됨")
+        ports.reset_process_ui_fields()             # 남은 미리보기 값으로 수동 공정이 돌지 않게(공정 종료 때와 같은 초기화)
         ports.log("정보", f"[레시피] 적재 해제: {name}")
 
     def load_csv_list(self) -> bool:

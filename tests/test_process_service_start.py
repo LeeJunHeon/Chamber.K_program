@@ -244,7 +244,8 @@ def test_load_recipe_missing_file_releases_old_recipe(tmp_path):
     st = ProcessState(csv_file_path="C:/r/old.csv", csv_rows=[dict(ROW)])
     svc, p = _svc(st)
     svc.load_recipe_file(str(tmp_path / "없음.csv"))
-    assert p.names() == ["is_closing", "alert", "stage"] and p.calls[1][1:3] == ["warning", "파일 오류"]
+    assert p.names() == ["is_closing", "alert", "stage", "reset_process_ui_fields"]
+    assert p.calls[1][1:3] == ["warning", "파일 오류"]
     assert p.calls[2] == ["stage", "레시피 적재 실패"]
     assert st.csv_file_path is None and st.csv_rows == []
 
@@ -267,9 +268,9 @@ def test_load_recipe_first_row_delay_and_bad_first_row(recipe_file):
     assert p.calls[-1] == ["stage", "CSV 공정: 1/2 - delay 3s (대기 스텝)"]
     svc, p = _svc(build_csv_params=ValueError("값 오류"))
     svc.load_recipe_file(recipe_file)
-    assert p.names()[-3:] == ["build_csv_params", "alert", "stage"]
-    assert p.calls[-2][1:] == ["warning", "CSV 레시피 오류", "첫 번째 공정 파라미터가 잘못되었습니다:\n값 오류"]
-    assert p.calls[-1] == ["stage", "레시피 적재 실패"]                 # B2
+    assert p.names()[-4:] == ["build_csv_params", "alert", "stage", "reset_process_ui_fields"]
+    assert p.calls[-3][1:] == ["warning", "CSV 레시피 오류", "첫 번째 공정 파라미터가 잘못되었습니다:\n값 오류"]
+    assert p.calls[-2] == ["stage", "레시피 적재 실패"]                 # B2 — 뒤이어 입력칸 초기화
 
 
 def test_load_recipe_closing_during_load(recipe_file):

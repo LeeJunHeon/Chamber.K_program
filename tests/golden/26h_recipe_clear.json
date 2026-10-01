@@ -357,7 +357,7 @@
         {
          "label": "DC Power",
          "value": "",
-         "setpoint": "100.0",
+         "setpoint": "200",
          "unit": "W"
         },
         {
@@ -378,7 +378,7 @@
         {
          "label": "for.P",
          "value": "",
-         "setpoint": "0",
+         "setpoint": "200",
          "unit": "W"
         },
         {
@@ -424,13 +424,13 @@
         {
          "label": "Ar",
          "value": null,
-         "setpoint": "20.00",
+         "setpoint": "5",
          "unit": "sccm"
         },
         {
          "label": "O₂",
          "value": null,
-         "setpoint": "0.00",
+         "setpoint": "",
          "unit": "sccm"
         }
        ]
@@ -445,27 +445,18 @@
         },
         {
          "label": "Working P",
-         "setpoint": "5.0",
+         "setpoint": "2",
          "unit": "mTorr"
         },
         {
          "label": "공정 시간",
-         "setpoint": "1.0",
+         "setpoint": "10",
          "unit": "분"
         },
         {
          "label": "셔터 딜레이",
-         "setpoint": "1.0",
+         "setpoint": "5",
          "unit": "분"
-        }
-       ]
-      },
-      {
-       "label": "타겟",
-       "items": [
-        {
-         "label": "G1",
-         "value": "CeO2"
         }
        ]
       }
