@@ -9,6 +9,9 @@
   E3 적재할 때 모든 공정 행을 검사한다
     27b [S1, delay 1m, S3(오류)] → "3번째 …" 적재 실패·입력칸 초기화 / [delay 1m, S2(오류)] → 적재 실패(전에는 검사 안 함) /
         [S1, delay 1m, S3] 정상 → 적재 성공, 미리보기 그대로
+  E4 공정 기록 종료(run_end)는 시작(run_start)을 보낸 공정에만
+    27c [S1(RF 미사용), S2(RF 150)] 적재 → Start → STEP1 중 노트북 offset 칸을 비움 → STEP1 종료 → STEP2 행 오류 →
+        리스트 중단·알림, erp.run_end 는 STEP1 의 done 한 번뿐
 """
 import os
 import re
@@ -71,6 +74,17 @@ def s27b_validate_all_rows_at_load(h):
         [csv_row("S1"), delay_row("delay 1m"), csv_row("S3")], name="ok.csv"))
     h.flush()
     h.check("정상", snapshot=True)
+
+
+def s27c_run_end_only_after_run_start(h):
+    h.w._start_csv_process_from_path(h.write_csv(
+        [csv_row("S1"), csv_row("S2", use_rf_power="1", rf_power="150")], name="rf_step2.csv"))
+    h.w.ui.Sputter_Start_Button.click()
+    h.ctrl_run()
+    h.w.ui.offset_edit.setPlainText("")                          # 적재 뒤 노트북에서 offset 칸을 비움
+    h.ctrl_finish()                                              # STEP1 done → STEP2 행 오류(실행 중 안전장치)
+    h.check("STEP2 행 오류 뒤", snapshot=True)
+    h.sink.erp_run_ends("run_end 호출", [list(c.args) for c in h.sink.erp.run_end.call_args_list])
 
 
 SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())

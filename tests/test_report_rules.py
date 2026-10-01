@@ -179,3 +179,48 @@ def test_e3_delay_first_row_still_previews_delay(recipe_file):
     svc.load_recipe_file(recipe_file)
     assert p.calls[-1] == ["stage", "CSV 공정: 1/2 - delay 3s (대기 스텝)"]
     assert [c[1]["Process_name"] for c in p.calls if c[0] == "check_csv_row"] == ["S2"]
+
+
+# ───────────────────────── E4 run_end 는 run_start 를 보낸 공정에만 ─────────────────────────
+from unittest.mock import MagicMock   # noqa: E402
+
+
+def test_e4_chat_reset_does_not_touch_erp_run_flag(win):
+    w = win
+    for v in (True, False):
+        w._erp_run_ended = v
+        w._chat_reset_run_state()
+        assert w._erp_run_ended is v
+    w._erp_run_ended = True
+
+
+def test_e4_erp_run_start_port_opens_record(win):
+    w = win
+    saved = w.erp
+    try:
+        w.erp = MagicMock()
+        w._erp_run_ended = True
+        w.proc.ports.erp_run_start("Single CHK", {"a": 1})
+        assert w._erp_run_ended is False
+        w.erp.run_start.assert_called_once_with("Single CHK", {"a": 1})
+    finally:
+        w.erp = saved
+        w._erp_run_ended = True
+
+
+def test_e4_no_run_end_without_run_start(win):
+    w = win
+    saved = (w.erp, w.chat_chk)
+    try:
+        w.erp = MagicMock(); w.chat_chk = None
+        w._erp_run_ended = True                      # 앞 공정이 이미 끝났다(또는 시작한 적 없음)
+        w._chat_reset_run_state()                    # 실행 중 행 오류 경로가 하던 일
+        w._chat_notify_finished(False)
+        w.erp.run_end.assert_not_called()
+        w.proc.ports.erp_run_start("CSV 1/1 - S1", {})   # run_start 를 보내면
+        w._chat_notify_finished(True)
+        w._chat_notify_finished(True)                # 한 번만
+        assert [c.args for c in w.erp.run_end.call_args_list] == [("done",)]
+    finally:
+        w.erp, w.chat_chk = saved
+        w._erp_run_ended = True

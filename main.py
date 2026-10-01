@@ -159,6 +159,9 @@ class _MainProcessPorts:
         self.w._chat_notify_started(params, name)
 
     def erp_run_start(self, name, params):
+        # ERP 공정 기록은 run_start 를 보낸 공정에만 연다 — run_end 는 이 표시가 있을 때 한 번만 나간다
+        #  (run_start 없이 끝나는 실행 중 행 오류가 서버의 엉뚱한 '진행 중' 기록을 닫지 않게)
+        self.w._erp_run_ended = False
         self.w.erp.run_start(name, params)
 
     def chat_enabled(self):
@@ -992,7 +995,6 @@ class MainDialog(QDialog):
         self._chat_fail_notified = False
         self._chat_fault_detail_sent = False
         self._chat_fail_reason = ""
-        self._erp_run_ended = False   # ERP: 이번 공정 run_end 미전송 상태로 초기화
         self._erp_meas = {}           # 이전 공정의 MFC 실측값을 물고 가지 않는다
         self._erp_main_remain_sec = -1    # -1 = 메인 공정 미진입
         self._erp_main_total_sec = 0
