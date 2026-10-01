@@ -8,11 +8,17 @@
    ]
   ],
   [
+   "stage",
+   [
+    "레시피 적재 실패"
+   ]
+  ],
+  [
    "check",
    [
     "적재 뒤",
     {
-     "stage": "",
+     "stage": "레시피 적재 실패",
      "start_enabled": true,
      "stop_enabled": false,
      "select_csv_enabled": true,
@@ -31,7 +37,7 @@
    [
     {
      "status": "idle",
-     "stage": "",
+     "stage": "레시피 적재 실패",
      "groups": [
       {
        "label": "전원",

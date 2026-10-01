@@ -7,10 +7,14 @@
     26b 일부 키 없이 원격 수동 시작(useRfPulse·dcDelay 키 없음, 노트북은 RF Pulse·DC delay 체크) → 둘 다 끈 채로 시작
     26c offset·param 을 안 보냄 → 장비 값 유지 / 보냄 → 덮어씀
     26d 원격 수동 시작 입력 오류 → 거부, 노트북 입력칸 그대로
+  B2 레시피 적재가 실패하면 적재 상태를 비운다
+    26e 정상 적재 뒤 실패 적재 4가지(없는 파일·읽기 오류·빈 레시피·첫 행 오류) → 각각 적재 해제
 """
 import re
 
 import pytest
+
+import main as MAIN
 
 from test_main_heater import win, fresh   # noqa: F401  (픽스처 재사용)
 from test_golden_process import H, check_golden, csv_row, _load_local, _REMOTE_ARGS   # noqa: F401
@@ -84,6 +88,41 @@ def s26d_input_error_fields_untouched(h):
     h.remote("PROCESS_START", dict(_REMOTE_ARGS, arFlow="", dcPower="abc"))
     _fields(h, "거부 뒤")
     h.check("거부 뒤", snapshot=True)
+
+
+def s26e_failed_load_releases_recipe(h):
+    good = h.write_csv([csv_row("G1"), csv_row("G2")], name="good.csv")
+
+    def _good():
+        h.w._start_csv_process_from_path(good)
+        h.check("정상 적재", snapshot=True)
+
+    _good()
+    h.w._start_csv_process_from_path(str(h.tmp / "없는_파일.csv"))
+    h.flush()
+    h.check("없는 파일 뒤", snapshot=True)
+
+    _good()
+    real = MAIN.load_table
+
+    def _broken(*a, **k):
+        raise RuntimeError("시트를 읽을 수 없습니다(가짜)")
+    h.mp.setattr(MAIN, "load_table", _broken)
+    h.w._start_csv_process_from_path(good)
+    h.flush()
+    h.check("읽기 오류 뒤", snapshot=True)
+    h.mp.setattr(MAIN, "load_table", real)
+
+    _good()
+    blank = {c: "" for c in csv_row("X")}
+    h.w._start_csv_process_from_path(h.write_csv([blank], name="empty.csv"))
+    h.flush()
+    h.check("빈 레시피 뒤", snapshot=True)
+
+    _good()
+    h.w._start_csv_process_from_path(h.write_csv([csv_row("B1", working_pressure="abc")], name="bad.csv"))
+    h.flush()
+    h.check("첫 행 오류 뒤", snapshot=True)
 
 
 SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())

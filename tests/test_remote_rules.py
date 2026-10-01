@@ -68,3 +68,47 @@ def test_b1_local_start_unchanged():
     svc, p = _svc(st)
     svc.start()
     assert "alert" not in p.names() and st.csv_mode is True
+
+
+# ───────────────────────── B2 적재 실패면 적재 상태를 비운다 ─────────────────────────
+def _loaded():
+    return ProcessState(csv_file_path="C:/r/old.csv", csv_rows=[dict(ROW)], current_name="x", last_params={"a": 1})
+
+
+@pytest.fixture
+def recipe_file(tmp_path):
+    f = tmp_path / "recipe.csv"
+    f.write_text("x", encoding="utf-8")
+    return str(f)
+
+
+@pytest.mark.parametrize("case", ["missing", "read_error", "no_rows", "bad_first_row"])
+def test_b2_failures_clear_previous_recipe(case, recipe_file, tmp_path):
+    ret = {"missing": {}, "read_error": dict(load_table=RuntimeError("깨짐")),
+           "no_rows": dict(load_table=[{"#": "1"}]), "bad_first_row": dict(build_csv_params=ValueError("wp"))}[case]
+    st = _loaded()
+    svc, p = _svc(st, **ret)
+    svc.load_recipe_file(str(tmp_path / "없음.csv") if case == "missing" else recipe_file)
+    assert p.calls[-1] == ["stage", "레시피 적재 실패"] and p.names()[-2] == "alert"
+    assert (st.csv_file_path, st.csv_rows, st.csv_index, st.csv_mode, st.current_name, st.last_params) == \
+        (None, [], -1, False, "", None)
+
+
+@pytest.mark.parametrize("kw,path", [
+    (dict(is_closing=True), "C:/r/new.csv"),               # 종료 중
+    (dict(), ""),                                          # 경로 없음(대화상자 취소)
+])
+def test_b2_non_failure_rejections_keep_recipe(kw, path):
+    st = _loaded()
+    svc, p = _svc(st, **kw)
+    svc.load_recipe_file(path)
+    assert st.csv_file_path == "C:/r/old.csv" and st.csv_rows == [dict(ROW)]
+    assert "stage" not in p.names()
+
+
+def test_b2_active_process_rejection_keeps_running_recipe(recipe_file):
+    st = _loaded()
+    st.running = True; st.csv_mode = True
+    svc, p = _svc(st)
+    svc.load_recipe_file(recipe_file)
+    assert p.calls[-1][2] == "변경 불가" and st.csv_file_path == "C:/r/old.csv" and st.csv_rows == [dict(ROW)]

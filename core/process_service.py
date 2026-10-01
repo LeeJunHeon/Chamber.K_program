@@ -316,12 +316,14 @@ class ProcessService:
         p = Path(path)
         if not p.exists():
             ports.alert("warning", "파일 오류", "선택한 CSV 파일을 찾을 수 없습니다.")
+            self._load_failed()
             return
 
         st.csv_file_path = str(p)
         ports.log("정보", f"CSV 공정 리스트 파일 선택: {p}")
 
         if not self.load_csv_list():
+            self._load_failed()
             return
 
         if ports.is_closing() or not st.csv_rows:
@@ -339,7 +341,7 @@ class ProcessService:
             params = ports.build_csv_params(first_row)
         except Exception as e:
             ports.alert("warning", "CSV 레시피 오류", f"첫 번째 공정 파라미터가 잘못되었습니다:\n{e}")
-            ports.stage(f"CSV 공정: 1/{len(st.csv_rows)} - (오류)")
+            self._load_failed()
             return
 
         if ports.is_closing():
@@ -348,6 +350,12 @@ class ProcessService:
         ports.apply_params_to_ui(params)
         name = params.get("process_name") or "STEP 1"
         ports.stage(f"CSV 공정: 1/{len(st.csv_rows)} - {name}")
+
+    def _load_failed(self) -> None:
+        """적재 실패(없는 파일·읽기 오류·유효 행 없음·첫 행 파라미터 오류) — 경고 뒤 적재 상태를 모두 비운다.
+        이전에 적재돼 있던 레시피도 해제된다(실패한 파일로 Start 가 이어지지 않게)."""
+        self.st.clear_csv_list()
+        self.ports.stage("레시피 적재 실패")
 
     def load_csv_list(self) -> bool:
         """

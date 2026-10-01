@@ -14,7 +14,7 @@
   [
    "stage",
    [
-    "CSV 공정: 1/1 - (오류)"
+    "레시피 적재 실패"
    ]
   ],
   [
@@ -37,14 +37,14 @@
    [
     "원격 적재 뒤",
     {
-     "stage": "CSV 공정: 1/1 - (오류)",
+     "stage": "레시피 적재 실패",
      "start_enabled": true,
      "stop_enabled": false,
      "select_csv_enabled": true,
      "process_running": false,
      "csv_mode": false,
      "csv_index": -1,
-     "csv_rows": 1,
+     "csv_rows": 0,
      "csv_delay_active": false,
      "proc_origin": "local",
      "current_process_name": ""
@@ -56,7 +56,7 @@
    [
     {
      "status": "idle",
-     "stage": "CSV 공정: 1/1 - (오류)",
+     "stage": "레시피 적재 실패",
      "groups": [
       {
        "label": "전원",
@@ -212,42 +212,7 @@
       "totalEstSec": 0,
       "percent": 0.0
      },
-     "csvRecipe": {
-      "name": "process_web.csv",
-      "stepNo": 0,
-      "total": 1,
-      "active": false,
-      "steps": [
-       "W1"
-      ],
-      "rows": [
-       {
-        "Process_name": "W1",
-        "Ar": "1",
-        "Ar_flow": "20",
-        "O2": "0",
-        "O2_flow": "0",
-        "working_pressure": "abc",
-        "process_time": "1",
-        "shutter_delay": "1",
-        "use_rf_power": "0",
-        "rf_power": "0",
-        "use_dc_power": "1",
-        "dc_power": "100",
-        "use_rf_pulse": "0",
-        "rf_pulse_power": "0",
-        "rf_pulse_freq": "",
-        "rf_pulse_duty": "",
-        "use_heater": "0",
-        "heater_temp": "0",
-        "heater_ramp": "0",
-        "gun1": "1",
-        "gun2": "0",
-        "G1 Target": "CeO2",
-        "G2 Target": ""
-       }
-      ]
-     },
+     "csvRecipe": null,
      "ion": {
       "run": false,
       "lamp": false,
@@ -265,73 +230,10 @@
    []
   ],
   [
-   "sig.clear_plc_fault",
-   []
-  ],
-  [
    "log",
    [
     "ERROR",
-    "CSV 레시피 오류로 리스트 공정을 중단합니다: CSV 'working_pressure' 값이 숫자가 아닙니다: 'abc'"
-   ]
-  ],
-  [
-   "erp.run_end",
-   [
-    "error",
-    "CSV 레시피 오류: CSV 'working_pressure' 값이 숫자가 아닙니다: 'abc'"
-   ]
-  ],
-  [
-   "chat.notify_process_finished_detail",
-   [
-    false,
-    {
-     "process_name": "CSV 1/1 - (레시피 오류)",
-     "stopped": false,
-     "aborting": false,
-     "errors": [
-      "CSV 레시피 오류: CSV 'working_pressure' 값이 숫자가 아닙니다: 'abc'"
-     ]
-    }
-   ]
-  ],
-  [
-   "chat.flush",
-   []
-  ],
-  [
-   "chat.notify_text",
-   [
-    "❌ CHK 공정 실패 이유: CSV 1/1 - (레시피 오류) | CSV 레시피 오류: CSV 'working_pressure' 값이 숫자가 아닙니다: 'abc'"
-   ]
-  ],
-  [
-   "chat.flush",
-   []
-  ],
-  [
-   "stage",
-   [
-    "CSV 레시피 오류로 중단"
-   ]
-  ],
-  [
-   "logfile.clear",
-   []
-  ],
-  [
-   "log",
-   [
-    "ERROR",
-    "[알림] CSV 레시피 오류: CSV 1번째 행 파라미터가 잘못되었습니다: CSV 'working_pressure' 값이 숫자가 아닙니다: 'abc'"
-   ]
-  ],
-  [
-   "log",
-   [
-    "ERROR",
-    "[원격] RECIPE_PROCESS_START 실패: CSV 레시피 오류: CSV 1번째 행 파라미터가 잘못되었습니다: CSV 'working_pressure' 값이 숫자가 아닙니다: 'abc'"
+    "[원격] RECIPE_PROCESS_START 실패: 적재된 레시피가 없습니다. 먼저 레시피를 적재하세요."
    ]
   ],
   [
@@ -339,7 +241,7 @@
    [
     2,
     false,
-    "CSV 레시피 오류: CSV 1번째 행 파라미터가 잘못되었습니다: CSV 'working_pressure' 값이 숫자가 아닙니다: 'abc'"
+    "적재된 레시피가 없습니다. 먼저 레시피를 적재하세요."
    ]
   ],
   [
@@ -347,7 +249,7 @@
    [
     "원격 시작 뒤",
     {
-     "stage": "CSV 레시피 오류로 중단",
+     "stage": "레시피 적재 실패",
      "start_enabled": true,
      "stop_enabled": false,
      "select_csv_enabled": true,
@@ -356,7 +258,7 @@
      "csv_index": -1,
      "csv_rows": 0,
      "csv_delay_active": false,
-     "proc_origin": "erp",
+     "proc_origin": "local",
      "current_process_name": ""
     }
    ]
@@ -366,7 +268,7 @@
    [
     {
      "status": "idle",
-     "stage": "CSV 레시피 오류로 중단",
+     "stage": "레시피 적재 실패",
      "groups": [
       {
        "label": "전원",

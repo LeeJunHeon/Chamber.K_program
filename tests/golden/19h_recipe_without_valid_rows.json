@@ -15,11 +15,17 @@
    ]
   ],
   [
+   "stage",
+   [
+    "레시피 적재 실패"
+   ]
+  ],
+  [
    "check",
    [
     "적재 뒤",
     {
-     "stage": "",
+     "stage": "레시피 적재 실패",
      "start_enabled": true,
      "stop_enabled": false,
      "select_csv_enabled": true,
@@ -38,7 +44,7 @@
    [
     {
      "status": "idle",
-     "stage": "",
+     "stage": "레시피 적재 실패",
      "groups": [
       {
        "label": "전원",
@@ -214,8 +220,8 @@
   [
    "msgbox.warning",
    [
-    "CSV 비어있음",
-    "CSV 파일에 유효한 공정 행이 없습니다."
+    "입력 오류",
+    "공정 파라미터가 잘못되었습니다:\nAr 또는 O2 가스를 하나 이상 선택해야 합니다."
    ]
   ],
   [
@@ -223,7 +229,7 @@
    [
     "Start 뒤",
     {
-     "stage": "",
+     "stage": "레시피 적재 실패",
      "start_enabled": true,
      "stop_enabled": false,
      "select_csv_enabled": true,
@@ -242,7 +248,7 @@
    [
     {
      "status": "idle",
-     "stage": "",
+     "stage": "레시피 적재 실패",
      "groups": [
       {
        "label": "전원",
