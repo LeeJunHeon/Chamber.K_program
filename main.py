@@ -3862,7 +3862,7 @@ class MainDialog(QDialog):
 
     def _reset_process_ui_fields(self):
         """공정 종료/중단 후 Sputter 관련 UI를 '초기 상태'로 리셋."""
-        # --- Gas 선택 (UI.py 기본값: Ar 체크, O2 해제) ---
+        # --- Gas 선택: Ar·O2 모두 해제 — UI.py 도 Ar 체크 줄이 주석 처리돼 있어 프로그램을 켠 직후와 같다 ---
         self.ui.Ar_gas_radio.setChecked(False)
         self.ui.O2_gas_radio.setChecked(False)
 
