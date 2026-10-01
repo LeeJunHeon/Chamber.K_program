@@ -372,7 +372,7 @@ class ProcessService:
             return
 
         ports.apply_params_to_ui(params)
-        name = params.get("process_name") or "STEP 1"
+        name = params.get("process_name") or "STEP1"          # 이름 없는 스텝은 "STEP{n}"(ERP 상태·웹 편집기와 같게)
         ports.stage(f"CSV 공정: 1/{len(st.csv_rows)} - {name}")
 
     def _load_failed(self) -> None:
@@ -544,7 +544,7 @@ class ProcessService:
         base_name = (
             params.get("process_name")
             or params.get("Process_name")
-            or f"STEP {step_no}/{total}"
+            or f"STEP{step_no}"          # 이름 없는 스텝 — 표시는 "CSV 2/3 - STEP2"(ERP 상태 steps 와 같게)
         )
 
         # ✅ 이 STEP의 표시명(=CSV 1/3 포함)으로 통일

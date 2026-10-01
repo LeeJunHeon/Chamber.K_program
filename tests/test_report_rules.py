@@ -294,3 +294,25 @@ def test_e6_recovery_event_error_is_swallowed():
     src = Boom(err=True)
     ErpStatePublisher(src).tick()                 # 밖으로 예외가 나오지 않는다
     assert len(src.sent) == 1
+
+
+# ───────────────────────── E7 이름 없는 스텝 표시 "STEP{n}" ─────────────────────────
+def test_e7_preview_label_step1(recipe_file):
+    ports = FakePorts(load_table=[dict(ROW, Process_name="")])
+    ports.ret["build_csv_params"] = {"process_name": ""}
+    ProcessService(ProcessState(), ports).load_recipe_file(recipe_file)
+    assert ports.calls[-1] == ["stage", "CSV 공정: 1/1 - STEP1"]
+
+
+def test_e7_running_label_step_n():
+    st = ProcessState(csv_mode=True, csv_rows=[dict(ROW), dict(ROW, Process_name=""), dict(ROW)], csv_index=0,
+                      csv_file_path="C:/r/a.csv")
+    ports = FakePorts()
+    ports.ret["build_csv_params"] = {"process_name": "", "use_heater": False}
+    ProcessService(st, ports).start_next_csv_step()
+    assert st.current_name == "CSV 2/3 - STEP2" and ["stage", "CSV 2/3 - STEP2"] in ports.calls
+
+
+def test_e7_label_matches_erp_state_steps():
+    st = build_state(FakeSrc(rows=[{"Process_name": "A"}, {"Process_name": ""}], path="C:/r/a.csv"))
+    assert st["csvRecipe"]["steps"] == ["A", "STEP2"]

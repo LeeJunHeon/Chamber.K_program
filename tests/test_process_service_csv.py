@@ -52,7 +52,7 @@ def test_next_step_blank_name_uses_step_label_and_heater_recipe_log():
     svc, p = _svc(st, build_csv_params={"process_name": "", "use_heater": False}, heater_recipe_running=True)
     svc.start_next_csv_step()
     assert p.calls[5] == ["log", "정보", "[히터] 히터 레시피가 제어 중입니다. 이번 공정은 히터를 제어하지 않습니다."]
-    assert st.current_name == "CSV 1/1 - STEP 1/1"
+    assert st.current_name == "CSV 1/1 - STEP1"                       # E7: 이름 없는 스텝은 "STEP{n}"
 
 
 def test_next_step_delay_row():

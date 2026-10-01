@@ -10,7 +10,7 @@
   [
    "stage",
    [
-    "CSV 공정: 1/3 - STEP 1"
+    "CSV 공정: 1/3 - STEP1"
    ]
   ],
   [
@@ -18,7 +18,7 @@
    [
     "적재 후",
     {
-     "stage": "CSV 공정: 1/3 - STEP 1",
+     "stage": "CSV 공정: 1/3 - STEP1",
      "start_enabled": true,
      "stop_enabled": false,
      "select_csv_enabled": true,
@@ -37,7 +37,7 @@
    [
     {
      "status": "idle",
-     "stage": "CSV 공정: 1/3 - STEP 1",
+     "stage": "CSV 공정: 1/3 - STEP1",
      "groups": [
       {
        "label": "전원",
@@ -354,8 +354,8 @@
      "process_name": "",
      "ch": "CHK",
      "prefix": "CHK Sputter",
-     "process_note": "CSV 1/3 - STEP 1/3",
-     "Process_name": "CSV 1/3 - STEP 1/3",
+     "process_note": "CSV 1/3 - STEP1",
+     "Process_name": "CSV 1/3 - STEP1",
      "G1_target_name": "CeO2",
      "use_dc_power": true,
      "use_rf_power": false
@@ -370,13 +370,13 @@
    "log",
    [
     "Process",
-    "CSV 공정 리스트 1/3 실행: CSV 1/3 - STEP 1/3"
+    "CSV 공정 리스트 1/3 실행: CSV 1/3 - STEP1"
    ]
   ],
   [
    "stage",
    [
-    "CSV 1/3 - STEP 1/3"
+    "CSV 1/3 - STEP1"
    ]
   ],
   [
@@ -386,7 +386,7 @@
   [
    "erp.run_start",
    [
-    "CSV 1/3 - STEP 1/3",
+    "CSV 1/3 - STEP1",
     {
      "use_ar_gas": true,
      "use_o2_gas": false,
@@ -751,7 +751,7 @@
    [
     "STEP 1 시작",
     {
-     "stage": "CSV 1/3 - STEP 1/3",
+     "stage": "CSV 1/3 - STEP1",
      "start_enabled": false,
      "stop_enabled": true,
      "select_csv_enabled": false,
@@ -761,7 +761,7 @@
      "csv_rows": 3,
      "csv_delay_active": false,
      "proc_origin": "local",
-     "current_process_name": "CSV 1/3 - STEP 1/3"
+     "current_process_name": "CSV 1/3 - STEP1"
     }
    ]
   ],
@@ -770,7 +770,7 @@
    [
     {
      "status": "running",
-     "stage": "CSV 1/3 - STEP 1/3",
+     "stage": "CSV 1/3 - STEP1",
      "groups": [
       {
        "label": "전원",
@@ -1033,7 +1033,7 @@
      "valves": {},
      "plc_link": true,
      "process": {
-      "name": "CSV 1/3 - STEP 1/3",
+      "name": "CSV 1/3 - STEP1",
       "remainSec": -1,
       "totalSec": 0,
       "phase": "pre"
@@ -1081,7 +1081,7 @@
      "csv_rows": 3,
      "csv_delay_active": false,
      "proc_origin": "local",
-     "current_process_name": "CSV 1/3 - STEP 1/3"
+     "current_process_name": "CSV 1/3 - STEP1"
     }
    ]
   ],
@@ -1353,7 +1353,7 @@
      "valves": {},
      "plc_link": true,
      "process": {
-      "name": "CSV 1/3 - STEP 1/3",
+      "name": "CSV 1/3 - STEP1",
       "remainSec": 60,
       "totalSec": 60,
       "phase": "main"
@@ -1392,7 +1392,7 @@
    [
     true,
     {
-     "process_name": "CSV 1/3 - STEP 1/3",
+     "process_name": "CSV 1/3 - STEP1",
      "stopped": false,
      "aborting": false,
      "errors": []
@@ -1408,7 +1408,7 @@
    [
     {
      "Timestamp": "<TS>",
-     "Process Name": "CSV 1/3 - STEP 1/3",
+     "Process Name": "CSV 1/3 - STEP1",
      "Shutter Delay": "1.000",
      "G1 Target": "CeO2",
      "G2 Target": "",
@@ -2319,8 +2319,8 @@
      "process_name": "",
      "ch": "CHK",
      "prefix": "CHK Sputter",
-     "process_note": "CSV 3/3 - STEP 3/3",
-     "Process_name": "CSV 3/3 - STEP 3/3",
+     "process_note": "CSV 3/3 - STEP3",
+     "Process_name": "CSV 3/3 - STEP3",
      "G1_target_name": "CeO2",
      "use_dc_power": true,
      "use_rf_power": false
@@ -2335,13 +2335,13 @@
    "log",
    [
     "Process",
-    "CSV 공정 리스트 3/3 실행: CSV 3/3 - STEP 3/3"
+    "CSV 공정 리스트 3/3 실행: CSV 3/3 - STEP3"
    ]
   ],
   [
    "stage",
    [
-    "CSV 3/3 - STEP 3/3"
+    "CSV 3/3 - STEP3"
    ]
   ],
   [
@@ -2351,7 +2351,7 @@
   [
    "erp.run_start",
    [
-    "CSV 3/3 - STEP 3/3",
+    "CSV 3/3 - STEP3",
     {
      "use_ar_gas": true,
      "use_o2_gas": false,
@@ -2751,7 +2751,7 @@
      "csv_rows": 3,
      "csv_delay_active": false,
      "proc_origin": "local",
-     "current_process_name": "CSV 3/3 - STEP 3/3"
+     "current_process_name": "CSV 3/3 - STEP3"
     }
    ]
   ],
@@ -3023,7 +3023,7 @@
      "valves": {},
      "plc_link": true,
      "process": {
-      "name": "CSV 3/3 - STEP 3/3",
+      "name": "CSV 3/3 - STEP3",
       "remainSec": 60,
       "totalSec": 60,
       "phase": "main"
@@ -3062,7 +3062,7 @@
    [
     true,
     {
-     "process_name": "CSV 3/3 - STEP 3/3",
+     "process_name": "CSV 3/3 - STEP3",
      "stopped": false,
      "aborting": false,
      "errors": []
@@ -3078,7 +3078,7 @@
    [
     {
      "Timestamp": "<TS>",
-     "Process Name": "CSV 3/3 - STEP 3/3",
+     "Process Name": "CSV 3/3 - STEP3",
      "Shutter Delay": "1.000",
      "G1 Target": "CeO2",
      "G2 Target": "",
