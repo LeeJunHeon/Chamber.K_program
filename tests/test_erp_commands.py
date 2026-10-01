@@ -63,6 +63,7 @@ class FakeHost:
     def remote_alerts(self): return self.alerts
     def remote_notes(self): return self.notes
     def widget(self, name): return self.widgets.get(name)
+    def plc_link_up(self): return getattr(self, "link", True)      # B6 (기록하지 않는다)
     def start_process(self): self._r("start_process"); self._fire("start")
     def current_rf_cal(self): self._r("current_rf_cal"); return getattr(self, "rf_cal", ("6.79", "1.0395"))
     def start_manual(self, inputs): self._r("start_manual", inputs); self._fire("start")

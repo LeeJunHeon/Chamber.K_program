@@ -145,6 +145,9 @@ class ErpCommandHost(Protocol):
     def widget(self, name: str) -> Any:
         """이름으로 입력칸·버튼 위젯을 얻는다(없으면 None)."""
 
+    def plc_link_up(self) -> bool:
+        """PLC 통신(링크)이 살아 있는가."""
+
     def start_process(self) -> None:
         """공정을 시작한다(Start 버튼과 같은 경로) — 적재된 레시피로 시작(RECIPE_PROCESS_START)."""
 
@@ -195,6 +198,9 @@ class ErpCommandRunner:
         name = str(c.get("command", ""))
         args = c.get("args") or {}
         if name in PLC_BUTTONS:
+            # PLC 통신이 끊겨 있으면 쓰기가 닿지 않는다 — 그때만 거부(B6). 살아 있으면 조건 없이(공정 중에도) 실행.
+            if not host.plc_link_up():
+                raise RuntimeError("PLC 통신이 끊겨 있어 실행할 수 없습니다")
             btn = host.widget(name)
             if btn is None:
                 raise RuntimeError(f"버튼 없음: {name}")

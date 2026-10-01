@@ -15,6 +15,8 @@
     26g 원격 레시피 이름이 상태에 보임(이름 있음 / 없음) — 원격 파일은 명령마다 다른 이름, 예전 파일 정리
   B5 RECIPE_CLEAR (원격 적재 해제)
     26h 대기 중 적재 있음 / 적재 없음 / 공정 중
+  B6 원격 PLC 버튼은 PLC 통신이 끊겨 있을 때만 거부
+    26i PLC 링크 끊김 중 원격 PLC 버튼 → 거부, 링크 복구 뒤 → 실행
 """
 import os
 import re
@@ -174,6 +176,24 @@ def s26h_recipe_clear(h):
     h.remote("RECIPE_PROCESS_START", {}, cid=5)
     h.remote("RECIPE_CLEAR", {}, cid=6)                           # 공정 중 → 거부
     h.check("공정 중 해제 요청 뒤", snapshot=True)
+    h.ctrl_run()
+    h.ctrl_finish()
+
+
+def s26i_plc_buttons_need_link(h):
+    w = h.w
+    for n in ("MV_button", "Rotary_button"):                       # 기록 없이 끈 상태로
+        b = getattr(w.ui, n)
+        b.blockSignals(True); b.setChecked(False); b.blockSignals(False)
+    w._on_plc_link(False)
+    h.remote("MV_button", {"on": True}, cid=1)                    # 링크 끊김 → 거부, 버튼 그대로
+    h.sink.buttons("끊김 중", {"MV_button": w.ui.MV_button.isChecked()})
+    w._on_plc_link(True)
+    h.remote("MV_button", {"on": True}, cid=2)                    # 복구 뒤 → 실행
+    h.sink.buttons("복구 뒤", {"MV_button": w.ui.MV_button.isChecked()})
+    h.set_manual_ui()
+    w.ui.Sputter_Start_Button.click()
+    h.remote("Rotary_button", {"on": True}, cid=3)                # 공정 중에도 막지 않는다
     h.ctrl_run()
     h.ctrl_finish()
 

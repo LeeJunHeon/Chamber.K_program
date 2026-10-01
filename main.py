@@ -303,6 +303,9 @@ class _MainErpHost:
     def widget(self, name):
         return getattr(self.w.ui, name, None)
 
+    def plc_link_up(self):
+        return bool(getattr(self.w, "_plc_link_up", False))
+
     def start_process(self):
         self.w._handle_start_process()
 

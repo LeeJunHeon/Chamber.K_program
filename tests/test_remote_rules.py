@@ -230,3 +230,33 @@ def test_b5_runner_delegates_recipe_clear():
     ErpCommandRunner(h).exec_one({"command": "RECIPE_CLEAR", "args": {}})
     assert h.calls == [["clear_recipe"]]
     assert ErpCommandRunner(h).silent_failure("RECIPE_CLEAR", {}) == ""          # 결과 확인 분기 없음 → 성공
+
+
+# ───────────────────────── B6 원격 PLC 버튼은 링크가 끊겼을 때만 거부 ─────────────────────────
+def test_b6_plc_button_rejected_only_when_link_down():
+    from integrations.erp_commands import ErpCommandRunner
+    from test_erp_commands import FakeHost, Widget
+    h = FakeHost(link=False)
+    h.widgets = {"MV_button": Widget(h, "MV_button")}
+    with pytest.raises(RuntimeError, match="^PLC 통신이 끊겨 있어 실행할 수 없습니다$"):
+        ErpCommandRunner(h).exec_one({"command": "MV_button", "args": {"on": True}})
+    assert h.calls == []                                           # 버튼을 건드리지 않는다
+    h.link = True
+    h.active = True                                                # 공정 중에도 막지 않는다
+    ErpCommandRunner(h).exec_one({"command": "MV_button", "args": {"on": True}})
+    assert h.calls == [["w.setChecked", "MV_button", True]]
+
+
+def test_b6_link_check_comes_before_missing_button():
+    from integrations.erp_commands import ErpCommandRunner
+    from test_erp_commands import FakeHost
+    with pytest.raises(RuntimeError, match="PLC 통신이 끊겨"):
+        ErpCommandRunner(FakeHost(link=False)).exec_one({"command": "Vent_button", "args": {"on": True}})
+
+
+def test_b6_drain_reports_link_down_reason():
+    from integrations.erp_commands import ErpCommandRunner
+    from test_erp_commands import FakeHost
+    h = FakeHost(link=False, cmds=[{"id": 4, "command": "Door_Button", "args": {"on": True}}])
+    ErpCommandRunner(h).drain()
+    assert h.calls[-1] == ["erp_cmd_result", 4, False, "PLC 통신이 끊겨 있어 실행할 수 없습니다"]
