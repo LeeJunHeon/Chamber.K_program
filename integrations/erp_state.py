@@ -285,7 +285,7 @@ def build_state(src: ErpStateSource) -> dict:
 
 
 class ErpStatePublisher:
-    """1초 타이머가 부르는 tick — 상태를 만들어 보내고, 수집이 실패하면 처음 한 번만 ERP 이벤트로 알린다."""
+    """1초 타이머가 부르는 tick — 상태를 만들어 보내고, 수집 실패는 실패 구간마다 한 번, 복구되면 한 번 ERP 이벤트로 알린다."""
 
     def __init__(self, src: ErpStateSource):
         self.src = src
@@ -295,10 +295,18 @@ class ErpStatePublisher:
         try:
             src.erp_update_state(build_state(src))
         except Exception as e:
-            # 조용한 실패 방지: 원인을 웹 이벤트로 1회만 보고한다.
+            # 조용한 실패 방지: 원인을 웹 이벤트로 실패 구간마다 1회만 보고한다.
             try:
                 if not src.snap_err_reported():
                     src.set_snap_err_reported(True)
                     src.erp_event("error", f"스냅샷 수집 실패: {type(e).__name__}: {e}")
             except Exception:
                 pass
+            return
+        # 실패를 보고해 둔 뒤 다시 성공했으면 복구를 1회 알리고 표시를 내린다 — 다음 실패는 다시 보고된다
+        try:
+            if src.snap_err_reported():
+                src.set_snap_err_reported(False)
+                src.erp_event("info", "스냅샷 수집 복구")
+        except Exception:
+            pass

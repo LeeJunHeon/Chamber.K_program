@@ -214,7 +214,8 @@ def test_tick_reports_error_once_then_resumes():
     assert src.err is True
     src.raise_on = None
     pub.tick()
-    assert len(src.sent) == 1 and len(src.events) == 1 and src.err is True   # 보고 표시는 그대로 남는다
+    assert len(src.sent) == 1 and src.err is False                           # E6: 복구되면 표시를 내리고
+    assert src.events[-1] == ("info", "스냅샷 수집 복구") and len(src.events) == 2   # 복구를 한 번 알린다
 
 
 def test_tick_swallows_errors_while_reporting():

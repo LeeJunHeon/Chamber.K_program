@@ -12,6 +12,8 @@
   E4 공정 기록 종료(run_end)는 시작(run_start)을 보낸 공정에만
     27c [S1(RF 미사용), S2(RF 150)] 적재 → Start → STEP1 중 노트북 offset 칸을 비움 → STEP1 종료 → STEP2 행 오류 →
         리스트 중단·알림, erp.run_end 는 STEP1 의 done 한 번뿐
+  E6 스냅샷 수집 실패 알림은 실패 구간마다 한 번, 복구되면 한 번
+    27d 실패 → 실패 → 복구 → 다시 실패 → 복구
 """
 import os
 import re
@@ -85,6 +87,28 @@ def s27c_run_end_only_after_run_start(h):
     h.ctrl_finish()                                              # STEP1 done → STEP2 행 오류(실행 중 안전장치)
     h.check("STEP2 행 오류 뒤", snapshot=True)
     h.sink.erp_run_ends("run_end 호출", [list(c.args) for c in h.sink.erp.run_end.call_args_list])
+
+
+def s27d_snapshot_fail_recover_cycles(h):
+    w = h.w
+    w._erp_snap_err = False
+    broken = {"on": True}
+    real = w._heater_output_text
+
+    def _flaky(*a, **k):
+        if broken["on"]:
+            raise RuntimeError("히터 출력 읽기 실패(가짜)")
+        return real(*a, **k)
+    h.mp.setattr(w, "_heater_output_text", _flaky)
+    h.check("실패 1", snapshot=True)
+    h.check("실패 2", snapshot=True)                  # 같은 실패 구간 — 다시 보고하지 않음
+    broken["on"] = False
+    h.check("복구", snapshot=True)                    # 상태 보고 + 복구 알림 1회
+    broken["on"] = True
+    h.check("다시 실패", snapshot=True)               # 새 실패 구간 — 다시 1회 보고
+    broken["on"] = False
+    h.check("다시 복구", snapshot=True)
+    h.check("정상 유지", snapshot=True)               # 복구 알림은 한 번뿐
 
 
 SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())

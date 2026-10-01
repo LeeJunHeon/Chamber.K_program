@@ -252,3 +252,45 @@ def test_e5_idle_has_no_process_even_if_delay_flag():
 def test_e5_name_none_becomes_empty_in_delay():
     st = build_state(FakeSrc(running=True, name=None, d_active=True, d_remain="7", d_total="10"))
     assert st["process"] == {"name": "", "remainSec": 7, "totalSec": 10, "phase": "delay"}
+
+
+# ───────────────────────── E6 수집 실패 알림: 실패 구간마다 1회, 복구 1회 ─────────────────────────
+def test_e6_fail_recover_cycles():
+    src = FakeSrc(raise_on="heater_output_text")
+    pub = ErpStatePublisher(src)
+    pub.tick(); pub.tick()
+    src.raise_on = None
+    pub.tick(); pub.tick()
+    src.raise_on = "heater_output_text"
+    pub.tick()
+    src.raise_on = None
+    pub.tick()
+    err = ("error", "스냅샷 수집 실패: RuntimeError: heater_output_text 실패(가짜)")
+    rec = ("info", "스냅샷 수집 복구")
+    assert src.events == [err, rec, err, rec]
+    assert len(src.sent) == 3 and src.err is False
+
+
+def test_e6_no_recovery_event_without_prior_failure():
+    src = FakeSrc()
+    pub = ErpStatePublisher(src)
+    pub.tick(); pub.tick()
+    assert src.events == [] and len(src.sent) == 2
+
+
+def test_e6_send_failure_counts_as_failure():
+    class SendFail(FakeSrc):
+        def erp_update_state(self, state):
+            raise ConnectionError("리포터 큐 가득")
+    src = SendFail()
+    ErpStatePublisher(src).tick()
+    assert src.events == [("error", "스냅샷 수집 실패: ConnectionError: 리포터 큐 가득")] and src.err is True
+
+
+def test_e6_recovery_event_error_is_swallowed():
+    class Boom(FakeSrc):
+        def erp_event(self, level, msg):
+            raise RuntimeError("이벤트 전송 실패")
+    src = Boom(err=True)
+    ErpStatePublisher(src).tick()                 # 밖으로 예외가 나오지 않는다
+    assert len(src.sent) == 1
