@@ -43,6 +43,8 @@ class ProcessState:
     #  히터를 제어하는 주체는 한 번에 하나여야 한다 — 공정이 소유하면 히터 레시피를 못 띄우고,
     #  소유하지 않으면 둘이 함께 돌 수 있다.
     heater_claimed: bool = False
+    # 적재된 레시피의 표시 이름(원격이면 받은 이름, 노트북이면 파일 이름). 비어 있으면 파일 이름을 쓴다(B4).
+    recipe_name: str = ""
 
     def is_active(self) -> bool:
         """공정이 도는가 — 스텝 진행 중 / CSV 리스트 진행 중 / CSV 대기 중 어느 하나라도."""
@@ -60,10 +62,11 @@ class ProcessState:
         return Phase.IDLE
 
     def clear_csv_list(self) -> None:
-        """CSV 리스트 흔적 정리 — 이 6개만 바꾼다. csv_rows 는 새 리스트(제자리 clear() 금지)."""
+        """CSV 리스트 흔적 정리 — 이 7개만 바꾼다. csv_rows 는 새 리스트(제자리 clear() 금지)."""
         self.csv_mode = False
         self.csv_rows = []
         self.csv_index = -1
         self.csv_file_path = None
         self.current_name = ""
         self.last_params = None
+        self.recipe_name = ""

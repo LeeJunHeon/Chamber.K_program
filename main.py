@@ -318,8 +318,8 @@ class _MainErpHost:
     def all_stop(self):
         self.w._on_all_stop_clicked()
 
-    def load_recipe_file(self, path):
-        self.w._start_csv_process_from_path(path)
+    def load_recipe_file(self, path, name=""):
+        self.w._start_csv_process_from_path(path, display_name=name)
 
     def csv_rows(self):
         return getattr(self.w, "csv_rows", None)
@@ -386,6 +386,9 @@ class _MainErpStateSource:
 
     def csv_file_path(self):
         return getattr(self.w, "csv_file_path", "")
+
+    def recipe_name(self):
+        return self.w.proc_state.recipe_name
 
     def csv_index(self):
         return getattr(self.w, "csv_index", -1)
@@ -3521,10 +3524,10 @@ class MainDialog(QDialog):
         """원격 수동 시작(ERP PROCESS_START) — 노트북 입력칸이 아니라 받은 입력값으로 시작한다."""
         self.proc.start(manual_inputs=inputs)
 
-    def _start_csv_process_from_path(self, path: str):
+    def _start_csv_process_from_path(self, path: str, display_name: str = ""):
         """파일 대화상자 없이 지정된 CSV/엑셀 레시피를 적재한다(원격 실행용·파일 선택 뒤 공통).
-        본문은 ProcessService.load_recipe_file."""
-        self.proc.load_recipe_file(path)
+        display_name: 표시 이름(원격 레시피 이름) — 노트북 파일 선택은 비워 둔다(파일 이름). 본문은 ProcessService.load_recipe_file."""
+        self.proc.load_recipe_file(path, display_name)
 
     @Slot()
     def _on_select_csv_clicked(self):

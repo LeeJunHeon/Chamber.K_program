@@ -39,6 +39,9 @@ class ErpStateSource(Protocol):
     def csv_file_path(self) -> Optional[str]:
         """적재된 레시피 파일 경로."""
 
+    def recipe_name(self) -> str:
+        """적재된 레시피의 표시 이름(B4) — 비어 있으면 파일 이름을 쓴다."""
+
     def csv_index(self) -> int:
         """실행 중인 레시피 행(0부터, -1 = 시작 전)."""
 
@@ -210,7 +213,7 @@ def build_state(src: ErpStateSource) -> dict:
         ),
         "csvRecipe": (
             {
-                "name": os.path.basename(str(src.csv_file_path() or "")) or None,
+                "name": (src.recipe_name() or os.path.basename(str(src.csv_file_path() or ""))) or None,
                 "stepNo": int(src.csv_index()) + 1,
                 "total": len(src.csv_rows() or []),
                 "active": bool(src.csv_mode()),

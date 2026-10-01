@@ -135,3 +135,64 @@ def test_b3_heater_check_and_run_use_same_loaded_rows(rows, blocked):
         assert p.calls[-1][2] == "시작 불가" and st.csv_mode is False
     else:
         assert st.csv_mode is True and [c for c in p.calls if c[0] == "build_csv_params"][0][1] is st.csv_rows[0]
+
+
+# ───────────────────────── B4 레시피 이름·원격 레시피 파일 ─────────────────────────
+@pytest.mark.parametrize("display,expected", [("웹 레시피 A", "웹 레시피 A"), ("", "recipe.csv")])
+def test_b4_recipe_name_set_on_successful_load(display, expected, recipe_file):
+    st = ProcessState()
+    svc, p = _svc(st)
+    svc.load_recipe_file(recipe_file, display)
+    assert st.recipe_name == expected and svc.recipe_display_name() == expected
+
+
+def test_b4_recipe_name_cleared_on_failure_and_clear():
+    st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)], recipe_name="웹 A")
+    svc, p = _svc(st)
+    svc.load_recipe_file("C:/없는/파일.csv", "웹 B")
+    assert st.recipe_name == ""
+    st.recipe_name = "X"; st.clear_csv_list()
+    assert st.recipe_name == ""
+    assert ProcessService(ProcessState(csv_file_path="C:/r/b.csv"), FakePorts()).recipe_display_name() == "b.csv"
+
+
+def test_b4_cleanup_web_recipes_keeps_loaded_and_ignores_errors(tmp_path, monkeypatch):
+    import os
+    import tempfile
+    from integrations.erp_commands import cleanup_web_recipes
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    d = tmp_path / "vanam_recipe"
+    d.mkdir()
+    for n in ("process_web_1.csv", "process_web_2.csv", "heater_web.csv", "other.csv"):
+        (d / n).write_text("x", encoding="utf-8")
+    real_remove = os.remove
+
+    def _remove(path):
+        if path.endswith("process_web_2.csv"):
+            raise PermissionError("열려 있음")
+        real_remove(path)
+    monkeypatch.setattr(os, "remove", _remove)
+    cleanup_web_recipes(str(d / "process_web_1.csv"))
+    assert sorted(os.listdir(d)) == ["heater_web.csv", "other.csv", "process_web_1.csv", "process_web_2.csv"]
+    monkeypatch.setattr(os, "remove", real_remove)
+    cleanup_web_recipes(None)
+    assert sorted(os.listdir(d)) == ["heater_web.csv", "other.csv"]
+
+
+def test_b4_remote_recipe_run_passes_name_and_id_file(tmp_path, monkeypatch):
+    import tempfile
+    from integrations.erp_commands import ErpCommandRunner
+    from test_erp_commands import FakeHost
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    h = FakeHost()
+    ErpCommandRunner(h).exec_one({"id": 77, "command": "RECIPE_PROCESS_RUN",
+                                  "args": {"name": "웹 레시피", "rows": [{"Process_name": "W"}]}})
+    assert h.calls[-1][0] == "load_recipe_file" and h.calls[-1][1].endswith("process_web_77.csv")
+    assert h.calls[-1][2] == "웹 레시피"
+
+
+def test_b4_erp_state_name_prefers_recipe_name():
+    from integrations.erp_state import build_state
+    from test_erp_state import FakeSrc
+    assert build_state(FakeSrc(rows=[{"a": 1}], path="C:/t/process_web_3.csv", rname="웹 A"))["csvRecipe"]["name"] == "웹 A"
+    assert build_state(FakeSrc(rows=[{"a": 1}], path="C:/t/process_web_3.csv"))["csvRecipe"]["name"] == "process_web_3.csv"

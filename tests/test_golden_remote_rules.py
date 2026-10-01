@@ -11,7 +11,10 @@
     26e 정상 적재 뒤 실패 적재 4가지(없는 파일·읽기 오류·빈 레시피·첫 행 오류) → 각각 적재 해제
   B3 Start 는 적재할 때 읽은 내용 그대로 실행한다
     26f 적재 뒤 파일 내용을 바꾸고 Start → 적재할 때 내용으로 실행
+  B4 레시피 이름과 원격 레시피 파일 이름
+    26g 원격 레시피 이름이 상태에 보임(이름 있음 / 없음) — 원격 파일은 명령마다 다른 이름, 예전 파일 정리
 """
+import os
 import re
 
 import pytest
@@ -137,6 +140,25 @@ def s26f_start_uses_rows_read_at_load(h):
     h.ctrl_run()
     h.ctrl_finish()
     h.check("리스트 완료", snapshot=True)
+
+
+def _web_files(h, label):
+    d = h.tmp / "systemp" / "vanam_recipe"
+    h.sink.files(label, sorted(os.listdir(d)) if d.exists() else [])
+
+
+def s26g_recipe_names(h):
+    h.remote("RECIPE_PROCESS_RUN", {"name": "웹 레시피 A", "rows": [csv_row("W1")]}, cid=1)
+    _web_files(h, "이름 있음 적재 뒤")
+    h.check("이름 있음", snapshot=True)
+    h.remote("PROCESS_START", dict(_REMOTE_ARGS), cid=2)          # B1 거부 문구에 표시 이름
+    h.remote("RECIPE_PROCESS_RUN", {"rows": [csv_row("W2")]}, cid=3)
+    _web_files(h, "이름 없음 적재 뒤")                             # 예전 파일(1)은 지우고 적재 중인 것만
+    h.check("이름 없음 → 파일 이름", snapshot=True)
+    h.w._start_csv_process_from_path(h.write_csv([csv_row("L1")], name="노트북 레시피.csv"))
+    h.check("노트북 적재 → 파일 이름", snapshot=True)
+    h.remote("RECIPE_PROCESS_RUN", {"name": "웹 레시피 B", "rows": [csv_row("W4")]}, cid=4)
+    _web_files(h, "다시 원격 적재 뒤")                            # 적재 중이던 건 노트북 파일 → 예전 웹 파일 모두 정리
 
 
 SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())

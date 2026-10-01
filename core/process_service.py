@@ -187,8 +187,8 @@ class ProcessService:
 
     # ==================== 공정 시작 ====================
     def recipe_display_name(self) -> str:
-        """적재된 레시피의 표시 이름(파일 이름)."""
-        return os.path.basename(str(self.st.csv_file_path or ""))
+        """적재된 레시피의 표시 이름 — recipe_name, 비어 있으면 파일 이름."""
+        return self.st.recipe_name or os.path.basename(str(self.st.csv_file_path or ""))
 
     def start(self, manual_inputs: Optional[ManualInputs] = None) -> None:
         """Start 버튼·원격 PROCESS_START·RECIPE_PROCESS_START 공통. 적재된 레시피가 있으면 CSV 리스트, 없으면 수동 공정.
@@ -295,8 +295,9 @@ class ProcessService:
         ports.set_buttons(False, True, False)
 
     # ==================== 레시피 적재 ====================
-    def load_recipe_file(self, path: str) -> None:
+    def load_recipe_file(self, path: str, display_name: str = "") -> None:
         """파일 대화상자 없이 지정된 CSV/엑셀 레시피를 적재한다(원격 실행용).
+        display_name: 표시 이름(원격 레시피 이름). 비어 있으면 파일 이름을 표시 이름으로 쓴다(B4).
 
         _on_select_csv_clicked 가 경로를 얻은 뒤 수행하는 처리와 동일하다.
         (UI 경로와 동작을 하나로 유지하기 위해 본문을 이쪽으로 옮겼다)
@@ -328,6 +329,7 @@ class ProcessService:
         if not self.load_csv_list():
             self._load_failed()
             return
+        st.recipe_name = display_name or p.name
 
         if ports.is_closing() or not st.csv_rows:
             return

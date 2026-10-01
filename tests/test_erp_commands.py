@@ -68,7 +68,7 @@ class FakeHost:
     def start_manual(self, inputs): self._r("start_manual", inputs); self._fire("start")
     def stop_process(self): self._r("stop_process")
     def all_stop(self): self._r("all_stop")
-    def load_recipe_file(self, path): self._r("load_recipe_file", path); self._fire("load", path)
+    def load_recipe_file(self, path, name=""): self._r("load_recipe_file", path, name); self._fire("load", path)
     def csv_rows(self): return self.rows
     def csv_file_path(self): return self.path
     def process_active(self): return self.active
@@ -154,11 +154,11 @@ def systemp(tmp_path, monkeypatch):
 
 def test_recipe_process_run_writes_csv_records_path_and_loads(systemp):
     h = FakeHost()
-    c = {"command": "RECIPE_PROCESS_RUN", "args": {"rows": [{"Process_name": "W1", "Ar": "1", "x": "무시"},
-                                                             {"Process_name": "W2"}]}}
+    c = {"id": 5, "command": "RECIPE_PROCESS_RUN", "args": {"rows": [{"Process_name": "W1", "Ar": "1", "x": "무시"},
+                                                                      {"Process_name": "W2"}]}}
     ErpCommandRunner(h).exec_one(c)
-    path = os.path.join(str(systemp), "vanam_recipe", "process_web.csv")
-    assert c["_csv_path"] == path and h.calls == [["load_recipe_file", path]]
+    path = os.path.join(str(systemp), "vanam_recipe", "process_web_5.csv")         # B4: 명령마다 다른 이름
+    assert c["_csv_path"] == path and h.calls == [["load_recipe_file", path, ""]]
     raw = open(path, "rb").read()
     assert raw.startswith(b"\xef\xbb\xbf")                           # utf-8-sig
     rows = list(csv.DictReader(open(path, encoding="utf-8-sig", newline="")))
