@@ -97,6 +97,8 @@ def test_T14_line_endings_unchanged_vs_head():
         add, dele, name = line.split("\t", 2)
         if add == "-":
             continue
+        if name.startswith("tests/golden/"):
+            continue        # 골든은 다시 찍으면 크게 줄 수 있다 — 줄바꿈은 아래에서 따로 본다
         with open(os.path.join(ROOT, name), "rb") as fh:
             total = fh.read().count(b"\n")
         assert int(dele) < max(1, total * 0.9), f"{name}: 통째 변경 의심 (-{dele}/{total})"
@@ -104,6 +106,10 @@ def test_T14_line_endings_unchanged_vs_head():
     for name in ("main.py", "device/PLC.py", "device/MFC.py", "device/DCpower.py",
                  "device/RFpulse.py", "lib/config.py", "config_user.json"):
         assert b"\r\n" not in open(os.path.join(ROOT, name), "rb").read(), name
+    goldens = glob.glob(os.path.join(ROOT, "tests", "golden", "*.json"))
+    assert goldens
+    crlf = [os.path.basename(g) for g in goldens if b"\r\n" in open(g, "rb").read()]
+    assert crlf == [], crlf
 
 
 def test_T13_no_jig_wording_in_new_code():
