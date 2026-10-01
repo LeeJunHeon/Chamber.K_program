@@ -1,14 +1,48 @@
 {
  "timeline": [
   [
+   "fields",
+   [
+    "거부 전",
+    {
+     "Ar_gas_radio": true,
+     "Ar_flow_edit": "15",
+     "O2_gas_radio": false,
+     "O2_flow_edit": "",
+     "working_pressure_edit": "4",
+     "dc_power_checkbox": true,
+     "DC_power_edit": "80",
+     "rf_power_checkbox": false,
+     "RF_power_edit": "",
+     "offset_edit": "7.10",
+     "param_edit": "1.1",
+     "rf_pulse_checkbox": false,
+     "rfp_power_edit": "",
+     "rfp_freq_edit": "",
+     "rfp_duty_edit": "",
+     "Shutter_delay_edit": "2",
+     "process_time_edit": "3",
+     "G1_checkbox": false,
+     "G1_edit": "",
+     "G2_checkbox": true,
+     "G2_edit": "Ti",
+     "dc_delay_checkbox": false
+    }
+   ]
+  ],
+  [
    "erp.pop_commands",
+   []
+  ],
+  [
+   "sig.clear_plc_fault",
    []
   ],
   [
    "log",
    [
     "ERROR",
-    "[원격] PROCESS_START 실패: 공정 시작 불가: 메인밸브가 열려 있지 않아 공정을 시작할 수 없습니다. (MV=OFF, MV_INTERLOCK=ON) 메인밸브를 먼저 개방한 뒤 다시 시작하세요."
+    "[원격] PROCESS_START 실패: 입력 오류: 공정 파라미터가 잘못되었습니다: Ar 가스 유량을 입력해야 합니다."
    ]
   ],
   [
@@ -16,7 +50,37 @@
    [
     1,
     false,
-    "공정 시작 불가: 메인밸브가 열려 있지 않아 공정을 시작할 수 없습니다. (MV=OFF, MV_INTERLOCK=ON) 메인밸브를 먼저 개방한 뒤 다시 시작하세요."
+    "입력 오류: 공정 파라미터가 잘못되었습니다: Ar 가스 유량을 입력해야 합니다."
+   ]
+  ],
+  [
+   "fields",
+   [
+    "거부 뒤",
+    {
+     "Ar_gas_radio": true,
+     "Ar_flow_edit": "15",
+     "O2_gas_radio": false,
+     "O2_flow_edit": "",
+     "working_pressure_edit": "4",
+     "dc_power_checkbox": true,
+     "DC_power_edit": "80",
+     "rf_power_checkbox": false,
+     "RF_power_edit": "",
+     "offset_edit": "7.10",
+     "param_edit": "1.1",
+     "rf_pulse_checkbox": false,
+     "rfp_power_edit": "",
+     "rfp_freq_edit": "",
+     "rfp_duty_edit": "",
+     "Shutter_delay_edit": "2",
+     "process_time_edit": "3",
+     "G1_checkbox": false,
+     "G1_edit": "",
+     "G2_checkbox": true,
+     "G2_edit": "Ti",
+     "dc_delay_checkbox": false
+    }
    ]
   ],
   [
@@ -33,7 +97,7 @@
      "csv_index": -1,
      "csv_rows": 0,
      "csv_delay_active": false,
-     "proc_origin": "local",
+     "proc_origin": "erp",
      "current_process_name": ""
     }
    ]
@@ -51,7 +115,7 @@
         {
          "label": "DC Power",
          "value": "",
-         "setpoint": "200",
+         "setpoint": "80",
          "unit": "W"
         },
         {
@@ -72,7 +136,7 @@
         {
          "label": "for.P",
          "value": "",
-         "setpoint": "200",
+         "setpoint": "",
          "unit": "W"
         },
         {
@@ -82,7 +146,7 @@
         },
         {
          "label": "offset / param",
-         "value": "6.79 / 1.0395"
+         "value": "7.10 / 1.1"
         }
        ]
       },
@@ -118,7 +182,7 @@
         {
          "label": "Ar",
          "value": null,
-         "setpoint": "5",
+         "setpoint": "15",
          "unit": "sccm"
         },
         {
@@ -139,18 +203,27 @@
         },
         {
          "label": "Working P",
-         "setpoint": "2",
+         "setpoint": "4",
          "unit": "mTorr"
         },
         {
          "label": "공정 시간",
-         "setpoint": "10",
+         "setpoint": "3",
          "unit": "분"
         },
         {
          "label": "셔터 딜레이",
-         "setpoint": "5",
+         "setpoint": "2",
          "unit": "분"
+        }
+       ]
+      },
+      {
+       "label": "타겟",
+       "items": [
+        {
+         "label": "G2",
+         "value": "Ti"
         }
        ]
       }

@@ -11,6 +11,7 @@ ports 는 main.py 가 구현한다. 본문의 순서·조건·문구는 옮기�
 
 이 모듈은 PyQt6·UI·main·controller·device·reporter·lib.logger·lib.heater_logger·lib.recipe_io 를 import 하지 않는다.
 """
+import os
 from pathlib import Path
 from typing import Iterable, Optional, Protocol, Sequence
 
@@ -39,6 +40,9 @@ class ProcessPorts(Protocol):
 
     def read_manual_inputs(self) -> ManualInputs:
         """수동 입력칸 원시값을 읽는다."""
+
+    def show_manual_inputs(self, inputs: ManualInputs) -> None:
+        """입력값을 노트북 수동 입력칸에 보여 준다(원격 수동 시작이 통과한 뒤 — 체크·값 칸, offset·param 포함)."""
 
     def apply_params_to_ui(self, params: dict) -> None:
         """공정 params 를 입력칸에 보여 준다(CSV 미리보기)."""
@@ -182,9 +186,24 @@ class ProcessService:
         self.ports = ports
 
     # ==================== 공정 시작 ====================
-    def start(self) -> None:
-        """Start 버튼·원격 PROCESS_START·RECIPE_PROCESS_START 공통. 적재된 레시피가 있으면 CSV 리스트, 없으면 수동 공정."""
+    def recipe_display_name(self) -> str:
+        """적재된 레시피의 표시 이름(파일 이름)."""
+        return os.path.basename(str(self.st.csv_file_path or ""))
+
+    def start(self, manual_inputs: Optional[ManualInputs] = None) -> None:
+        """Start 버튼·원격 PROCESS_START·RECIPE_PROCESS_START 공통. 적재된 레시피가 있으면 CSV 리스트, 없으면 수동 공정.
+        manual_inputs 가 있으면 원격 수동 시작이다 — 노트북 입력칸 대신 그 값으로 시작하고, 레시피가 적재돼 있으면 거부한다."""
         st, ports = self.st, self.ports
+        # 원격 수동 시작만: 공정 중이거나 레시피가 적재돼 있으면 거부(노트북 입력칸은 건드리지 않는다)
+        if manual_inputs is not None:
+            if st.is_active():
+                ports.alert("warning", "경고", "이미 공정이 진행 중입니다.")
+                return
+            if st.csv_file_path:
+                ports.alert("warning", "시작 불가",
+                            f"장비에 레시피가 적재돼 있습니다({self.recipe_display_name()}). "
+                            "레시피로 시작하거나 적재를 해제하세요.")
+                return
         # 히터 레시피가 돌아도, 이 공정이 히터를 건드리지 않으면 시작을 허용한다.
         if ports.heater_recipe_running():
             if st.csv_file_path and csv_rows_use_heater(st.csv_rows):
@@ -221,11 +240,16 @@ class ProcessService:
             return
 
         try:
-            params = build_manual_params(ports.read_manual_inputs())
+            params = build_manual_params(manual_inputs if manual_inputs is not None
+                                         else ports.read_manual_inputs())
 
         except (ValueError, TypeError) as e:
             ports.alert("warning", "입력 오류", f"공정 파라미터가 잘못되었습니다:\n{e}")
             return
+
+        # 원격 수동 시작이 통과했다 — 이제 노트북 입력칸에도 보여 준다
+        if manual_inputs is not None:
+            ports.show_manual_inputs(manual_inputs)
 
         # ★ 단일 공정(수동 Start)일 때의 공정 이름
         st.current_name = "Single CHK"

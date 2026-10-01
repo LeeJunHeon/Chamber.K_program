@@ -4,7 +4,7 @@
 
 옮기기 전에는 MainDialog.__init__ 안의 중첩 함수(_erp_exec_one, _erp_drain_commands)와
 MainDialog._erp_silent_failure / _remote_alert_reason 이었다. 본문의 순서·조건·문구·try 범위는 그대로다.
-바깥 일(ERP 리포터, 로그, 모달 창 확인, 입력칸 위젯, 공정 시작·정지, 레시피 적재, 히터 명령)은 host 로만 부른다.
+바깥 일(ERP 리포터, 로그, 모달 창 확인, 버튼 위젯, 공정 시작·정지, 레시피 적재, 히터 명령)은 host 로만 부른다.
 히터 명령(HEATER_SV, HEATER_ONOFF, RECIPE_HEATER_RUN, …)은 5단계(히터 서비스)까지 host.exec_heater_command 에 맡긴다.
 
 이 모듈은 PyQt6·UI·main·lib.logger 를 import 하지 않는다(위젯은 host 가 건네주는 객체의 메서드만 부른다).
@@ -13,6 +13,8 @@ import csv
 import os
 import tempfile
 from typing import Any, List, Optional, Protocol, Tuple
+
+from core.params import ManualInputs
 
 # === ERP 원격 명령 실행 (메인 스레드 전용) ===
 # 안전: 아래 화이트리스트에 없는 명령은 실행하지 않는다.
@@ -25,34 +27,33 @@ PLC_BUTTONS = {
     "ION_button",   # 이오나이저 Remote On
 }
 
-# PROCESS_START 가 입력칸에 쓰는 (종류, 위젯 이름, 인자 이름) — 쓰는 순서 그대로
-#  종류 "check" = setChecked(bool(값)), "text" = setPlainText/setText(str(값)). 값이 None 이면 건너뛴다.
-PROCESS_START_FIELDS: List[Tuple[str, str, str]] = [
-    ("check", "G1_checkbox", "useG1"),
-    ("text", "G1_edit", "g1"),
-    ("check", "G2_checkbox", "useG2"),
-    ("text", "G2_edit", "g2"),
-    ("check", "Ar_gas_radio", "useAr"),
-    ("text", "Ar_flow_edit", "arFlow"),
-    ("check", "O2_gas_radio", "useO2"),
-    ("text", "O2_flow_edit", "o2Flow"),
-    ("text", "working_pressure_edit", "workingPressure"),
-    ("check", "rf_power_checkbox", "useRf"),
-    ("text", "RF_power_edit", "rfPower"),
-    # RF Pulse — 전용 칸을 쓴다. 웹 폼이 안 보내면 키가 없어 미사용.
-    #  RF power 와 독립이므로 offset/param 을 건드리지 않는다.
-    ("check", "rf_pulse_checkbox", "useRfPulse"),
-    ("text", "rfp_power_edit", "rfPulsePower"),
-    ("text", "rfp_freq_edit", "rfPulseFreq"),
-    ("text", "rfp_duty_edit", "rfPulseDuty"),
-    ("check", "dc_power_checkbox", "useDc"),
-    ("text", "DC_power_edit", "dcPower"),
-    ("check", "dc_delay_checkbox", "dcDelay"),
-    ("text", "Shutter_delay_edit", "shutterDelay"),
-    ("text", "process_time_edit", "processTime"),
-    ("text", "offset_edit", "offset"),
-    ("text", "param_edit", "param"),
-]
+# 원격 수동 시작(PROCESS_START) 인자 → 수동 입력칸 원시값(ManualInputs).
+#  노트북 입력칸을 먼저 고쳐 쓰지 않는다 — 시작이 통과한 뒤에만 노트북에 보여 준다(B1).
+_ARG_CHECKS = {"use_g1": "useG1", "use_g2": "useG2", "use_ar": "useAr", "use_o2": "useO2",
+               "use_rf": "useRf", "use_rf_pulse": "useRfPulse", "use_dc": "useDc", "use_dc_delay": "dcDelay"}
+_ARG_TEXTS = {"g1_name_text": "g1", "g2_name_text": "g2", "ar_flow_text": "arFlow", "o2_flow_text": "o2Flow",
+              "working_pressure_text": "workingPressure", "rf_power_text": "rfPower",
+              "rfp_power_text": "rfPulsePower", "rfp_freq_text": "rfPulseFreq", "rfp_duty_text": "rfPulseDuty",
+              "dc_power_text": "dcPower", "shutter_delay_text": "shutterDelay", "process_time_text": "processTime"}
+
+
+def manual_inputs_from_args(args, current_offset: str, current_param: str) -> ManualInputs:
+    """원격 PROCESS_START 인자 → ManualInputs.
+    - 체크 항목: 키가 없으면 False, 있으면 bool(값)
+    - 값 칸: 없거나 None 이면 "", 있으면 str(값)
+    - offset/param: 값이 있고 공백이 아니면 그 값(장비 값을 덮어씀), 없거나 빈칸이면 장비 현재 값"""
+    a = args or {}
+
+    def _cal(key, current):
+        v = a.get(key)
+        return str(v) if v is not None and str(v).strip() != "" else current
+
+    kw = {f: (key in a and bool(a.get(key))) for f, key in _ARG_CHECKS.items()}
+    kw.update({f: ("" if a.get(key) is None else str(a.get(key))) for f, key in _ARG_TEXTS.items()})
+    kw["offset_text"] = _cal("offset", current_offset)
+    kw["param_text"] = _cal("param", current_param)
+    return ManualInputs(**kw)
+
 
 # 웹에서 만든 레시피를 CSV 로 저장할 때의 열
 PROCESS_RECIPE_COLS = ["Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
@@ -130,7 +131,13 @@ class ErpCommandHost(Protocol):
         """이름으로 입력칸·버튼 위젯을 얻는다(없으면 None)."""
 
     def start_process(self) -> None:
-        """공정을 시작한다(Start 버튼과 같은 경로)."""
+        """공정을 시작한다(Start 버튼과 같은 경로) — 적재된 레시피로 시작(RECIPE_PROCESS_START)."""
+
+    def current_rf_cal(self) -> Tuple[str, str]:
+        """장비 화면의 RF 보정값 (offset, param) 지금 글자."""
+
+    def start_manual(self, inputs: ManualInputs) -> None:
+        """원격 수동 시작 — 입력값으로 시작한다(노트북 입력칸은 시작이 통과한 뒤에만 바뀐다)."""
 
     def stop_process(self) -> None:
         """공정 STOP(STOP 버튼과 같은 경로)."""
@@ -175,29 +182,10 @@ class ErpCommandRunner:
                 raise RuntimeError(f"버튼 없음: {name}")
             btn.setChecked(bool(args.get("on")))
         elif name == "PROCESS_START":
-            def _set_text(widget_name: str, value):
-                w = host.widget(widget_name)
-                if w is None or value is None:
-                    return
-                s = str(value)
-                if hasattr(w, "setPlainText"):
-                    w.setPlainText(s)
-                elif hasattr(w, "setText"):
-                    w.setText(s)
-
-            def _set_check(widget_name: str, value):
-                w = host.widget(widget_name)
-                if w is not None and value is not None:
-                    w.setChecked(bool(value))
-
-            if args:
-                for kind, widget_name, key in PROCESS_START_FIELDS:
-                    if kind == "check":
-                        _set_check(widget_name, args.get(key))
-                    else:
-                        _set_text(widget_name, args.get(key))
-
-            host.start_process()
+            # 원격 수동 시작 — 입력칸에 먼저 쓰지 않고 인자로 만든 입력값으로 시작한다.
+            #  거부·입력 오류면 노트북 입력칸은 그대로, 시작이 통과한 뒤에만 노트북에 보여 준다.
+            inputs = manual_inputs_from_args(args, *host.current_rf_cal())
+            host.start_manual(inputs)
         elif name == "PROCESS_STOP":
             host.stop_process()
         elif name == "ALL_STOP":

@@ -612,11 +612,8 @@ def s13a_loaded_recipe_local_start(h):
 def s13b_loaded_recipe_remote_process_start(h):
     _load_local(h, [csv_row("R1", dc_power="100")])
     args = dict(_REMOTE_ARGS, dcPower=150, workingPressure=3)
-    h.remote("PROCESS_START", args)                 # 원격 수동 시작이어도 적재된 레시피가 돈다(지금 동작)
-    h.check("시작 뒤", snapshot=True)
-    h.ctrl_run()
-    h.ctrl_finish()
-    h.check("리스트 완료", snapshot=True)
+    h.remote("PROCESS_START", args)                 # 레시피가 적재돼 있으면 원격 수동 시작은 거부(B1) — 적재·입력칸 그대로
+    h.check("거부 뒤", snapshot=True)
 
 
 def s14_plc_link_down_up(h):

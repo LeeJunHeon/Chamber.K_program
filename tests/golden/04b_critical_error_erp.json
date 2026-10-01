@@ -517,7 +517,7 @@
         {
          "label": "for.P",
          "value": "0.0",
-         "setpoint": "200",
+         "setpoint": "",
          "unit": "W"
         },
         {
@@ -742,7 +742,7 @@
         {
          "label": "for.P",
          "value": "0.0",
-         "setpoint": "200",
+         "setpoint": "",
          "unit": "W"
         },
         {

@@ -51,6 +51,7 @@ class FakePorts:
     def set_buttons(self, start, stop, select_csv=None): self._r("set_buttons", start, stop, select_csv)
     def is_closing(self): return self._r("is_closing")
     def read_manual_inputs(self): return self._r("read_manual_inputs")
+    def show_manual_inputs(self, inputs): self._r("show_manual_inputs", inputs)   # B1
     def apply_params_to_ui(self, params): self._r("apply_params_to_ui", params)
     def build_csv_params(self, row): return self._r("build_csv_params", row)
     def open_process_log(self, prefix): self._r("open_process_log", prefix)

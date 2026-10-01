@@ -8,7 +8,8 @@ import tempfile
 
 import pytest
 
-from integrations.erp_commands import (ErpCommandHost, ErpCommandRunner, PLC_BUTTONS, PROCESS_START_FIELDS,
+from core.params import ManualInputs
+from integrations.erp_commands import (ErpCommandHost, ErpCommandRunner, PLC_BUTTONS, manual_inputs_from_args,
                                        PROCESS_RECIPE_COLS, HEATER_RECIPE_COLS, alert_reason, write_recipe_csv)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -63,6 +64,8 @@ class FakeHost:
     def remote_notes(self): return self.notes
     def widget(self, name): return self.widgets.get(name)
     def start_process(self): self._r("start_process"); self._fire("start")
+    def current_rf_cal(self): self._r("current_rf_cal"); return getattr(self, "rf_cal", ("6.79", "1.0395"))
+    def start_manual(self, inputs): self._r("start_manual", inputs); self._fire("start")
     def stop_process(self): self._r("stop_process")
     def all_stop(self): self._r("all_stop")
     def load_recipe_file(self, path): self._r("load_recipe_file", path); self._fire("load", path)
@@ -106,32 +109,33 @@ def test_plc_button_on_off_and_missing():
     assert "Door_Button" in PLC_BUTTONS and "ION_button" in PLC_BUTTONS and len(PLC_BUTTONS) == 14
 
 
-def test_process_start_writes_fields_in_order_then_starts():
-    h = FakeHost()
-    for kind, name, key in PROCESS_START_FIELDS:
-        h.widgets[name] = Widget(h, name, plain=(name != "G2_edit"))   # G2_edit 는 setText 만 있는 위젯
-    args = {key: (True if kind == "check" else f"v-{key}") for kind, name, key in PROCESS_START_FIELDS}
-    args["rfPower"] = None                                             # None 은 건너뛴다
-    del h.widgets["param_edit"]                                        # 없는 위젯도 건너뛴다
-    ErpCommandRunner(h).exec_one({"command": "PROCESS_START", "args": args})
-    exp = []
-    for kind, name, key in PROCESS_START_FIELDS:
-        if name == "param_edit" or key == "rfPower":
-            continue
-        if kind == "check":
-            exp.append(["w.setChecked", name, True])
-        else:
-            exp.append(["w.setText" if name == "G2_edit" else "w.setPlainText", name, f"v-{key}"])
-    assert h.calls == exp + [["start_process"]]
-    assert [f[1] for f in PROCESS_START_FIELDS][:4] == ["G1_checkbox", "G1_edit", "G2_checkbox", "G2_edit"]
-    assert PROCESS_START_FIELDS[-2:] == [("text", "offset_edit", "offset"), ("text", "param_edit", "param")]
+def test_process_start_builds_inputs_and_starts_without_touching_widgets():
+    """B1: 원격 수동 시작은 입력칸에 먼저 쓰지 않는다 — 인자로 입력값을 만들어 host.start_manual 로 넘긴다."""
+    h = FakeHost(rf_cal=("6.79", "1.0395"))
+    h.widgets = {"G1_checkbox": Widget(h, "G1_checkbox"), "G1_edit": Widget(h, "G1_edit")}
+    ErpCommandRunner(h).exec_one({"command": "PROCESS_START",
+                                  "args": {"useG1": True, "g1": "CeO2", "useAr": 1, "arFlow": 20}})
+    assert h.names() == ["current_rf_cal", "start_manual"]
+    inp = h.calls[-1][1]
+    assert isinstance(inp, ManualInputs)
+    assert (inp.use_g1, inp.g1_name_text, inp.use_ar, inp.ar_flow_text) == (True, "CeO2", True, "20")
+    assert (inp.offset_text, inp.param_text) == ("6.79", "1.0395")
 
 
-def test_process_start_without_args_touches_nothing():
-    h = FakeHost(widgets={})
-    h.widgets["G1_checkbox"] = Widget(h, "G1_checkbox")
-    ErpCommandRunner(h).exec_one({"command": "PROCESS_START", "args": {}})
-    assert h.calls == [["start_process"]]
+def test_manual_inputs_from_args_missing_keys_none_and_calibration():
+    inp = manual_inputs_from_args({}, "6.79", "1.0395")
+    assert all(getattr(inp, f) is False for f in ("use_g1", "use_g2", "use_ar", "use_o2", "use_rf",
+                                                  "use_rf_pulse", "use_dc", "use_dc_delay"))
+    assert all(getattr(inp, f) == "" for f in ("g1_name_text", "g2_name_text", "ar_flow_text", "o2_flow_text",
+                                               "working_pressure_text", "rf_power_text", "rfp_power_text",
+                                               "rfp_freq_text", "rfp_duty_text", "dc_power_text",
+                                               "shutter_delay_text", "process_time_text"))
+    assert (inp.offset_text, inp.param_text) == ("6.79", "1.0395")
+    inp = manual_inputs_from_args({"useRf": 0, "useDc": "yes", "rfPower": None, "dcPower": 100.5,
+                                   "offset": " ", "param": 2}, "6.79", "1.0395")
+    assert (inp.use_rf, inp.use_dc, inp.rf_power_text, inp.dc_power_text) == (False, True, "", "100.5")
+    assert (inp.offset_text, inp.param_text) == ("6.79", "2")     # 빈칸 offset → 장비 값, param → 덮어씀
+    assert manual_inputs_from_args(None, "a", "b").offset_text == "a"
 
 
 def test_stop_and_all_stop():

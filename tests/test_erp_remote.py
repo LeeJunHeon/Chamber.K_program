@@ -104,7 +104,7 @@ def test_T124_already_running_and_atmosphere_busy(erp, monkeypatch):
 def test_T125_bad_process_params(erp, monkeypatch):
     w = erp; _params(w, ar="")
     monkeypatch.setattr(w.plc_controller, "read_main_valve_state", lambda: (True, True))
-    ok, why = run_remote(w, "PROCESS_START")
+    ok, why = run_remote(w, "PROCESS_START", {"useAr": True, "arFlow": ""})
     assert ok is False and w._mb.count() == 0
     assert why.startswith("입력 오류: 공정 파라미터가 잘못되었습니다") and "Ar 가스 유량" in why
 
@@ -113,10 +113,10 @@ def test_T126_process_start_silent_failure_is_reported(erp, monkeypatch):
     """창도 예외도 없이 조용히 return 하는 경로 — 결과로 판정한다."""
     w = erp; _params(w)
     monkeypatch.setattr(w.plc_controller, "read_main_valve_state", lambda: (True, True))
-    monkeypatch.setattr(w, "_handle_start_process", lambda: None)
+    monkeypatch.setattr(w, "_handle_remote_manual_start", lambda inputs: None)
     ok, why = run_remote(w, "PROCESS_START")
     assert ok is False and why == "공정이 시작되지 않았습니다 (장비 로그 확인)"
-    monkeypatch.setattr(w, "_handle_start_process", lambda: setattr(w, "process_running", True))
+    monkeypatch.setattr(w, "_handle_remote_manual_start", lambda inputs: setattr(w, "process_running", True))
     ok, why = run_remote(w, "PROCESS_START")
     assert ok is True and why == ""
 
@@ -242,15 +242,15 @@ def test_T134_next_command_not_blocked_after_failure(erp, monkeypatch):
     from PyQt6.QtWidgets import QApplication
     assert QApplication.activeModalWidget() is None
     monkeypatch.setattr(w.plc_controller, "read_main_valve_state", lambda: (True, True))
-    monkeypatch.setattr(w, "_handle_start_process", lambda: setattr(w, "process_running", True))
+    monkeypatch.setattr(w, "_handle_remote_manual_start", lambda inputs: setattr(w, "process_running", True))
     ok, why = run_remote(w, "PROCESS_START")
     assert ok is True and "대화상자" not in why
 
 
 def test_T135_information_only_is_success(erp, monkeypatch):
     w = erp
-    monkeypatch.setattr(w, "_handle_start_process",
-                        lambda: (w._alert("information", "안내", "참고 사항"), setattr(w, "process_running", True)))
+    monkeypatch.setattr(w, "_handle_remote_manual_start",
+                        lambda inputs: (w._alert("information", "안내", "참고 사항"), setattr(w, "process_running", True)))
     ok, why = run_remote(w, "PROCESS_START")
     assert ok is True and why == "" and w._mb.count() == 0
 
@@ -349,8 +349,8 @@ def test_T140_csv_row_error_cancels_before_notice(erp, monkeypatch):
 def test_T141_notice_suppressed_inside_remote_command(erp, monkeypatch):
     w = erp
     w.erp.notice.reset_mock()
-    monkeypatch.setattr(w, "_handle_start_process",
-                        lambda: (w._notice("process", "warning", "안내 제목", "본문"),
+    monkeypatch.setattr(w, "_handle_remote_manual_start",
+                        lambda inputs: (w._notice("process", "warning", "안내 제목", "본문"),
                                  setattr(w, "process_running", True)))
     ok, why = run_remote(w, "PROCESS_START")
     spin(50)

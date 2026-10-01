@@ -109,6 +109,9 @@ class _MainProcessPorts:
     def read_manual_inputs(self):
         return self.w._read_manual_inputs()
 
+    def show_manual_inputs(self, inputs):
+        self.w._show_manual_inputs(inputs)
+
     def apply_params_to_ui(self, params):
         self.w._apply_params_to_ui(params)
 
@@ -302,6 +305,12 @@ class _MainErpHost:
 
     def start_process(self):
         self.w._handle_start_process()
+
+    def current_rf_cal(self):
+        return (self.w.ui.offset_edit.toPlainText(), self.w.ui.param_edit.toPlainText())
+
+    def start_manual(self, inputs):
+        self.w._handle_remote_manual_start(inputs)
 
     def stop_process(self):
         self.w._on_sputter_stop_clicked()
@@ -3477,10 +3486,40 @@ class MainDialog(QDialog):
             use_dc_delay=ui.dc_delay_checkbox.isChecked(),
         )
 
+    # ManualInputs 필드 → 수동 입력칸 위젯(_read_manual_inputs 와 같은 짝)
+    _MANUAL_INPUT_WIDGETS = (
+        ("use_ar", "Ar_gas_radio"), ("ar_flow_text", "Ar_flow_edit"),
+        ("use_o2", "O2_gas_radio"), ("o2_flow_text", "O2_flow_edit"),
+        ("working_pressure_text", "working_pressure_edit"),
+        ("use_dc", "dc_power_checkbox"), ("dc_power_text", "DC_power_edit"),
+        ("use_rf", "rf_power_checkbox"), ("rf_power_text", "RF_power_edit"),
+        ("offset_text", "offset_edit"), ("param_text", "param_edit"),
+        ("use_rf_pulse", "rf_pulse_checkbox"), ("rfp_power_text", "rfp_power_edit"),
+        ("rfp_freq_text", "rfp_freq_edit"), ("rfp_duty_text", "rfp_duty_edit"),
+        ("shutter_delay_text", "Shutter_delay_edit"), ("process_time_text", "process_time_edit"),
+        ("use_g1", "G1_checkbox"), ("g1_name_text", "G1_edit"),
+        ("use_g2", "G2_checkbox"), ("g2_name_text", "G2_edit"),
+        ("use_dc_delay", "dc_delay_checkbox"),
+    )
+
+    def _show_manual_inputs(self, inputs: ManualInputs) -> None:
+        """입력값을 수동 입력칸에 쓴다(원격 수동 시작이 통과한 뒤 — 노트북 화면이 실제로 시작한 값과 같게)."""
+        for field, name in self._MANUAL_INPUT_WIDGETS:
+            v = getattr(inputs, field)
+            w = getattr(self.ui, name)
+            if isinstance(v, bool):
+                w.setChecked(v)
+            else:
+                w.setPlainText(v)
+
     @Slot()
     def _handle_start_process(self):
         """Start 버튼·원격 시작 공통. 본문은 core.process_service.ProcessService.start."""
         self.proc.start()
+
+    def _handle_remote_manual_start(self, inputs: ManualInputs) -> None:
+        """원격 수동 시작(ERP PROCESS_START) — 노트북 입력칸이 아니라 받은 입력값으로 시작한다."""
+        self.proc.start(manual_inputs=inputs)
 
     def _start_csv_process_from_path(self, path: str):
         """파일 대화상자 없이 지정된 CSV/엑셀 레시피를 적재한다(원격 실행용·파일 선택 뒤 공통).

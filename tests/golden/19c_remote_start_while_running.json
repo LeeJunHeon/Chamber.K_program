@@ -705,7 +705,7 @@
         {
          "label": "DC Power",
          "value": "99.80",
-         "setpoint": "150",
+         "setpoint": "100",
          "unit": "W"
         },
         {
@@ -772,7 +772,7 @@
         {
          "label": "Ar",
          "value": 19.8,
-         "setpoint": "20",
+         "setpoint": "19.80",
          "unit": "sccm"
         },
         {
@@ -793,17 +793,17 @@
         },
         {
          "label": "Working P",
-         "setpoint": "5",
+         "setpoint": "4.9",
          "unit": "mTorr"
         },
         {
          "label": "공정 시간",
-         "setpoint": "1",
+         "setpoint": "00:00",
          "unit": "분"
         },
         {
          "label": "셔터 딜레이",
-         "setpoint": "1",
+         "setpoint": "00:00",
          "unit": "분"
         }
        ]

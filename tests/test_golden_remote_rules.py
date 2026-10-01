@@ -1,0 +1,96 @@
+# -*- coding: utf-8 -*-
+"""골든 — 원격 조작 규칙(B단계). 하니스·기록 방식은 test_golden_process 와 같다. 갱신은 CHK_UPDATE_GOLDEN=1 일 때만.
+
+  B1 원격 수동 시작(PROCESS_START) — 인자로 입력값을 만들고, 통과한 뒤에만 노트북 입력칸에 보여 준다
+    26a 레시피가 적재된 상태에서 원격 수동 시작 → 거부, 노트북 입력칸 전체 그대로
+        (거부 자체와 상태 스냅샷은 13b 가 고정한다 — 여기서는 입력칸 22개 전후 비교만)
+    26b 일부 키 없이 원격 수동 시작(useRfPulse·dcDelay 키 없음, 노트북은 RF Pulse·DC delay 체크) → 둘 다 끈 채로 시작
+    26c offset·param 을 안 보냄 → 장비 값 유지 / 보냄 → 덮어씀
+    26d 원격 수동 시작 입력 오류 → 거부, 노트북 입력칸 그대로
+"""
+import re
+
+import pytest
+
+from test_main_heater import win, fresh   # noqa: F401  (픽스처 재사용)
+from test_golden_process import H, check_golden, csv_row, _load_local, _REMOTE_ARGS   # noqa: F401
+
+# 수동 입력칸 22개 — (위젯 이름, 체크박스인가)
+_FIELDS = (("Ar_gas_radio", True), ("Ar_flow_edit", False), ("O2_gas_radio", True), ("O2_flow_edit", False),
+           ("working_pressure_edit", False), ("dc_power_checkbox", True), ("DC_power_edit", False),
+           ("rf_power_checkbox", True), ("RF_power_edit", False), ("offset_edit", False), ("param_edit", False),
+           ("rf_pulse_checkbox", True), ("rfp_power_edit", False), ("rfp_freq_edit", False),
+           ("rfp_duty_edit", False), ("Shutter_delay_edit", False), ("process_time_edit", False),
+           ("G1_checkbox", True), ("G1_edit", False), ("G2_checkbox", True), ("G2_edit", False),
+           ("dc_delay_checkbox", True))
+
+
+def _fields(h, label):
+    ui = h.w.ui
+    h.sink.fields(label, {n: (getattr(ui, n).isChecked() if chk else getattr(ui, n).toPlainText())
+                          for n, chk in _FIELDS})
+
+
+def _notebook(h, **over):
+    """노트북 수동 입력칸을 정해진 값으로(기록되는 시그널은 없다 — 스테이지만 기록된다)."""
+    vals = dict(Ar_gas_radio=True, Ar_flow_edit="15", O2_gas_radio=False, O2_flow_edit="",
+                working_pressure_edit="4", dc_power_checkbox=True, DC_power_edit="80",
+                rf_power_checkbox=False, RF_power_edit="", offset_edit="7.10", param_edit="1.1",
+                rf_pulse_checkbox=False, rfp_power_edit="", rfp_freq_edit="", rfp_duty_edit="",
+                Shutter_delay_edit="2", process_time_edit="3", G1_checkbox=False, G1_edit="",
+                G2_checkbox=True, G2_edit="Ti", dc_delay_checkbox=False)
+    vals.update(over)
+    ui = h.w.ui
+    for n, v in vals.items():
+        w = getattr(ui, n)
+        w.setChecked(v) if isinstance(v, bool) else w.setPlainText(v)
+
+
+def s26a_loaded_recipe_remote_manual_fields_untouched(h):
+    _load_local(h, [csv_row("R1", dc_power="100")])
+    _notebook(h)
+    _fields(h, "거부 전")
+    h.remote("PROCESS_START", dict(_REMOTE_ARGS, dcPower=150, workingPressure=3, offset=9, param=9))
+    _fields(h, "거부 뒤")
+
+
+def s26b_missing_keys_turn_off(h):
+    _notebook(h, rf_pulse_checkbox=True, rfp_power_edit="100", dc_delay_checkbox=True)
+    _fields(h, "시작 전")
+    args = dict(_REMOTE_ARGS)                        # useRfPulse·dcDelay 키 없음
+    assert "useRfPulse" not in args and "dcDelay" not in args
+    h.remote("PROCESS_START", args)
+    _fields(h, "시작 뒤")
+    h.check("시작 뒤", snapshot=True)
+    h.ctrl_run()
+    h.ctrl_finish()
+
+
+def s26c_rf_calibration_keep_or_override(h):
+    _notebook(h, offset_edit="7.10", param_edit="1.1")
+    h.remote("PROCESS_START", dict(_REMOTE_ARGS, useRf=True, rfPower=150), cid=1)    # offset·param 안 보냄
+    _fields(h, "보내지 않음 → 장비 값")
+    h.ctrl_run()
+    h.ctrl_finish()
+    h.remote("PROCESS_START", dict(_REMOTE_ARGS, useRf=True, rfPower=150, offset="6.5", param=" 1.2 "), cid=2)
+    _fields(h, "보냄 → 덮어씀")
+    h.ctrl_run()
+    h.ctrl_finish()
+
+
+def s26d_input_error_fields_untouched(h):
+    _notebook(h)
+    _fields(h, "거부 전")
+    h.remote("PROCESS_START", dict(_REMOTE_ARGS, arFlow="", dcPower="abc"))
+    _fields(h, "거부 뒤")
+    h.check("거부 뒤", snapshot=True)
+
+
+SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())
+             if re.match(r"s\d\d[a-z]?_", name) and callable(fn)}
+
+
+@pytest.mark.parametrize("name", list(SCENARIOS))
+def test_golden_remote_rules(name, H):
+    SCENARIOS[name](H)
+    check_golden(name, H.result())
