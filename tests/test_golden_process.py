@@ -539,10 +539,7 @@ def s08b_csv_stop_during_step(h):
 
 
 def s09_csv_row2_value_error(h):
-    _load_local(h, [csv_row("S1"), csv_row("S2", working_pressure="abc")])
-    h.w.ui.Sputter_Start_Button.click()
-    h.ctrl_run()
-    h.ctrl_finish()
+    _load_local(h, [csv_row("S1"), csv_row("S2", working_pressure="abc")])     # 적재 때 2번째 행 검사로 실패(E3)
     h.check("2번째 행 오류 뒤", snapshot=True)
 
 

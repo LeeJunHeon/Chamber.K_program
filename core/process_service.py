@@ -50,6 +50,9 @@ class ProcessPorts(Protocol):
     def build_csv_params(self, row: dict) -> dict:
         """CSV 한 행 → 공정 params(화면 offset/param 칸 포함). 잘못되면 ValueError."""
 
+    def check_csv_row(self, row: dict) -> None:
+        """CSV 한 행을 공정 params 를 만들 때와 같은 검사로 확인한다(경고 로그 없음). 잘못되면 ValueError(E3)."""
+
     def open_process_log(self, prefix: str) -> None:
         """이번 공정용 로그 파일을 연다."""
 
@@ -333,6 +336,22 @@ class ProcessService:
 
         if ports.is_closing() or not st.csv_rows:
             return
+
+        # 모든 공정 행을 적재할 때 검사한다(E3) — 첫 행만 보면 2번째 이후 행 오류는 공정이 돌다가 그 행에서 멈춘다.
+        #  딜레이 행(0초 포함)과 내용 없는 행은 건너뛴다. 검사는 공정 params 를 만드는 것과 같고(화면 offset/param 칸),
+        #  경고 로그는 남기지 않는다. 처음 걸린 행에서 적재 실패로 끝낸다.
+        for n, row in enumerate(st.csv_rows, 1):
+            if parse_delay_seconds((row.get("Process_name") or "").strip()) is not None:
+                continue
+            if not row_has_content(row):
+                continue
+            try:
+                ports.check_csv_row(row)
+            except Exception as e:
+                which = "첫 번째" if n == 1 else f"{n}번째"
+                ports.alert("warning", "CSV 레시피 오류", f"{which} 공정 파라미터가 잘못되었습니다:\n{e}")
+                self._load_failed()
+                return
 
         first_row = st.csv_rows[0]
         first_name = (first_row.get("Process_name") or "").strip()

@@ -54,6 +54,7 @@ class FakePorts:
     def show_manual_inputs(self, inputs): self._r("show_manual_inputs", inputs)   # B1
     def apply_params_to_ui(self, params): self._r("apply_params_to_ui", params)
     def build_csv_params(self, row): return self._r("build_csv_params", row)
+    def check_csv_row(self, row): return self._r("check_csv_row", row)            # E3
     def open_process_log(self, prefix): self._r("open_process_log", prefix)
     def reset_stats(self): self._r("reset_stats")
     def load_table(self, path, preferred_sheets): return self._r("load_table", path, preferred_sheets)
@@ -254,8 +255,8 @@ def test_load_recipe_preview_first_row(recipe_file):
     st = ProcessState()
     svc, p = _svc(st)
     svc.load_recipe_file(recipe_file)
-    assert p.names() == ["is_closing", "log", "load_table", "is_closing", "build_csv_params", "is_closing",
-                         "apply_params_to_ui", "stage"]
+    assert p.names() == ["is_closing", "log", "load_table", "is_closing", "check_csv_row",   # E3: 모든 행 검사
+                         "build_csv_params", "is_closing", "apply_params_to_ui", "stage"]
     assert p.calls[1] == ["log", "정보", f"CSV 공정 리스트 파일 선택: {recipe_file}"]
     assert p.calls[-1] == ["stage", "CSV 공정: 1/1 - S1"]
     assert st.csv_file_path == recipe_file and st.csv_rows == [dict(ROW)]

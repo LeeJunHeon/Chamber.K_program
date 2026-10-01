@@ -119,6 +119,9 @@ class _MainProcessPorts:
     def build_csv_params(self, row):
         return self.w._build_params_from_csv_row(row)
 
+    def check_csv_row(self, row):
+        build_csv_params(row, self.w.ui.offset_edit.toPlainText(), self.w.ui.param_edit.toPlainText())
+
     def open_process_log(self, prefix):
         set_process_log_file(prefix=prefix)
 
