@@ -112,3 +112,26 @@ def test_b2_active_process_rejection_keeps_running_recipe(recipe_file):
     svc, p = _svc(st)
     svc.load_recipe_file(recipe_file)
     assert p.calls[-1][2] == "변경 불가" and st.csv_file_path == "C:/r/old.csv" and st.csv_rows == [dict(ROW)]
+
+
+# ───────────────────────── B3 Start 는 적재할 때 읽은 내용 그대로 ─────────────────────────
+def test_b3_start_does_not_reread_file():
+    st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)])
+    svc, p = _svc(st, load_table=RuntimeError("다시 읽으면 안 된다"))
+    svc.start()
+    assert "load_table" not in p.names() and st.csv_mode is True and st.csv_index == 0
+
+
+@pytest.mark.parametrize("rows,blocked", [
+    ([dict(ROW)], False),
+    ([dict(ROW), dict(ROW, use_heater="1", heater_temp="300")], True),
+])
+def test_b3_heater_check_and_run_use_same_loaded_rows(rows, blocked):
+    """히터 레시피 실행 중 검사는 적재된 행으로 하고, 통과하면 같은 행이 실행된다."""
+    st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=list(rows))
+    svc, p = _svc(st, heater_recipe_running=True)
+    svc.start()
+    if blocked:
+        assert p.calls[-1][2] == "시작 불가" and st.csv_mode is False
+    else:
+        assert st.csv_mode is True and [c for c in p.calls if c[0] == "build_csv_params"][0][1] is st.csv_rows[0]

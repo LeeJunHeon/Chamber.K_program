@@ -232,9 +232,12 @@ class ProcessService:
 
         # === 1) CSV 모드인지 먼저 확인 ===
         if st.csv_file_path:
-            # CSV 로딩 & 리스트 공정 모드 진입
-            if not self.load_csv_list():
-                return  # 로딩 실패
+            # 적재할 때 읽은 행 그대로 실행한다(B3) — 파일을 다시 읽지 않는다. 그래서 히터 충돌 검사와
+            #  실제 실행이 같은 행을 쓴다. 적재 뒤에 파일을 고쳤으면 다시 적재해야 반영된다.
+            if not st.csv_rows:
+                ports.alert("warning", "시작 불가", "적재된 레시피 내용이 없습니다. 다시 적재하세요.")
+                return
+            st.csv_index = -1
             st.csv_mode = True
             self.start_next_csv_step()
             return

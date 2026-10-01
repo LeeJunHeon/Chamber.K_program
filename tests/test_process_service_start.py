@@ -198,27 +198,25 @@ def test_manual_input_error():
 
 
 # ───────────────────────── start(): CSV 분기 ─────────────────────────
-def test_csv_branch_load_then_mode_then_next_step():
-    st = ProcessState(csv_file_path="C:/r/a.csv")
-    rows = [{"#": "1", "Process_name": ""}, dict(ROW)]
-    svc, p = _svc(st, load_table=rows)
+def test_csv_branch_uses_loaded_rows_then_mode_then_next_step():
+    """B3: Start 는 파일을 다시 읽지 않고 적재된 행으로 csv_index=-1 → csv_mode → 다음 스텝."""
+    st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)], csv_index=3)
+    svc, p = _svc(st, load_table=RuntimeError("다시 읽으면 안 된다"))
     seen = {}
-    p.ret["start_next_csv_step"] = lambda: seen.update(mode=st.csv_mode, rows=list(st.csv_rows))
+    p.ret["start_next_csv_step"] = lambda: seen.update(mode=st.csv_mode, rows=list(st.csv_rows), idx=st.csv_index)
     svc.start_next_csv_step = lambda: p._r("start_next_csv_step")   # 3b: 다음 스텝은 port 가 아니라 서비스 메서드
     svc.start()
     assert p.names() == ["heater_recipe_running", "heater_gas_guard", "main_valve_open", "command_origin",
-                         "clear_plc_fault", "load_table", "start_next_csv_step"]
-    assert p.calls[5] == ["load_table", "C:/r/a.csv", ("Recipe", "recipe", "공정", "Sheet1")]
-    assert seen == {"mode": True, "rows": [dict(ROW)]}        # load → csv_mode → 다음 스텝 순서
-    assert st.csv_index == -1
+                         "clear_plc_fault", "start_next_csv_step"]
+    assert seen == {"mode": True, "rows": [dict(ROW)], "idx": -1}
 
 
-def test_csv_branch_load_failure_stops():
-    st = ProcessState(csv_file_path="C:/r/a.csv")
-    svc, p = _svc(st, load_table=[])
+def test_csv_branch_empty_loaded_rows_rejected():
+    st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[])
+    svc, p = _svc(st)
     svc.start()
-    assert p.names()[-2:] == ["load_table", "alert"] and "start_next_csv_step" not in p.names()
-    assert st.csv_mode is False
+    assert p.calls[-1] == ["alert", "warning", "시작 불가", "적재된 레시피 내용이 없습니다. 다시 적재하세요."]
+    assert "start_next_csv_step" not in p.names() and "load_table" not in p.names() and st.csv_mode is False
 
 
 # ───────────────────────── load_recipe_file ─────────────────────────

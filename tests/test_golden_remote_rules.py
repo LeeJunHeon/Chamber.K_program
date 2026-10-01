@@ -9,6 +9,8 @@
     26d 원격 수동 시작 입력 오류 → 거부, 노트북 입력칸 그대로
   B2 레시피 적재가 실패하면 적재 상태를 비운다
     26e 정상 적재 뒤 실패 적재 4가지(없는 파일·읽기 오류·빈 레시피·첫 행 오류) → 각각 적재 해제
+  B3 Start 는 적재할 때 읽은 내용 그대로 실행한다
+    26f 적재 뒤 파일 내용을 바꾸고 Start → 적재할 때 내용으로 실행
 """
 import re
 
@@ -123,6 +125,18 @@ def s26e_failed_load_releases_recipe(h):
     h.w._start_csv_process_from_path(h.write_csv([csv_row("B1", working_pressure="abc")], name="bad.csv"))
     h.flush()
     h.check("첫 행 오류 뒤", snapshot=True)
+
+
+def s26f_start_uses_rows_read_at_load(h):
+    path = h.write_csv([csv_row("L1", dc_power="100")], name="edited.csv")
+    h.w._start_csv_process_from_path(path)
+    h.check("적재", snapshot=True)
+    h.write_csv([csv_row("E1", dc_power="250"), csv_row("E2", dc_power="300")], name="edited.csv")   # 적재 뒤 파일 수정
+    h.w.ui.Sputter_Start_Button.click()
+    h.check("Start 뒤", snapshot=True)
+    h.ctrl_run()
+    h.ctrl_finish()
+    h.check("리스트 완료", snapshot=True)
 
 
 SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())
