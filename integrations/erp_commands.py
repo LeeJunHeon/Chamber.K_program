@@ -163,6 +163,9 @@ class ErpCommandHost(Protocol):
     def load_recipe_file(self, path: str, name: str = "") -> None:
         """레시피 파일을 적재한다(파일 선택 뒤와 같은 경로). name: 표시 이름(원격 레시피 이름, 없으면 "")."""
 
+    def clear_recipe(self) -> None:
+        """레시피 적재를 해제한다(공정 중이면 경고창 문구로 거부)."""
+
     def csv_rows(self) -> list:
         """적재된 레시피 행 목록."""
 
@@ -216,6 +219,10 @@ class ErpCommandRunner:
             path = write_recipe_csv(rows, PROCESS_RECIPE_COLS, f"process_web_{c.get('id')}.csv")
             c["_csv_path"] = path        # 적재 결과 확인용(경고창 없이 조용히 return 하는 경로 대비)
             host.load_recipe_file(path, str(args.get("name") or ""))
+
+        elif name == "RECIPE_CLEAR":
+            # 원격 적재 해제(B5) — 공정 중이면 거부, 적재된 레시피가 없으면 아무것도 하지 않고 성공
+            host.clear_recipe()
 
         elif name == "RECIPE_PROCESS_START":
             # 적재된 CSV 레시피로 공정을 시작한다(장비 앞 Start 버튼과 동일 경로)

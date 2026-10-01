@@ -327,6 +327,9 @@ class _MainErpHost:
     def csv_file_path(self):
         return getattr(self.w, "csv_file_path", "")
 
+    def clear_recipe(self):
+        self.w.proc.clear_recipe()
+
     def process_active(self):
         return self.w._process_active()
 

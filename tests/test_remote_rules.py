@@ -196,3 +196,37 @@ def test_b4_erp_state_name_prefers_recipe_name():
     from test_erp_state import FakeSrc
     assert build_state(FakeSrc(rows=[{"a": 1}], path="C:/t/process_web_3.csv", rname="웹 A"))["csvRecipe"]["name"] == "웹 A"
     assert build_state(FakeSrc(rows=[{"a": 1}], path="C:/t/process_web_3.csv"))["csvRecipe"]["name"] == "process_web_3.csv"
+
+
+# ───────────────────────── B5 RECIPE_CLEAR ─────────────────────────
+def test_b5_clear_recipe_loaded():
+    st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)], recipe_name="웹 A")
+    svc, p = _svc(st)
+    svc.clear_recipe()
+    assert p.calls == [["stage", "레시피 적재 해제됨"], ["log", "정보", "[레시피] 적재 해제: 웹 A"]]
+    assert (st.csv_file_path, st.csv_rows, st.recipe_name) == (None, [], "")
+
+
+def test_b5_clear_recipe_nothing_loaded():
+    st = ProcessState()
+    svc, p = _svc(st)
+    svc.clear_recipe()
+    assert p.calls == [["log", "정보", "[레시피] 적재된 레시피가 없습니다(해제할 것 없음)"]]
+
+
+@pytest.mark.parametrize("kw", [dict(running=True), dict(csv_mode=True), dict(delay_active=True)])
+def test_b5_clear_recipe_rejected_while_active(kw):
+    st = ProcessState(csv_file_path="C:/r/a.csv", csv_rows=[dict(ROW)], **kw)
+    svc, p = _svc(st)
+    svc.clear_recipe()
+    assert p.calls == [["alert", "warning", "해제 불가", "공정 진행 중에는 레시피 적재를 해제할 수 없습니다."]]
+    assert st.csv_file_path == "C:/r/a.csv"
+
+
+def test_b5_runner_delegates_recipe_clear():
+    from integrations.erp_commands import ErpCommandRunner
+    from test_erp_commands import FakeHost
+    h = FakeHost()
+    ErpCommandRunner(h).exec_one({"command": "RECIPE_CLEAR", "args": {}})
+    assert h.calls == [["clear_recipe"]]
+    assert ErpCommandRunner(h).silent_failure("RECIPE_CLEAR", {}) == ""          # 결과 확인 분기 없음 → 성공

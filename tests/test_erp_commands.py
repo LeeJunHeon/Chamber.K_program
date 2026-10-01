@@ -70,6 +70,7 @@ class FakeHost:
     def all_stop(self): self._r("all_stop")
     def load_recipe_file(self, path, name=""): self._r("load_recipe_file", path, name); self._fire("load", path)
     def csv_rows(self): return self.rows
+    def clear_recipe(self): self._r("clear_recipe")              # B5
     def csv_file_path(self): return self.path
     def process_active(self): return self.active
     def heater_pending(self): return self.pending

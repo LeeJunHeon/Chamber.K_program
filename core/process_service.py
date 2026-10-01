@@ -362,6 +362,20 @@ class ProcessService:
         self.st.clear_csv_list()
         self.ports.stage("레시피 적재 실패")
 
+    def clear_recipe(self) -> None:
+        """레시피 적재 해제(원격 RECIPE_CLEAR, B5). 공정 중이면 거부, 적재된 레시피가 없으면 로그 한 줄만."""
+        st, ports = self.st, self.ports
+        if st.is_active():
+            ports.alert("warning", "해제 불가", "공정 진행 중에는 레시피 적재를 해제할 수 없습니다.")
+            return
+        if not st.csv_file_path:
+            ports.log("정보", "[레시피] 적재된 레시피가 없습니다(해제할 것 없음)")
+            return
+        name = self.recipe_display_name()
+        st.clear_csv_list()
+        ports.stage("레시피 적재 해제됨")
+        ports.log("정보", f"[레시피] 적재 해제: {name}")
+
     def load_csv_list(self) -> bool:
         """
         st.csv_file_path 에 지정된 CSV를 읽어서

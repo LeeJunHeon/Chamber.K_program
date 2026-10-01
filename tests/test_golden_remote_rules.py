@@ -13,6 +13,8 @@
     26f 적재 뒤 파일 내용을 바꾸고 Start → 적재할 때 내용으로 실행
   B4 레시피 이름과 원격 레시피 파일 이름
     26g 원격 레시피 이름이 상태에 보임(이름 있음 / 없음) — 원격 파일은 명령마다 다른 이름, 예전 파일 정리
+  B5 RECIPE_CLEAR (원격 적재 해제)
+    26h 대기 중 적재 있음 / 적재 없음 / 공정 중
 """
 import os
 import re
@@ -159,6 +161,21 @@ def s26g_recipe_names(h):
     h.check("노트북 적재 → 파일 이름", snapshot=True)
     h.remote("RECIPE_PROCESS_RUN", {"name": "웹 레시피 B", "rows": [csv_row("W4")]}, cid=4)
     _web_files(h, "다시 원격 적재 뒤")                            # 적재 중이던 건 노트북 파일 → 예전 웹 파일 모두 정리
+
+
+def s26h_recipe_clear(h):
+    h.remote("RECIPE_PROCESS_RUN", {"name": "웹 레시피 C", "rows": [csv_row("W1"), csv_row("W2")]}, cid=1)
+    h.check("적재", snapshot=True)
+    h.remote("RECIPE_CLEAR", {}, cid=2)                           # 대기 중 적재 있음 → 해제
+    h.check("해제 뒤", snapshot=True)
+    h.remote("RECIPE_CLEAR", {}, cid=3)                           # 적재 없음 → 아무것도 하지 않고 성공
+    h.check("다시 해제 뒤")
+    h.remote("RECIPE_PROCESS_RUN", {"name": "웹 레시피 D", "rows": [csv_row("W3")]}, cid=4)
+    h.remote("RECIPE_PROCESS_START", {}, cid=5)
+    h.remote("RECIPE_CLEAR", {}, cid=6)                           # 공정 중 → 거부
+    h.check("공정 중 해제 요청 뒤", snapshot=True)
+    h.ctrl_run()
+    h.ctrl_finish()
 
 
 SCENARIOS = {name[1:]: fn for name, fn in sorted(globals().items())
