@@ -35,9 +35,7 @@
    "files",
    [
     "이름 있음 적재 뒤",
-    [
-     "process_web_1.csv"
-    ]
+    []
    ]
   ],
   [
@@ -331,10 +329,7 @@
    "files",
    [
     "이름 없음 적재 뒤",
-    [
-     "process_web_1.csv",
-     "process_web_3.csv"
-    ]
+    []
    ]
   ],
   [
@@ -859,9 +854,7 @@
    "files",
    [
     "다시 원격 적재 뒤",
-    [
-     "process_web_4.csv"
-    ]
+    []
    ]
   ]
  ]

@@ -81,18 +81,21 @@ def write_recipe_csv(rows, cols, filename: str) -> str:
     return path
 
 
-def cleanup_web_recipes(keep_path) -> None:
-    """<임시 폴더>/vanam_recipe/ 의 예전 process_web_*.csv 를 지운다 — 지금 적재돼 있는 파일(keep_path)만 남긴다.
-    지우기 실패(열려 있음 등)는 무시한다(B4)."""
+def remove_quietly(path) -> None:
+    """파일 하나를 지운다. 없거나 지우지 못하면(열려 있음 등) 조용히 넘어간다."""
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+
+
+def cleanup_web_recipes() -> None:
+    """<임시 폴더>/vanam_recipe/ 의 웹 공정 레시피 임시 파일(process_web*.csv — 예전 이름 process_web.csv 포함)을
+    모두 지운다. 적재가 끝나면 필요 없는 파일이다(B3 이후 Start 는 파일을 다시 읽지 않는다). 지우기 실패는 무시한다.
+    노트북에서 고른 레시피 파일은 이 폴더에 있지 않으므로 건드리지 않는다."""
     d = os.path.join(tempfile.gettempdir(), "vanam_recipe")
-    keep = os.path.normcase(os.path.abspath(str(keep_path))) if keep_path else None
-    for f in glob.glob(os.path.join(d, "process_web_*.csv")):
-        try:
-            if keep and os.path.normcase(os.path.abspath(f)) == keep:
-                continue
-            os.remove(f)
-        except Exception:
-            pass
+    for f in glob.glob(os.path.join(d, "process_web*.csv")):
+        remove_quietly(f)
 
 
 def alert_reason(alerts) -> str:
@@ -220,11 +223,14 @@ class ErpCommandRunner:
             if not rows:
                 raise RuntimeError("레시피 행이 없습니다")
             # 명령마다 다른 파일 이름(B4) — 같은 이름에 덮어쓰면 적재 실패를 경로 비교로 알아챌 수 없다.
-            #  예전 파일은 지금 적재돼 있는 것만 남기고 지운다.
-            cleanup_web_recipes(host.csv_file_path())
+            #  임시 파일은 적재에만 쓰고 바로 지운다(성공·실패·거부·예외 모두). 웹에서 보낸 원본은 ERP 명령 기록에 남는다.
+            cleanup_web_recipes()
             path = write_recipe_csv(rows, PROCESS_RECIPE_COLS, f"process_web_{c.get('id')}.csv")
             c["_csv_path"] = path        # 적재 결과 확인용(경고창 없이 조용히 return 하는 경로 대비)
-            host.load_recipe_file(path, str(args.get("name") or ""))
+            try:
+                host.load_recipe_file(path, str(args.get("name") or ""))
+            finally:
+                remove_quietly(path)
 
         elif name == "RECIPE_CLEAR":
             # 원격 적재 해제(B5) — 공정 중이면 거부, 적재된 레시피가 없으면 아무것도 하지 않고 성공

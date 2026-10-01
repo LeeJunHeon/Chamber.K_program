@@ -35,6 +35,7 @@ from core.state import ProcessState
 from core.recipe import parse_delay_seconds, csv_rows_use_heater
 from core.process_service import ProcessService
 from integrations.erp_commands import ErpCommandRunner, write_recipe_csv, HEATER_RECIPE_COLS
+from integrations.erp_commands import remove_quietly
 from integrations.erp_state import ErpStatePublisher
 from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
@@ -1709,7 +1710,11 @@ class MainDialog(QDialog):
             if not rows:
                 raise RuntimeError("레시피 행이 없습니다")
             path = write_recipe_csv(rows, HEATER_RECIPE_COLS, "heater_web.csv")
-            self._run_heater_recipe_file(path, confirm=False)
+            try:
+                self._run_heater_recipe_file(path, confirm=False)
+            finally:
+                # 히터 레시피는 load 때 메모리로 읽고 파일 경로는 이름 표시에만 쓴다 — 임시 파일은 바로 지운다
+                remove_quietly(path)
 
         elif name == "HEATER_RESET":
             # PLC 래치된 히터 이상(M00043) 해제. 확인은 웹이 이미 받았다.

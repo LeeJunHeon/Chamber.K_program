@@ -157,14 +157,15 @@ def test_b4_recipe_name_cleared_on_failure_and_clear():
     assert ProcessService(ProcessState(csv_file_path="C:/r/b.csv"), FakePorts()).recipe_display_name() == "b.csv"
 
 
-def test_b4_cleanup_web_recipes_keeps_loaded_and_ignores_errors(tmp_path, monkeypatch):
+def test_b4_cleanup_web_recipes_removes_all_web_files_and_ignores_errors(tmp_path, monkeypatch):
+    """적재가 끝나면 웹 레시피 임시 파일은 필요 없다 — process_web*.csv(예전 이름 포함)를 모두 지운다(E 커밋 2)."""
     import os
     import tempfile
     from integrations.erp_commands import cleanup_web_recipes
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     d = tmp_path / "vanam_recipe"
     d.mkdir()
-    for n in ("process_web_1.csv", "process_web_2.csv", "heater_web.csv", "other.csv"):
+    for n in ("process_web.csv", "process_web_1.csv", "process_web_2.csv", "heater_web.csv", "other.csv"):
         (d / n).write_text("x", encoding="utf-8")
     real_remove = os.remove
 
@@ -173,10 +174,10 @@ def test_b4_cleanup_web_recipes_keeps_loaded_and_ignores_errors(tmp_path, monkey
             raise PermissionError("열려 있음")
         real_remove(path)
     monkeypatch.setattr(os, "remove", _remove)
-    cleanup_web_recipes(str(d / "process_web_1.csv"))
-    assert sorted(os.listdir(d)) == ["heater_web.csv", "other.csv", "process_web_1.csv", "process_web_2.csv"]
+    cleanup_web_recipes()                                           # 지우기 실패는 무시
+    assert sorted(os.listdir(d)) == ["heater_web.csv", "other.csv", "process_web_2.csv"]
     monkeypatch.setattr(os, "remove", real_remove)
-    cleanup_web_recipes(None)
+    cleanup_web_recipes()
     assert sorted(os.listdir(d)) == ["heater_web.csv", "other.csv"]
 
 

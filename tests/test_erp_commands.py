@@ -155,17 +155,24 @@ def systemp(tmp_path, monkeypatch):
 
 
 def test_recipe_process_run_writes_csv_records_path_and_loads(systemp):
+    """파일 내용은 적재 시점(host.load_recipe_file 안)에서 확인한다 — 적재가 끝나면 임시 파일은 지워진다."""
     h = FakeHost()
+    seen = {}
+
+    def _at_load(path):
+        seen["raw"] = open(path, "rb").read()
+        seen["rows"] = list(csv.DictReader(open(path, encoding="utf-8-sig", newline="")))
+    h.on_exec["load"] = _at_load
     c = {"id": 5, "command": "RECIPE_PROCESS_RUN", "args": {"rows": [{"Process_name": "W1", "Ar": "1", "x": "무시"},
                                                                       {"Process_name": "W2"}]}}
     ErpCommandRunner(h).exec_one(c)
     path = os.path.join(str(systemp), "vanam_recipe", "process_web_5.csv")         # B4: 명령마다 다른 이름
     assert c["_csv_path"] == path and h.calls == [["load_recipe_file", path, ""]]
-    raw = open(path, "rb").read()
-    assert raw.startswith(b"\xef\xbb\xbf")                           # utf-8-sig
-    rows = list(csv.DictReader(open(path, encoding="utf-8-sig", newline="")))
+    assert seen["raw"].startswith(b"\xef\xbb\xbf")                   # utf-8-sig
+    rows = seen["rows"]
     assert list(rows[0]) == PROCESS_RECIPE_COLS
     assert rows[0]["Process_name"] == "W1" and rows[0]["Ar"] == "1" and rows[1]["Ar"] == ""
+    assert not os.path.exists(path)                                   # 적재가 끝나면 지운다
 
 
 def test_recipe_process_run_without_rows_writes_nothing(systemp):
