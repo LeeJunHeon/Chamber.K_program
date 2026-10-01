@@ -237,7 +237,7 @@ def build_state(src: ErpStateSource) -> dict:
                         "working_pressure", "process_time", "shutter_delay",
                         "use_rf_power", "rf_power", "use_dc_power", "dc_power",
                         "use_rf_pulse", "rf_pulse_power",
-                        "rf_pulse_freq", "rf_pulse_duty",
+                        "rf_pulse_freq", "rf_pulse_duty", "use_dc_delay",
                         "use_heater", "heater_temp", "heater_ramp",
                         "gun1", "gun2", "G1 Target", "G2 Target",
                     )}

@@ -145,7 +145,7 @@ def test_csv_recipe_loaded_and_running():
     st = build_state(FakeSrc(rows=rows, path="C:/r/레시피.csv", index=-1, mode=False))["csvRecipe"]
     assert (st["name"], st["stepNo"], st["total"], st["active"], st["steps"]) == ("레시피.csv", 0, 2, False, ["S1", "STEP2"])
     assert st["rows"][0]["Ar"] == "1" and st["rows"][0]["dc_power"] == "" and st["rows"][1]["Process_name"] == ""
-    assert len(st["rows"][0]) == 23 and list(st["rows"][0])[:2] == ["Process_name", "Ar"]
+    assert len(st["rows"][0]) == 24 and list(st["rows"][0])[:2] == ["Process_name", "Ar"]
     st = build_state(FakeSrc(rows=rows, path=None, index=1, mode=True))["csvRecipe"]
     assert (st["name"], st["stepNo"], st["active"]) == (None, 2, True)
 

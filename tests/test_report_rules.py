@@ -316,3 +316,21 @@ def test_e7_running_label_step_n():
 def test_e7_label_matches_erp_state_steps():
     st = build_state(FakeSrc(rows=[{"Process_name": "A"}, {"Process_name": ""}], path="C:/r/a.csv"))
     assert st["csvRecipe"]["steps"] == ["A", "STEP2"]
+
+
+# ───────────────────────── E8 csvRecipe.rows 에 use_dc_delay ─────────────────────────
+def test_e8_rows_keys_include_use_dc_delay_after_rf_pulse_duty():
+    st = build_state(FakeSrc(rows=[{"Process_name": "A", "use_dc_delay": "T", "rf_pulse_duty": "50"}, {}],
+                             path="C:/r/a.csv"))
+    keys = list(st["csvRecipe"]["rows"][0])
+    assert len(keys) == 24
+    assert keys[keys.index("rf_pulse_duty") + 1] == "use_dc_delay"
+    assert st["csvRecipe"]["rows"][0]["use_dc_delay"] == "T"
+    assert st["csvRecipe"]["rows"][1]["use_dc_delay"] == ""          # 열이 없으면 빈 문자열(다른 키와 같게)
+
+
+def test_e8_rows_keys_match_web_process_recipe_columns():
+    """웹 편집기에서 받는 공정 레시피 열(PROCESS_RECIPE_COLS)과 보고하는 행 키가 같은 집합이다."""
+    from integrations.erp_commands import PROCESS_RECIPE_COLS
+    st = build_state(FakeSrc(rows=[{}], path="C:/r/a.csv"))
+    assert set(st["csvRecipe"]["rows"][0]) == set(PROCESS_RECIPE_COLS) - {"#"}
