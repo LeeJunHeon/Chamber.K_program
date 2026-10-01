@@ -397,6 +397,15 @@ class _MainErpStateSource:
     def main_total_sec(self):
         return getattr(self.w, "_erp_main_total_sec", 0)
 
+    def delay_active(self):
+        return self.w.proc_state.delay_active
+
+    def delay_remaining_sec(self):
+        return self.w.proc_state.delay_remaining_sec
+
+    def delay_total_sec(self):
+        return self.w.proc_state.delay_total_sec
+
     def csv_file_path(self):
         return getattr(self.w, "csv_file_path", "")
 

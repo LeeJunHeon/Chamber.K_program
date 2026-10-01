@@ -224,3 +224,31 @@ def test_e4_no_run_end_without_run_start(win):
     finally:
         w.erp, w.chat_chk = saved
         w._erp_run_ended = True
+
+
+# ───────────────────────── E5 딜레이 중에는 딜레이 남은 시간을 보고 ─────────────────────────
+from integrations.erp_state import ErpStatePublisher, build_state   # noqa: E402
+from test_erp_state import FakeSrc                                    # noqa: E402
+
+
+def test_e5_delay_phase_reports_delay_seconds():
+    src = FakeSrc(running=True, name="CSV 2/3 - delay 10m", remain=-1, total=0,
+                  d_active=True, d_remain=598, d_total=600)
+    st = build_state(src)
+    assert st["process"] == {"name": "CSV 2/3 - delay 10m", "remainSec": 598, "totalSec": 600, "phase": "delay"}
+    assert "main_remain_sec" not in src.names()                 # 딜레이 중에는 메인 공정 초를 읽지 않는다
+
+
+@pytest.mark.parametrize("remain,phase", [(-1, "pre"), (0, "main"), (45, "main")])
+def test_e5_not_delay_keeps_main_pre(remain, phase):
+    src = FakeSrc(running=True, name="Single CHK", remain=remain, total=60, d_active=False, d_remain=99, d_total=99)
+    assert build_state(src)["process"] == {"name": "Single CHK", "remainSec": remain, "totalSec": 60, "phase": phase}
+
+
+def test_e5_idle_has_no_process_even_if_delay_flag():
+    assert "process" not in build_state(FakeSrc(running=False, d_active=True, d_remain=5, d_total=10))
+
+
+def test_e5_name_none_becomes_empty_in_delay():
+    st = build_state(FakeSrc(running=True, name=None, d_active=True, d_remain="7", d_total="10"))
+    assert st["process"] == {"name": "", "remainSec": 7, "totalSec": 10, "phase": "delay"}

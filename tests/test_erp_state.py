@@ -60,6 +60,9 @@ class FakeSrc:
     def current_name(self): self._r("current_name"); return self.name
     def main_remain_sec(self): self._r("main_remain_sec"); return self.remain
     def main_total_sec(self): self._r("main_total_sec"); return self.total
+    def delay_active(self): self._r("delay_active"); return getattr(self, "d_active", False)      # E5
+    def delay_remaining_sec(self): self._r("delay_remaining_sec"); return getattr(self, "d_remain", 0)
+    def delay_total_sec(self): self._r("delay_total_sec"); return getattr(self, "d_total", 0)
     def csv_file_path(self): self._r("csv_file_path"); return self.path
     def recipe_name(self): self._r("recipe_name"); return getattr(self, "rname", "")
     def csv_index(self): self._r("csv_index"); return self.index

@@ -36,6 +36,15 @@ class ErpStateSource(Protocol):
     def main_total_sec(self) -> int:
         """메인 공정 총 초."""
 
+    def delay_active(self) -> bool:
+        """CSV 딜레이 스텝 진행 중인가."""
+
+    def delay_remaining_sec(self) -> int:
+        """CSV 딜레이 남은 초."""
+
+    def delay_total_sec(self) -> int:
+        """CSV 딜레이 전체 초."""
+
     def csv_file_path(self) -> Optional[str]:
         """적재된 레시피 파일 경로."""
 
@@ -253,16 +262,25 @@ def build_state(src: ErpStateSource) -> dict:
     # 공정 진행 정보 — 계산은 장비가 하고 웹은 표시만 한다.
     #  remainSec: 메인 공정 잔여 초 (process_time_tick 원본). -1 = 아직 메인 공정 전
     #  totalSec : 메인 공정 총 초
-    #  phase    : main = 메인 공정 진행 중, pre = 준비 단계(승온·안정화·셔터딜레이)
+    #  phase    : main = 메인 공정 진행 중, pre = 준비 단계(승온·안정화·셔터딜레이),
+    #             delay = CSV 딜레이 스텝(remainSec/totalSec 는 딜레이의 남은/전체 초)
     if running:
-        _remain = int(src.main_remain_sec())
-        _total = int(src.main_total_sec())
-        state["process"] = {
-            "name": src.current_name() or "",
-            "remainSec": _remain,
-            "totalSec": _total,
-            "phase": "main" if _remain >= 0 else "pre",
-        }
+        if src.delay_active():
+            state["process"] = {
+                "name": src.current_name() or "",
+                "remainSec": int(src.delay_remaining_sec()),
+                "totalSec": int(src.delay_total_sec()),
+                "phase": "delay",
+            }
+        else:
+            _remain = int(src.main_remain_sec())
+            _total = int(src.main_total_sec())
+            state["process"] = {
+                "name": src.current_name() or "",
+                "remainSec": _remain,
+                "totalSec": _total,
+                "phase": "main" if _remain >= 0 else "pre",
+            }
     return state
 
 

@@ -1452,9 +1452,9 @@
      "plc_link": true,
      "process": {
       "name": "CSV 2/3 - delay 3s",
-      "remainSec": -1,
-      "totalSec": 0,
-      "phase": "pre"
+      "remainSec": 3,
+      "totalSec": 3,
+      "phase": "delay"
      }
     }
    ]
@@ -1753,9 +1753,9 @@
      "plc_link": true,
      "process": {
       "name": "CSV 2/3 - delay 3s",
-      "remainSec": -1,
-      "totalSec": 0,
-      "phase": "pre"
+      "remainSec": 2,
+      "totalSec": 3,
+      "phase": "delay"
      }
     }
    ]

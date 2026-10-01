@@ -1452,9 +1452,9 @@
      "plc_link": true,
      "process": {
       "name": "CSV 2/3 - delay 2h",
-      "remainSec": -1,
-      "totalSec": 0,
-      "phase": "pre"
+      "remainSec": 7200,
+      "totalSec": 7200,
+      "phase": "delay"
      }
     }
    ]
@@ -1765,9 +1765,9 @@
      "plc_link": true,
      "process": {
       "name": "CSV 2/3 - delay 2h",
-      "remainSec": -1,
-      "totalSec": 0,
-      "phase": "pre"
+      "remainSec": 7197,
+      "totalSec": 7200,
+      "phase": "delay"
      }
     }
    ]
@@ -2066,9 +2066,9 @@
      "plc_link": true,
      "process": {
       "name": "CSV 2/3 - delay 2h",
-      "remainSec": -1,
-      "totalSec": 0,
-      "phase": "pre"
+      "remainSec": 3596,
+      "totalSec": 7200,
+      "phase": "delay"
      }
     }
    ]

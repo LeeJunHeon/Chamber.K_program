@@ -547,9 +547,9 @@
      "plc_link": true,
      "process": {
       "name": "CSV 1/2 - delay 3s",
-      "remainSec": -1,
-      "totalSec": 0,
-      "phase": "pre"
+      "remainSec": 3,
+      "totalSec": 3,
+      "phase": "delay"
      }
     }
    ]
