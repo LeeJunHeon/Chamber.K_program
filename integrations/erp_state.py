@@ -93,6 +93,9 @@ class ErpStateSource(Protocol):
     def plc_link_up(self) -> bool:
         """PLC 링크가 살아 있는가."""
 
+    def ion_gauge(self) -> dict:
+        """이온 게이지 상태 객체(장비가 만든 숫자·표시 문자열·통신 상태). 꺼져 있으면 enabled=False."""
+
     def erp_update_state(self, state: dict) -> None:
         """상태 dict 를 ERP 리포터로 보낸다."""
 
@@ -257,6 +260,8 @@ def build_state(src: ErpStateSource) -> dict:
         "valves": dict(src.valves()),
         # 링크 다운 중 indicators/valves 는 마지막 값 그대로다(거짓 OFF 보고 금지) — 이 플래그로 구분
         "plc_link": bool(src.plc_link_up()),
+        # 이온 게이지(읽기 전용) — 숫자와 표시 문자열을 장비가 만든다. 웹은 그대로 보여 준다.
+        "ionGauge": dict(src.ion_gauge() or {}),
     }
 
     # 공정 진행 정보 — 계산은 장비가 하고 웹은 표시만 한다.

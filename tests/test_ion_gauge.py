@@ -174,3 +174,20 @@ def test_ig_log_dir_dev_and_ops():
     import lib.paths as P
     assert P.resolve_paths(True).ig_dir == P.DEV_LOG_ROOT / "ig"
     assert str(P.resolve_paths(False).ig_dir).endswith(r"\Logs\CHK\ig")
+
+
+def test_erp_state_dict():
+    from device.IonGauge import erp_state_dict
+    r = parse_status(E_REPLY, t=1000.0)
+    d = erp_state_dict(_snap(r), True, "게이지 A", "게이지 B", now=1002.0)
+    assert d["enabled"] is True and d["comm"] == "ok" and d["commText"] == "정상"
+    assert d["ion"] == pytest.approx(9e-6) and d["gaugeA"] is None and d["gaugeB"] == pytest.approx(6.3e-3)
+    assert (d["ionText"], d["gaugeAText"], d["gaugeBText"]) == ("9.0E-6 Torr", "하한 이하", "6.3E-3 Torr")
+    assert (d["filamentOn"], d["emissionOk"], d["degasOn"], d["errorCode"], d["errorText"]) == (True, True, False, 0, "")
+    assert d["filamentText"] == "필라멘트 켜짐" and d["lastResponse"] == "1970-01-01T00:16:40+00:00" and d["ageSec"] == 2
+    lost = erp_state_dict(_snap(r, comm="timeout", fresh=False), True, "A", "B", now=1030.0)
+    assert lost["comm"] == "timeout" and lost["ion"] is None and lost["ionText"] == "" and lost["filamentOn"] is None
+    assert lost["ageSec"] == 30 and lost["lastResponse"] is not None            # 끊기면 숫자 없음 + 마지막 응답 시각
+    assert erp_state_dict(None, True, "A", "B")["comm"] == "connecting"
+    off = erp_state_dict(None, False, "A", "B")
+    assert off["enabled"] is False and off["comm"] == "disabled" and off["ion"] is None

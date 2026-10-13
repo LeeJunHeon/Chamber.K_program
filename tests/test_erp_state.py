@@ -79,6 +79,7 @@ class FakeSrc:
     def plc_bits(self): self._r("plc_bits"); return self.bits
     def valves(self): self._r("valves"); return self.valv
     def plc_link_up(self): self._r("plc_link_up"); return self.link
+    def ion_gauge(self): self._r("ion_gauge"); return getattr(self, "ig", {"enabled": False})        # 이온 게이지
     def erp_update_state(self, state): self.sent.append(state)
     def erp_event(self, level, msg): self.events.append((level, msg))
     def snap_err_reported(self): return self.err
@@ -196,7 +197,7 @@ def test_plc_block():
 
 def test_state_key_order():
     assert list(build_state(FakeSrc())) == ["status", "stage", "groups", "heater", "heaterRecipe", "csvRecipe",
-                                            "ion", "indicators", "mvInterlock", "valves", "plc_link"]
+                                            "ion", "indicators", "mvInterlock", "valves", "plc_link", "ionGauge"]
 
 
 # ───────────────────────── 보내기·오류 1회 보고 ─────────────────────────

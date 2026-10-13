@@ -624,3 +624,36 @@ def process_log_line(snap: Optional[IgSnapshot], phase: str, a_name: str, b_name
         return f"{head} — 아직 받은 값 없음"
     lines, _ = display_lines(snap, a_name, b_name, now)
     return f"{head} — 통신 끊김({snap.comm_text}), {lines[2]}" + (f": {lines[3]}" if lines[3] else "")
+
+
+def erp_state_dict(snap: Optional[IgSnapshot], enabled: bool, a_name: str, b_name: str,
+                   now: Optional[float] = None) -> dict:
+    """ERP 상태의 ionGauge 객체. 압력 숫자(Torr)는 이번 주기에 받은 값일 때만 — 끊기면 None 이고
+    통신 상태와 마지막 응답 시각(UTC ISO)·경과 초로 알린다. 표시 문자열은 장비 화면과 같다."""
+    d = {
+        "enabled": bool(enabled), "comm": "disabled", "commText": COMM_TEXT["disabled"],
+        "ion": None, "gaugeA": None, "gaugeB": None,
+        "ionText": "", "gaugeAText": "", "gaugeBText": "",
+        "gaugeAName": a_name, "gaugeBName": b_name,
+        "filamentOn": None, "emissionOk": None, "degasOn": None,
+        "errorCode": None, "errorText": "", "filamentText": "",
+        "lastResponse": None, "ageSec": None,
+    }
+    if not enabled:
+        return d
+    if snap is None:
+        d.update(comm="connecting", commText=COMM_TEXT["connecting"])
+        return d
+    d.update(comm=snap.comm, commText=snap.comm_text)
+    if snap.last_ok_wall is not None:
+        d["lastResponse"] = datetime.datetime.fromtimestamp(
+            snap.last_ok_wall, datetime.timezone.utc).isoformat(timespec="seconds")
+        d["ageSec"] = int(round(snap.age_sec(now) or 0.0))
+    if snap.ok:
+        r = snap.reading
+        d.update(ion=r.ion_torr, gaugeA=r.a_torr, gaugeB=r.b_torr,
+                 ionText=_with_unit(r.ion_text, r.ion_state), gaugeAText=_with_unit(r.a_text, r.a_state),
+                 gaugeBText=_with_unit(r.b_text, r.b_state),
+                 filamentOn=r.filament_on, emissionOk=r.emission_ok, degasOn=r.degas_on,
+                 errorCode=r.error_code, errorText=r.error_text, filamentText=filament_text(r))
+    return d

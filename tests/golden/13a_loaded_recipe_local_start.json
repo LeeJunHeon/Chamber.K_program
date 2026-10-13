@@ -247,7 +247,28 @@
      "indicators": {},
      "mvInterlock": null,
      "valves": {},
-     "plc_link": true
+     "plc_link": true,
+     "ionGauge": {
+      "enabled": false,
+      "comm": "disabled",
+      "commText": "사용 안 함",
+      "ion": null,
+      "gaugeA": null,
+      "gaugeB": null,
+      "ionText": "",
+      "gaugeAText": "",
+      "gaugeBText": "",
+      "gaugeAName": "게이지 A",
+      "gaugeBName": "게이지 B",
+      "filamentOn": null,
+      "emissionOk": null,
+      "degasOn": null,
+      "errorCode": null,
+      "errorText": "",
+      "filamentText": "",
+      "lastResponse": null,
+      "ageSec": null
+     }
     }
    ]
   ],
@@ -930,6 +951,27 @@
      "mvInterlock": null,
      "valves": {},
      "plc_link": true,
+     "ionGauge": {
+      "enabled": false,
+      "comm": "disabled",
+      "commText": "사용 안 함",
+      "ion": null,
+      "gaugeA": null,
+      "gaugeB": null,
+      "ionText": "",
+      "gaugeAText": "",
+      "gaugeBText": "",
+      "gaugeAName": "게이지 A",
+      "gaugeBName": "게이지 B",
+      "filamentOn": null,
+      "emissionOk": null,
+      "degasOn": null,
+      "errorCode": null,
+      "errorText": "",
+      "filamentText": "",
+      "lastResponse": null,
+      "ageSec": null
+     },
      "process": {
       "name": "CSV 1/1 - R1",
       "remainSec": -1,
@@ -1199,6 +1241,27 @@
      "mvInterlock": null,
      "valves": {},
      "plc_link": true,
+     "ionGauge": {
+      "enabled": false,
+      "comm": "disabled",
+      "commText": "사용 안 함",
+      "ion": null,
+      "gaugeA": null,
+      "gaugeB": null,
+      "ionText": "",
+      "gaugeAText": "",
+      "gaugeBText": "",
+      "gaugeAName": "게이지 A",
+      "gaugeBName": "게이지 B",
+      "filamentOn": null,
+      "emissionOk": null,
+      "degasOn": null,
+      "errorCode": null,
+      "errorText": "",
+      "filamentText": "",
+      "lastResponse": null,
+      "ageSec": null
+     },
      "process": {
       "name": "CSV 1/1 - R1",
       "remainSec": 60,
@@ -1513,7 +1576,28 @@
      "indicators": {},
      "mvInterlock": null,
      "valves": {},
-     "plc_link": true
+     "plc_link": true,
+     "ionGauge": {
+      "enabled": false,
+      "comm": "disabled",
+      "commText": "사용 안 함",
+      "ion": null,
+      "gaugeA": null,
+      "gaugeB": null,
+      "ionText": "",
+      "gaugeAText": "",
+      "gaugeBText": "",
+      "gaugeAName": "게이지 A",
+      "gaugeBName": "게이지 B",
+      "filamentOn": null,
+      "emissionOk": null,
+      "degasOn": null,
+      "errorCode": null,
+      "errorText": "",
+      "filamentText": "",
+      "lastResponse": null,
+      "ageSec": null
+     }
     }
    ]
   ]

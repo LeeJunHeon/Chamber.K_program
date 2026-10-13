@@ -127,3 +127,16 @@ def test_stop_runs_cleanup_in_worker_and_flushes(ig):
     assert th.isFinished() and s.closes >= 1
     assert w._ig_rows == []
     assert not any("스레드" in m for _, m in logs)                # 종료는 조용히
+
+
+def test_erp_state_has_ion_gauge(ig):
+    from integrations.erp_state import build_state
+    w, s, logs = ig
+    spin(700)
+    st = build_state(w.erp_state.src)
+    g = st["ionGauge"]
+    assert list(st)[-1] == "ionGauge" and g["enabled"] is True and g["comm"] == "ok"
+    assert g["ion"] == pytest.approx(9e-6) and g["gaugeA"] is None and g["gaugeB"] == pytest.approx(6.3e-3)
+    assert (g["ionText"], g["gaugeAText"], g["gaugeBText"], g["filamentText"]) == (
+        "9.0E-6 Torr", "하한 이하", "6.3E-3 Torr", "필라멘트 켜짐")
+    assert g["ageSec"] is not None and g["ageSec"] <= 1

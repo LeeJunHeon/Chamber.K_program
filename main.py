@@ -47,7 +47,8 @@ from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
 from device.RFpulse import RFPulseController
-from device.IonGauge import IonGaugeController, display_lines, csv_row as ig_csv_row, process_log_line
+from device.IonGauge import (IonGaugeController, display_lines, csv_row as ig_csv_row, process_log_line,
+                             erp_state_dict as ig_erp_state_dict)
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
@@ -459,6 +460,9 @@ class _MainErpStateSource:
 
     def plc_link_up(self):
         return getattr(self.w, "_plc_link_up", False)
+
+    def ion_gauge(self):
+        return self.w._ig_erp_state()
 
     def erp_update_state(self, state):
         self.w.erp.update_state(state)
@@ -1321,6 +1325,11 @@ class MainDialog(QDialog):
             else:
                 color = self._IG_COLORS["ok"]
             lab.setStyleSheet(f"color: {color};")
+
+    def _ig_erp_state(self) -> dict:
+        """ERP 상태 ionGauge — 꺼져 있으면 enabled=False."""
+        return ig_erp_state_dict(getattr(self, "_ig_snap", None), getattr(self, "ig_controller", None) is not None,
+                                 IG_GAUGE_A_NAME, IG_GAUGE_B_NAME)
 
     def _ig_process_log(self, phase: str) -> None:
         """공정 시작·종료 때 공정 로그 파일에만 한 줄(모니터·매초 기록 없음)."""
