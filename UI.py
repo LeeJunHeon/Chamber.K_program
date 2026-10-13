@@ -335,13 +335,21 @@ class Ui_Dialog(object):
         self.O2_flow_edit.setObjectName(u"O2_flow_edit")
         self.O2_flow_edit.setGeometry(QRect(875, 155, 131, 31))
 
-        # --- Working Pressure ---
+        # --- Base Pressure(왼쪽) / Working Pressure(오른쪽) ---
+        #   생성 순서가 탭 순서다(base → working). 라벨 폭: working 은 오른쪽 끝이 히터 그룹(x 1022) 앞에서 멈추게 146.
+        self.basePressure_label = QLabel(Dialog)
+        self.basePressure_label.setObjectName(u"basePressure_label")
+        self.basePressure_label.setGeometry(QRect(735, 190, 131, 20))
+        self.basePressure_edit = QPlainTextEdit(Dialog)
+        self.basePressure_edit.setObjectName(u"basePressure_edit")
+        self.basePressure_edit.setGeometry(QRect(735, 210, 131, 31))
+        self.basePressure_edit.setPlainText("1.0E-05")
         self.working_pressure_label = QLabel(Dialog)
         self.working_pressure_label.setObjectName(u"working_pressure_label")
-        self.working_pressure_label.setGeometry(QRect(735, 190, 181, 20))
+        self.working_pressure_label.setGeometry(QRect(875, 190, 146, 20))
         self.working_pressure_edit = QPlainTextEdit(Dialog)
         self.working_pressure_edit.setObjectName(u"working_pressure_edit")
-        self.working_pressure_edit.setGeometry(QRect(735, 210, 271, 31))
+        self.working_pressure_edit.setGeometry(QRect(875, 210, 131, 31))
         self.working_pressure_edit.setPlainText("2")
 
         # --- Power (RF / RF Pulse / DC) — 3열. "체크박스 바로 아래가 그 파워 칸" 규칙 ---
@@ -1181,6 +1189,9 @@ class Ui_Dialog(object):
             QCoreApplication.translate("Dialog", u"O2 flow [sccm]", None)
         )
 
+        self.basePressure_label.setText(
+            QCoreApplication.translate("Dialog", u"Base pressure [Torr]", None)
+        )
         self.working_pressure_label.setText(
             QCoreApplication.translate("Dialog", u"working pressure [mTorr]", None)
         )

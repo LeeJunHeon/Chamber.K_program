@@ -132,6 +132,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "5.0",
          "unit": "mTorr"
@@ -218,6 +223,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -244,6 +250,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -341,6 +348,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "shutter_delay": 1.0,
@@ -398,6 +406,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 0.0,
@@ -431,6 +440,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 0.0,
@@ -869,6 +879,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "5.0",
          "unit": "mTorr"
@@ -955,6 +970,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -981,6 +997,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -1186,6 +1203,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "4.9",
          "unit": "mTorr"
@@ -1272,6 +1294,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -1298,6 +1321,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -1472,6 +1496,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "shutter_delay": 1.0,
@@ -1529,6 +1554,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 0.0,
@@ -1562,6 +1588,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 0.0,
@@ -2000,6 +2027,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "5.0",
          "unit": "mTorr"
@@ -2086,6 +2118,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -2112,6 +2145,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -2317,6 +2351,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "4.9",
          "unit": "mTorr"
@@ -2403,6 +2442,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -2429,6 +2469,7 @@
         "Ar_flow": "20",
         "O2": "0",
         "O2_flow": "0",
+        "base_pressure": "",
         "working_pressure": "5",
         "process_time": "1",
         "shutter_delay": "1",
@@ -2723,6 +2764,11 @@
          "label": "챔버 압력",
          "value": null,
          "unit": "mTorr"
+        },
+        {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
         },
         {
          "label": "Working P",

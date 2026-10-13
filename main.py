@@ -32,7 +32,8 @@ from lib.logger import (
     process_log_active,
 )
 from lib.paths import DEV_MODE, DEV_MODE_BANNER, DEV_MODE_TITLE_TAG, chat_webhook, erp_settings
-from core.params import ManualInputs, build_manual_params, build_csv_params, check_rfpulse_range
+from core.params import (ManualInputs, build_manual_params, build_csv_params, check_rfpulse_range,
+                         fmt_base_pressure)
 from core.state import ProcessState
 from core.recipe import parse_delay_seconds, csv_rows_use_heater
 from core.process_service import ProcessService
@@ -66,7 +67,8 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
                         heater_est_current,
                         IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME,
-                        MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts)
+                        MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts,
+                        PROCESS_DEFAULT_BASE_PRESSURE)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from controller.heater_hold import HeaterHold
@@ -3645,6 +3647,7 @@ class MainDialog(QDialog):
             use_o2=ui.O2_gas_radio.isChecked(),
             o2_flow_text=ui.O2_flow_edit.toPlainText(),
             working_pressure_text=ui.working_pressure_edit.toPlainText(),
+            base_pressure_text=ui.basePressure_edit.toPlainText(),
             use_dc=ui.dc_power_checkbox.isChecked(),
             dc_power_text=ui.DC_power_edit.toPlainText(),
             use_rf=ui.rf_power_checkbox.isChecked(),
@@ -3668,6 +3671,7 @@ class MainDialog(QDialog):
     _MANUAL_INPUT_WIDGETS = (
         ("use_ar", "Ar_gas_radio"), ("ar_flow_text", "Ar_flow_edit"),
         ("use_o2", "O2_gas_radio"), ("o2_flow_text", "O2_flow_edit"),
+        ("base_pressure_text", "basePressure_edit"),
         ("working_pressure_text", "working_pressure_edit"),
         ("use_dc", "dc_power_checkbox"), ("dc_power_text", "DC_power_edit"),
         ("use_rf", "rf_power_checkbox"), ("rf_power_text", "RF_power_edit"),
@@ -4039,7 +4043,8 @@ class MainDialog(QDialog):
         self.ui.Ar_flow_edit.setPlainText("5")
         self.ui.O2_flow_edit.setPlainText("")
 
-        # --- Working pressure (UI.py 기본값: 2) ---
+        # --- Base pressure (기본값 PROCESS_DEFAULT_BASE_PRESSURE) / Working pressure (UI.py 기본값: 2) ---
+        self.ui.basePressure_edit.setPlainText(fmt_base_pressure(PROCESS_DEFAULT_BASE_PRESSURE))
         self.ui.working_pressure_edit.setPlainText("2")
 
         # --- Power setpoint + 체크박스 (UI.py 기본값) ---
@@ -4575,6 +4580,11 @@ class MainDialog(QDialog):
             self.ui.Ar_flow_edit.setPlainText(f"{float(ar_flow):.2f}")
         if o2_flow is not None:
             self.ui.O2_flow_edit.setPlainText(f"{float(o2_flow):.2f}")
+
+        # 베이스 압력(Torr) — "1.0E-05", 0 이면 "0"(대기 생략)
+        base_p = params.get("base_pressure")
+        if base_p is not None:
+            self.ui.basePressure_edit.setPlainText(fmt_base_pressure(base_p))
 
         # 작업 압력(sp1_set)
         sp1_set = params.get("sp1_set")

@@ -164,6 +164,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "2",
          "unit": "mTorr"
@@ -411,6 +416,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "2",
          "unit": "mTorr"
@@ -630,6 +640,11 @@
          "label": "챔버 압력",
          "value": null,
          "unit": "mTorr"
+        },
+        {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
         },
         {
          "label": "Working P",

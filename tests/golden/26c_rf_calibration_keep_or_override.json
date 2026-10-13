@@ -39,6 +39,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 150.0,
@@ -78,6 +79,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 150.0,
@@ -109,6 +111,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 150.0,
@@ -614,6 +617,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "4.9",
          "unit": "mTorr"
@@ -848,6 +856,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 150.0,
@@ -887,6 +896,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 150.0,
@@ -918,6 +928,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
+     "base_pressure": 1e-05,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 150.0,
@@ -1421,6 +1432,11 @@
          "label": "챔버 압력",
          "value": 4.9,
          "unit": "mTorr"
+        },
+        {
+         "label": "Base P",
+         "setpoint": "",
+         "unit": "Torr"
         },
         {
          "label": "Working P",

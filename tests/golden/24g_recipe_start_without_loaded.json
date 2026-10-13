@@ -138,6 +138,11 @@
          "unit": "mTorr"
         },
         {
+         "label": "Base P",
+         "setpoint": "1.0E-05",
+         "unit": "Torr"
+        },
+        {
          "label": "Working P",
          "setpoint": "2",
          "unit": "mTorr"

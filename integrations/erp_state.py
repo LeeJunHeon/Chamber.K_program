@@ -162,6 +162,7 @@ def build_state(src: ErpStateSource) -> dict:
         ]},
         {"label": "압력 · 시간", "items": [
             {"label": "챔버 압력", "value": _press, "unit": "mTorr"},
+            {"label": "Base P", "setpoint": _w("basePressure_edit"), "unit": "Torr"},
             {"label": "Working P", "setpoint": _w("working_pressure_edit"),
              "unit": "mTorr"},
             {"label": "공정 시간", "setpoint": _w("process_time_edit"), "unit": "분"},
@@ -237,7 +238,7 @@ def build_state(src: ErpStateSource) -> dict:
                 "rows": [
                     {k: str((r or {}).get(k, "") or "") for k in (
                         "Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
-                        "working_pressure", "process_time", "shutter_delay",
+                        "base_pressure", "working_pressure", "process_time", "shutter_delay",
                         "use_rf_power", "rf_power", "use_dc_power", "dc_power",
                         "use_rf_pulse", "rf_pulse_power",
                         "rf_pulse_freq", "rf_pulse_duty", "use_dc_delay",

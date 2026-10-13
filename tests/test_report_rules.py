@@ -323,7 +323,7 @@ def test_e8_rows_keys_include_use_dc_delay_after_rf_pulse_duty():
     st = build_state(FakeSrc(rows=[{"Process_name": "A", "use_dc_delay": "T", "rf_pulse_duty": "50"}, {}],
                              path="C:/r/a.csv"))
     keys = list(st["csvRecipe"]["rows"][0])
-    assert len(keys) == 24
+    assert len(keys) == 25                                         # + base_pressure
     assert keys[keys.index("rf_pulse_duty") + 1] == "use_dc_delay"
     assert st["csvRecipe"]["rows"][0]["use_dc_delay"] == "T"
     assert st["csvRecipe"]["rows"][1]["use_dc_delay"] == ""          # 열이 없으면 빈 문자열(다른 키와 같게)

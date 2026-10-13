@@ -33,6 +33,7 @@ PLC_BUTTONS = {
 _ARG_CHECKS = {"use_g1": "useG1", "use_g2": "useG2", "use_ar": "useAr", "use_o2": "useO2",
                "use_rf": "useRf", "use_rf_pulse": "useRfPulse", "use_dc": "useDc", "use_dc_delay": "dcDelay"}
 _ARG_TEXTS = {"g1_name_text": "g1", "g2_name_text": "g2", "ar_flow_text": "arFlow", "o2_flow_text": "o2Flow",
+              "base_pressure_text": "basePressure",
               "working_pressure_text": "workingPressure", "rf_power_text": "rfPower",
               "rfp_power_text": "rfPulsePower", "rfp_freq_text": "rfPulseFreq", "rfp_duty_text": "rfPulseDuty",
               "dc_power_text": "dcPower", "shutter_delay_text": "shutterDelay", "process_time_text": "processTime"}
@@ -58,7 +59,7 @@ def manual_inputs_from_args(args, current_offset: str, current_param: str) -> Ma
 
 # 웹에서 만든 레시피를 CSV 로 저장할 때의 열
 PROCESS_RECIPE_COLS = ["Process_name", "Ar", "Ar_flow", "O2", "O2_flow",
-                       "working_pressure", "process_time", "shutter_delay",
+                       "base_pressure", "working_pressure", "process_time", "shutter_delay",
                        "use_rf_power", "rf_power", "use_dc_power", "dc_power",
                        "use_rf_pulse", "rf_pulse_power", "rf_pulse_freq", "rf_pulse_duty",
                        "use_dc_delay", "use_heater", "heater_temp", "heater_ramp",
