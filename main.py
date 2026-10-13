@@ -65,7 +65,8 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         rfpulse_pulse_edge_violation,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
                         heater_est_current,
-                        IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME)
+                        IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME,
+                        MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from controller.heater_hold import HeaterHold
@@ -524,6 +525,7 @@ class MainDialog(QDialog):
         self.ui = Ui_Dialog()
         self.ui.setupUi(self)
         set_monitor_widget(self.ui.error_monitor)
+        self._warn_serial_port_conflicts()
 
         # DC Power 안정화 대기(선택): 기본 OFF
         self.ui.dc_delay_checkbox.setChecked(False)
@@ -1230,6 +1232,14 @@ class MainDialog(QDialog):
             )
         except Exception:
             pass
+    def _warn_serial_port_conflicts(self) -> None:
+        """시작 때 1회 — 시리얼 장비 포트가 겹치면 모니터 로그에 경고(동작은 바꾸지 않는다)."""
+        ports = {"MFC_PORT": MFC_PORT, "DC_PORT": DC_PORT, "PLC_PORT": PLC_PORT, "RFPULSE_PORT": RFPULSE_PORT}
+        if IG_ENABLED:
+            ports["IG_PORT"] = IG_PORT
+        for msg in serial_port_conflicts(ports):
+            log_message_to_monitor("경고", msg)
+
     # ==================== 이온 게이지 (Terranova 934, 읽기 전용) ====================
     # 화면 표시 위치: HMI 램프 줄(Air~Water, x 20~401 · y 20~100) 오른쪽 빈 자리.
     #  x 410~582, y 12~76 — Water 램프 오른쪽 끝 401, Door 버튼 위쪽 80, BuzzStop 왼쪽 590 과 겹치지 않는다(UI.py setGeometry).

@@ -578,7 +578,8 @@ RF_REFP_WAIT_SEC        = get('RF_REFP_WAIT_SEC',        15)    # Ref.P 대기 �
 # config_user.json에서 변경 가능
 # ★ RFPULSE_PORT 는 실제 포트가 아직 확정되지 않았다.
 #    장비를 연결한 뒤 config_user.json 에서 반드시 실제 COM 포트로 고칠 것.
-RFPULSE_PORT      = get('RFPULSE_PORT',      "COM12")
+#    기본값은 장비 config_user.json 값(COM13)과 같다. COM12 는 이온 게이지(IG_PORT)가 쓴다.
+RFPULSE_PORT      = get('RFPULSE_PORT',      "COM13")
 RFPULSE_BAUD      = get('RFPULSE_BAUD',      9600)
 RFPULSE_ADDR      = get('RFPULSE_ADDR',      1)       # AE Bus 주소 0~31
 # ★ CESAR 매뉴얼 RS-232 규격: "Odd parity, one start bit, eight data bits, one stop bit"
@@ -729,6 +730,19 @@ IG_PORT         = get('IG_PORT',         "")
 IG_BAUD         = get('IG_BAUD',         9600)
 IG_GAUGE_A_NAME = get('IG_GAUGE_A_NAME', "게이지 A")
 IG_GAUGE_B_NAME = get('IG_GAUGE_B_NAME', "게이지 B")
+
+
+
+def serial_port_conflicts(ports: dict) -> list:
+    """{설정 이름: 포트} 중 같은 COM 을 둘 이상이 쓰면 경고 문구 목록(대소문자·앞뒤 공백 무시, 빈 값 제외).
+    프로그램 시작 때 main 이 모니터 로그에 남긴다 — 경고만, 동작은 바꾸지 않는다."""
+    by_port: dict = {}
+    for name, port in (ports or {}).items():
+        p = str(port or "").strip().upper()
+        if p:
+            by_port.setdefault(p, []).append(name)
+    return [f"시리얼 포트 중복: {p} = {', '.join(names)} — config_user.json 확인"
+            for p, names in by_port.items() if len(names) > 1]
 
 # ================================================================
 # MFC 설정
