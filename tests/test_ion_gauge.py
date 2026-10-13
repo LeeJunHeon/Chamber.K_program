@@ -129,3 +129,48 @@ def test_error_codes_and_texts():
 def test_setpoint_and_format_helpers():
     assert setpoint_from_pair("50      0") == pytest.approx(0.5)
     assert fmt_torr(9e-6) == "9.0E-6" and fmt_torr(0.5) == "5.0E-1" and fmt_torr(1.234e-10) == "1.2E-10"
+
+
+# ───────────── 화면·기록 문구(순수 함수) ─────────────
+from device.IonGauge import IgSnapshot, display_lines, csv_row, process_log_line  # noqa: E402
+
+
+def _snap(reading, comm="ok", fresh=True, t=1000.0):
+    from device.IonGauge import COMM_TEXT
+    return IgSnapshot(comm=comm, comm_text=COMM_TEXT[comm], detail="", reading=reading, fresh=fresh,
+                      last_ok_wall=None if reading is None else reading.t, t=t)
+
+
+def test_display_lines_states():
+    r = parse_status(E_REPLY, t=1000.0)
+    assert display_lines(_snap(r), "게이지 A", "게이지 B") == (
+        ["IG 9.0E-6 Torr", "게이지 A 하한 이하", "게이지 B 6.3E-3 Torr", "필라멘트 켜짐"], "ok")
+    items = list(E_ITEMS); items[1] = "0"; items[4] = "4"; items[23], items[24], items[25] = "0", "-900", "-999"
+    lines, level = display_lines(_snap(parse_status(e_reply(items), t=1000.0)), "Pirani", "Conv")
+    assert lines == ["IG 꺼짐", "Pirani 미연결", "Conv 영점 미조정",
+                     "필라멘트 오류 4: 필라멘트가 제한 시간 안에 안 켜짐(게이지 불량 가능)"] and level == "warn"
+    lost = _snap(r, comm="timeout", fresh=False)
+    assert display_lines(lost, "A", "B", now=1012.4) == (["IG 통신 끊김", "응답 없음", "마지막 값 12초 전", "IG 9.0E-6 Torr"], "lost")
+    assert display_lines(_snap(None, comm="no_port", fresh=False), "A", "B")[0] == ["IG 통신 끊김", "포트 없음", "받은 값 없음", ""]
+    assert display_lines(None, "A", "B") == (["IG 연결 중", "", "", ""], "lost")
+
+
+def test_csv_row_and_process_line():
+    r = parse_status(E_REPLY, t=1000.0)
+    row = csv_row(_snap(r, t=1000.0))
+    assert {k: row[k] for k in ("IG(Torr)", "게이지A(Torr)", "게이지B(Torr)", "필라멘트", "방출", "디개스", "오류 코드", "통신 상태")} == {
+        "IG(Torr)": "9.0E-6", "게이지A(Torr)": "하한 이하", "게이지B(Torr)": "6.3E-3", "필라멘트": "켜짐",
+        "방출": "정상", "디개스": "꺼짐", "오류 코드": 0, "통신 상태": "정상"}
+    lost = csv_row(_snap(r, comm="timeout", fresh=False, t=1001.0))
+    assert set(lost) == {"시각", "통신 상태"} and lost["통신 상태"] == "응답 없음"      # 끊긴 주기는 압력 칸 비움
+    assert process_log_line(_snap(r), "시작", "게이지 A", "게이지 B") == \
+        "[IG] 시작 압력 IG 9.0E-6 Torr, 게이지 A 하한 이하, 게이지 B 6.3E-3 Torr (필라멘트 켜짐)"
+    assert process_log_line(_snap(r, comm="timeout", fresh=False), "종료", "A", "B", now=1030.0) == \
+        "[IG] 종료 압력 — 통신 끊김(응답 없음), 마지막 값 30초 전: IG 9.0E-6 Torr"
+    assert process_log_line(None, "시작", "A", "B") == "[IG] 시작 압력 — 아직 받은 값 없음"
+
+
+def test_ig_log_dir_dev_and_ops():
+    import lib.paths as P
+    assert P.resolve_paths(True).ig_dir == P.DEV_LOG_ROOT / "ig"
+    assert str(P.resolve_paths(False).ig_dir).endswith(r"\Logs\CHK\ig")

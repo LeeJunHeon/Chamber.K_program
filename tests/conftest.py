@@ -29,7 +29,8 @@ import pytest  # noqa: E402
 # ── 로그 격리: 테스트 중 어떤 로그도 NAS 운영 폴더로 나가지 않는다 ──
 #  2026-09-22 16:33 실기 PC 에서 테스트 중 \VanaM_NAS\...\CHK\heater 에 HEATER_20260922_1633xx.csv/.txt 가 생겼다
 #  (conftest.make_heater_st 값 TC1 598.9 / TC2 893.4 / OT 650.0). 실제 챔버는 403°C 승온 중이었다.
-_NAS_ATTRS = ("NAS_LOG_DIR", "NAS_PROCESS_LOG_DIR", "NAS_HEATER_LOG_DIR", "NAS_PLC_LOG_DIR", "NAS_COMM_LOG_DIR")
+_NAS_ATTRS = ("NAS_LOG_DIR", "NAS_PROCESS_LOG_DIR", "NAS_HEATER_LOG_DIR", "NAS_PLC_LOG_DIR", "NAS_COMM_LOG_DIR",
+              "NAS_IG_LOG_DIR")
 
 
 @pytest.fixture(scope="session", autouse=True)

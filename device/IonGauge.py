@@ -573,3 +573,54 @@ class IonGaugeController(QObject):
             })
         except Exception:
             pass
+
+
+# ===== 화면·기록 문구 (main 이 쓰는 순수 함수) =====
+def _with_unit(text: str, state: str) -> str:
+    return f"{text} Torr" if state == "ok" else text
+
+
+def display_lines(snap: Optional[IgSnapshot], a_name: str, b_name: str,
+                  now: Optional[float] = None) -> Tuple[List[str], str]:
+    """화면 4줄과 표시 등급('ok' / 'warn' / 'lost'). 꺼짐·미연결·영점 미조정은 숫자 대신 그 말로 보여 준다."""
+    if snap is None:
+        return ["IG 연결 중", "", "", ""], "lost"
+    r = snap.reading
+    if snap.ok:
+        fil = filament_text(r)
+        return ([f"IG {_with_unit(r.ion_text, r.ion_state)}",
+                 f"{a_name} {_with_unit(r.a_text, r.a_state)}",
+                 f"{b_name} {_with_unit(r.b_text, r.b_state)}",
+                 fil], ("warn" if (r.error_code or not r.filament_on) else "ok"))
+    age = snap.age_sec(now)
+    last = "받은 값 없음" if age is None else f"마지막 값 {age:.0f}초 전"
+    old = "" if r is None else f"IG {_with_unit(r.ion_text, r.ion_state)}"
+    return ["IG 통신 끊김", snap.comm_text, last, old], "lost"
+
+
+def csv_row(snap: IgSnapshot) -> dict:
+    """IG CSV 1행. 통신이 끊긴 주기는 압력·필라멘트 칸을 비운다(지난 값을 새 값처럼 남기지 않는다)."""
+    row = {"시각": datetime.datetime.fromtimestamp(snap.t).strftime("%Y-%m-%d %H:%M:%S"),
+           "통신 상태": snap.comm_text}
+    if snap.ok:
+        r = snap.reading
+        row.update({"IG(Torr)": r.ion_text, "게이지A(Torr)": r.a_text, "게이지B(Torr)": r.b_text,
+                    "필라멘트": "켜짐" if r.filament_on else "꺼짐",
+                    "방출": "정상" if r.emission_ok else "이상",
+                    "디개스": "켜짐" if r.degas_on else "꺼짐",
+                    "오류 코드": r.error_code})
+    return row
+
+
+def process_log_line(snap: Optional[IgSnapshot], phase: str, a_name: str, b_name: str,
+                     now: Optional[float] = None) -> str:
+    """공정 로그 한 줄 — '[IG] 시작 압력 …' / '[IG] 종료 압력 …'."""
+    head = f"[IG] {phase} 압력"
+    if snap is not None and snap.ok:
+        r = snap.reading
+        return (f"{head} IG {_with_unit(r.ion_text, r.ion_state)}, {a_name} {_with_unit(r.a_text, r.a_state)}, "
+                f"{b_name} {_with_unit(r.b_text, r.b_state)} ({filament_text(r)})")
+    if snap is None:
+        return f"{head} — 아직 받은 값 없음"
+    lines, _ = display_lines(snap, a_name, b_name, now)
+    return f"{head} — 통신 끊김({snap.comm_text}), {lines[2]}" + (f": {lines[3]}" if lines[3] else "")

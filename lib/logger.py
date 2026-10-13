@@ -27,7 +27,7 @@ _heater_log_file: Optional[Path] = None
 #  종류별 하위 폴더: process / heater / plc(PLC 블랙박스, 2026-09-16 CPU 정지 사고 대응) /
 #  comm(시리얼 장비 공통 통신 이벤트 COMM_events.csv). log.txt 는 CHK 루트에 그대로 둔다.
 from lib.paths import (NAS_LOG_DIR, NAS_PROCESS_LOG_DIR, NAS_HEATER_LOG_DIR,  # noqa: E402
-                       NAS_PLC_LOG_DIR, NAS_COMM_LOG_DIR)
+                       NAS_PLC_LOG_DIR, NAS_COMM_LOG_DIR, NAS_IG_LOG_DIR)
 
 # NAS 폴백 경고는 프로그램 실행당 1회만. 공정마다 반복되면 로그가 지저분해진다.
 _nas_fallback_warned: bool = False
@@ -48,6 +48,11 @@ COMM_EVENT_COLUMNS = ["장비", "시각", "종류", "상세", "단절초", "연�
 PLC_BLACKBOX_COLUMNS = ["시각", "경과ms", "PV", "SV", "MV", "히터플래그", "코일비트", "센서비트"]
 _plc_dir_fallback_warned: bool = False
 _comm_dir_fallback_warned: bool = False
+_ig_dir_fallback_warned: bool = False
+# 이온 게이지 1초 기록(ig/IG_YYYYMMDD.csv). 압력 칸은 값(9.0E-6) 또는 상태 말(하한 이하·꺼짐 등),
+#  통신이 끊긴 주기는 압력·필라멘트 칸을 비운다(지난 값을 새 값처럼 남기지 않는다).
+IG_CSV_COLUMNS = ["시각", "IG(Torr)", "게이지A(Torr)", "게이지B(Torr)", "필라멘트", "방출", "디개스",
+                  "오류 코드", "통신 상태"]
 
 
 def _fallback_dir(nas_dir: Path, local_name: str, flag_name: str, label: str) -> Path:
@@ -100,6 +105,45 @@ def append_comm_event(device: str, row: dict) -> bool:
         except Exception:
             pass
         return False
+
+
+def _ig_log_dir() -> Path:
+    return _fallback_dir(NAS_IG_LOG_DIR, "ig", "_ig_dir_fallback_warned", "이온 게이지")
+
+
+def append_ig_rows(rows: list) -> bool:
+    """이온 게이지 행들을 날짜별 IG_YYYYMMDD.csv 에 덧붙인다(없으면 헤더, utf-8-sig).
+    행의 '시각'(YYYY-mm-dd HH:MM:SS) 날짜로 파일을 고른다. main 스레드가 10초마다 모아서 부른다.
+    실패해도 예외를 내보내지 않는다."""
+    if not rows:
+        return True
+    try:
+        by_day: dict = {}
+        for r in rows:
+            day = str(r.get("시각", ""))[:10].replace("-", "") or datetime.datetime.now().strftime("%Y%m%d")
+            by_day.setdefault(day, []).append(r)
+        base = _ig_log_dir()
+        for day, rs in by_day.items():
+            path = base / f"IG_{day}.csv"
+            new = not path.exists() or path.stat().st_size == 0
+            with open(path, "a", newline="", encoding="utf-8-sig") as f:
+                w = csv.writer(f)
+                if new:
+                    w.writerow(IG_CSV_COLUMNS)
+                for r in rs:
+                    w.writerow([("" if r.get(c) is None else r.get(c)) for c in IG_CSV_COLUMNS])
+        return True
+    except Exception as e:
+        try:
+            log_message_to_monitor("경고", f"이온 게이지 기록 실패: {e!r}")
+        except Exception:
+            pass
+        return False
+
+
+def process_log_active() -> bool:
+    """공정 로그 파일이 열려 있는가(공정 시작~종료 사이)."""
+    return _current_log_file is not None
 
 
 def write_plc_blackbox(rows: list) -> Optional[Path]:

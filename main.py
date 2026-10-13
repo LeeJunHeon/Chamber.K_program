@@ -7,7 +7,7 @@ from PyQt6.QtCore import (
     QThread, pyqtSlot as Slot, pyqtSignal as Signal,
     QEventLoop, QTimer, Qt, QElapsedTimer, QMetaObject
 )
-from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog, QLabel
 from pathlib import Path
 
 import re
@@ -28,6 +28,8 @@ from lib.logger import (
     append_chk_csv_row,
     append_comm_event,
     write_plc_blackbox,
+    append_ig_rows,
+    process_log_active,
 )
 from lib.paths import DEV_MODE, DEV_MODE_BANNER, DEV_MODE_TITLE_TAG, chat_webhook, erp_settings
 from core.params import ManualInputs, build_manual_params, build_csv_params, check_rfpulse_range
@@ -45,6 +47,7 @@ from device.MFC import MFCController
 from device.DCpower import DCPowerController
 from device.RFpower import RFPowerController
 from device.RFpulse import RFPulseController
+from device.IonGauge import IonGaugeController, display_lines, csv_row as ig_csv_row, process_log_line
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
@@ -60,7 +63,8 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         RFPULSE_MAX_POWER, RFPULSE_PULSE_FREQ_MAX_HZ, RFPULSE_PULSE_FREQ_MIN_HZ,
                         rfpulse_pulse_edge_violation,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
-                        heater_est_current)
+                        heater_est_current,
+                        IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from controller.heater_hold import HeaterHold
@@ -124,6 +128,7 @@ class _MainProcessPorts:
 
     def open_process_log(self, prefix):
         set_process_log_file(prefix=prefix)
+        self.w._ig_process_log("시작")
 
     def reset_stats(self):
         self.w._reset_chk_stats()
@@ -190,6 +195,7 @@ class _MainProcessPorts:
         self.w._reset_process_ui_fields()
 
     def close_process_log(self):
+        self.w._ig_process_log("종료")
         clear_process_log_file()
 
     def delay_timer_start(self):
@@ -712,6 +718,9 @@ class MainDialog(QDialog):
         QMetaObject.invokeMethod(
             self.rfpulse_controller, "connect_device", Qt.ConnectionType.QueuedConnection)
 
+        # 이온 게이지(읽기 전용) — 자기 스레드에서 따로 돈다. 공정·다른 장비와 무관.
+        self._setup_ion_gauge()
+
         self.ui.Sputter_Stop_Button.setEnabled(False)
 
         # === ERP 원격 명령 실행 (메인 스레드 전용) ===
@@ -1217,6 +1226,122 @@ class MainDialog(QDialog):
             )
         except Exception:
             pass
+    # ==================== 이온 게이지 (Terranova 934, 읽기 전용) ====================
+    # 화면 표시 위치: HMI 램프 줄(Air~Water, x 20~401 · y 20~100) 오른쪽 빈 자리.
+    #  x 410~582, y 12~76 — Water 램프 오른쪽 끝 401, Door 버튼 위쪽 80, BuzzStop 왼쪽 590 과 겹치지 않는다(UI.py setGeometry).
+    _IG_LABEL_RECTS = ((410, 12, 172, 18), (410, 31, 172, 15), (410, 46, 172, 15), (410, 61, 172, 15))
+    _IG_COLORS = {"ok": "#222222", "warn": "#b35c00", "lost": "#c62828"}
+    _IG_ROWS_MAX = 600              # CSV 버퍼 상한(쓰기가 계속 실패해도 메모리가 늘지 않게)
+
+    def _setup_ion_gauge(self, enabled=None, port=None, controller_factory=None) -> None:
+        """이온 게이지 스레드·표시·기록 준비. 꺼져 있거나 포트가 비어 있으면 아무것도 만들지 않는다.
+        enabled/port/controller_factory 는 시험용(기본은 config)."""
+        self.ig_thread = None
+        self.ig_controller = None
+        self._ig_snap = None
+        self._ig_rows = []
+        self._ig_labels = []
+        self._ig_lines = []             # 화면 4줄(줄임표 전 원문) — 칸보다 길면 라벨은 '…'로 줄이고 툴팁에 전체
+        self._ig_flush_timer = None
+        on = IG_ENABLED if enabled is None else bool(enabled)
+        name = str(IG_PORT if port is None else port).strip()
+        if not (on and name):
+            return
+        for i, (x, y, w, h) in enumerate(self._IG_LABEL_RECTS):
+            lab = QLabel(self)
+            lab.setObjectName(f"ig_label_{i}")
+            lab.setGeometry(x, y, w, h)
+            f = lab.font()
+            f.setPointSizeF(10.0 if i == 0 else 8.0)
+            f.setBold(i == 0)
+            lab.setFont(f)
+            lab.show()
+            self._ig_labels.append(lab)
+        self.ig_thread = QThread()
+        self.ig_thread.setObjectName("IonGaugeThread")
+        self.ig_controller = (controller_factory or (lambda: IonGaugeController(name)))()
+        self.ig_controller.moveToThread(self.ig_thread)
+        # 종료 정리는 워커 스레드에서(스레드가 끝나기 직전, DirectConnection) — 메인 스레드에서 포트를 만지지 않는다
+        self.ig_thread.finished.connect(self.ig_controller.cleanup, Qt.ConnectionType.DirectConnection)
+        self.ig_controller.snapshot.connect(self._on_ig_snapshot)
+        self.ig_controller.status_message.connect(self._on_ig_status)
+        self.ig_controller.comm_event.connect(self._on_ig_comm_event)
+        self._ig_flush_timer = QTimer(self)
+        self._ig_flush_timer.setInterval(10000)
+        self._ig_flush_timer.timeout.connect(self._flush_ig_rows)
+        self._ig_flush_timer.start()
+        self._render_ig()
+        self.ig_thread.start()
+        QMetaObject.invokeMethod(self.ig_controller, "connect_device", Qt.ConnectionType.QueuedConnection)
+
+    @Slot(object)
+    def _on_ig_snapshot(self, snap):
+        """1초마다 — 표시 갱신 + CSV 행 모으기(파일 쓰기는 10초마다 _flush_ig_rows)."""
+        self._ig_snap = snap
+        self._render_ig()
+        try:
+            self._ig_rows.append(ig_csv_row(snap))
+            if len(self._ig_rows) > self._IG_ROWS_MAX:
+                del self._ig_rows[:-self._IG_ROWS_MAX]
+        except Exception:
+            pass
+
+    @Slot(str, str)
+    def _on_ig_status(self, level: str, msg: str):
+        """이온 게이지 상태 변화 로그(드라이버가 바뀔 때만 보낸다). 경고창은 띄우지 않는다."""
+        log_message_to_monitor(level, msg)
+
+    @Slot(dict)
+    def _on_ig_comm_event(self, row: dict):
+        self._on_comm_event("IG", row)
+
+    @Slot()
+    def _flush_ig_rows(self):
+        rows, self._ig_rows = self._ig_rows, []
+        if rows:
+            append_ig_rows(rows)
+
+    def _render_ig(self):
+        if not self._ig_labels:
+            return
+        lines, level = display_lines(self._ig_snap, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME)
+        self._ig_lines = list(lines)
+        snap = self._ig_snap
+        full = [t for t in lines if t]
+        if snap is not None and snap.reading is not None and snap.reading.error_code:
+            full.append(f"필라멘트 오류 코드 {snap.reading.error_code}: {snap.reading.error_text}")
+        tip = "이온 게이지 (Terranova 934)\n" + "\n".join(full)
+        for i, (lab, text) in enumerate(zip(self._ig_labels, lines)):
+            lab.setText(lab.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, lab.width()))
+            lab.setToolTip(tip)
+            if level == "lost":
+                color = self._IG_COLORS["lost"] if i == 0 else "#8a8a8a"
+            elif level == "warn" and i == 3:
+                color = self._IG_COLORS["warn"]
+            else:
+                color = self._IG_COLORS["ok"]
+            lab.setStyleSheet(f"color: {color};")
+
+    def _ig_process_log(self, phase: str) -> None:
+        """공정 시작·종료 때 공정 로그 파일에만 한 줄(모니터·매초 기록 없음)."""
+        if getattr(self, "ig_controller", None) is None or not process_log_active():
+            return
+        try:
+            log_message_to_file("정보", process_log_line(self._ig_snap, phase, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME))
+        except Exception:
+            pass
+
+    def _stop_ion_gauge(self) -> None:
+        """종료 — 로그 없이 스레드를 세우고(정리는 finished 에서 워커가) 남은 CSV 행을 쓴다."""
+        th = getattr(self, "ig_thread", None)
+        if th is not None:
+            th.quit()
+            th.wait(3000)
+        if getattr(self, "_ig_flush_timer", None) is not None:
+            self._ig_flush_timer.stop()
+        if getattr(self, "_ig_rows", None):
+            self._flush_ig_rows()
+
     # ==================== PLC 이벤트 기록 / 블랙박스 / 재기동 / 복구 후 안전 상태 (2026-09-16 사고 대응) ====================
     def _plc_current_process_name(self) -> str:
         try:
@@ -4376,6 +4501,8 @@ class MainDialog(QDialog):
             log_message_to_monitor("정보", f"{thread_name} 스레드 종료 대기 중...")
             if not thread.wait(3000):
                 log_message_to_monitor("경고", f"{thread_name} 스레드가 시간 내에 종료되지 않았습니다.")
+
+        self._stop_ion_gauge()
 
         try:
             if self.chat_chk:

@@ -304,3 +304,17 @@ def test_timer_and_ready_read_run_in_worker_thread(qapp):
     fresh = [x for x in rcv.snaps if x.fresh]
     assert fresh and fresh[-1].reading.ion_text == "9.0E-6"
     assert set(rcv.threads) == {main_ident}                     # 받는 쪽(main)은 main 스레드에서
+
+
+def test_default_qserialport_path_without_ports(qapp):
+    """기본 경로(QSerialPort·QSerialPortInfo) — 시험에서는 conftest 가 포트 목록을 비워 실제 포트를 열지 않는다."""
+    from PyQt6.QtSerialPort import QSerialPort
+    c = IonGaugeController("COM12", 9600, poll_ms=100, policy=ReconnectPolicy(50, 200, 600, 1000, 600))
+    snaps = []
+    c.snapshot.connect(lambda s: snaps.append(s))
+    c.connect_device()
+    assert isinstance(c.serial, QSerialPort) and c.serial.baudRate() == 9600
+    assert c.serial.parity() == QSerialPort.Parity.NoParity and c.serial.flowControl() == QSerialPort.FlowControl.NoFlowControl
+    spin(250)
+    c.cleanup()
+    assert snaps and all(x.comm == "no_port" for x in snaps) and not c.serial.isOpen()

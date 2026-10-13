@@ -19,6 +19,9 @@ def spin(ms=50):
 @pytest.fixture(scope="module")
 def win(qapp):
     MAIN.QMessageBox = MagicMock()
+    # 이온 게이지는 이 공용 창에서 끈다 — 실제 포트를 찾는 스레드가 뒤에서 돌면, 큐에 쌓인 신호가 어느 시험에서
+    #  이벤트 루프가 돌 때 배달되느냐에 따라 로그·ERP 상태가 달라진다. 이온 게이지 시험은 test_ion_gauge_main 에서 따로.
+    MAIN.IG_ENABLED = False
     w = MAIN.MainDialog()
     w.chat_chk = MagicMock()
     w.erp = MagicMock()
@@ -31,6 +34,7 @@ def win(qapp):
     #  이 창을 쓰는 모듈이 늘면 GC 시점이 당겨져 실행 도중에, 아니면 종료 때 났다.
     threads = (w.process_thread, w.plc_thread, w.mfc_thread,
                w.dcpower_thread, w.rfpower_thread, w.rfpulse_thread)
+    threads += tuple(t for t in (getattr(w, "ig_thread", None),) if t is not None)
     for t in threads:
         t.quit()
     for t in threads:
