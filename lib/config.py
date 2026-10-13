@@ -719,6 +719,18 @@ def _validate_rfpulse_config() -> None:
 _validate_rfpulse_config()
 
 # ================================================================
+# 이온 게이지 (Duniway Terranova 934, RS-232) — 읽기 전용
+# ================================================================
+# 압력을 읽어 화면·IG CSV·ERP 상태에만 쓴다. 공정·다른 장비에는 어떤 영향도 주지 않는다.
+#  기본은 꺼짐·포트 없음 — 장비 노트북 config_user.json 에서 켜고 포트를 적는다(2026-10-13 실측 COM12, MOXA UPort 1410).
+#  규격: 9600 8N1, 흐름 제어 없음(매뉴얼 고정). 게이지 이름은 화면·로그 문구용.
+IG_ENABLED      = get('IG_ENABLED',      False)
+IG_PORT         = get('IG_PORT',         "")
+IG_BAUD         = get('IG_BAUD',         9600)
+IG_GAUGE_A_NAME = get('IG_GAUGE_A_NAME', "게이지 A")
+IG_GAUGE_B_NAME = get('IG_GAUGE_B_NAME', "게이지 B")
+
+# ================================================================
 # MFC 설정
 # ================================================================
 # config_user.json에서 변경 가능
