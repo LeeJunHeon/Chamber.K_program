@@ -18,10 +18,20 @@
 
 from __future__ import annotations
 
+import datetime
 import re
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Callable, Iterable, List, Optional, Tuple
+
+from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, pyqtSlot as Slot
+from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
+
+from lib.comm_policy import ReconnectPolicy
+from lib.config import (
+    IG_PORT, IG_BAUD,
+    COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
+)
 
 # ===== 프로토콜 상수 =====
 ALLOWED_COMMANDS = frozenset({"E", "F"})     # 이 밖의 글자는 보내지 않는다(A~D 필라멘트·디개스 금지)
@@ -218,3 +228,348 @@ def filament_text(r: Optional[IgReading]) -> str:
     if not r.filament_on:
         return "필라멘트 꺼짐"
     return "필라멘트 켜짐" + ("" if r.emission_ok else " · 방출 이상")
+
+
+# ===== 통신 상태 =====
+COMM_TEXT = {
+    "connecting": "연결 중",
+    "ok": "정상",
+    "disabled": "사용 안 함",
+    "no_port": "포트 없음",
+    "open_failed": "포트 열기 실패",
+    "no_identity": "응답 없음/형식 다름",
+    "timeout": "응답 없음",
+    "bad_response": "응답 형식 다름",
+}
+
+
+@dataclass
+class IgSnapshot:
+    """1초에 한 번 main 으로 보내는 상태. reading 은 마지막으로 해석에 성공한 값이다 —
+    이번 주기에 새로 받은 값인지는 fresh 로 구분한다(지난 값을 새 값처럼 쓰지 않도록)."""
+    comm: str
+    comm_text: str
+    detail: str
+    reading: Optional[IgReading]
+    fresh: bool
+    last_ok_wall: Optional[float]
+    t: float
+
+    @property
+    def ok(self) -> bool:
+        return self.comm == "ok" and self.fresh and self.reading is not None
+
+    def age_sec(self, now: Optional[float] = None) -> Optional[float]:
+        if self.last_ok_wall is None:
+            return None
+        return max(0.0, (time.time() if now is None else now) - self.last_ok_wall)
+
+
+class IonGaugeController(QObject):
+    """Terranova 934 읽기 전용 드라이버. 전용 QThread 에서 돈다.
+
+    [스레드 규칙] 시리얼 포트·타이머·시그널 연결은 전부 워커 스레드 안에서 처음 쓸 때 만든다(_ensure_created).
+      __init__ 에서는 Qt 객체를 만들지 않는다 — DCPowerController._outage_probe 처럼 moveToThread 전에
+      만든 타이머가 @Slot 없는 메서드에 연결돼 콜백이 메인 스레드에서 도는 문제를 만들지 않기 위해서다.
+      타이머·시그널로 불리는 메서드에는 전부 @Slot 을 붙인다.
+    [주기] 1초마다 E 한 번. readyRead 로 모으다가 26항목 + 줄 끝이면 완료, timeout_ms 안에 안 오면 실패 1회.
+      중첩 이벤트 루프로 기다리지 않는다. 다음 요청 전에 남은 입력을 비운다. 명령 간격은 min_gap_ms 이상.
+    [두절] 연속 fail_limit 회 실패하면 포트를 닫고 공통 ReconnectPolicy 일정으로 다시 연다. 다시 열면 F 로
+      신원을 확인한 뒤에만 E 를 보낸다. 로그·COMM 이벤트는 상태가 바뀔 때만 낸다(매초 남기지 않는다).
+    [안전] 공정·다른 장비에 아무 영향도 주지 않는다. 경고창 없음. 보낼 수 있는 명령은 E·F 뿐.
+    """
+
+    snapshot = Signal(object)          # IgSnapshot — 1초마다(연결이 안 돼도) 1번
+    status_message = Signal(str, str)  # (레벨, 문구) — 상태가 바뀔 때만
+    comm_event = Signal(dict)          # COMM_events.csv 1행(파일 쓰기는 main 스레드)
+
+    _RX_MAX = 4096
+
+    def __init__(self, port_name: Optional[str] = None, baud: Optional[int] = None, *,
+                 poll_ms: int = 1000, timeout_ms: int = 800, fail_limit: int = 3, min_gap_ms: int = 500,
+                 port_factory: Optional[Callable[[QObject], object]] = None,
+                 port_lister: Optional[Callable[[], Iterable[str]]] = None,
+                 policy: Optional[ReconnectPolicy] = None, parent=None):
+        super().__init__(parent)
+        self.port_name = str(IG_PORT if port_name is None else port_name).strip()
+        self.baud = int(IG_BAUD if baud is None else baud)
+        self.poll_ms = int(poll_ms)
+        self.timeout_ms = int(timeout_ms)
+        self.fail_limit = max(1, int(fail_limit))
+        self.min_gap_ms = int(min_gap_ms)
+        self._port_factory = port_factory
+        self._port_lister = port_lister
+        self._policy = policy or ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS,
+                                                 COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC)
+        # Qt 객체 — 워커 스레드에서 _ensure_created 가 만든다
+        self.serial = None
+        self._poll_timer: Optional[QTimer] = None
+        self._resp_timer: Optional[QTimer] = None
+        self._reconnect_timer: Optional[QTimer] = None
+        # 상태
+        self._rx = bytearray()
+        self._pending: Optional[str] = None     # 응답을 기다리는 명령(E/F)
+        self._want = False
+        self._linked = False                    # 포트 열림 + 신원 확인 완료
+        self._comm = "connecting"
+        self._detail = ""
+        self._fail_streak = 0
+        self._outage_t0: Optional[float] = None # 이번 두절의 시작(monotonic). None = 두절 아님
+        self._reopened = False                  # 이번 두절 중 포트를 닫았다 다시 열었는가
+        self._last_reading: Optional[IgReading] = None
+        self._last_ok_wall: Optional[float] = None
+        self._last_send_t = -1e9
+        self._device_key = None                 # (필라멘트, 방출, 디개스, 오류) — 바뀔 때만 로그
+
+    # ==================== 지연 생성(워커 스레드) ====================
+    def _make_port(self):
+        if self._port_factory is not None:
+            return self._port_factory(self)
+        p = QSerialPort(self)
+        p.setBaudRate(self.baud)
+        p.setDataBits(QSerialPort.DataBits.Data8)
+        p.setParity(QSerialPort.Parity.NoParity)
+        p.setStopBits(QSerialPort.StopBits.OneStop)
+        p.setFlowControl(QSerialPort.FlowControl.NoFlowControl)
+        return p
+
+    def _ensure_created(self) -> None:
+        if self.serial is None:
+            self.serial = self._make_port()
+            self.serial.readyRead.connect(self._on_ready_read)
+        if self._poll_timer is None:
+            self._poll_timer = QTimer(self)
+            self._poll_timer.setInterval(self.poll_ms)
+            self._poll_timer.timeout.connect(self._on_poll_tick)
+        if self._resp_timer is None:
+            self._resp_timer = QTimer(self)
+            self._resp_timer.setSingleShot(True)
+            self._resp_timer.timeout.connect(self._on_response_timeout)
+        if self._reconnect_timer is None:
+            self._reconnect_timer = QTimer(self)
+            self._reconnect_timer.setSingleShot(True)
+            self._reconnect_timer.timeout.connect(self._try_connect)
+
+    def _available_ports(self) -> set:
+        if self._port_lister is not None:
+            return set(self._port_lister())
+        return {p.portName() for p in QSerialPortInfo.availablePorts()}
+
+    # ==================== 연결 ====================
+    @Slot()
+    def connect_device(self) -> None:
+        """프로그램 시작 때 워커 스레드에서 부른다(QueuedConnection). 하드웨어가 없어도 예외를 올리지 않는다."""
+        if not self.port_name:
+            self._set_comm("disabled", "IG_PORT 가 비어 있음")
+            return
+        self._ensure_created()
+        self._want = True
+        self._poll_timer.start()
+        self._try_connect()
+
+    @Slot()
+    def _try_connect(self) -> None:
+        if not self._want or self._linked or self._pending is not None:
+            return
+        try:
+            if not self.serial.isOpen():
+                if self.port_name not in self._available_ports():
+                    self._link_failed("no_port", f"{self.port_name} 없음")
+                    return
+                self.serial.setPortName(self.port_name)
+                if not self.serial.open(QIODeviceBase.OpenModeFlag.ReadWrite):
+                    self._link_failed("open_failed", f"{self.port_name}: {self.serial.errorString()}")
+                    return
+                if self._outage_t0 is not None:
+                    self._reopened = True
+            self._send("F")                     # 신원 확인 — 압력 한 줄이 와야 이 포트를 쓴다
+        except Exception as e:
+            self._link_failed("open_failed", f"{self.port_name}: {e!r}")
+
+    @Slot()
+    def cleanup(self) -> None:
+        """종료 — 워커 스레드에서 돈다(ig_thread.finished 에 DirectConnection). 메시지는 내지 않는다."""
+        self._want = False
+        self._linked = False
+        self._pending = None
+        for t in (self._poll_timer, self._resp_timer, self._reconnect_timer):
+            if t is not None:
+                try:
+                    t.stop()
+                except Exception:
+                    pass
+        try:
+            if self.serial is not None and self.serial.isOpen():
+                self.serial.close()
+        except Exception:
+            pass
+        self._rx.clear()
+
+    # ==================== 송신 ====================
+    def _send(self, cmd: str) -> None:
+        """허용 목록(E, F) 밖의 명령은 포트에 닿기 전에 예외 — 필라멘트·디개스(A~D)는 절대 나가지 않는다."""
+        if not isinstance(cmd, str) or cmd not in ALLOWED_COMMANDS:
+            raise ValueError(f"이온 게이지에 보낼 수 없는 명령: {cmd!r} (허용: {sorted(ALLOWED_COMMANDS)})")
+        try:
+            self.serial.clear(QSerialPort.Direction.Input)   # 지난 응답 찌꺼기
+        except Exception:
+            pass
+        try:
+            self.serial.readAll()
+        except Exception:
+            pass
+        self._rx.clear()
+        self.serial.write(cmd.encode("ascii"))
+        self._pending = cmd
+        self._last_send_t = time.monotonic()
+        self._resp_timer.start(self.timeout_ms)
+
+    @Slot()
+    def _on_poll_tick(self) -> None:
+        if not self._want:
+            return
+        if not self._linked:
+            self._emit_snapshot(fresh=False)    # 끊겨 있어도 1초에 한 번(화면·CSV 가 '끊김'을 그대로 보여 준다)
+            return
+        if self._pending is not None:
+            return
+        if (time.monotonic() - self._last_send_t) * 1000.0 < self.min_gap_ms:
+            return
+        self._send("E")
+
+    # ==================== 수신 ====================
+    @Slot()
+    def _on_ready_read(self) -> None:
+        if self.serial is None:
+            return
+        data = bytes(self.serial.readAll())
+        if not data or self._pending is None:
+            return                              # 기다리는 명령이 없으면(늦게 온 응답) 버린다
+        self._rx.extend(data)
+        if len(self._rx) > self._RX_MAX:
+            del self._rx[:-self._RX_MAX]
+        need = E_ITEM_COUNT if self._pending == "E" else 1
+        if not is_complete(bytes(self._rx), need):
+            return
+        self._resp_timer.stop()
+        cmd, buf = self._pending, bytes(self._rx)
+        self._pending = None
+        self._rx.clear()
+        if cmd == "F":
+            self._on_identity(buf)
+        else:
+            self._on_status(buf)
+
+    @Slot()
+    def _on_response_timeout(self) -> None:
+        cmd, n = self._pending, len(split_lines(bytes(self._rx)))
+        self._pending = None
+        self._rx.clear()
+        if cmd == "F":
+            self._link_failed("no_identity", "F 응답 없음" + (f"(받은 줄 {n})" if n else ""))
+        elif cmd == "E":
+            self._cycle_failed("timeout", f"{self.timeout_ms} ms 안에 {E_ITEM_COUNT}항목 미수신(받은 줄 {n})")
+
+    def _on_identity(self, buf: bytes) -> None:
+        if not looks_like_pressure_reply(buf):
+            self._link_failed("no_identity", f"F 응답 형식 다름: {buf[:40]!r}")
+            return
+        self._linked = True
+        self._fail_streak = 0
+        if self._outage_t0 is not None and self._reopened:
+            self._emit_event("재연결", f"{self.port_name} 다시 열고 신원 확인")
+        self._reopened = False
+
+    def _on_status(self, buf: bytes) -> None:
+        try:
+            r = parse_status(buf)
+        except IgParseError as e:
+            self._cycle_failed("bad_response", str(e))
+            return
+        self._fail_streak = 0
+        self._last_reading = r
+        self._last_ok_wall = r.t
+        if self._policy.in_outage():
+            self._policy.on_success()           # 장비가 실제로 응답했을 때만 리셋(포트 열림은 성공이 아니다)
+        self._set_comm("ok", "")
+        self._log_device_changes(r)
+        self._emit_snapshot(fresh=True)
+
+    # ==================== 실패·재연결 ====================
+    def _cycle_failed(self, kind: str, detail: str) -> None:
+        self._fail_streak += 1
+        self._set_comm(kind, detail)
+        self._emit_snapshot(fresh=False)
+        if self._fail_streak >= self.fail_limit:
+            self._link_failed(kind, f"연속 {self._fail_streak}회 실패 — 포트를 닫고 다시 연결")
+
+    def _link_failed(self, kind: str, detail: str) -> None:
+        self._linked = False
+        self._pending = None
+        self._fail_streak = 0
+        if self._resp_timer is not None:
+            self._resp_timer.stop()
+        self._rx.clear()
+        try:
+            if self.serial is not None and self.serial.isOpen():
+                self.serial.close()
+        except Exception:
+            pass
+        self._set_comm(kind, detail)
+        if not self._want or self._reconnect_timer is None:
+            return
+        ms = self._policy.on_failure()
+        if self._policy.take_long_outage_alert():
+            lost = self._policy.outage_sec()
+            self.status_message.emit("IG(경고)", f"이온 게이지 통신 장기 두절 {lost:.0f}초 — {ms} ms 간격으로만 재시도")
+            self._emit_event("장기두절", f"{lost:.0f}초", lost=lost)
+        self._reconnect_timer.start(int(ms))
+
+    def _set_comm(self, kind: str, detail: str) -> None:
+        """통신 상태 — 바뀔 때만 로그와 COMM 이벤트를 낸다."""
+        prev = self._comm
+        self._comm, self._detail = kind, detail
+        if kind == prev:
+            return
+        if kind == "ok":
+            if self._outage_t0 is not None:
+                lost = time.monotonic() - self._outage_t0
+                self._outage_t0 = None
+                self._emit_event("복구", f"단절 {lost:.1f}초", lost=lost)
+                self.status_message.emit("IG", f"이온 게이지 통신 복구 (단절 {lost:.1f}초)")
+            else:
+                self.status_message.emit("IG", f"이온 게이지 연결됨 ({self.port_name})")
+            return
+        text = COMM_TEXT.get(kind, kind)
+        if kind == "disabled":
+            self.status_message.emit("IG", f"이온 게이지 {text} — {detail}")
+            return
+        if self._outage_t0 is None:
+            self._outage_t0 = time.monotonic()
+            self._emit_event("실패", f"{text}: {detail}")
+        self.status_message.emit("IG(경고)", f"이온 게이지 {text} — {detail}")
+
+    def _log_device_changes(self, r: IgReading) -> None:
+        key = (r.filament_on, r.emission_ok, r.degas_on, r.error_code)
+        if key == self._device_key:
+            return
+        self._device_key = key
+        msg = f"이온 게이지 {filament_text(r)}" + (" · 디개스 켜짐" if r.degas_on else "")
+        self.status_message.emit("IG(경고)" if r.error_code else "IG", msg)
+
+    # ==================== 내보내기 ====================
+    def _emit_snapshot(self, fresh: bool) -> None:
+        self.snapshot.emit(IgSnapshot(
+            comm=self._comm, comm_text=COMM_TEXT.get(self._comm, self._comm), detail=self._detail,
+            reading=self._last_reading, fresh=bool(fresh), last_ok_wall=self._last_ok_wall, t=time.time()))
+
+    def _emit_event(self, kind: str, detail: str, lost=None) -> None:
+        try:
+            self.comm_event.emit({
+                "시각": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "종류": kind, "상세": detail,
+                "단절초": ("" if lost is None else f"{float(lost):.1f}"),
+                "연속실패": self._fail_streak,
+            })
+        except Exception:
+            pass
