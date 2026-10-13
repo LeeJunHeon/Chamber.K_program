@@ -390,7 +390,7 @@ def _warn_legacy_chk_header_once(path: Path) -> None:
         log_message_to_monitor(
             "경고",
             "ChK_log.csv 헤더가 구버전입니다 — tools/migrate_chk_csv.py 를 "
-            "실행하면 RF Pulse Freq/Duty 컬럼이 기록됩니다")
+            "실행하면 RF Pulse·Base Pressure 컬럼이 기록됩니다")
     except Exception:
         pass
 

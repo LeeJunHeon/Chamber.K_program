@@ -905,6 +905,8 @@ class MainDialog(QDialog):
         self.dcpower_controller.status_message.connect(self.on_status_message)
         self.rfpower_controller.status_message.connect(self.on_status_message)
         self.process_controller.status_message.connect(self.on_status_message)
+        # 베이스 압력 대기 통과 값 → ChK_log 'Base Pressure'(이온 게이지·히터 설정과 무관하게 잇는다)
+        self.process_controller.ig_base_reached.connect(self._on_ig_base_reached)
         
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
 
@@ -1348,6 +1350,11 @@ class MainDialog(QDialog):
         """ERP 상태 ionGauge — 꺼져 있으면 enabled=False."""
         return ig_erp_state_dict(getattr(self, "_ig_snap", None), getattr(self, "ig_controller", None) is not None,
                                  IG_GAUGE_A_NAME, IG_GAUGE_B_NAME)
+
+    @Slot(float)
+    def _on_ig_base_reached(self, torr: float):
+        """공정의 베이스 압력 대기 통과 — 판정에 쓴 마지막 이온 압력을 ChK_log 'Base Pressure' 용으로 보관."""
+        self._chk_base_pressure = float(torr)
 
     def _ig_process_log(self, phase: str) -> None:
         """공정 시작·종료 때 공정 로그 파일에만 한 줄(모니터·매초 기록 없음)."""
@@ -3990,12 +3997,15 @@ class MainDialog(QDialog):
             "RF Pulse: Duty[%]":   rfp_duty,
             "RF Pulse: For.P":     rfp_for_p,
             "RF Pulse: Ref. P":    rfp_ref_p,
+            "Base Pressure":       ("" if getattr(self, "_chk_base_pressure", None) is None
+                                    else "%.2E" % float(self._chk_base_pressure)),
         }
 
         return row
     
     def _reset_chk_stats(self):
         """ChK CSV 평균 계산용 누적값 + 샘플링 상태 초기화."""
+        self._chk_base_pressure = None  # 베이스 압력 대기에서 판정에 쓴 마지막 이온 압력(Torr). 대기 생략이면 None
         self._chk_heater_sum = 0.0      # ★
         self._chk_heater_cnt = 0        # ★
 

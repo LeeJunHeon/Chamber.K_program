@@ -844,4 +844,7 @@ CHK_CSV_COLUMNS = [
     "RF Pulse: Duty[%]",     # 설정값(평균 아님). 빈 칸이면 장비 리드백값
     "RF Pulse: For.P",       # 계측 평균
     "RF Pulse: Ref. P",      # 계측 평균
+    # ↓ 베이스 압력 대기(이온 게이지)에서 판정에 쓴 마지막 이온 압력(Torr, "%.2E"). 대기를 생략했거나
+    #   이온 게이지를 끈 공정은 빈 칸. 이것도 맨 끝에만 붙인다(옛 파일은 tools/migrate_chk_csv.py).
+    "Base Pressure",
 ]

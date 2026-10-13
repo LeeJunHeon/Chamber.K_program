@@ -65,7 +65,7 @@ from lib.config import CHK_CSV_PATH, CHK_CSV_COLUMNS   # noqa: E402
 # ===== 스키마 이력 =====
 # 필드 수로 어느 시절의 행인지 가른다. 헤더만 믿으면 안 된다 —
 # 실제 파일에는 헤더가 15열인데 뒤쪽 행만 16필드인 경우가 있다.
-COLS_NOW = list(CHK_CSV_COLUMNS)                       # 현재(이 작업 후 20열)
+COLS_NOW = list(CHK_CSV_COLUMNS)                       # 현재(21열 — 맨 끝 Base Pressure)
 
 # 16열: Heater Temp 가 들어간 시절 (2026-09-03~)
 COLS_16 = [
@@ -78,14 +78,19 @@ COLS_16 = [
 COLS_15 = [c for c in COLS_16 if c != "Heater Temp"]
 # 18열: RF Pulse Freq/Duty 만 붙었던 중간 스키마 (커밋 16ad9b6)
 COLS_18 = COLS_16 + ["RF Pulse: Freq[kHz]", "RF Pulse: Duty[%]"]
+# 20열: RF Pulse For.P/Ref.P 까지 붙은 스키마 (Base Pressure 이전)
+COLS_20 = COLS_18 + ["RF Pulse: For.P", "RF Pulse: Ref. P"]
 
 SCHEMAS = {
     len(COLS_15): ("15열(Heater Temp 이전)", COLS_15),
     len(COLS_16): ("16열(Heater Temp 추가)", COLS_16),
     len(COLS_18): ("18열(RF Pulse Freq/Duty 추가)", COLS_18),
+    len(COLS_20): ("20열(RF Pulse For/Ref 추가, Base Pressure 이전)", COLS_20),
 }
 if len(COLS_NOW) not in SCHEMAS:
     SCHEMAS[len(COLS_NOW)] = ("현재 스키마", COLS_NOW)
+# 옛 스키마는 모두 현재 스키마의 앞부분이어야 한다(열은 맨 끝에만 붙인다) — 아니면 옮기지 않는다
+assert all(COLS_NOW[:len(c)] == c for _, c in SCHEMAS.values() if c is not COLS_15), "CHK_CSV_COLUMNS 순서가 바뀌었습니다"
 
 
 def _read_raw(path: Path):
@@ -176,10 +181,20 @@ def _verify(data, out):
             if (last or "").strip() != "" and o.get("DC: P", "") != last:
                 problems.append("행 %d: 마지막 값 %r 가 DC: P(%r)와 다름"
                                 % (i, last, o.get("DC: P", "")))
+        # 2-1) 20필드 행에서는 RF Pulse: Ref. P 가 마지막 필드다
+        if len(raw) == len(COLS_20):
+            if o.get("RF Pulse: Ref. P", "") != raw[-1]:
+                problems.append("행 %d: 마지막 값 %r 가 RF Pulse: Ref. P(%r)와 다름"
+                                % (i, raw[-1], o.get("RF Pulse: Ref. P", "")))
         # 3) 원본에 있던 모든 컬럼 값이 그대로 옮겨졌는가
         for k, v in zip(cols, raw):
             if k in COLS_NOW and o.get(k, "") != v:
                 problems.append("행 %d: %s 값이 %r → %r 로 바뀜" % (i, k, v, o.get(k, "")))
+                break
+        # 4) 원본에 없던 컬럼(새로 붙은 Base Pressure 등)은 빈칸이어야 한다 — 다른 값이 새어 들어오지 않았는가
+        for k in COLS_NOW:
+            if k not in cols and o.get(k, "") != "":
+                problems.append("행 %d: 새 컬럼 %s 에 값 %r 가 들어감(빈칸이어야 함)" % (i, k, o.get(k, "")))
                 break
     return problems
 
@@ -330,6 +345,12 @@ FIX_15A = ["2026-08-20 09:00:00", "SiO2_RF", "", "2.000", "SiO2", "", "18.000", 
            "3.000", "20.000", "198.500", "1.200", "0.000", "0.000", "0.000"]
 FIX_15B = ["2026-08-21 11:30:00", "Au_DC_old", "", "1.000", "", "Au", "20.000", "0.000",
            "5.000", "0.500", "0.000", "0.000", "402.100", "0.130", "52.273"]
+# 20필드(Base Pressure 이전) — RF Pulse 4컬럼에 값이 있는 행
+FIX_20A = ["2026-10-01 14:00:00", "SiO2_RFpulse", "", "2.000", "SiO2", "", "18.000", "2.000",
+           "3.000", "20.000", "300.0", "0.000", "0.000", "0.000", "0.000", "0.000",
+           "10.000", "50", "199.800", "1.250"]
+# 21필드(현재) — 옛 헤더 파일에 섞여 있는 경우
+FIX_21A = FIX_20A[:1] + ["Au_base"] + FIX_20A[2:] + ["3.90E-06"]
 
 
 def cmd_selftest() -> int:
@@ -343,7 +364,7 @@ def cmd_selftest() -> int:
     td = Path(tempfile.mkdtemp(prefix="chk_mig_selftest_"))
     p = td / "ChK_log.csv"
 
-    # 헤더 15열 + 15필드 2행 + 16필드 2행 + 끝 빈 줄
+    # 헤더 15열 + 15필드 2행 + 16필드 2행 + 20필드 1행 + 21필드 1행 + 끝 빈 줄
     with p.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(COLS_15)
@@ -351,11 +372,13 @@ def cmd_selftest() -> int:
         w.writerow(FIX_15B)
         w.writerow(FIX_16A)
         w.writerow(FIX_16B)
+        w.writerow(FIX_20A)
+        w.writerow(FIX_21A)
         f.write("\r\n")          # 파일 끝 빈 줄(실제 파일에 있다)
 
     print("=== 픽스처 ===")
     print("  %s" % p)
-    print("  헤더 15열 / 15필드 2행 / 16필드 2행 / 끝 빈 줄")
+    print("  헤더 15열 / 15필드 2행 / 16필드 2행 / 20필드 1행 / 21필드 1행 / 끝 빈 줄")
     print()
 
     rc = cmd_migrate(p, dry=False)
@@ -368,7 +391,7 @@ def cmd_selftest() -> int:
     hdr = rows[0]
     body = [r for r in rows[1:] if r]
     ck("헤더가 현재 스키마(%d열)" % len(COLS_NOW), hdr == COLS_NOW, "-> %d열" % len(hdr))
-    ck("데이터 4행", len(body) == 4, "-> %d행" % len(body))
+    ck("데이터 6행", len(body) == 6, "-> %d행" % len(body))
     ck("모든 행 %d필드" % len(COLS_NOW),
        all(len(r) == len(COLS_NOW) for r in body),
        "-> %r" % sorted({len(r) for r in body}))
@@ -395,16 +418,43 @@ def cmd_selftest() -> int:
         for key, want in exp.items():
             ck("    %-12s == %r" % (key, want), r[key] == want, "-> %r" % r[key])
 
-    # 새 4컬럼은 모두 ""
-    NEW4 = ["RF Pulse: Freq[kHz]", "RF Pulse: Duty[%]",
-            "RF Pulse: For.P", "RF Pulse: Ref. P"]
-    ck("새 4컬럼이 모두 ''",
-       all(r.get(c, None) == "" for r in recs for c in NEW4),
-       "-> %r" % [{c: r.get(c) for c in NEW4} for r in recs[:1]])
+    # 15/16필드 행: 새 5컬럼(RF Pulse 4 + Base Pressure)은 모두 ""
+    NEW5 = ["RF Pulse: Freq[kHz]", "RF Pulse: Duty[%]",
+            "RF Pulse: For.P", "RF Pulse: Ref. P", "Base Pressure"]
+    ck("15/16필드 행: 새 5컬럼이 모두 ''",
+       all(r.get(c, None) == "" for r in recs[:4] for c in NEW5),
+       "-> %r" % [{c: r.get(c) for c in NEW5} for r in recs[:1]])
+
+    # 20필드 행: RF Pulse 4컬럼·DC 값 그대로, Base Pressure 는 ""
+    r20 = recs[4]
+    for key, want in (("RF Pulse: Freq[kHz]", "10.000"), ("RF Pulse: Duty[%]", "50"),
+                      ("RF Pulse: For.P", "199.800"), ("RF Pulse: Ref. P", "1.250"),
+                      ("DC: P", "0.000"), ("Heater Temp", "300.0"), ("Base Pressure", "")):
+        ck("20필드 행 %-20s == %r" % (key, want), r20[key] == want, "-> %r" % r20[key])
+    # 21필드 행: 그대로(Base Pressure 값 유지)
+    ck("21필드 행 그대로", body[5] == FIX_21A, "-> %r" % body[5][-3:])
+    ck("열 순서: Base Pressure 가 맨 끝", hdr[-1] == "Base Pressure" and hdr[:20] == COLS_20)
 
     # 멱등성
     rc2 = cmd_migrate(p, dry=False)
     ck("재실행 rc=0(이미 최신)", rc2 == 0, "-> rc=%d" % rc2)
+
+    # 지금 운영 중인 20열 파일(헤더 20열, 20필드 행만) → 21열, Base Pressure 빈칸
+    p20 = td / "ChK_20.csv"
+    with p20.open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(COLS_20)
+        w.writerow(FIX_20A)
+        w.writerow(FIX_20A)
+    ck("20열 파일 dry-run rc=0", cmd_migrate(p20, dry=True) == 0)
+    with p20.open("r", newline="", encoding="utf-8") as f:
+        ck("  dry-run 은 파일을 안 바꿈", next(csv.reader(f)) == COLS_20)
+    ck("20열 파일 --apply rc=0", cmd_migrate(p20, dry=False) == 0)
+    with p20.open("r", newline="", encoding="utf-8") as f:
+        rr = list(csv.reader(f))
+    ck("  21열 헤더 + 행마다 끝에 빈 Base Pressure",
+       rr[0] == COLS_NOW and all(r == FIX_20A + [""] for r in rr[1:]), "-> %r" % rr[1][-2:])
+    ck("  백업 생성", len(list(td.glob("ChK_log_backup_*.csv"))) >= 1)
 
     # 알 수 없는 필드 수 → 중단
     p2 = td / "ChK_weird.csv"
@@ -412,7 +462,7 @@ def cmd_selftest() -> int:
         w = csv.writer(f)
         w.writerow(COLS_15)
         w.writerow(FIX_15A)
-        w.writerow(FIX_15A + ["x", "y", "z"])       # 18? -> 아니고 18필드
+        w.writerow(FIX_15A + ["x", "y", "z"])       # 15+3 = 18필드 → 18열 스키마로 통과(알 수 없음 아님)
         w.writerow(FIX_15A[:9])                      # 9필드 = 알 수 없음
     rc3 = cmd_migrate(p2, dry=False)
     ck("알 수 없는 필드 수 → rc=2", rc3 == 2, "-> rc=%d" % rc3)
