@@ -29,6 +29,13 @@ def ig(win, monkeypatch):
         port_factory=lambda parent: FakeIgPort(s, parent), port_lister=lambda: s.ports))
     yield w, s, logs
     w._stop_ion_gauge()
+    pc = w.process_controller                               # 공용 창 — 공정 쪽 배선도 되돌린다
+    pc.set_ig_snapshot_provider(None)
+    for sig in (pc.request_ig_filament_on, pc.request_ig_filament_off):
+        try:
+            sig.disconnect()
+        except TypeError:
+            pass
     for lab in w._ig_labels:
         lab.deleteLater()
     w.ig_thread = None
@@ -140,3 +147,25 @@ def test_erp_state_has_ion_gauge(ig):
     assert (g["ionText"], g["gaugeAText"], g["gaugeBText"], g["filamentText"]) == (
         "9.0E-6 Torr", "하한 이하", "6.3E-3 Torr", "필라멘트 켜짐")
     assert g["ageSec"] is not None and g["ageSec"] <= 1
+
+
+
+def test_process_controller_wired_to_ion_gauge(ig):
+    """공정 → 시그널 → 이온 게이지 스레드(QueuedConnection) → 포트에 A, 결과는 공정 컨트롤러 슬롯으로."""
+    w, s, logs = ig
+    pc = w.process_controller
+    spin(500)
+    assert pc._ig_snap() is w._ig_snap and w._ig_snap is not None
+    got = []
+    pc._running = True
+    pc._ig_expect, pc._ig_ctx = "on", "probe"              # 결과만 받아 본다(ctx 미지정 → 다음 스텝 없음)
+    orig = pc._ig_after_result
+    pc._ig_after_result = lambda ctx, a, ok, d: got.append((ctx, a, ok))
+    try:
+        pc.request_ig_filament_on.emit()
+        spin(1500)
+    finally:
+        pc._ig_after_result = orig
+        pc._running = False
+    assert b"A" in s.writes
+    assert got and got[0][:2] == ("probe", "on")            # 가짜 장비는 필라멘트가 이미 켜져 있어 결과 성공

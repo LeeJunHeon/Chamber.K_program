@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import math
+import time
 from PyQt6.QtCore import (
     QObject, QTimer, QEventLoop, QMetaObject, QThread,
     pyqtSignal as Signal, pyqtSlot as Slot, Qt, QElapsedTimer
@@ -15,7 +16,9 @@ from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_HOLD_MODE, HEATER_HOLD_WAIT_SEC, HEATER_HOLD_FAIL_ACTION,
                         HEATER_WAIT_TIMEOUT_SEC, POWER_WAIT_TIMEOUT_SEC,
                         POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
-                        DC_RAMP_STEP_A)
+                        DC_RAMP_STEP_A,
+                        IG_FILAMENT_ON_TIMEOUT_SEC, IG_SETTLE_SEC, IG_BASE_STABLE_COUNT,
+                        IG_BASE_WAIT_TIMEOUT_SEC, PROCESS_DEFAULT_BASE_PRESSURE)
 from lib.heater_profile import ramp_minutes
 from controller.heater_hold import ENGAGE_TIMEOUT_SEC
 
@@ -27,6 +30,13 @@ WAIT_TIMEOUT_MAX_SEC    = 43200.0    # 12시간
 # 걸리는 시간에 맞춘다 — 짧게 잡으면 정상 동작인데도 매번 타임아웃 경고가 찍힌다.
 STOP_FLOW_OFF_WAIT_MS   = 6000                      # READ R69 → L0 → VERIFY R69 (1초 간격) ≈ 3초 + 여유
 STOP_VALVE_OPEN_WAIT_MS = MFC_DELAY_MS_VALVE + 3000  # 밸브 이동 대기 5초 + 위치 확인 1초 + 여유
+
+# 베이스 압력 대기 — 이온 게이지 통신이 이 시간(초)을 넘게 끊기면 중단. 판정에 쓰는 값은 이 시간(초) 안의 것만.
+IG_COMM_LOSS_ABORT_SEC = 60.0
+IG_VALUE_MAX_AGE_SEC = 2.0
+IG_MAX_RELIGHTS = 2                 # 대기 중 필라멘트가 꺼지면 다시 켜는 최대 횟수
+IG_RESULT_MARGIN_SEC = 10.0         # 필라멘트 결과 시그널을 기다리는 여유(이온 게이지 스레드가 멈췄을 때 대비)
+IG_OFF_RESULT_WAIT_SEC = 20.0       # OFF 결과 대기(드라이버 기한 10초 + 여유)
 
 # 래더 램프 목표(D00019)가 최종 목표에 닿았다고 볼 허용치.
 # D00019 는 0.1°C 단위 정수라 그만큼의 여유를 둔다.
@@ -56,6 +66,10 @@ class ActionType(str, Enum):
     HEATER_SET    = "HEATER_SET"     # value: 목표 온도(°C)
     HEATER_WAIT   = "HEATER_WAIT"    # value: 목표 온도(°C)
     HEATER_RAMP   = "HEATER_RAMP"    # value: 램프 속도(°C/min)
+    # 이온 게이지 베이스 압력 대기 — 가스 도입 전 고진공 확인
+    IG_FILAMENT_ON  = "IG_FILAMENT_ON"   # 필라멘트 ON(이미 켜져 방출 정상이면 생략)
+    IG_BASE_WAIT    = "IG_BASE_WAIT"     # value: 목표 베이스 압력(Torr)
+    IG_FILAMENT_OFF = "IG_FILAMENT_OFF"  # 필라멘트 OFF(실패해도 계속)
 
 @dataclass
 class ProcessStep:
@@ -291,6 +305,10 @@ class SputterProcessController(QObject):
     heater_reached        = Signal(dict)     # 공정 소유 히터의 승온 대기 통과 {"pv","target","took_sec","next"} → 챗 카드
     heater_hold_failed    = Signal(dict)     # 유지 모드 진입 실패 {"action","reason","state","elapsed","forced"} → main 이 경고 로그+챗 카드
     request_hold_force  = Signal(str, object)  # ("tc2"|"dac", 현재 MV) → main 이 HeaterHold.force_*_hold 실행. 결과는 스냅샷 force_result
+    # 이온 게이지 — main 이 IonGaugeController.filament_on/off 에 QueuedConnection 으로 잇는다(IG 스레드 객체를 직접 부르지 않는다)
+    request_ig_filament_on  = Signal()
+    request_ig_filament_off = Signal()
+    ig_base_reached         = Signal(float)    # 베이스 도달 판정에 쓴 마지막 이온 압력(Torr) → main 이 ChK_log 에 쓴다
 
     # --- MFC 라우팅 (Process -> MFC) ---
     command_requested     = Signal(str, dict)  # (cmd, params)
@@ -307,6 +325,16 @@ class SputterProcessController(QObject):
         # 유지 모드(HeaterHold) 상태 조회 — main 이 set_hold_state_provider 로 주입한다(main 속성 직접 접근 금지).
         #  반환 dict: {"mode","state","kind","holding","sv2","value","gave_up"}. None 이면 유지 모드 대기 없음
         self._hold_state: Optional[Callable[[], dict]] = None
+        # 이온 게이지 스냅샷 조회 — main 이 set_ig_snapshot_provider 로 주입한다(꺼져 있으면 None → 베이스 대기 생략)
+        self._ig_state: Optional[Callable[[], object]] = None
+        self._ig_tick_ms = 1000
+        self._ig_timer: Optional[QTimer] = None     # 베이스 대기 1초 판정(공정 스레드에서 생성)
+        self._ig_guard: Optional[QTimer] = None     # 필라멘트 결과 시그널 대기 기한
+        self._ig_wait: Dict[str, Any] = {}          # 베이스 대기 상태(비어 있으면 대기 아님)
+        self._ig_expect: Optional[str] = None       # 기다리는 필라멘트 결과 "on"/"off"
+        self._ig_ctx: Optional[str] = None          # "step_on" | "relight" | "step_off"
+        self._ig_fil_on_by_us = False               # 이번 공정에서 필라멘트를 켰고 아직 끄기를 보내지 않았는가
+        self.ig_base_pressure_used: Optional[float] = None
 
         # 내부 상태
         self._steps: List[ProcessStep] = []
@@ -378,6 +406,8 @@ class SputterProcessController(QObject):
         try:
             self.params = params
             self._running = True
+            self._ig_fil_on_by_us = False
+            self.ig_base_pressure_used = None
 
             # 타이머는 자신의 스레드에서 생성
             self._invoke_self("_setup_timers")
@@ -517,6 +547,11 @@ class SputterProcessController(QObject):
                 #  실제로 적용되지 않은 숫자가 stage_monitor·히터 CSV note 에 남는다(2026-09-27: 5400s vs 129분).
                 f"히터 온도 도달 대기 (±{HEATER_SOAK_TOLERANCE:.1f}°C, {HEATER_SOAK_TIME_SEC}s 유지)",
                 value=heater_temp))
+
+        # --- 5.5) 베이스 압력 대기(이온 게이지) — 가스를 넣기 전 고진공 확인 ---
+        #  히터를 쓰면 도달 확인 뒤, 안 쓰면 배기 개방 뒤. 필라멘트를 켜 목표 이하가 연속으로 확인되면 끈다
+        #  (가스 도입 뒤 9.9E-3 Torr 를 넘으면 934 가 스스로 끄지만 먼저 끈다).
+        steps.extend(self._ig_base_steps(p))
 
         # --- 6~8) 영점 → 가스 밸브 Open → 유량 설정/Flow ON ---
         #  승온이 끝나 아웃가싱이 잦아든 뒤에 잡아야 영점이 정확하다.
@@ -763,6 +798,15 @@ class SputterProcessController(QObject):
             elif step.action == ActionType.HEATER_WAIT:
                 self._heater_wait(float(step.value or 0.0))
 
+            elif step.action == ActionType.IG_FILAMENT_ON:
+                self._ig_filament_on_step()
+
+            elif step.action == ActionType.IG_BASE_WAIT:
+                self._ig_base_wait_start(float(step.value or 0.0))
+
+            elif step.action == ActionType.IG_FILAMENT_OFF:
+                self._ig_filament_off_step()
+
             elif step.action == ActionType.POWER_WAIT:
                 self._power_wait()
 
@@ -965,6 +1009,242 @@ class SputterProcessController(QObject):
         _sec = max(float(POWER_WAIT_TIMEOUT_SEC), _need)
         _sec = min(_sec, float(POWER_WAIT_TIMEOUT_MAX_SEC))
         return _sec, est
+
+    # ==================== 이온 게이지 베이스 압력 대기 ====================
+    def set_ig_snapshot_provider(self, fn) -> None:
+        """이온 게이지 최신 IgSnapshot 조회 콜러블 주입(main). None 이면 이온 게이지 꺼짐 — 베이스 대기 생략."""
+        self._ig_state = fn
+
+    @staticmethod
+    def base_pressure_of(p: Dict[str, Any]) -> float:
+        v = p.get('base_pressure', None)
+        if v is None or v == "":
+            v = PROCESS_DEFAULT_BASE_PRESSURE
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _ig_base_steps(self, p: Dict[str, Any]) -> List[ProcessStep]:
+        bp = self.base_pressure_of(p)
+        if self._ig_state is None:
+            self.status_message.emit("경고", "베이스 압력 대기 생략 — 이온 게이지 꺼짐(IG_ENABLED=false 또는 IG_PORT 없음)")
+            return []
+        if bp <= 0:
+            self.status_message.emit("경고", "베이스 압력 대기 생략 — base_pressure 0")
+            return []
+        return [
+            ProcessStep(ActionType.IG_FILAMENT_ON, "이온 게이지 필라멘트 ON"),
+            ProcessStep(ActionType.IG_BASE_WAIT, f"베이스 압력 대기 (목표 {bp:.1E} Torr)", value=bp),
+            ProcessStep(ActionType.IG_FILAMENT_OFF, "이온 게이지 필라멘트 OFF"),
+        ]
+
+    def _now(self) -> float:
+        return time.monotonic()
+
+    @staticmethod
+    def _mmss(sec: float) -> str:
+        sec = max(0, int(sec))
+        return f"{sec // 60:02d}:{sec % 60:02d}"
+
+    @staticmethod
+    def _fmt_torr(v) -> str:
+        return "--" if v is None else f"{float(v):.1E}"
+
+    def _ig_snap(self):
+        try:
+            return self._ig_state() if self._ig_state is not None else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _ig_fresh(snap) -> bool:
+        return (snap is not None and snap.ok and snap.last_ok_wall is not None
+                and (time.time() - snap.last_ok_wall) <= IG_VALUE_MAX_AGE_SEC)
+
+    def _ensure_ig_timers(self) -> None:
+        if self._ig_timer is None:
+            self._ig_timer = QTimer(self)
+            self._ig_timer.timeout.connect(self._on_ig_tick)
+        self._ig_timer.setInterval(int(self._ig_tick_ms))
+        if self._ig_guard is None:
+            self._ig_guard = QTimer(self)
+            self._ig_guard.setSingleShot(True)
+            self._ig_guard.timeout.connect(self._on_ig_guard_timeout)
+
+    def _ig_filament_on_step(self) -> None:
+        snap = self._ig_snap()
+        r = getattr(snap, "reading", None)
+        if self._ig_fresh(snap) and r.filament_on and r.emission_ok:
+            self.status_message.emit("정보", "[IG] 필라멘트 이미 켜짐·방출 정상 — 켜기 생략")
+            self._next_step()
+            return
+        self._ig_request("on", "step_on")
+
+    def _ig_filament_off_step(self) -> None:
+        self._ig_request("off", "step_off")
+
+    def _ig_request(self, action: str, ctx: str) -> None:
+        self._ensure_ig_timers()
+        self._ig_expect, self._ig_ctx = action, ctx
+        if action == "on":
+            self._ig_fil_on_by_us = True
+            self.request_ig_filament_on.emit()
+            self._ig_guard.start(int((float(IG_FILAMENT_ON_TIMEOUT_SEC) + IG_RESULT_MARGIN_SEC) * 1000))
+        else:
+            self._ig_fil_on_by_us = False
+            self.request_ig_filament_off.emit()
+            self._ig_guard.start(int(IG_OFF_RESULT_WAIT_SEC * 1000))
+
+    @Slot(str, bool, str)
+    def _on_ig_filament_result(self, action: str, ok: bool, detail: str) -> None:
+        """IonGaugeController.filament_result(main 이 QueuedConnection 으로 잇는다)."""
+        if not self._running or self._stop_pending or self._ig_expect != action:
+            return
+        ctx = self._ig_ctx
+        self._ig_expect, self._ig_ctx = None, None
+        if self._ig_guard is not None:
+            self._ig_guard.stop()
+        self._ig_after_result(ctx, action, bool(ok), str(detail or ""))
+
+    @Slot()
+    def _on_ig_guard_timeout(self) -> None:
+        if self._ig_expect is None or not self._running or self._stop_pending:
+            return
+        action, ctx = self._ig_expect, self._ig_ctx
+        self._ig_expect, self._ig_ctx = None, None
+        self._ig_after_result(ctx, action, False, "이온 게이지에서 필라멘트 결과가 오지 않음")
+
+    def _ig_after_result(self, ctx: Optional[str], action: str, ok: bool, detail: str) -> None:
+        if ctx == "step_on":
+            if ok:
+                self.status_message.emit("정보", f"[IG] 필라멘트 켜짐 — {detail}")
+                self._next_step()
+            else:
+                self._abort_with_error(f"{self._step_tag()} | 이온 게이지 필라멘트 켜기 실패 — {detail}")
+        elif ctx == "relight":
+            w = self._ig_wait
+            if not w:
+                return
+            if ok:
+                w['count'] = 0
+                w['paused'] = False
+                self.status_message.emit("정보", f"[IG] 필라멘트 재점등 {w['relights']}/{IG_MAX_RELIGHTS} 성공 — 안정화부터 다시")
+            elif w['relights'] < IG_MAX_RELIGHTS:
+                self._ig_relight(detail)
+            else:
+                self._ig_base_fail(f"필라멘트 재점등 {w['relights']}회 실패 — {detail}")
+        elif ctx == "step_off":
+            if ok:
+                self.status_message.emit("정보", f"[IG] 필라멘트 꺼짐 — {detail}")
+            else:
+                self.status_message.emit(
+                    "경고", f"[IG] 필라멘트 끄기 실패(공정 계속 — 가스 도입 뒤 934 가 스스로 끈다): {detail}")
+            self._next_step()
+
+    def _ig_base_wait_start(self, target: float) -> None:
+        self._ensure_ig_timers()
+        now = self._now()
+        self._ig_wait = {'target': float(target), 't0': now, 'count': 0, 'last_ion': None, 'last_used': None,
+                         'last_report': now, 'comm_ok_t': now, 'relights': 0, 'paused': False, 'last_snap_t': None}
+        self.status_message.emit("정보", f"[IG] 베이스 대기 시작 목표 {float(target):.1E} Torr")
+        self._ig_timer.start()
+
+    @Slot()
+    def _on_ig_tick(self) -> None:
+        w = self._ig_wait
+        if not w or not self._running or self._stop_pending:
+            if self._ig_timer is not None:
+                self._ig_timer.stop()
+            return
+        now = self._now()
+        elapsed = now - w['t0']
+        target = w['target']
+        timeout = float(IG_BASE_WAIT_TIMEOUT_SEC)
+        snap = self._ig_snap()
+        r = getattr(snap, "reading", None)
+        fresh = self._ig_fresh(snap)
+        if fresh and r.ion_torr is not None:
+            w['last_ion'] = r.ion_torr                 # 표시·사유용(판정과 별개)
+        if snap is not None and snap.comm in ("ok", "starting"):
+            w['comm_ok_t'] = now
+        if elapsed > timeout:
+            self._ig_base_fail(f"베이스 압력 대기 시간 초과 — 목표 {target:.1E} Torr, "
+                               f"마지막 {self._fmt_torr(w['last_ion'])} Torr, 경과 {self._mmss(elapsed)}")
+            return
+        if now - w['comm_ok_t'] > IG_COMM_LOSS_ABORT_SEC:
+            self._ig_base_fail(f"이온 게이지 통신 {IG_COMM_LOSS_ABORT_SEC:.0f}초 넘게 끊김 — 목표 {target:.1E} Torr, "
+                               f"마지막 {self._fmt_torr(w['last_ion'])} Torr, 경과 {self._mmss(elapsed)}")
+            return
+        if now - w['last_report'] >= 30.0:
+            w['last_report'] = now
+            msg = (f"베이스 대기 {self._fmt_torr(w['last_ion'])} → 목표 {target:.1E} "
+                   f"({self._mmss(elapsed)} / {self._mmss(timeout)})")
+            self.stage_monitor.emit(msg)
+            self.status_message.emit("정보", msg)
+        if w['paused']:                                # 재점등 결과 대기
+            return
+        if snap is None or snap.t == w['last_snap_t']:
+            return                                     # 새 스냅샷이 아니면 판정하지 않는다(같은 값을 두 번 세지 않게)
+        w['last_snap_t'] = snap.t
+        if fresh and not r.filament_on:
+            if w['relights'] >= IG_MAX_RELIGHTS:
+                self._ig_base_fail(f"필라멘트가 꺼짐 — 재점등 {w['relights']}회 뒤에도 유지 안 됨 "
+                                   f"(오류 코드 {r.error_code}: {r.error_text or '없음'})")
+            else:
+                self._ig_relight(f"오류 코드 {r.error_code}: {r.error_text or '없음'}")
+            return
+        usable = (fresh and r.filament_on and r.emission_ok and snap.emission_since is not None
+                  and (time.time() - snap.emission_since) >= float(IG_SETTLE_SEC)
+                  and r.ion_torr is not None and r.ion_torr > 0)
+        if usable and r.ion_torr <= target:
+            w['count'] += 1
+            w['last_used'] = r.ion_torr
+            if w['count'] >= int(IG_BASE_STABLE_COUNT):
+                self._ig_base_pass(elapsed)
+        else:
+            w['count'] = 0
+
+    def _ig_relight(self, why: str) -> None:
+        w = self._ig_wait
+        w['relights'] += 1
+        w['count'] = 0
+        w['paused'] = True
+        self.status_message.emit(
+            "경고", f"[IG] 베이스 대기 중 필라멘트 꺼짐 — 재점등 {w['relights']}/{IG_MAX_RELIGHTS} ({why})")
+        self._ig_request("on", "relight")
+
+    def _ig_base_pass(self, elapsed: float) -> None:
+        v = float(self._ig_wait['last_used'])
+        if self._ig_timer is not None:
+            self._ig_timer.stop()
+        self._ig_wait = {}
+        self.ig_base_pressure_used = v
+        self.ig_base_reached.emit(v)
+        self.status_message.emit("정보", f"[IG] 베이스 도달 {v:.1E} Torr (대기 {self._mmss(elapsed)})")
+        self._next_step()
+
+    def _ig_base_fail(self, reason: str) -> None:
+        if self._ig_timer is not None:
+            self._ig_timer.stop()
+        self._ig_wait = {}
+        self.status_message.emit("경고", f"[IG] 베이스 대기 실패 — {reason}")
+        self._abort_with_error(f"{self._step_tag()} | {reason}")
+
+    def _ig_cancel(self, send_off: bool) -> None:
+        """대기 타이머 즉시 정리. send_off 면 이번 공정에서 켜고 아직 안 끈 필라멘트를 1회 끈다(결과 기다리지 않음)."""
+        for t in (self._ig_timer, self._ig_guard):
+            if t is not None:
+                try:
+                    t.stop()
+                except Exception:
+                    pass
+        self._ig_wait = {}
+        self._ig_expect, self._ig_ctx = None, None
+        if send_off and self._ig_fil_on_by_us:
+            self._ig_fil_on_by_us = False
+            self.request_ig_filament_off.emit()
+            self.status_message.emit("정보", "[IG] 공정 종료 — 필라멘트 OFF 1회 요청(결과를 기다리지 않음)")
 
     def set_hold_state_provider(self, fn) -> None:
         """유지 모드 상태 조회 콜러블 주입(main 이 스냅샷 dict 를 돌려주는 함수를 넘긴다)."""
@@ -1420,6 +1700,7 @@ class SputterProcessController(QObject):
     def teardown(self):
         if self._timer and self._timer.isActive():
             self._timer.stop()
+        self._ig_cancel(send_off=False)
 
         self._stop_rfdown_timeout_timer()
 
@@ -1468,6 +1749,8 @@ class SputterProcessController(QObject):
             # 진행 중인 딜레이 즉시 중단
             if self._timer and self._timer.isActive():
                 self._timer.stop()
+            # 베이스 압력 대기 즉시 정리 + 이번 공정에서 켠 필라멘트를 1회 끄기(best-effort)
+            self._ig_cancel(send_off=True)
             self._delay_clock = None
             self._delay_total_sec = 0
             self._timer_purpose = None

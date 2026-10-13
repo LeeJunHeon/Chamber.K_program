@@ -736,6 +736,15 @@ IG_FILAMENT_START_QUIET_SEC = get('IG_FILAMENT_START_QUIET_SEC', 12)
 # 필라멘트 ON 결과 기한(초) — 안에 필라멘트=1·방출=1 이 보여야 성공. 실측 약 4초 무응답 뒤 fil=1·emis=1 →
 #  시동 구간 12초 + E 몇 회 여유.
 IG_FILAMENT_ON_TIMEOUT_SEC = get('IG_FILAMENT_ON_TIMEOUT_SEC', 20)
+# 방출이 처음 확인된 뒤 이 시간(초)이 지나야 이온 압력을 베이스 판정에 쓴다. 실측: 방출 직후 레인지를 찾느라
+#  0E-4 → 8E-4 → 9.9E-4 → 9.9E-5 → 9.9E-6 → 4.0E-6 으로 높게 나오다 약 7초 뒤 안정 — 여유를 둬 10초.
+IG_SETTLE_SEC = get('IG_SETTLE_SEC', 10)
+# 이온 압력 ≤ 목표가 이 횟수(1초 간격) 연속이어야 베이스 도달. 레인지 전환 직후 한두 번 낮게 튀는 값을 거른다.
+IG_BASE_STABLE_COUNT = get('IG_BASE_STABLE_COUNT', 5)
+# 베이스 압력 대기 최대 시간(초). 넘으면 공정 중단(목표·마지막 압력·경과 시간을 사유에 남긴다).
+IG_BASE_WAIT_TIMEOUT_SEC = get('IG_BASE_WAIT_TIMEOUT_SEC', 600)
+# 레시피·화면에 base_pressure 가 없을 때 쓰는 목표 베이스 압력(Torr). 0 이면 대기 생략.
+PROCESS_DEFAULT_BASE_PRESSURE = get('PROCESS_DEFAULT_BASE_PRESSURE', 1e-5)
 
 
 

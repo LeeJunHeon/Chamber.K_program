@@ -1280,6 +1280,12 @@ class MainDialog(QDialog):
         self.ig_controller.snapshot.connect(self._on_ig_snapshot)
         self.ig_controller.status_message.connect(self._on_ig_status)
         self.ig_controller.comm_event.connect(self._on_ig_comm_event)
+        # 공정의 베이스 압력 대기 — 스냅샷은 조회 함수로, 필라멘트 요청·결과는 시그널(스레드 간 QueuedConnection)로
+        pc = self.process_controller
+        pc.set_ig_snapshot_provider(lambda: self._ig_snap)
+        pc.request_ig_filament_on.connect(self.ig_controller.filament_on, Qt.ConnectionType.QueuedConnection)
+        pc.request_ig_filament_off.connect(self.ig_controller.filament_off, Qt.ConnectionType.QueuedConnection)
+        self.ig_controller.filament_result.connect(pc._on_ig_filament_result, Qt.ConnectionType.QueuedConnection)
         self._ig_flush_timer = QTimer(self)
         self._ig_flush_timer.setInterval(10000)
         self._ig_flush_timer.timeout.connect(self._flush_ig_rows)
