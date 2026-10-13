@@ -3,8 +3,9 @@
 """이온 게이지 (Duniway Terranova 934, RS-232 9600 8N1) — Chamber-K. 읽기 전용.
 
 [이 장비로 하는 일]
-  압력을 읽어 화면·IG CSV·ERP 상태에 보여 줄 뿐이다. 공정을 멈추거나 다른 장비를 건드리지 않는다.
-  필라멘트 켜기/끄기(A/B)·디개스(C/D)는 절대 보내지 않는다 — 보낼 수 있는 글자는 ALLOWED_COMMANDS(E, F)뿐.
+  압력을 읽어 화면·IG CSV·ERP 상태에 보여 준다. 필라멘트 켜기/끄기(A/B)는 공정의 베이스 압력 대기가
+  전용 슬롯 filament_on()/filament_off() 로만 보낸다. 디개스(C/D)와 그 밖의 글자는 절대 보내지 않는다.
+  A/B 에는 응답이 없다(0 바이트, 2026-10-13 실측) — 결과는 다음 E 의 2번(필라멘트)·3번(방출)·5번(오류)으로 본다.
 
 [프로토콜 — 매뉴얼 3장 + 2026-10-13 장비 노트북 실측]
   명령: 대문자 한 글자, 줄바꿈 없음. 초당 약 2개 이하, 응답을 받은 뒤 다음 명령.
@@ -29,12 +30,14 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.comm_policy import ReconnectPolicy
 from lib.config import (
-    IG_PORT, IG_BAUD,
+    IG_PORT, IG_BAUD, IG_FILAMENT_START_QUIET_SEC, IG_FILAMENT_ON_TIMEOUT_SEC,
     COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
 )
 
 # ===== 프로토콜 상수 =====
-ALLOWED_COMMANDS = frozenset({"E", "F"})     # 이 밖의 글자는 보내지 않는다(A~D 필라멘트·디개스 금지)
+QUERY_COMMANDS = frozenset({"E", "F"})        # 조회(응답 있음)
+FILAMENT_COMMANDS = frozenset({"A", "B"})     # 필라멘트 ON/OFF(응답 없음) — filament_on()/filament_off() 로만
+ALLOWED_COMMANDS = QUERY_COMMANDS | FILAMENT_COMMANDS   # 이 밖의 글자(C·D 디개스 등)는 포트에 닿기 전에 예외
 E_ITEM_COUNT = 26
 SETPOINT_ITEMS = frozenset({17, 18, 19, 22, 23})
 
@@ -234,6 +237,7 @@ def filament_text(r: Optional[IgReading]) -> str:
 COMM_TEXT = {
     "connecting": "연결 중",
     "ok": "정상",
+    "starting": "필라멘트 시동 중",
     "disabled": "사용 안 함",
     "no_port": "포트 없음",
     "open_failed": "포트 열기 실패",
@@ -254,6 +258,8 @@ class IgSnapshot:
     fresh: bool
     last_ok_wall: Optional[float]
     t: float
+    emission_since: Optional[float] = None   # 방출이 처음 확인된 시각(epoch). 필라멘트·방출이 꺼지면 None
+    filament_starting: bool = False          # A 를 보낸 뒤 시동 무응답 구간(실패로 세지 않는다)
 
     @property
     def ok(self) -> bool:
@@ -276,17 +282,24 @@ class IonGaugeController(QObject):
       중첩 이벤트 루프로 기다리지 않는다. 다음 요청 전에 남은 입력을 비운다. 명령 간격은 min_gap_ms 이상.
     [두절] 연속 fail_limit 회 실패하면 포트를 닫고 공통 ReconnectPolicy 일정으로 다시 연다. 다시 열면 F 로
       신원을 확인한 뒤에만 E 를 보낸다. 로그·COMM 이벤트는 상태가 바뀔 때만 낸다(매초 남기지 않는다).
-    [안전] 공정·다른 장비에 아무 영향도 주지 않는다. 경고창 없음. 보낼 수 있는 명령은 E·F 뿐.
+    [필라멘트] filament_on()/filament_off() 로만 A/B 를 보낸다(응답 없음). 진행 중인 E 가 끝난 뒤 보내고,
+      보낸 뒤 e_block_sec(1초)는 E 를 보내지 않는다. B 뒤 relight_lockout_sec(5초) 안의 A 는 그만큼 늦춘다
+      (매뉴얼: 끈 뒤 4초 안에는 다시 켤 수 없다). A 뒤 quiet_sec(IG_FILAMENT_START_QUIET_SEC) 동안은 E 무응답·
+      불완전 응답을 실패로 세지 않고 포트도 닫지 않는다(실측: A 직후 약 4초 무응답). 결과는 filament_result.
+    [안전] 공정·다른 장비를 직접 건드리지 않는다. 경고창 없음. C·D(디개스)와 그 밖의 글자는 보낼 수 없다.
     """
 
     snapshot = Signal(object)          # IgSnapshot — 1초마다(연결이 안 돼도) 1번
     status_message = Signal(str, str)  # (레벨, 문구) — 상태가 바뀔 때만
     comm_event = Signal(dict)          # COMM_events.csv 1행(파일 쓰기는 main 스레드)
+    filament_result = Signal(str, bool, str)   # ("on"|"off", 성공, 상세 — 실패면 5번 오류 코드와 문구)
 
     _RX_MAX = 4096
 
     def __init__(self, port_name: Optional[str] = None, baud: Optional[int] = None, *,
                  poll_ms: int = 1000, timeout_ms: int = 800, fail_limit: int = 3, min_gap_ms: int = 500,
+                 quiet_sec: Optional[float] = None, on_timeout_sec: Optional[float] = None,
+                 off_timeout_sec: float = 10.0, relight_lockout_sec: float = 5.0, e_block_sec: float = 1.0,
                  port_factory: Optional[Callable[[QObject], object]] = None,
                  port_lister: Optional[Callable[[], Iterable[str]]] = None,
                  policy: Optional[ReconnectPolicy] = None, parent=None):
@@ -297,6 +310,11 @@ class IonGaugeController(QObject):
         self.timeout_ms = int(timeout_ms)
         self.fail_limit = max(1, int(fail_limit))
         self.min_gap_ms = int(min_gap_ms)
+        self.quiet_sec = float(IG_FILAMENT_START_QUIET_SEC if quiet_sec is None else quiet_sec)
+        self.on_timeout_sec = float(IG_FILAMENT_ON_TIMEOUT_SEC if on_timeout_sec is None else on_timeout_sec)
+        self.off_timeout_sec = float(off_timeout_sec)
+        self.relight_lockout_sec = float(relight_lockout_sec)
+        self.e_block_sec = float(e_block_sec)
         self._port_factory = port_factory
         self._port_lister = port_lister
         self._policy = policy or ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS,
@@ -306,6 +324,7 @@ class IonGaugeController(QObject):
         self._poll_timer: Optional[QTimer] = None
         self._resp_timer: Optional[QTimer] = None
         self._reconnect_timer: Optional[QTimer] = None
+        self._fil_timer: Optional[QTimer] = None   # B 뒤 재점등 금지 시간만큼 A 를 늦출 때
         # 상태
         self._rx = bytearray()
         self._pending: Optional[str] = None     # 응답을 기다리는 명령(E/F)
@@ -320,6 +339,14 @@ class IonGaugeController(QObject):
         self._last_ok_wall: Optional[float] = None
         self._last_send_t = -1e9
         self._device_key = None                 # (필라멘트, 방출, 디개스, 오류) — 바뀔 때만 로그
+        # 필라멘트 제어
+        self._fil_queue: Optional[str] = None   # 보낼 A/B(아직 안 보냄)
+        self._fil_expect: Optional[str] = None  # 결과를 기다리는 동작 "on"/"off"
+        self._fil_deadline: Optional[float] = None
+        self._last_b_t = -1e9                   # 마지막 B 송신(monotonic)
+        self._e_block_until = 0.0               # A/B 뒤 E 를 보내지 않는 시각까지
+        self._quiet_until = 0.0                 # A 뒤 시동 무응답을 실패로 세지 않는 시각까지
+        self._emission_since: Optional[float] = None
 
     # ==================== 지연 생성(워커 스레드) ====================
     def _make_port(self):
@@ -349,6 +376,10 @@ class IonGaugeController(QObject):
             self._reconnect_timer = QTimer(self)
             self._reconnect_timer.setSingleShot(True)
             self._reconnect_timer.timeout.connect(self._try_connect)
+        if self._fil_timer is None:
+            self._fil_timer = QTimer(self)
+            self._fil_timer.setSingleShot(True)
+            self._fil_timer.timeout.connect(self._try_send_filament)
 
     def _available_ports(self) -> set:
         if self._port_lister is not None:
@@ -392,7 +423,10 @@ class IonGaugeController(QObject):
         self._want = False
         self._linked = False
         self._pending = None
-        for t in (self._poll_timer, self._resp_timer, self._reconnect_timer):
+        self._fil_queue = None
+        self._fil_expect = None
+        self._fil_deadline = None
+        for t in (self._poll_timer, self._resp_timer, self._reconnect_timer, self._fil_timer):
             if t is not None:
                 try:
                     t.stop()
@@ -406,10 +440,24 @@ class IonGaugeController(QObject):
         self._rx.clear()
 
     # ==================== 송신 ====================
-    def _send(self, cmd: str) -> None:
-        """허용 목록(E, F) 밖의 명령은 포트에 닿기 전에 예외 — 필라멘트·디개스(A~D)는 절대 나가지 않는다."""
+    @staticmethod
+    def _check_command(cmd, filament: bool) -> None:
+        """허용 목록 밖(C·D 디개스 등)은 예외. A·B 는 필라멘트 경로로만, E·F 는 조회 경로로만."""
         if not isinstance(cmd, str) or cmd not in ALLOWED_COMMANDS:
             raise ValueError(f"이온 게이지에 보낼 수 없는 명령: {cmd!r} (허용: {sorted(ALLOWED_COMMANDS)})")
+        if (cmd in FILAMENT_COMMANDS) != bool(filament):
+            raise ValueError(f"이온 게이지 명령 {cmd!r} 은 "
+                             + ("filament_on()/filament_off() 로만 보낸다" if cmd in FILAMENT_COMMANDS
+                                else "조회 경로로만 보낸다"))
+
+    def _write(self, cmd: str, *, filament: bool = False) -> None:
+        """포트에 쓰는 단 한 곳."""
+        self._check_command(cmd, filament)
+        self.serial.write(cmd.encode("ascii"))
+
+    def _send(self, cmd: str) -> None:
+        """조회(E/F) — 응답을 기다린다. 그 밖의 글자는 포트에 닿기 전에 예외."""
+        self._check_command(cmd, False)
         try:
             self.serial.clear(QSerialPort.Direction.Input)   # 지난 응답 찌꺼기
         except Exception:
@@ -419,7 +467,7 @@ class IonGaugeController(QObject):
         except Exception:
             pass
         self._rx.clear()
-        self.serial.write(cmd.encode("ascii"))
+        self._write(cmd)
         self._pending = cmd
         self._last_send_t = time.monotonic()
         self._resp_timer.start(self.timeout_ms)
@@ -428,12 +476,17 @@ class IonGaugeController(QObject):
     def _on_poll_tick(self) -> None:
         if not self._want:
             return
+        self._check_filament_deadline()
         if not self._linked:
             self._emit_snapshot(fresh=False)    # 끊겨 있어도 1초에 한 번(화면·CSV 가 '끊김'을 그대로 보여 준다)
             return
         if self._pending is not None:
             return
-        if (time.monotonic() - self._last_send_t) * 1000.0 < self.min_gap_ms:
+        self._try_send_filament()
+        now = time.monotonic()
+        if now < self._e_block_until:           # A/B 직후 1초는 E 를 보내지 않는다
+            return
+        if (now - self._last_send_t) * 1000.0 < self.min_gap_ms:
             return
         self._send("E")
 
@@ -468,6 +521,9 @@ class IonGaugeController(QObject):
         if cmd == "F":
             self._link_failed("no_identity", "F 응답 없음" + (f"(받은 줄 {n})" if n else ""))
         elif cmd == "E":
+            if self._in_quiet():
+                self._quiet_skip()
+                return
             self._cycle_failed("timeout", f"{self.timeout_ms} ms 안에 {E_ITEM_COUNT}항목 미수신(받은 줄 {n})")
 
     def _on_identity(self, buf: bytes) -> None:
@@ -479,21 +535,32 @@ class IonGaugeController(QObject):
         if self._outage_t0 is not None and self._reopened:
             self._emit_event("재연결", f"{self.port_name} 다시 열고 신원 확인")
         self._reopened = False
+        self._try_send_filament()
 
     def _on_status(self, buf: bytes) -> None:
         try:
             r = parse_status(buf)
         except IgParseError as e:
+            if self._in_quiet():
+                self._quiet_skip()
+                return
             self._cycle_failed("bad_response", str(e))
             return
         self._fail_streak = 0
         self._last_reading = r
         self._last_ok_wall = r.t
+        if r.filament_on and r.emission_ok:
+            if self._emission_since is None:
+                self._emission_since = r.t      # 방출이 처음 확인된 시각 — 위쪽이 안정화 시간을 센다
+        else:
+            self._emission_since = None
         if self._policy.in_outage():
             self._policy.on_success()           # 장비가 실제로 응답했을 때만 리셋(포트 열림은 성공이 아니다)
         self._set_comm("ok", "")
         self._log_device_changes(r)
+        self._judge_filament(r)
         self._emit_snapshot(fresh=True)
+        self._try_send_filament()
 
     # ==================== 실패·재연결 ====================
     def _cycle_failed(self, kind: str, detail: str) -> None:
@@ -531,7 +598,12 @@ class IonGaugeController(QObject):
         self._comm, self._detail = kind, detail
         if kind == prev:
             return
+        if kind == "starting":
+            self.status_message.emit("IG", "이온 게이지 필라멘트 시동 중 — 무응답을 실패로 세지 않음")
+            return
         if kind == "ok":
+            if prev == "starting" and self._outage_t0 is None:
+                return
             if self._outage_t0 is not None:
                 lost = time.monotonic() - self._outage_t0
                 self._outage_t0 = None
@@ -561,7 +633,105 @@ class IonGaugeController(QObject):
     def _emit_snapshot(self, fresh: bool) -> None:
         self.snapshot.emit(IgSnapshot(
             comm=self._comm, comm_text=COMM_TEXT.get(self._comm, self._comm), detail=self._detail,
-            reading=self._last_reading, fresh=bool(fresh), last_ok_wall=self._last_ok_wall, t=time.time()))
+            reading=self._last_reading, fresh=bool(fresh), last_ok_wall=self._last_ok_wall, t=time.time(),
+            emission_since=self._emission_since, filament_starting=self._in_quiet()))
+
+    # ==================== 필라멘트 ON/OFF ====================
+    @Slot()
+    def filament_on(self) -> None:
+        """필라멘트 켜기(A). 공정의 베이스 압력 대기가 시그널(QueuedConnection)로 부른다."""
+        self._request_filament("A")
+
+    @Slot()
+    def filament_off(self) -> None:
+        """필라멘트 끄기(B)."""
+        self._request_filament("B")
+
+    def _request_filament(self, cmd: str) -> None:
+        action = "on" if cmd == "A" else "off"
+        if self._poll_timer is None or not self._want:
+            self.filament_result.emit(action, False, "이온 게이지가 연결돼 있지 않음")
+            return
+        if self._fil_expect is not None and self._fil_expect != action:
+            self._finish_filament(self._fil_expect, False, "다른 필라멘트 요청으로 취소")
+        now = time.monotonic()
+        self._fil_queue = cmd
+        self._fil_expect = action
+        # 못 보내는 경우(통신 끊김)를 위한 기한 — 보내면 보낸 시각 기준으로 다시 잡는다
+        self._fil_deadline = now + (self.on_timeout_sec + self.relight_lockout_sec if action == "on"
+                                    else self.off_timeout_sec)
+        self._try_send_filament()
+
+    @Slot()
+    def _try_send_filament(self) -> None:
+        cmd = self._fil_queue
+        if cmd is None or not self._linked or self.serial is None or not self.serial.isOpen():
+            return
+        if self._pending is not None:           # 진행 중인 E 가 끝난 뒤
+            return
+        now = time.monotonic()
+        if cmd == "A":
+            wait = self._last_b_t + self.relight_lockout_sec - now
+            if wait > 0:                        # B 뒤 재점등 금지 — 그만큼 늦춘다
+                if self._fil_timer is not None and not self._fil_timer.isActive():
+                    self._fil_timer.start(int(wait * 1000) + 1)
+                return
+        self._write(cmd, filament=True)
+        self._fil_queue = None
+        self._e_block_until = now + self.e_block_sec
+        if cmd == "A":
+            self._quiet_until = now + self.quiet_sec
+            self._fil_deadline = now + self.on_timeout_sec
+            self.status_message.emit("IG", "이온 게이지 필라멘트 ON(A) 보냄")
+        else:
+            self._last_b_t = now
+            self._fil_deadline = now + self.off_timeout_sec
+            self.status_message.emit("IG", "이온 게이지 필라멘트 OFF(B) 보냄")
+
+    def _judge_filament(self, r: IgReading) -> None:
+        if self._fil_expect is None or self._fil_queue is not None:
+            return
+        if self._fil_expect == "on" and r.filament_on and r.emission_ok:
+            self._finish_filament("on", True, "필라멘트 켜짐·방출 정상")
+        elif self._fil_expect == "off" and not r.filament_on:
+            self._finish_filament("off", True, "필라멘트 꺼짐")
+
+    def _check_filament_deadline(self) -> None:
+        if self._fil_expect is None or self._fil_deadline is None or time.monotonic() <= self._fil_deadline:
+            return
+        action, r = self._fil_expect, self._last_reading
+        sent = self._fil_queue is None
+        if not sent:
+            detail = "명령을 보내지 못함(이온 게이지 통신 끊김)"
+        elif action == "on":
+            code = r.error_code if r is not None else None
+            state = ("" if r is None else
+                     f" (필라멘트 {'켜짐' if r.filament_on else '꺼짐'}, 방출 {'정상' if r.emission_ok else '없음'})")
+            detail = (f"{self.on_timeout_sec:.0f}초 안에 필라멘트·방출 확인 안 됨{state} — "
+                      f"오류 코드 {code if code is not None else '?'}: {filament_error_text(code) or '없음'}")
+        else:
+            detail = f"{self.off_timeout_sec:.0f}초 안에 필라멘트 꺼짐 확인 안 됨"
+        self._finish_filament(action, False, detail)
+
+    def _finish_filament(self, action: str, ok: bool, detail: str) -> None:
+        self._fil_expect = None
+        self._fil_deadline = None
+        self._fil_queue = None
+        if self._fil_timer is not None:
+            self._fil_timer.stop()
+        word = "켜기" if action == "on" else "끄기"
+        self.status_message.emit("IG" if ok else "IG(경고)",
+                                 f"이온 게이지 필라멘트 {word} {'성공' if ok else '실패'} — {detail}")
+        self.filament_result.emit(action, bool(ok), detail)
+
+    def _in_quiet(self) -> bool:
+        return time.monotonic() < self._quiet_until
+
+    def _quiet_skip(self) -> None:
+        """A 직후 시동 구간의 무응답·불완전 응답 — 실패로 세지 않고 포트도 닫지 않는다."""
+        self._set_comm("starting", "필라멘트 시동 중")
+        self._emit_snapshot(fresh=False)
+        self._try_send_filament()
 
     def _emit_event(self, kind: str, detail: str, lost=None) -> None:
         try:
@@ -586,6 +756,8 @@ def display_lines(snap: Optional[IgSnapshot], a_name: str, b_name: str,
     if snap is None:
         return ["IG 연결 중", "", "", ""], "lost"
     r = snap.reading
+    if snap.comm == "starting":
+        return ["IG 필라멘트 시동 중", "", "", ""], "warn"
     if snap.ok:
         fil = filament_text(r)
         return ([f"IG {_with_unit(r.ion_text, r.ion_state)}",

@@ -28,6 +28,7 @@ class Script:
         self.ports = set(ports)
         self.open_ok = open_ok
         self.writes, self.write_threads, self.read_threads, self.close_threads = [], [], [], []
+        self.write_times = []
         self.opens = 0
         self.closes = 0
 
@@ -70,6 +71,7 @@ class FakeIgPort(QObject):
     def write(self, data):
         data = bytes(data)
         self.s.writes.append(data)
+        self.s.write_times.append(time.monotonic())
         self.s.write_threads.append(threading.get_ident())
         r = self.s.replies.get(data)
         if callable(r):
@@ -242,7 +244,8 @@ def test_empty_port_name_disables(qapp):
 
 
 @pytest.mark.parametrize("cmd", ["A", "B", "C", "D", "G", "H", "e", "EF", "", b"E", None])
-def test_only_e_and_f_can_be_sent(qapp, cmd):
+def test_query_path_sends_only_e_and_f(qapp, cmd):
+    """조회 경로(_send)는 E·F 만 — A·B 는 전용 슬롯으로만, C·D·기타는 어디로도 안 나간다."""
     s = Script()
     c, _ = make(s)
     c.connect_device()
@@ -250,17 +253,37 @@ def test_only_e_and_f_can_be_sent(qapp, cmd):
     with pytest.raises(ValueError):
         c._send(cmd)
     c.cleanup()
-    assert len(s.writes) == n and ALLOWED_COMMANDS == frozenset({"E", "F"})
+    assert len(s.writes) == n
+
+
+@pytest.mark.parametrize("cmd", ["C", "D", "E", "F", "G", "a", "AB", "", None])
+def test_filament_path_sends_only_a_and_b(qapp, cmd):
+    s = Script()
+    c, _ = make(s)
+    c.connect_device()
+    spin(150)
+    n = len(s.writes)
+    with pytest.raises(ValueError):
+        c._write(cmd, filament=True)
+    c.cleanup()
+    assert len(s.writes) == n
+    assert ALLOWED_COMMANDS == frozenset({"E", "F", "A", "B"})
 
 
 def test_single_write_path_in_source():
-    """포트에 쓰는 곳은 _send 한 곳뿐(허용 목록 검사를 거치지 않는 쓰기 없음)."""
+    """포트에 쓰는 곳은 _write 한 곳, A·B 는 _try_send_filament(= filament_on/off 슬롯)에서만. C·D 글자 없음."""
     import inspect
     import device.IonGauge as M
     src = inspect.getsource(M)
     assert src.count(".write(") == 1 and "self.serial.write(cmd.encode" in src
-    for bad in ('"A"', '"B"', '"C"', '"D"', "b\"A\"", "b\"B\""):
+    assert src.count("filament=True") == 1
+    fil_src = inspect.getsource(M.IonGaugeController._try_send_filament)
+    assert "self._write(cmd, filament=True)" in fil_src
+    for bad in ('"C"', '"D"', "b\"C\"", "b\"D\""):
         assert bad not in src
+    on_src = inspect.getsource(M.IonGaugeController.filament_on)
+    off_src = inspect.getsource(M.IonGaugeController.filament_off)
+    assert "@Slot()" in on_src and '"A"' in on_src and "@Slot()" in off_src and '"B"' in off_src
 
 
 # ───────────── 실제 QThread ─────────────
@@ -318,3 +341,182 @@ def test_default_qserialport_path_without_ports(qapp):
     spin(250)
     c.cleanup()
     assert snaps and all(x.comm == "no_port" for x in snaps) and not c.serial.isOpen()
+
+
+
+# ───────────── 필라멘트 ON/OFF (가짜 934: A·B 에는 응답 없음) ─────────────
+from test_ion_gauge import e_reply, E_ITEMS  # noqa: E402
+
+
+def e_with(fil, emis, code=0, ion="9       -6"):
+    items = list(E_ITEMS)
+    items[1], items[2], items[4], items[23] = str(int(fil)), str(int(emis)), str(int(code)), ion
+    return e_reply(items)
+
+
+class Gauge934:
+    """필라멘트 상태를 가진 가짜 934. A 뒤 start_quiet 초 동안 E 무응답 → 그 뒤 fil=1·emis=1(on_ok 이면).
+    B 는 즉시 fil=0. A·B 에는 응답 바이트가 없다."""
+
+    def __init__(self, fil=False, start_quiet=0.3, on_ok=True, fail_code=7):
+        self.fil = fil
+        self.start_quiet = start_quiet
+        self.on_ok = on_ok
+        self.fail_code = fail_code
+        self.a_t = None
+
+    def replies(self):
+        return {b"F": F_REPLY, b"E": self._e, b"A": self._a, b"B": self._b}
+
+    def _a(self):
+        self.a_t = time.monotonic()
+        return None
+
+    def _b(self):
+        self.fil = False
+        self.a_t = None
+        return None
+
+    def _e(self):
+        if self.a_t is not None:
+            if time.monotonic() - self.a_t < self.start_quiet:
+                return None                                 # 시동 중 무응답
+            self.fil = self.on_ok
+            self.a_t = None
+        if self.fil:
+            return e_with(1, 1)
+        return e_with(0, 0, code=(self.fail_code if not self.on_ok else 0))
+
+
+def make_fil(g, **kw):
+    s = Script(replies=g.replies())
+    kw.setdefault("quiet_sec", 0.8)
+    kw.setdefault("on_timeout_sec", 1.5)
+    kw.setdefault("off_timeout_sec", 1.0)
+    kw.setdefault("relight_lockout_sec", 0.5)
+    kw.setdefault("e_block_sec", 0.15)
+    kw.setdefault("fail_limit", 2)
+    c, rec = make(s, **kw)
+    rec["fil"] = []
+    c.filament_result.connect(lambda a, ok, d: rec["fil"].append((a, ok, d)))
+    return s, c, rec
+
+
+def test_filament_on_quiet_start_then_success(qapp):
+    g = Gauge934(fil=False, start_quiet=0.4)
+    s, c, rec = make_fil(g)
+    c.connect_device()
+    spin(250)
+    c.filament_on()
+    spin(1300)
+    closes = s.closes
+    c.cleanup()
+    assert b"A" in s.writes and b"B" not in s.writes
+    assert closes == 0                                      # 시동 무응답에도 포트를 닫지 않는다
+    assert any(x.comm == "starting" and x.filament_starting for x in rec["snap"])
+    assert rec["fil"] == [("on", True, "필라멘트 켜짐·방출 정상")]
+    assert not any(e["종류"] == "실패" for e in rec["ev"])
+    ok = [x for x in rec["snap"] if x.ok and x.reading.filament_on]
+    assert ok and ok[-1].emission_since == ok[0].reading.t     # 방출이 처음 확인된 시각을 유지
+
+
+def test_quiet_expired_counts_failures_again(qapp):
+    g = Gauge934(fil=False, start_quiet=99)                # A 뒤 계속 무응답
+    s, c, rec = make_fil(g, quiet_sec=0.4, on_timeout_sec=5)
+    c.connect_device()
+    spin(250)
+    c.filament_on()
+    spin(1300)
+    c.cleanup()
+    assert s.closes >= 1                                    # 시동 구간이 지나면 기존대로 실패를 센다
+    assert any(x.comm == "timeout" for x in rec["snap"])
+
+
+def test_a_after_b_is_delayed_by_lockout(qapp):
+    g = Gauge934(fil=True)
+    s, c, rec = make_fil(g, relight_lockout_sec=0.6)
+    c.connect_device()
+    spin(250)
+    c.filament_off()
+    spin(50)
+    c.filament_on()
+    spin(1800)
+    c.cleanup()
+    ib, ia = s.writes.index(b"B"), s.writes.index(b"A")
+    assert ia > ib and s.write_times[ia] - s.write_times[ib] >= 0.59
+    assert rec["fil"][0][0] == "off" and rec["fil"][0][1] is False and "취소" in rec["fil"][0][2]
+    assert rec["fil"][-1] == ("on", True, "필라멘트 켜짐·방출 정상")
+
+
+def test_e_not_sent_for_block_after_a(qapp):
+    g = Gauge934(fil=False, start_quiet=0.0)
+    s, c, rec = make_fil(g, e_block_sec=0.5)
+    c.connect_device()
+    spin(250)
+    c.filament_on()
+    spin(900)
+    c.cleanup()
+    ia = s.writes.index(b"A")
+    nxt = [t for w, t in zip(s.writes[ia + 1:], s.write_times[ia + 1:]) if w == b"E"]
+    assert nxt and nxt[0] - s.write_times[ia] >= 0.49
+
+
+def test_a_waits_for_inflight_e(qapp):
+    g = Gauge934(fil=False, start_quiet=0.0)
+    s, c, rec = make_fil(g)
+    s.delay_ms = 60
+    c.connect_device()
+    spin(250)
+    while c._pending != "E":                                # E 가 나간 직후를 잡는다
+        spin(5)
+    c.filament_on()
+    assert s.writes[-1] == b"E"                             # 아직 A 를 보내지 않았다
+    spin(400)
+    c.cleanup()
+    i = len(s.writes) - 1 - s.writes[::-1].index(b"A")
+    assert s.writes[i - 1] == b"E"
+
+
+def test_filament_on_failure_reports_error_code(qapp):
+    g = Gauge934(fil=False, start_quiet=0.1, on_ok=False, fail_code=7)
+    s, c, rec = make_fil(g, on_timeout_sec=0.8)
+    c.connect_device()
+    spin(250)
+    c.filament_on()
+    spin(1400)
+    c.cleanup()
+    a, ok, d = rec["fil"][-1]
+    assert (a, ok) == ("on", False)
+    assert "오류 코드 7" in d and "필라멘트 전류 없음(필라멘트·케이블 단선 가능)" in d
+
+
+def test_filament_off_success_and_timeout(qapp):
+    g = Gauge934(fil=True)
+    s, c, rec = make_fil(g)
+    c.connect_device()
+    spin(250)
+    c.filament_off()
+    spin(700)
+    assert rec["fil"] == [("off", True, "필라멘트 꺼짐")]
+    snaps = [x for x in rec["snap"] if x.ok]
+    assert snaps[-1].emission_since is None                 # 꺼지면 방출 시각을 지운다
+    c.cleanup()
+    # B 를 무시하는 장비 — 기한 안에 꺼짐 확인 안 됨
+    g2 = Gauge934(fil=True)
+    g2._b = lambda: None
+    s2, c2, rec2 = make_fil(g2, off_timeout_sec=0.6)
+    s2.replies[b"B"] = g2._b
+    c2.connect_device()
+    spin(250)
+    c2.filament_off()
+    spin(1200)
+    c2.cleanup()
+    assert rec2["fil"] == [("off", False, "1초 안에 필라멘트 꺼짐 확인 안 됨")]
+
+
+def test_filament_request_without_connection_fails_fast(qapp):
+    c = IonGaugeController("COM12", port_factory=lambda p: FakeIgPort(Script(), p), port_lister=lambda: [])
+    got = []
+    c.filament_result.connect(lambda a, ok, d: got.append((a, ok, d)))
+    c.filament_on()
+    assert got == [("on", False, "이온 게이지가 연결돼 있지 않음")]

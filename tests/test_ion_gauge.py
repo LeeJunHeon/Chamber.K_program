@@ -191,3 +191,13 @@ def test_erp_state_dict():
     assert erp_state_dict(None, True, "A", "B")["comm"] == "connecting"
     off = erp_state_dict(None, False, "A", "B")
     assert off["enabled"] is False and off["comm"] == "disabled" and off["ion"] is None
+
+
+def test_starting_state_display_and_erp():
+    from device.IonGauge import erp_state_dict
+    r = parse_status(E_REPLY, t=1000.0)
+    st = _snap(r, comm="starting", fresh=False)
+    assert display_lines(st, "A", "B") == (["IG 필라멘트 시동 중", "", "", ""], "warn")
+    d = erp_state_dict(st, True, "A", "B", now=1003.0)
+    assert d["comm"] == "starting" and d["commText"] == "필라멘트 시동 중" and d["ion"] is None
+    assert _snap(r).emission_since is None and _snap(r).filament_starting is False   # 기본값
