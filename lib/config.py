@@ -730,9 +730,11 @@ IG_PORT         = get('IG_PORT',         "")
 IG_BAUD         = get('IG_BAUD',         9600)
 IG_GAUGE_A_NAME = get('IG_GAUGE_A_NAME', "게이지 A")
 IG_GAUGE_B_NAME = get('IG_GAUGE_B_NAME', "게이지 B")
-# 필라멘트 ON(A) 직후 E 무응답·불완전 응답을 실패로 세지 않는 시간(초). 2026-10-13 실측: A 직후 약 4초 무응답
-#  (필라멘트 시동·자동 영점) — 3배 여유. 이 동안 포트를 닫지 않고 화면에 '필라멘트 시동 중'을 띄운다.
-IG_FILAMENT_START_QUIET_SEC = get('IG_FILAMENT_START_QUIET_SEC', 12)
+# 필라멘트 ON(A)·OFF(B) 직후 E 무응답·불완전 응답을 실패로 세지 않는 시간(초). 2026-10-13 실측:
+#  A 직후 약 4초 무응답(필라멘트 시동·자동 영점), 켜져 있던 필라멘트에 B 를 보낸 뒤 약 3.7초 시점 E 도 0바이트
+#  (B 가 상태를 바꾸지 않을 때 — 이미 꺼져 있을 때 — 는 정상 응답). 3배 여유. 이 동안 포트를 닫지 않고 화면에
+#  '필라멘트 시동 중'(A) / '필라멘트 끄는 중'(B)을 띄운다.
+IG_FILAMENT_SWITCH_QUIET_SEC = get('IG_FILAMENT_SWITCH_QUIET_SEC', 12)
 # 필라멘트 ON 결과 기한(초) — 안에 필라멘트=1·방출=1 이 보여야 성공. 실측 약 4초 무응답 뒤 fil=1·emis=1 →
 #  시동 구간 12초 + E 몇 회 여유.
 IG_FILAMENT_ON_TIMEOUT_SEC = get('IG_FILAMENT_ON_TIMEOUT_SEC', 20)

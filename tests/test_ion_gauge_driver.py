@@ -520,3 +520,60 @@ def test_filament_request_without_connection_fails_fast(qapp):
     c.filament_result.connect(lambda a, ok, d: got.append((a, ok, d)))
     c.filament_on()
     assert got == [("on", False, "이온 게이지가 연결돼 있지 않음")]
+
+
+class Gauge934B(Gauge934):
+    """켜져 있던 필라멘트에 B 를 보내면 stop_quiet 초 동안 E 무응답(2026-10-13 실측 약 3.7초)."""
+
+    def __init__(self, stop_quiet=0.4, **kw):
+        super().__init__(**kw)
+        self.stop_quiet = stop_quiet
+        self.b_t = None
+
+    def _b(self):
+        if self.fil:
+            self.b_t = time.monotonic()
+        self.fil = False
+        self.a_t = None
+        return None
+
+    def _e(self):
+        if self.b_t is not None and time.monotonic() - self.b_t < self.stop_quiet:
+            return None
+        return super()._e()
+
+
+def test_b_quiet_no_port_close_then_off_success(qapp):
+    """B 뒤 무응답(실측 4초를 0.4초로 축소)에도 포트를 닫지 않고 '끄는 중' — 유예 뒤 fil=0 확인."""
+    g = Gauge934B(fil=True, stop_quiet=0.4)
+    s, c, rec = make_fil(g, quiet_sec=0.8, off_timeout_sec=2.0)
+    c.connect_device()
+    spin(250)
+    c.filament_off()
+    spin(1300)
+    closes = s.closes
+    c.cleanup()
+    assert closes == 0 and b"B" in s.writes
+    assert any(x.comm == "stopping" and x.filament_stopping and not x.filament_starting for x in rec["snap"])
+    assert rec["fil"] == [("off", True, "필라멘트 꺼짐")]
+    assert not any(e["종류"] in ("실패", "재연결") for e in rec["ev"])      # 종료 중 끊김·재연결 이벤트 없음
+    assert any("필라멘트 끄는 중 — 무응답을 실패로 세지 않음" in m for _, m in rec["msg"])
+
+
+def test_b_quiet_expired_counts_failures_again(qapp):
+    g = Gauge934B(fil=True, stop_quiet=99)                 # B 뒤 계속 무응답
+    s, c, rec = make_fil(g, quiet_sec=0.4, off_timeout_sec=5)
+    c.connect_device()
+    spin(250)
+    c.filament_off()
+    spin(1300)
+    c.cleanup()
+    assert s.closes >= 2                                    # 유예가 끝나면 기존대로 실패 → 닫고 다시 열기(+정리 1)
+    assert any(x.comm == "timeout" for x in rec["snap"])
+
+
+def test_off_confirm_default_is_20s():
+    c = IonGaugeController("COM12", port_factory=lambda p: FakeIgPort(Script(), p), port_lister=lambda: [])
+    assert c.off_timeout_sec == 20.0
+    from lib.config import IG_FILAMENT_SWITCH_QUIET_SEC
+    assert c.quiet_sec == float(IG_FILAMENT_SWITCH_QUIET_SEC) == 12.0

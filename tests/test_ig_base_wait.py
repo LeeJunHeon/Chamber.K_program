@@ -275,3 +275,11 @@ def test_abort_path_reaches_stop(pc):
     pc._ig_base_wait_start(1e-5)
     pc._ig_base_fail("시험 사유")
     assert pc.rec["stop"] == [1] and pc.rec["crit"][-1].endswith("시험 사유") and pc._ig_wait == {}
+
+
+def test_filament_switching_is_not_comm_loss(pc):
+    pc._ig_base_wait_start(1e-5)
+    tick(pc, snap(ion=5e-6, fresh=False, comm="stopping"), dt=50.0)
+    tick(pc, snap(ion=5e-6, fresh=False, comm="starting"), dt=50.0)
+    assert pc.rec["stop"] == []
+    assert PC.IG_OFF_RESULT_WAIT_SEC == 30.0                # OFF 결과 대기 = 드라이버 20초 + 여유

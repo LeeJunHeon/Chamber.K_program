@@ -36,7 +36,7 @@ IG_COMM_LOSS_ABORT_SEC = 60.0
 IG_VALUE_MAX_AGE_SEC = 2.0
 IG_MAX_RELIGHTS = 2                 # 대기 중 필라멘트가 꺼지면 다시 켜는 최대 횟수
 IG_RESULT_MARGIN_SEC = 10.0         # 필라멘트 결과 시그널을 기다리는 여유(이온 게이지 스레드가 멈췄을 때 대비)
-IG_OFF_RESULT_WAIT_SEC = 20.0       # OFF 결과 대기(드라이버 기한 10초 + 여유)
+IG_OFF_RESULT_WAIT_SEC = 30.0       # OFF 결과 대기(드라이버 기한 20초 + 여유)
 
 # 래더 램프 목표(D00019)가 최종 목표에 닿았다고 볼 허용치.
 # D00019 는 0.1°C 단위 정수라 그만큼의 여유를 둔다.
@@ -1166,7 +1166,7 @@ class SputterProcessController(QObject):
         fresh = self._ig_fresh(snap)
         if fresh and r.ion_torr is not None:
             w['last_ion'] = r.ion_torr                 # 표시·사유용(판정과 별개)
-        if snap is not None and snap.comm in ("ok", "starting"):
+        if snap is not None and snap.comm in ("ok", "starting", "stopping"):   # 필라멘트 전환 유예는 끊김이 아니다
             w['comm_ok_t'] = now
         if elapsed > timeout:
             self._ig_base_fail(f"베이스 압력 대기 시간 초과 — 목표 {target:.1E} Torr, "

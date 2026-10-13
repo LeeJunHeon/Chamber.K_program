@@ -30,7 +30,7 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.comm_policy import ReconnectPolicy
 from lib.config import (
-    IG_PORT, IG_BAUD, IG_FILAMENT_START_QUIET_SEC, IG_FILAMENT_ON_TIMEOUT_SEC,
+    IG_PORT, IG_BAUD, IG_FILAMENT_SWITCH_QUIET_SEC, IG_FILAMENT_ON_TIMEOUT_SEC,
     COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
 )
 
@@ -238,6 +238,7 @@ COMM_TEXT = {
     "connecting": "연결 중",
     "ok": "정상",
     "starting": "필라멘트 시동 중",
+    "stopping": "필라멘트 끄는 중",
     "disabled": "사용 안 함",
     "no_port": "포트 없음",
     "open_failed": "포트 열기 실패",
@@ -259,7 +260,8 @@ class IgSnapshot:
     last_ok_wall: Optional[float]
     t: float
     emission_since: Optional[float] = None   # 방출이 처음 확인된 시각(epoch). 필라멘트·방출이 꺼지면 None
-    filament_starting: bool = False          # A 를 보낸 뒤 시동 무응답 구간(실패로 세지 않는다)
+    filament_starting: bool = False          # A 를 보낸 뒤 무응답 유예 구간(실패로 세지 않는다)
+    filament_stopping: bool = False          # B 를 보낸 뒤 무응답 유예 구간
 
     @property
     def ok(self) -> bool:
@@ -284,8 +286,9 @@ class IonGaugeController(QObject):
       신원을 확인한 뒤에만 E 를 보낸다. 로그·COMM 이벤트는 상태가 바뀔 때만 낸다(매초 남기지 않는다).
     [필라멘트] filament_on()/filament_off() 로만 A/B 를 보낸다(응답 없음). 진행 중인 E 가 끝난 뒤 보내고,
       보낸 뒤 e_block_sec(1초)는 E 를 보내지 않는다. B 뒤 relight_lockout_sec(5초) 안의 A 는 그만큼 늦춘다
-      (매뉴얼: 끈 뒤 4초 안에는 다시 켤 수 없다). A 뒤 quiet_sec(IG_FILAMENT_START_QUIET_SEC) 동안은 E 무응답·
-      불완전 응답을 실패로 세지 않고 포트도 닫지 않는다(실측: A 직후 약 4초 무응답). 결과는 filament_result.
+      (매뉴얼: 끈 뒤 4초 안에는 다시 켤 수 없다). A·B 뒤 quiet_sec(IG_FILAMENT_SWITCH_QUIET_SEC) 동안은 E 무응답·
+      불완전 응답을 실패로 세지 않고 포트도 닫지 않는다(실측: A 직후 약 4초, 켜진 필라멘트에 B 뒤 약 3.7초 무응답).
+      결과는 filament_result.
     [안전] 공정·다른 장비를 직접 건드리지 않는다. 경고창 없음. C·D(디개스)와 그 밖의 글자는 보낼 수 없다.
     """
 
@@ -299,7 +302,7 @@ class IonGaugeController(QObject):
     def __init__(self, port_name: Optional[str] = None, baud: Optional[int] = None, *,
                  poll_ms: int = 1000, timeout_ms: int = 800, fail_limit: int = 3, min_gap_ms: int = 500,
                  quiet_sec: Optional[float] = None, on_timeout_sec: Optional[float] = None,
-                 off_timeout_sec: float = 10.0, relight_lockout_sec: float = 5.0, e_block_sec: float = 1.0,
+                 off_timeout_sec: float = 20.0, relight_lockout_sec: float = 5.0, e_block_sec: float = 1.0,
                  port_factory: Optional[Callable[[QObject], object]] = None,
                  port_lister: Optional[Callable[[], Iterable[str]]] = None,
                  policy: Optional[ReconnectPolicy] = None, parent=None):
@@ -310,7 +313,7 @@ class IonGaugeController(QObject):
         self.timeout_ms = int(timeout_ms)
         self.fail_limit = max(1, int(fail_limit))
         self.min_gap_ms = int(min_gap_ms)
-        self.quiet_sec = float(IG_FILAMENT_START_QUIET_SEC if quiet_sec is None else quiet_sec)
+        self.quiet_sec = float(IG_FILAMENT_SWITCH_QUIET_SEC if quiet_sec is None else quiet_sec)
         self.on_timeout_sec = float(IG_FILAMENT_ON_TIMEOUT_SEC if on_timeout_sec is None else on_timeout_sec)
         self.off_timeout_sec = float(off_timeout_sec)
         self.relight_lockout_sec = float(relight_lockout_sec)
@@ -345,7 +348,8 @@ class IonGaugeController(QObject):
         self._fil_deadline: Optional[float] = None
         self._last_b_t = -1e9                   # 마지막 B 송신(monotonic)
         self._e_block_until = 0.0               # A/B 뒤 E 를 보내지 않는 시각까지
-        self._quiet_until = 0.0                 # A 뒤 시동 무응답을 실패로 세지 않는 시각까지
+        self._quiet_until = 0.0                 # A·B 뒤 무응답을 실패로 세지 않는 시각까지
+        self._quiet_kind = "starting"           # 유예 중 통신 상태: A 뒤 "starting", B 뒤 "stopping"
         self._emission_since: Optional[float] = None
 
     # ==================== 지연 생성(워커 스레드) ====================
@@ -598,11 +602,11 @@ class IonGaugeController(QObject):
         self._comm, self._detail = kind, detail
         if kind == prev:
             return
-        if kind == "starting":
-            self.status_message.emit("IG", "이온 게이지 필라멘트 시동 중 — 무응답을 실패로 세지 않음")
+        if kind in ("starting", "stopping"):
+            self.status_message.emit("IG", f"이온 게이지 {COMM_TEXT[kind]} — 무응답을 실패로 세지 않음")
             return
         if kind == "ok":
-            if prev == "starting" and self._outage_t0 is None:
+            if prev in ("starting", "stopping") and self._outage_t0 is None:
                 return
             if self._outage_t0 is not None:
                 lost = time.monotonic() - self._outage_t0
@@ -634,7 +638,9 @@ class IonGaugeController(QObject):
         self.snapshot.emit(IgSnapshot(
             comm=self._comm, comm_text=COMM_TEXT.get(self._comm, self._comm), detail=self._detail,
             reading=self._last_reading, fresh=bool(fresh), last_ok_wall=self._last_ok_wall, t=time.time(),
-            emission_since=self._emission_since, filament_starting=self._in_quiet()))
+            emission_since=self._emission_since,
+            filament_starting=self._in_quiet() and self._quiet_kind == "starting",
+            filament_stopping=self._in_quiet() and self._quiet_kind == "stopping"))
 
     # ==================== 필라멘트 ON/OFF ====================
     @Slot()
@@ -679,8 +685,9 @@ class IonGaugeController(QObject):
         self._write(cmd, filament=True)
         self._fil_queue = None
         self._e_block_until = now + self.e_block_sec
+        self._quiet_until = now + self.quiet_sec        # A·B 모두 상태가 바뀌는 동안 E 무응답(실측)
+        self._quiet_kind = "starting" if cmd == "A" else "stopping"
         if cmd == "A":
-            self._quiet_until = now + self.quiet_sec
             self._fil_deadline = now + self.on_timeout_sec
             self.status_message.emit("IG", "이온 게이지 필라멘트 ON(A) 보냄")
         else:
@@ -728,8 +735,8 @@ class IonGaugeController(QObject):
         return time.monotonic() < self._quiet_until
 
     def _quiet_skip(self) -> None:
-        """A 직후 시동 구간의 무응답·불완전 응답 — 실패로 세지 않고 포트도 닫지 않는다."""
-        self._set_comm("starting", "필라멘트 시동 중")
+        """A·B 직후 유예 구간의 무응답·불완전 응답 — 실패로 세지 않고 포트도 닫지 않는다."""
+        self._set_comm(self._quiet_kind, COMM_TEXT[self._quiet_kind])
         self._emit_snapshot(fresh=False)
         self._try_send_filament()
 
@@ -756,8 +763,8 @@ def display_lines(snap: Optional[IgSnapshot], a_name: str, b_name: str,
     if snap is None:
         return ["IG 연결 중", "", "", ""], "lost"
     r = snap.reading
-    if snap.comm == "starting":
-        return ["IG 필라멘트 시동 중", "", "", ""], "warn"
+    if snap.comm in ("starting", "stopping"):
+        return [f"IG {COMM_TEXT[snap.comm]}", "", "", ""], "warn"
     if snap.ok:
         fil = filament_text(r)
         return ([f"IG {_with_unit(r.ion_text, r.ion_state)}",
