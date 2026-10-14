@@ -36,8 +36,9 @@ def ig(win, monkeypatch):
             sig.disconnect()
         except TypeError:
             pass
-    for lab in w._ig_labels:
-        lab.deleteLater()
+    if w._ig_frame is not None:
+        w._ig_frame.deleteLater()                           # 4줄 라벨·제목은 틀의 자식이라 함께 지워진다
+        w._ig_frame = None
     w.ig_thread = None
     w.ig_controller = None
     w._ig_labels = []
@@ -65,15 +66,25 @@ def test_display_values_and_position(ig):
     assert w._ig_labels[0].styleSheet() == "color: #222222;"
     assert ("IG", "이온 게이지 연결됨 (COM12)") in logs and ("IG", "이온 게이지 필라멘트 켜짐") in logs
     assert sum(m == "이온 게이지 필라멘트 켜짐" for _, m in logs) == 1   # 매초 로그 없음
-    # 위치: 램프 줄 오른쪽 빈 자리, UI.py 의 어떤 위젯과도 겹치지 않는다
-    rects = [lab.geometry() for lab in w._ig_labels]
-    assert [(r.x(), r.y(), r.width(), r.height()) for r in rects] == [
-        (410, 12, 172, 18), (410, 31, 172, 15), (410, 46, 172, 15), (410, 61, 172, 15)]
-    others = [c for c in w.findChildren(QWidget) if c.parent() is w and c not in w._ig_labels]
-    assert others
-    for r in rects:
-        hits = [c.objectName() for c in others if c.geometry().intersects(r)]
-        assert hits == [], hits
+    # 위치: Process List / Select File 아래 빈 공간(x 555~725, y 345~475) 안의 테두리 틀, UI.py 위젯과 겹치지 않는다
+    fr = w._ig_frame
+    g = fr.geometry()
+    assert (g.x(), g.y(), g.width(), g.height()) == MAIN.IG_FRAME_RECT == (560, 345, 165, 104)
+    assert 555 <= g.left() and g.right() < 725 and 345 <= g.top() and g.bottom() < 475
+    assert fr.objectName() == "ig_frame" and fr.parent() is w
+    assert "border: 1px solid #8a8a8a" in fr.styleSheet() and "border-radius: 4px" in fr.styleSheet()
+    assert "background: #ffffff" in fr.styleSheet()
+    others = [c for c in w.findChildren(QWidget) if c.parent() is w and c is not fr]
+    assert len(others) > 50
+    hits = [c.objectName() for c in others if c.geometry().intersects(g)]
+    assert hits == [], hits
+    title = fr.findChild(QWidget, "ig_title")
+    assert title.text() == "Ion Gauge" and title.font().bold()
+    for lab in w._ig_labels:                                # 4줄은 틀 안에, 1줄만 크게·굵게
+        assert lab.parent() is fr and fr.rect().contains(lab.geometry())
+    assert w._ig_labels[0].font().bold() and w._ig_labels[0].font().pointSizeF() > w._ig_labels[1].font().pointSizeF()
+    # 옛 위치(램프 줄 오른쪽)에는 아무것도 남지 않는다
+    assert not [c for c in others if c.objectName().startswith("ig_")]
 
 
 def test_csv_rows_and_process_log_line(ig, monkeypatch):

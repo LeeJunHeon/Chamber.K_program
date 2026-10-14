@@ -7,7 +7,7 @@ from PyQt6.QtCore import (
     QThread, pyqtSlot as Slot, pyqtSignal as Signal,
     QEventLoop, QTimer, Qt, QElapsedTimer, QMetaObject
 )
-from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog, QLabel
+from PyQt6.QtWidgets import QApplication, QDialog, QMessageBox, QFileDialog, QLabel, QFrame
 from pathlib import Path
 
 import re
@@ -87,6 +87,42 @@ def _fmt_hms_sec(sec: float) -> str:
     h, rem = divmod(v, 3600)
     m, ss = divmod(rem, 60)
     return f"{h}:{m:02d}:{ss:02d}" if h else f"{m}:{ss:02d}"
+
+
+# ==================== 이온 게이지 표시 틀 ====================
+# 위치: "Process List / Select File"(select_csv_button 590,300,130,32) 아래 빈 공간 x 555~725 · y 345~475 안.
+#  왼쪽 Turbo(460~541)·배관 그림(pushButton_9 480~521), 위 Select File(아래 끝 332), 아래 error_monitor(y 480),
+#  오른쪽 Sputtering 입력칸(x 735)과 겹치지 않는다(UI.py setGeometry, 시험으로 확인).
+IG_FRAME_RECT = (560, 345, 165, 104)
+IG_FRAME_TITLE_RECT = (6, 4, 153, 16)                       # 틀 안쪽 좌표
+IG_FRAME_LINE_RECTS = ((6, 22, 153, 20), (6, 44, 153, 16), (6, 62, 153, 16), (6, 80, 153, 16))
+
+
+def build_ig_frame(parent):
+    """테두리 있는 이온 게이지 틀(ig_frame) + 제목 "Ion Gauge" + 4줄 라벨. (틀, 제목, [라벨 4개]) 를 돌려준다.
+    테두리 1px #8a8a8a, 둥근 모서리 4px, 흰 배경. 1줄(IG 압력)은 10pt 굵게, 나머지 8pt."""
+    frame = QFrame(parent)
+    frame.setObjectName("ig_frame")
+    frame.setGeometry(*IG_FRAME_RECT)
+    frame.setStyleSheet("QFrame#ig_frame { border: 1px solid #8a8a8a; border-radius: 4px; background: #ffffff; }")
+    title = QLabel("Ion Gauge", frame)
+    title.setObjectName("ig_title")
+    title.setGeometry(*IG_FRAME_TITLE_RECT)
+    f = title.font()
+    f.setPointSizeF(9.0)
+    f.setBold(True)
+    title.setFont(f)
+    labels = []
+    for i, rect in enumerate(IG_FRAME_LINE_RECTS):
+        lab = QLabel(frame)
+        lab.setObjectName(f"ig_label_{i}")
+        lab.setGeometry(*rect)
+        f = lab.font()
+        f.setPointSizeF(10.0 if i == 0 else 8.0)
+        f.setBold(i == 0)
+        lab.setFont(f)
+        labels.append(lab)
+    return frame, title, labels
 
 
 class _MainProcessPorts:
@@ -1245,9 +1281,6 @@ class MainDialog(QDialog):
             log_message_to_monitor("경고", msg)
 
     # ==================== 이온 게이지 (Terranova 934, 읽기 전용) ====================
-    # 화면 표시 위치: HMI 램프 줄(Air~Water, x 20~401 · y 20~100) 오른쪽 빈 자리.
-    #  x 410~582, y 12~76 — Water 램프 오른쪽 끝 401, Door 버튼 위쪽 80, BuzzStop 왼쪽 590 과 겹치지 않는다(UI.py setGeometry).
-    _IG_LABEL_RECTS = ((410, 12, 172, 18), (410, 31, 172, 15), (410, 46, 172, 15), (410, 61, 172, 15))
     _IG_COLORS = {"ok": "#222222", "warn": "#b35c00", "lost": "#c62828"}
     _IG_ROWS_MAX = 600              # CSV 버퍼 상한(쓰기가 계속 실패해도 메모리가 늘지 않게)
 
@@ -1259,22 +1292,15 @@ class MainDialog(QDialog):
         self._ig_snap = None
         self._ig_rows = []
         self._ig_labels = []
+        self._ig_frame = None
         self._ig_lines = []             # 화면 4줄(줄임표 전 원문) — 칸보다 길면 라벨은 '…'로 줄이고 툴팁에 전체
         self._ig_flush_timer = None
         on = IG_ENABLED if enabled is None else bool(enabled)
         name = str(IG_PORT if port is None else port).strip()
         if not (on and name):
             return
-        for i, (x, y, w, h) in enumerate(self._IG_LABEL_RECTS):
-            lab = QLabel(self)
-            lab.setObjectName(f"ig_label_{i}")
-            lab.setGeometry(x, y, w, h)
-            f = lab.font()
-            f.setPointSizeF(10.0 if i == 0 else 8.0)
-            f.setBold(i == 0)
-            lab.setFont(f)
-            lab.show()
-            self._ig_labels.append(lab)
+        self._ig_frame, _title, self._ig_labels = build_ig_frame(self)
+        self._ig_frame.show()
         self.ig_thread = QThread()
         self.ig_thread.setObjectName("IonGaugeThread")
         self.ig_controller = (controller_factory or (lambda: IonGaugeController(name)))()
