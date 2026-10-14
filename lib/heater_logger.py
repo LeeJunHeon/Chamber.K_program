@@ -31,6 +31,7 @@ COLUMNS = [
     "note",
     "hold", "hold_mv",        # 유지 모드 holding(0/1, dac·tc2 공통) / dac 고정값(그 외 빈칸)
     "pv2_c", "pv_ctrl_c", "hold_kind", "sv2_c",   # TC2 / PID 가 보는 PV / 유지 종류(dac·tc2) / TC2 목표
+    "WD age[s]",              # 행을 쓸 때 마지막 워치독 하트비트 성공 뒤 경과 초(래더는 10초에 트립). 운전마다 새 파일이라 맨 끝에 붙인다
 ]
 
 
@@ -100,9 +101,9 @@ class HeaterCsvLogger:
         self._warned = False
         return path
 
-    def write_row(self, st: dict, note: str = "", hold=None, hold_kind=None):
+    def write_row(self, st: dict, note: str = "", hold=None, hold_kind=None, wd_age=None):
         """한 행 기록 후 즉시 flush. 프로그램이 죽어도 데이터는 남는다.
-        hold=(holding 0/1, dac 고정값|None), hold_kind="dac"|"tc2"|None."""
+        hold=(holding 0/1, dac 고정값|None), hold_kind="dac"|"tc2"|None, wd_age=워치독 하트비트 나이(초)."""
         if self._fp is None or self._writer is None:
             return
 
@@ -138,6 +139,7 @@ class HeaterCsvLogger:
                 "" if st.get('pv_ctrl') is None else f"{float(st['pv_ctrl']):.1f}",
                 ("" if not (hold and hold[0]) else (hold_kind or "")),
                 "" if st.get('sv2') is None else f"{float(st['sv2']):.1f}",
+                "" if wd_age is None else f"{float(wd_age):.1f}",
             ])
             self._fp.flush()
         except Exception as e:

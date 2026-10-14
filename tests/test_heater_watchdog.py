@@ -183,3 +183,88 @@ def test_heartbeat_gap_under_rf_rampup_load_60s(qapp):
     gap, n = run_rf_load(PLCM.PLCController, 60.0, delay=0.04)
     assert n >= 20
     assert gap <= 3.0, f"최대 하트비트 간격 {gap:.2f}초"
+
+
+# ───────────── 진단 ─────────────
+def _recorder(c):
+    rec = {"msg": [], "ev": [], "fault": []}
+    c.status_message.connect(lambda lv, m: rec["msg"].append((lv, m)))
+    c.plc_event.connect(lambda r: rec["ev"].append(r))
+    c.heater_fault.connect(lambda why: rec["fault"].append(why))
+    return rec
+
+
+def test_delay_warning_once_and_recovery_once(qapp):
+    fake = WdFake(delay=0)
+    c = make_ctrl(fake)
+    rec = _recorder(c)
+    c._heater_wd_last_ok = time.monotonic() - 6.2
+    c._check_heater_wd_delay()
+    c._check_heater_wd_delay()
+    warns = [m for lv, m in rec["msg"] if "하트비트 지연" in m]
+    assert len(warns) == 1 and warns[0].startswith("히터 워치독 하트비트 지연 6.") and warns[0].endswith("초 (래더 10초에 트립)")
+    assert [lv for lv, m in rec["msg"] if "하트비트 지연" in m] == ["히터(경고)"]   # '히터…' 레벨 → 히터 로그에도
+    c._kick_heater_watchdog()
+    c._kick_heater_watchdog()
+    recov = [m for lv, m in rec["msg"] if "하트비트 회복" in m]
+    assert len(recov) == 1 and recov[0].startswith("히터 워치독 하트비트 회복 (지연 최대 6.")
+    kinds = [e["종류"] for e in rec["ev"]]
+    assert kinds == ["워치독지연", "워치독회복"]
+
+
+def test_delay_checked_even_when_poll_skipped_by_busy(qapp):
+    fake = WdFake(delay=0)
+    c = make_ctrl(fake)
+    rec = _recorder(c)
+    c._busy = True
+    c._heater_wd_last_ok = time.monotonic() - 7.0
+    c._poll_status()                                # _busy 로 폴링은 건너뛰지만 나이는 본다
+    assert any("하트비트 지연 7." in m for _, m in rec["msg"])
+    assert fake.wd_times == []
+
+
+def test_no_delay_warning_below_5s(qapp):
+    c = make_ctrl(WdFake(delay=0))
+    rec = _recorder(c)
+    c._heater_wd_last_ok = time.monotonic() - 4.5
+    c._check_heater_wd_delay()
+    assert rec["msg"] == [] and rec["ev"] == []
+
+
+class FaultFake(WdFake):
+    def read_bits(self, addr, count, functioncode=1):
+        bits = [0] * count
+        if addr == CFG.HEATER_COIL_BASE:
+            bits[CFG.HEATER_COIL_ITL - addr] = 1
+            bits[CFG.HEATER_COIL_FAULT - addr] = 1
+            bits[CFG.HEATER_COIL_WD_ERR - addr] = 1
+        return bits
+
+
+def test_trip_message_has_heartbeat_age(qapp):
+    c = make_ctrl(FaultFake(delay=0))
+    rec = _recorder(c)
+    c._heater_wd_last_ok = time.monotonic() - 1.0
+    c._poll_status()
+    assert rec["fault"] and "히터 통신 워치독 타임아웃 (마지막 하트비트 성공 후 1." in rec["fault"][0]
+
+
+def test_heater_csv_wd_age_column(tmp_path, monkeypatch):
+    import lib.heater_logger as HL
+    import csv
+    monkeypatch.setattr(HL, "NAS_HEATER_LOG_DIR", tmp_path)
+    lg = HL.HeaterCsvLogger()
+    p = lg.start("WDTEST")
+    lg.write_row({"pv": 600.0, "sv": 600.0}, "", None, None, wd_age=6.24)
+    lg.write_row({"pv": 600.0, "sv": 600.0})
+    lg.stop()
+    with open(p, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    assert rows[0][-1] == "WD age[s]" and len(rows[0]) == len(HL.COLUMNS)
+    assert rows[1][-1] == "6.2" and rows[2][-1] == "" and all(len(r) == len(rows[0]) for r in rows)
+
+
+def test_main_passes_wd_age_to_heater_csv():
+    import os
+    src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main.py"), encoding="utf-8").read()
+    assert src.count("self._heater_logger.write_row(") == src.count("wd_age=self._heater_wd_age()") == 2

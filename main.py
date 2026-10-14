@@ -1356,6 +1356,13 @@ class MainDialog(QDialog):
         """공정의 베이스 압력 대기 통과 — 판정에 쓴 마지막 이온 압력을 ChK_log 'Base Pressure' 용으로 보관."""
         self._chk_base_pressure = float(torr)
 
+    def _heater_wd_age(self):
+        """히터 CSV 'WD age[s]' — PLC 컨트롤러의 마지막 워치독 하트비트 성공 뒤 경과 초(float 읽기만)."""
+        try:
+            return self.plc_controller.heater_wd_age()
+        except Exception:
+            return None
+
     def _ig_process_log(self, phase: str) -> None:
         """공정 시작·종료 때 공정 로그 파일에만 한 줄(모니터·매초 기록 없음)."""
         if getattr(self, "ig_controller", None) is None or not process_log_active():
@@ -2392,11 +2399,13 @@ class MainDialog(QDialog):
             if run and (self._heater_log_last_ms == 0.0
                         or now - self._heater_log_last_ms >= HEATER_LOG_PERIOD_MS):
                 self._heater_log_last_ms = now
-                self._heater_logger.write_row(st, self._heater_log_note(), self.heater_hold.log_tuple(), self.heater_hold.kind)
+                self._heater_logger.write_row(st, self._heater_log_note(), self.heater_hold.log_tuple(), self.heater_hold.kind,
+                                              wd_age=self._heater_wd_age())
 
             if edge == 'fall':
                 # 정지 직후 마지막 한 행을 남기고 파일을 닫는다
-                self._heater_logger.write_row(st, self._heater_log_note(), self.heater_hold.log_tuple(), self.heater_hold.kind)
+                self._heater_logger.write_row(st, self._heater_log_note(), self.heater_hold.log_tuple(), self.heater_hold.kind,
+                                              wd_age=self._heater_wd_age())
                 self._heater_logger.stop()
                 try:
                     clear_heater_log_file()

@@ -115,6 +115,8 @@ HEATER_SV_LOG_MIN_INTERVAL_SEC = 30.0
 # 하트비트가 잠금을 기다리는 최대 시간 / 못 잡았을 때 다시 시도까지(다른 스레드 트랜잭션은 보통 수십 ms)
 HEATER_WD_LOCK_TIMEOUT_MS = 1000
 HEATER_WD_RETRY_MS = 200
+# 마지막 하트비트 성공 뒤 이 시간(초)이 지나면 경고 1줄(래더는 10초에 트립). 회복되면 1줄.
+HEATER_WD_DELAY_WARN_SEC = 5.0
 
 
 class PLCController(QObject):
@@ -199,6 +201,8 @@ class PLCController(QObject):
         self._heater_wd_retry_timer.setSingleShot(True)
         self._heater_wd_retry_timer.timeout.connect(self._kick_heater_watchdog)
         self._heater_wd_last_ok: float = time.monotonic()   # 마지막 하트비트 쓰기 성공 시각
+        self._heater_wd_delay_warned = False                # 이번 지연을 이미 경고했는가(회복 때 1줄)
+        self._heater_wd_delay_max = 0.0
 
         # ★ 히터: 상태 캐시 / 이상 중복 알림 방지
         self._heater_last: Dict[str, object] = {}
@@ -662,6 +666,7 @@ class PLCController(QObject):
         # ★ 단절 중에는 폴링 1회가 (PLC_TIMEOUT 0.5초 × 3회 × 트랜잭션 수)만큼 길어진다.
         #   타이머는 _busy 로 건너뛰므로 허용한다. 그동안 워치독 kick 이 못 나가면 PLC 가
         #   10초에 히터를 끄는데, 그것이 의도된 안전 동작이다(PLC_COMM_LOSS_ABORT_SEC 와 같은 예산).
+        self._check_heater_wd_delay()      # 폴링이 _busy 로 건너뛰어지는 주기에도 하트비트 나이는 본다
         if not self._is_running or self._busy:
             return
         if self._link_down or self.instrument is None:
@@ -1054,7 +1059,7 @@ class PLCController(QObject):
                 elif st['tc_err']:
                     why = "히터 온도센서 이상(단선/모듈)"
                 elif st['wd_err']:
-                    why = "히터 통신 워치독 타임아웃"
+                    why = f"히터 통신 워치독 타임아웃 (마지막 하트비트 성공 후 {self.heater_wd_age():.1f}초)"
                 else:
                     why = f"히터 이상 (PID err={st['pid_err']})"
 
@@ -1115,6 +1120,7 @@ class PLCController(QObject):
             return
         if not self._mutex.tryLock(HEATER_WD_LOCK_TIMEOUT_MS):
             self._heater_wd_retry_timer.start(HEATER_WD_RETRY_MS)
+            self._check_heater_wd_delay()
             return
         self._busy = True
         try:
@@ -1130,6 +1136,27 @@ class PLCController(QObject):
         self._heater_wd = (self._heater_wd + 1) & 0x7FFF
         self._mb(what, self.instrument.write_register, HEATER_REG_WD, self._heater_wd, functioncode=6)
         self._heater_wd_last_ok = time.monotonic()
+        if self._heater_wd_delay_warned:
+            self._heater_wd_delay_warned = False
+            self.status_message.emit(
+                "히터", f"히터 워치독 하트비트 회복 (지연 최대 {self._heater_wd_delay_max:.1f}초)")
+            self._emit_event("워치독회복", f"하트비트 회복, 지연 최대 {self._heater_wd_delay_max:.1f}초")
+
+    def _check_heater_wd_delay(self) -> None:
+        """하트비트 지연 감시 — 마지막 성공 뒤 HEATER_WD_DELAY_WARN_SEC 를 넘으면 지연 한 번에 경고 1줄
+        (모니터·히터 로그·COMM_events). 구글챗은 보내지 않는다."""
+        if not (HEATER_ENABLED and self._is_running and self._ever_connected):
+            return
+        age = self.heater_wd_age()
+        if age <= HEATER_WD_DELAY_WARN_SEC:
+            return
+        if self._heater_wd_delay_warned:
+            self._heater_wd_delay_max = max(self._heater_wd_delay_max, age)
+            return
+        self._heater_wd_delay_warned = True
+        self._heater_wd_delay_max = age
+        self.status_message.emit("히터(경고)", f"히터 워치독 하트비트 지연 {age:.1f}초 (래더 10초에 트립)")
+        self._emit_event("워치독지연", f"하트비트 지연 {age:.1f}초 (래더 10초에 트립)")
 
     def heater_wd_age(self) -> float:
         """마지막 하트비트 성공 뒤 경과 초(어느 스레드에서 읽어도 되는 float 하나)."""
