@@ -241,13 +241,14 @@ def test_relight_result_failure_retries_then_aborts(pc):
     assert pc.rec["stop"] == [1] and "필라멘트 재점등 2회 실패" in pc.rec["crit"][-1]
 
 
-def test_progress_every_30s(pc):
+def test_stage_every_tick_and_no_30s_line(pc):
     pc._ig_base_wait_start(1e-5)
-    tick(pc, snap(ion=3.2e-5), dt=29.0)
-    assert pc.rec["stage"] == []
     tick(pc, snap(ion=3.2e-5), dt=1.0)
-    want = "베이스 대기 3.2E-05 → 목표 1.0E-05 (00:30 / 10:00)"
-    assert pc.rec["stage"] == [want] and want in msgs(pc)
+    assert pc.rec["stage"] == ["베이스 대기 3.2E-05 → 목표 1.0E-05 (00:01 / 10:00)"]
+    for _ in range(29):
+        tick(pc, snap(ion=3.2e-5), dt=1.0)
+    assert len(pc.rec["stage"]) == 30
+    assert not any(m.startswith("베이스 대기 ") for m in msgs(pc))       # 옛 30초 진행 줄은 없다
 
 
 # ───────────── STOP·중단 ─────────────
@@ -297,3 +298,71 @@ def test_settle_default_is_15s_and_14s_values_unused(pc):
     assert pc._ig_wait["count"] == 0
     tick(pc, snap(ion=1.5e-6, settle_ago=15.2))
     assert pc._ig_wait["count"] == 1
+
+
+
+# ───────────── 베이스 대기 로그(IG_BASE_LOG_INTERVAL_SEC) ─────────────
+def _base_logs(pc):
+    return [m for m in msgs(pc) if m.startswith("[IG] 베이스 대기 ") and not m.startswith("[IG] 베이스 대기 시작")
+            and not m.startswith("[IG] 베이스 대기 실패")]
+
+
+def test_log_every_5s_with_settling_and_pass_count(pc):
+    assert PC.IG_BASE_LOG_INTERVAL_SEC == 5
+    pc._ig_base_wait_start(1e-6)
+    seq = [(1, 0), (2, 8e-4), (3, 9.9e-5), (4, 9.9e-6), (5, 9.9e-7)]          # 방출 뒤 1~5초 — 안정화 중
+    for ago, v in seq:
+        tick(pc, snap(ion=v, settle_ago=float(ago)))
+    for k in range(8):                                                       # 안정화 뒤 3.2E-6 (목표 초과) 00:06~00:13
+        tick(pc, snap(ion=3.2e-6, settle_ago=20.0 + k))
+    for k in range(2):                                                       # 9.0E-7 통과 1..2 (00:14~00:15)
+        tick(pc, snap(ion=9.0e-7, settle_ago=30.0 + k))
+    assert _base_logs(pc) == [
+        "[IG] 베이스 대기 9.9E-07 Torr (목표 1.0E-06, 00:05) — 안정화 중(판정 제외)",
+        "[IG] 베이스 대기 3.2E-06 Torr (목표 1.0E-06, 00:10)",
+        "[IG] 베이스 대기 9.0E-07 Torr (목표 1.0E-06, 00:15) — 통과 2/5",
+    ]
+    assert pc.rec["reached"] == []
+
+
+def test_log_unusable_phrases(pc):
+    pc._ig_base_wait_start(1e-6)
+    for _ in range(5):
+        tick(pc, snap(ion=0))                                               # 필라멘트 켜짐 + 이온 0
+    assert _base_logs(pc) == ["[IG] 베이스 대기 — IG 측정 준비 중 (00:05)"]
+    for _ in range(5):
+        tick(pc, snap(ion=5e-6, fresh=False, comm="starting"))
+    assert _base_logs(pc)[-1] == "[IG] 베이스 대기 — IG 필라멘트 시동 중 (00:10)"
+    for _ in range(5):
+        tick(pc, snap(ion=5e-6, fresh=False, comm="timeout"))
+    assert _base_logs(pc)[-1] == "[IG] 베이스 대기 — IG 통신 끊김 (00:15)"
+
+
+def test_log_interval_follows_config(pc, monkeypatch):
+    monkeypatch.setattr(PC, "IG_BASE_LOG_INTERVAL_SEC", 2)
+    pc._ig_base_wait_start(1e-6)
+    for _ in range(6):
+        tick(pc, snap(ion=3.2e-6))
+    assert [m.split(", ")[-1] for m in _base_logs(pc)] == ["00:02)", "00:04)", "00:06)"]
+
+
+def test_first_value_line_after_filament_on(pc):
+    pc.box["snap"] = snap(fil=0, emis=0)
+    pc._ig_filament_on_step()
+    pc._on_ig_filament_result("on", True, "필라멘트 켜짐·방출 정상")
+    assert not any("필라멘트 켜짐" in m for m in msgs(pc))                    # 결과 신호 때가 아니라
+    pc._ig_base_wait_start(1e-6)
+    tick(pc, snap(ion=8e-4, settle_ago=0.5))                                 # 첫 새 스냅샷에서 1줄
+    tick(pc, snap(ion=9.9e-5, settle_ago=1.5))
+    assert [m for m in msgs(pc) if m.startswith("[IG] 필라멘트 켜짐")] == ["[IG] 필라멘트 켜짐 — 첫 값 8.0E-04 Torr"]
+
+
+def test_no_periodic_log_outside_base_wait(pc):
+    pc._ig_base_wait_start(1e-6)
+    for _ in range(5):
+        tick(pc, snap(ion=9.0e-7))
+    assert pc.rec["reached"] and len(_base_logs(pc)) == 0                   # 5초째 도달 → 대기 끝, 그 뒤 주기 로그 없음
+    n = len(msgs(pc))
+    for _ in range(10):
+        tick(pc, snap(ion=9.0e-7))
+    assert len(msgs(pc)) == n

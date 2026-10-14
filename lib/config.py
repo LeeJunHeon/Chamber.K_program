@@ -755,6 +755,9 @@ IG_RESPONSE_TIMEOUT_MS = get('IG_RESPONSE_TIMEOUT_MS', 1200)
 IG_BASE_STABLE_COUNT = get('IG_BASE_STABLE_COUNT', 5)
 # 베이스 압력 대기 최대 시간(초). 넘으면 공정 중단(목표·마지막 압력·경과 시간을 사유에 남긴다).
 IG_BASE_WAIT_TIMEOUT_SEC = get('IG_BASE_WAIT_TIMEOUT_SEC', 600)
+# 베이스 대기 중 이온 압력을 모니터·공정 로그에 남기는 간격(초). 10/14 시험은 20초 만에 끝나 30초 진행 줄이 한 번도
+#  안 나왔다 — 압력이 내려가는 과정을 보려고 5초. 베이스 대기 밖에서는 주기 기록을 하지 않는다.
+IG_BASE_LOG_INTERVAL_SEC = get('IG_BASE_LOG_INTERVAL_SEC', 5)
 # 레시피·화면에 base_pressure 가 없을 때 쓰는 목표 베이스 압력(Torr). 0 이면 대기 생략.
 PROCESS_DEFAULT_BASE_PRESSURE = get('PROCESS_DEFAULT_BASE_PRESSURE', 1e-5)
 

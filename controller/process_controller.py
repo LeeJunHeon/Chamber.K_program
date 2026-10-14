@@ -18,7 +18,7 @@ from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
                         DC_RAMP_STEP_A,
                         IG_FILAMENT_ON_TIMEOUT_SEC, IG_SETTLE_SEC, IG_BASE_STABLE_COUNT,
-                        IG_BASE_WAIT_TIMEOUT_SEC, PROCESS_DEFAULT_BASE_PRESSURE)
+                        IG_BASE_WAIT_TIMEOUT_SEC, PROCESS_DEFAULT_BASE_PRESSURE, IG_BASE_LOG_INTERVAL_SEC)
 from lib.heater_profile import ramp_minutes
 from controller.heater_hold import ENGAGE_TIMEOUT_SEC
 
@@ -334,6 +334,7 @@ class SputterProcessController(QObject):
         self._ig_expect: Optional[str] = None       # 기다리는 필라멘트 결과 "on"/"off"
         self._ig_ctx: Optional[str] = None          # "step_on" | "relight" | "step_off"
         self._ig_fil_on_by_us = False               # 이번 공정에서 필라멘트를 켰고 아직 끄기를 보내지 않았는가
+        self._ig_first_value_pending = False        # 필라멘트 켜기 성공 뒤 첫 값 줄을 아직 안 남겼는가
         self.ig_base_pressure_used: Optional[float] = None
 
         # 내부 상태
@@ -1118,7 +1119,9 @@ class SputterProcessController(QObject):
     def _ig_after_result(self, ctx: Optional[str], action: str, ok: bool, detail: str) -> None:
         if ctx == "step_on":
             if ok:
-                self.status_message.emit("정보", f"[IG] 필라멘트 켜짐 — {detail}")
+                # "[IG] 필라멘트 켜짐 — 첫 값 …" 은 베이스 대기의 첫 새 스냅샷에서 남긴다(결과 신호가 main 의
+                #  스냅샷 갱신보다 먼저 올 수 있어, 여기서 읽으면 켜기 전 값일 수 있다)
+                self._ig_first_value_pending = True
                 self._next_step()
             else:
                 self._abort_with_error(f"{self._step_tag()} | 이온 게이지 필라멘트 켜기 실패 — {detail}")
@@ -1146,7 +1149,7 @@ class SputterProcessController(QObject):
         self._ensure_ig_timers()
         now = self._now()
         self._ig_wait = {'target': float(target), 't0': now, 'count': 0, 'last_ion': None, 'last_used': None,
-                         'last_report': now, 'comm_ok_t': now, 'relights': 0, 'paused': False, 'last_snap_t': None}
+                         'last_log': now, 'comm_ok_t': now, 'relights': 0, 'paused': False, 'last_snap_t': None}
         self.status_message.emit("정보", f"[IG] 베이스 대기 시작 목표 {float(target):.1E} Torr")
         self._ig_timer.start()
 
@@ -1176,12 +1179,47 @@ class SputterProcessController(QObject):
             self._ig_base_fail(f"이온 게이지 통신 {IG_COMM_LOSS_ABORT_SEC:.0f}초 넘게 끊김 — 목표 {target:.1E} Torr, "
                                f"마지막 {self._fmt_torr(w['last_ion'])} Torr, 경과 {self._mmss(elapsed)}")
             return
-        if now - w['last_report'] >= 30.0:
-            w['last_report'] = now
-            msg = (f"베이스 대기 {self._fmt_torr(w['last_ion'])} → 목표 {target:.1E} "
-                   f"({self._mmss(elapsed)} / {self._mmss(timeout)})")
-            self.stage_monitor.emit(msg)
-            self.status_message.emit("정보", msg)
+        # 진행 표시(stage_monitor)는 매 틱, 로그는 IG_BASE_LOG_INTERVAL_SEC 마다(_ig_base_log) — 판정 뒤에 남긴다
+        self.stage_monitor.emit(f"베이스 대기 {self._fmt_torr(w['last_ion'])} → 목표 {target:.1E} "
+                                f"({self._mmss(elapsed)} / {self._mmss(timeout)})")
+        if self._ig_first_value_pending and fresh and r.filament_on:
+            self._ig_first_value_pending = False
+            first = f"{r.ion_torr:.1E} Torr" if r.ion_torr is not None else self._ig_phrase(snap)
+            self.status_message.emit("정보", f"[IG] 필라멘트 켜짐 — 첫 값 {first}")
+        self._ig_base_judge(w, snap, r, fresh, elapsed)
+        if self._ig_wait is w and now - w['last_log'] >= float(IG_BASE_LOG_INTERVAL_SEC):
+            w['last_log'] = now
+            self._ig_base_log(w, snap, r, fresh, elapsed)
+
+    def _ig_phrase(self, snap) -> str:
+        """판정에 쓸 수 없는 값의 화면 문구 그대로 — "IG 측정 준비 중" / "IG 필라멘트 시동 중" / "IG 통신 끊김" 등."""
+        try:
+            from device.IonGauge import display_lines
+            return display_lines(snap, "A", "B")[0][0]
+        except Exception:
+            return "IG 값 없음"
+
+    def _ig_settling(self, snap, r) -> bool:
+        return bool(r is not None and r.filament_on and r.emission_ok and snap.emission_since is not None
+                    and (time.time() - snap.emission_since) < float(IG_SETTLE_SEC))
+
+    def _ig_base_log(self, w: Dict[str, Any], snap, r, fresh: bool, elapsed: float) -> None:
+        """베이스 대기 로그 1줄(모니터·공정 로그). 예) "[IG] 베이스 대기 3.2E-06 Torr (목표 1.0E-06, 00:10) — 통과 3/5"."""
+        t = self._mmss(elapsed)
+        if fresh and r.ion_torr is not None and r.ion_torr > 0 and not w['paused']:
+            msg = f"[IG] 베이스 대기 {r.ion_torr:.1E} Torr (목표 {w['target']:.1E}, {t})"
+            if self._ig_settling(snap, r):
+                msg += " — 안정화 중(판정 제외)"
+            elif w['count'] > 0:
+                msg += f" — 통과 {w['count']}/{int(IG_BASE_STABLE_COUNT)}"
+        elif w['paused']:
+            msg = f"[IG] 베이스 대기 — 필라멘트 재점등 결과 대기 ({t})"
+        else:
+            msg = f"[IG] 베이스 대기 — {self._ig_phrase(snap)} ({t})"
+        self.status_message.emit("정보", msg)
+
+    def _ig_base_judge(self, w: Dict[str, Any], snap, r, fresh: bool, elapsed: float) -> None:
+        """판정(새 스냅샷만) — 재점등·연속 통과·도달."""
         if w['paused']:                                # 재점등 결과 대기
             return
         if snap is None or snap.t == w['last_snap_t']:
@@ -1197,7 +1235,7 @@ class SputterProcessController(QObject):
         usable = (fresh and r.filament_on and r.emission_ok and snap.emission_since is not None
                   and (time.time() - snap.emission_since) >= float(IG_SETTLE_SEC)
                   and r.ion_torr is not None and r.ion_torr > 0)
-        if usable and r.ion_torr <= target:
+        if usable and r.ion_torr <= w['target']:
             w['count'] += 1
             w['last_used'] = r.ion_torr
             if w['count'] >= int(IG_BASE_STABLE_COUNT):
