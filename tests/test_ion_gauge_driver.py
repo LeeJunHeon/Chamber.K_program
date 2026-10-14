@@ -577,3 +577,41 @@ def test_off_confirm_default_is_20s():
     assert c.off_timeout_sec == 20.0
     from lib.config import IG_FILAMENT_SWITCH_QUIET_SEC
     assert c.quiet_sec == float(IG_FILAMENT_SWITCH_QUIET_SEC) == 12.0
+
+
+
+def test_response_timeout_default_1200ms_from_config():
+    from lib.config import IG_RESPONSE_TIMEOUT_MS
+    c = IonGaugeController("COM12", port_factory=lambda p: FakeIgPort(Script(), p), port_lister=lambda: [])
+    assert IG_RESPONSE_TIMEOUT_MS == 1200 and c.timeout_ms == 1200
+
+
+def test_860ms_reply_is_not_a_failure_outside_quiet(qapp):
+    """레인지 찾기 중 E 응답 860 ms(2026-10-14 실측) — 유예 구간 밖에서도 실패로 세지 않는다."""
+    s = Script(delay_ms=860)
+    c, rec = make(s, timeout_ms=None, poll_ms=1500)           # 기본 응답 제한(1200 ms)
+    c.connect_device()
+    spin(4200)
+    c.cleanup()
+    assert c.timeout_ms == 1200
+    assert any(x.fresh and x.comm == "ok" for x in rec["snap"])
+    assert not any(x.comm == "timeout" for x in rec["snap"]) and rec["ev"] == []
+
+
+def test_over_1200ms_reply_counts_one_failure(qapp):
+    calls = {"n": 0}
+
+    def e_reply():
+        calls["n"] += 1
+        s.delay_ms = 1350 if calls["n"] == 2 else 30          # 두 번째 E 만 1.35초 뒤에 온다
+        return E_REPLY
+
+    s = Script(replies={b"F": F_REPLY, b"E": e_reply}, delay_ms=30)
+    c, rec = make(s, timeout_ms=None, poll_ms=1600, fail_limit=3)
+    c.connect_device()
+    spin(5200)
+    c.cleanup()
+    comms = [x.comm for x in rec["snap"]]
+    assert comms.count("timeout") == 1 and "ok" in comms[comms.index("timeout") + 1:]
+    assert s.closes <= 1                                     # 1회 실패로는 포트를 닫지 않는다(정리 1회만)
+    assert [e["종류"] for e in rec["ev"]] == ["실패", "복구"]

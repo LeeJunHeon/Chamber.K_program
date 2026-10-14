@@ -30,7 +30,7 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 
 from lib.comm_policy import ReconnectPolicy
 from lib.config import (
-    IG_PORT, IG_BAUD, IG_FILAMENT_SWITCH_QUIET_SEC, IG_FILAMENT_ON_TIMEOUT_SEC,
+    IG_PORT, IG_BAUD, IG_FILAMENT_SWITCH_QUIET_SEC, IG_FILAMENT_ON_TIMEOUT_SEC, IG_RESPONSE_TIMEOUT_MS,
     COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
 )
 
@@ -300,7 +300,7 @@ class IonGaugeController(QObject):
     _RX_MAX = 4096
 
     def __init__(self, port_name: Optional[str] = None, baud: Optional[int] = None, *,
-                 poll_ms: int = 1000, timeout_ms: int = 800, fail_limit: int = 3, min_gap_ms: int = 500,
+                 poll_ms: int = 1000, timeout_ms: Optional[int] = None, fail_limit: int = 3, min_gap_ms: int = 500,
                  quiet_sec: Optional[float] = None, on_timeout_sec: Optional[float] = None,
                  off_timeout_sec: float = 20.0, relight_lockout_sec: float = 5.0, e_block_sec: float = 1.0,
                  port_factory: Optional[Callable[[QObject], object]] = None,
@@ -310,7 +310,7 @@ class IonGaugeController(QObject):
         self.port_name = str(IG_PORT if port_name is None else port_name).strip()
         self.baud = int(IG_BAUD if baud is None else baud)
         self.poll_ms = int(poll_ms)
-        self.timeout_ms = int(timeout_ms)
+        self.timeout_ms = int(IG_RESPONSE_TIMEOUT_MS if timeout_ms is None else timeout_ms)
         self.fail_limit = max(1, int(fail_limit))
         self.min_gap_ms = int(min_gap_ms)
         self.quiet_sec = float(IG_FILAMENT_SWITCH_QUIET_SEC if quiet_sec is None else quiet_sec)

@@ -149,16 +149,17 @@ def test_measured_ranging_values_before_settle_are_not_used(pc):
     """실측 순서(0E-4 → 8E-4 → 9.9E-4 → 9.9E-5 → 9.9E-6 → 4.0E-6) — 목표가 1E-3 이어도 안정화 전 값으로는 통과하지 않는다."""
     pc._ig_base_wait_start(1e-3)
     assert msgs(pc)[-1] == "[IG] 베이스 대기 시작 목표 1.0E-03 Torr"
-    for k, v in enumerate([0, 8e-4, 9.9e-4, 9.9e-5, 9.9e-6, 4.0e-6, 4.0e-6, 4.0e-6, 4.0e-6], start=1):
-        tick(pc, snap(ion=v, settle_ago=float(k)))           # 방출 뒤 1~9초
+    seq = [0, 8e-4, 9.9e-4, 9.9e-5, 9.9e-6, 4.0e-6] + [4.0e-6] * 8
+    for k, v in enumerate(seq, start=1):
+        tick(pc, snap(ion=v, settle_ago=float(k)))           # 방출 뒤 1~14초 — 안정화(15초) 전
     assert pc.rec["reached"] == [] and pc._ig_wait["count"] == 0
     for _ in range(4):
-        tick(pc, snap(ion=4.0e-6, settle_ago=11.0))
+        tick(pc, snap(ion=4.0e-6, settle_ago=15.5))
     assert pc.rec["reached"] == []
-    tick(pc, snap(ion=4.0e-6, settle_ago=12.0))
+    tick(pc, snap(ion=4.0e-6, settle_ago=16.5))
     assert pc.rec["reached"] == [pytest.approx(4.0e-6)] and pc.rec["next"] == [1]
     assert pc.ig_base_pressure_used == pytest.approx(4.0e-6)
-    assert msgs(pc)[-1] == "[IG] 베이스 도달 4.0E-06 Torr (대기 00:14)"
+    assert msgs(pc)[-1] == "[IG] 베이스 도달 4.0E-06 Torr (대기 00:19)"
 
 
 def test_five_in_a_row_reset_by_high_or_unusable(pc):
@@ -283,3 +284,16 @@ def test_filament_switching_is_not_comm_loss(pc):
     tick(pc, snap(ion=5e-6, fresh=False, comm="starting"), dt=50.0)
     assert pc.rec["stop"] == []
     assert PC.IG_OFF_RESULT_WAIT_SEC == 30.0                # OFF 결과 대기 = 드라이버 20초 + 여유
+
+
+
+def test_settle_default_is_15s_and_14s_values_unused(pc):
+    """2026-10-14 실측 레인지 찾기 7.3초(0E-4 → 8E-4 → 9.9E-5 → 9.9E-6 → 1.5E-6) — 안정화 15초 전 값은 판정에 안 쓴다."""
+    assert PC.IG_SETTLE_SEC == 15
+    pc._ig_base_wait_start(1e-5)
+    for ago, v in ((1, 0), (2, 8e-4), (3, 9.9e-5), (4, 9.9e-6), (7.3, 1.5e-6), (10, 1.5e-6), (12, 1.5e-6),
+                   (13, 1.5e-6), (14.5, 1.5e-6)):
+        tick(pc, snap(ion=v, settle_ago=float(ago)))
+    assert pc._ig_wait["count"] == 0
+    tick(pc, snap(ion=1.5e-6, settle_ago=15.2))
+    assert pc._ig_wait["count"] == 1
