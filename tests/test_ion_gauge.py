@@ -209,3 +209,19 @@ def test_stopping_state_display_and_erp():
     st = _snap(r, comm="stopping", fresh=False)
     assert display_lines(st, "A", "B") == (["IG 필라멘트 끄는 중", "", "", ""], "warn")
     assert erp_state_dict(st, True, "A", "B")["commText"] == "필라멘트 끄는 중"
+
+
+# ───────────── 게이지 A/B '값 오류' 원문 ─────────────
+def test_invalid_negative_mantissa_keeps_raw_text():
+    assert pressure_from_pair("-12      -4", "conv") == (None, "invalid", "값 오류(-12 -4)")
+    assert pressure_from_pair("-3", "conv") == (None, "invalid", "값 오류(-3)")
+    assert pressure_from_pair("-900", "conv")[2] == "미연결"
+    assert pressure_from_pair("-999", "conv")[2] == "영점 미조정"
+    assert pressure_from_pair("0       -4", "conv")[2] == "하한 이하"
+    items = list(E_ITEMS); items[24] = "-12      -4"
+    r = parse_status(e_reply(items), t=1000.0)
+    assert r.a_state == "invalid" and r.a_text == "값 오류(-12 -4)" and r.a_torr is None
+    assert display_lines(_snap(r), "게이지 A", "게이지 B")[0][1] == "게이지 A 값 오류(-12 -4)"
+    assert csv_row(_snap(r))["게이지A(Torr)"] == "값 오류(-12 -4)"              # IG CSV 열은 그대로
+    from device.IonGauge import erp_state_dict
+    assert erp_state_dict(_snap(r), True, "A", "B")["gaugeAText"] == "값 오류(-12 -4)"

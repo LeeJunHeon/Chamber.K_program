@@ -615,3 +615,35 @@ def test_over_1200ms_reply_counts_one_failure(qapp):
     assert comms.count("timeout") == 1 and "ok" in comms[comms.index("timeout") + 1:]
     assert s.closes <= 1                                     # 1회 실패로는 포트를 닫지 않는다(정리 1회만)
     assert [e["종류"] for e in rec["ev"]] == ["실패", "복구"]
+
+
+def test_gauge_state_change_logged_once_with_raw(qapp):
+    from test_ion_gauge import e_reply, E_ITEMS
+    seq = {"n": 0}
+    raws = ["0       -4", "-12      -4", "-13      -4", "-12      -4", "0       -4", "0       -4"]
+
+    def e():
+        items = list(E_ITEMS)
+        items[24] = raws[min(seq["n"], len(raws) - 1)]
+        seq["n"] += 1
+        return e_reply(items)
+
+    s = Script(replies={b"F": F_REPLY, b"E": e})
+    c, rec = make(s, poll_ms=120)
+    c.connect_device()
+    spin(1100)
+    c.cleanup()
+    lines = [(lv, m) for lv, m in rec["msg"] if m.startswith("[IG] 게이지")]
+    assert lines == [("IG(경고)", "[IG] 게이지 A 하한 이하 → 값 오류(-12 -4)"),
+                     ("IG", "[IG] 게이지 A 값 오류(-12 -4) → 하한 이하")]   # 원문이 바뀌어도 상태가 같으면 안 남김
+
+
+def test_first_reading_invalid_is_logged(qapp):
+    from test_ion_gauge import e_reply, E_ITEMS
+    items = list(E_ITEMS); items[25] = "-7      -3"
+    s = Script(replies={b"F": F_REPLY, b"E": e_reply(items)})
+    c, rec = make(s, poll_ms=120)
+    c.connect_device()
+    spin(500)
+    c.cleanup()
+    assert [m for _, m in rec["msg"] if m.startswith("[IG] 게이지")] == ["[IG] 게이지 B 값 오류(-7 -3)"]

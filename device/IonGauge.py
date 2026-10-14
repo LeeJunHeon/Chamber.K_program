@@ -31,6 +31,7 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 from lib.comm_policy import ReconnectPolicy
 from lib.config import (
     IG_PORT, IG_BAUD, IG_FILAMENT_SWITCH_QUIET_SEC, IG_FILAMENT_ON_TIMEOUT_SEC, IG_RESPONSE_TIMEOUT_MS,
+    IG_GAUGE_A_NAME, IG_GAUGE_B_NAME,
     COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
 )
 
@@ -127,7 +128,8 @@ def pressure_from_pair(text: str, kind: str) -> Tuple[Optional[float], str, str]
         if mant == 0:
             return None, "below", STATE_TEXT["below"]
     if mant < 0:
-        return None, "invalid", STATE_TEXT["invalid"]
+        # -900/-999 가 아닌 음수(영점 드리프트 추정, 2026-10-14) — 해석하지 않고 원문을 남긴다(화면·IG CSV·ERP)
+        return None, "invalid", f"{STATE_TEXT['invalid']}({' '.join(text.split())})"
     v = mant * (10.0 ** exp)
     return v, "ok", fmt_torr(v)
 
@@ -342,6 +344,7 @@ class IonGaugeController(QObject):
         self._last_ok_wall: Optional[float] = None
         self._last_send_t = -1e9
         self._device_key = None                 # (필라멘트, 방출, 디개스, 오류) — 바뀔 때만 로그
+        self._gauge_prev = {}                   # 게이지 A/B: (상태, 화면 문구) — 상태가 바뀔 때만 로그
         # 필라멘트 제어
         self._fil_queue: Optional[str] = None   # 보낼 A/B(아직 안 보냄)
         self._fil_expect: Optional[str] = None  # 결과를 기다리는 동작 "on"/"off"
@@ -562,6 +565,7 @@ class IonGaugeController(QObject):
             self._policy.on_success()           # 장비가 실제로 응답했을 때만 리셋(포트 열림은 성공이 아니다)
         self._set_comm("ok", "")
         self._log_device_changes(r)
+        self._log_gauge_changes(r)
         self._judge_filament(r)
         self._emit_snapshot(fresh=True)
         self._try_send_filament()
@@ -624,6 +628,21 @@ class IonGaugeController(QObject):
             self._outage_t0 = time.monotonic()
             self._emit_event("실패", f"{text}: {detail}")
         self.status_message.emit("IG(경고)", f"이온 게이지 {text} — {detail}")
+
+    def _log_gauge_changes(self, r: IgReading) -> None:
+        """게이지 A/B 상태가 바뀔 때만 1줄(원문 포함). 예) "[IG] 게이지 A 하한 이하 → 값 오류(-12 -4)".
+        첫 값은 '값 오류'일 때만 남긴다(원문 확보용)."""
+        for key, name, state, text in (("a", IG_GAUGE_A_NAME, r.a_state, _with_unit(r.a_text, r.a_state)),
+                                       ("b", IG_GAUGE_B_NAME, r.b_state, _with_unit(r.b_text, r.b_state))):
+            prev = self._gauge_prev.get(key)
+            self._gauge_prev[key] = (state, text)
+            if prev is None:
+                if state == "invalid":
+                    self.status_message.emit("IG(경고)", f"[IG] {name} {text}")
+                continue
+            if prev[0] != state:
+                self.status_message.emit("IG(경고)" if state == "invalid" else "IG",
+                                         f"[IG] {name} {prev[1]} → {text}")
 
     def _log_device_changes(self, r: IgReading) -> None:
         key = (r.filament_on, r.emission_ok, r.degas_on, r.error_code)
