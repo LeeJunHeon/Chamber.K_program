@@ -67,7 +67,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         rfpulse_pulse_edge_violation,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
                         heater_est_current,
-                        IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME,
+                        IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME, IG_CSV_ENABLED,
                         MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts,
                         PROCESS_DEFAULT_BASE_PRESSURE)
 from lib.recipe_io import load_table
@@ -1285,9 +1285,11 @@ class MainDialog(QDialog):
     _IG_COLORS = {"ok": "#222222", "warn": "#b35c00", "lost": "#c62828"}
     _IG_ROWS_MAX = 600              # CSV 버퍼 상한(쓰기가 계속 실패해도 메모리가 늘지 않게)
 
-    def _setup_ion_gauge(self, enabled=None, port=None, controller_factory=None) -> None:
+    def _setup_ion_gauge(self, enabled=None, port=None, controller_factory=None, csv_enabled=None) -> None:
         """이온 게이지 스레드·표시·기록 준비. 꺼져 있거나 포트가 비어 있으면 아무것도 만들지 않는다.
-        enabled/port/controller_factory 는 시험용(기본은 config)."""
+        enabled/port/controller_factory/csv_enabled 는 시험용(기본은 config).
+        IG CSV(1초 기록)는 IG_CSV_ENABLED 일 때만 — 꺼져 있으면 행을 모으지 않고 10초 쓰기 타이머도 만들지 않는다
+        (ig 폴더도 생기지 않는다)."""
         self.ig_thread = None
         self.ig_controller = None
         self._ig_snap = None
@@ -1296,6 +1298,7 @@ class MainDialog(QDialog):
         self._ig_frame = None
         self._ig_lines = []             # 화면 4줄(줄임표 전 원문) — 칸보다 길면 라벨은 '…'로 줄이고 툴팁에 전체
         self._ig_flush_timer = None
+        self._ig_csv = bool(IG_CSV_ENABLED if csv_enabled is None else csv_enabled)
         on = IG_ENABLED if enabled is None else bool(enabled)
         name = str(IG_PORT if port is None else port).strip()
         if not (on and name):
@@ -1317,10 +1320,11 @@ class MainDialog(QDialog):
         pc.request_ig_filament_on.connect(self.ig_controller.filament_on, Qt.ConnectionType.QueuedConnection)
         pc.request_ig_filament_off.connect(self.ig_controller.filament_off, Qt.ConnectionType.QueuedConnection)
         self.ig_controller.filament_result.connect(pc._on_ig_filament_result, Qt.ConnectionType.QueuedConnection)
-        self._ig_flush_timer = QTimer(self)
-        self._ig_flush_timer.setInterval(10000)
-        self._ig_flush_timer.timeout.connect(self._flush_ig_rows)
-        self._ig_flush_timer.start()
+        if self._ig_csv:
+            self._ig_flush_timer = QTimer(self)
+            self._ig_flush_timer.setInterval(10000)
+            self._ig_flush_timer.timeout.connect(self._flush_ig_rows)
+            self._ig_flush_timer.start()
         self._render_ig()
         self.ig_thread.start()
         QMetaObject.invokeMethod(self.ig_controller, "connect_device", Qt.ConnectionType.QueuedConnection)
@@ -1330,6 +1334,8 @@ class MainDialog(QDialog):
         """1초마다 — 표시 갱신 + CSV 행 모으기(파일 쓰기는 10초마다 _flush_ig_rows)."""
         self._ig_snap = snap
         self._render_ig()
+        if not getattr(self, "_ig_csv", False):
+            return
         try:
             self._ig_rows.append(ig_csv_row(snap))
             if len(self._ig_rows) > self._IG_ROWS_MAX:

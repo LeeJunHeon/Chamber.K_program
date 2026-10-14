@@ -24,7 +24,7 @@ def ig(win, monkeypatch):
     monkeypatch.setattr(MAIN, "log_message_to_monitor", lambda lv, m: logs.append((lv, m)))
     s = Script(delay_ms=20)
     w = win
-    w._setup_ion_gauge(enabled=True, port="COM12", controller_factory=lambda: IonGaugeController(
+    w._setup_ion_gauge(enabled=True, port="COM12", csv_enabled=True, controller_factory=lambda: IonGaugeController(
         "COM12", poll_ms=200, timeout_ms=150, min_gap_ms=0, fail_limit=2,
         policy=ReconnectPolicy(100, 200, 600, 1000, 600),
         port_factory=lambda parent: FakeIgPort(s, parent), port_lister=lambda: s.ports))
@@ -183,3 +183,44 @@ def test_process_controller_wired_to_ion_gauge(ig):
         pc._running = False
     assert b"A" in s.writes
     assert got and got[0][:2] == ("probe", "on")            # 가짜 장비는 필라멘트가 이미 켜져 있어 결과 성공
+
+
+def test_csv_disabled_collects_nothing_and_has_no_timer(win, monkeypatch):
+    """IG_CSV_ENABLED=false(기본): 스냅샷이 와도 행이 쌓이지 않고, 10초 쓰기 타이머가 없고, 종료 때도 쓰지 않는다."""
+    from lib.config import IG_CSV_ENABLED
+    assert IG_CSV_ENABLED is False
+    writes = []
+    monkeypatch.setattr(MAIN, "append_ig_rows", lambda rows: writes.append(list(rows)) or True)
+    monkeypatch.setattr(MAIN, "log_message_to_monitor", lambda lv, m: None)
+    s = Script(delay_ms=20)
+    w = win
+    w._setup_ion_gauge(enabled=True, port="COM12", controller_factory=lambda: IonGaugeController(
+        "COM12", poll_ms=200, timeout_ms=150, min_gap_ms=0,
+        port_factory=lambda parent: FakeIgPort(s, parent), port_lister=lambda: s.ports))
+    try:
+        assert w._ig_csv is False and w._ig_flush_timer is None
+        spin(800)
+        assert w._ig_snap is not None and w._ig_snap.ok          # 표시는 그대로 돈다
+        assert w._ig_rows == []
+        w._stop_ion_gauge()
+        assert writes == []                                      # 종료 때도 쓰기 호출 없음(→ ig 폴더도 안 생김)
+    finally:
+        w._stop_ion_gauge()
+        if w._ig_frame is not None:
+            w._ig_frame.deleteLater()
+            w._ig_frame = None
+        w.ig_thread = None
+        w.ig_controller = None
+        w._ig_labels = []
+        pc = w.process_controller
+        pc.set_ig_snapshot_provider(None)
+        for sig in (pc.request_ig_filament_on, pc.request_ig_filament_off):
+            try:
+                sig.disconnect()
+            except TypeError:
+                pass
+
+
+def test_csv_enabled_keeps_timer(ig):
+    w, s, logs = ig
+    assert w._ig_csv is True and w._ig_flush_timer is not None and w._ig_flush_timer.isActive()

@@ -735,6 +735,9 @@ IG_PORT         = get('IG_PORT',         "")
 IG_BAUD         = get('IG_BAUD',         9600)
 IG_GAUGE_A_NAME = get('IG_GAUGE_A_NAME', "게이지 A")
 IG_GAUGE_B_NAME = get('IG_GAUGE_B_NAME', "게이지 B")
+# 1초마다 IG CSV(Logs\CHK\ig\IG_YYYYMMDD.csv). 기본 꺼짐 — 공정 기록은 ChK_log 'Base Pressure'와 공정 로그 [IG] 줄로 충분.
+#  IG 진단이 필요할 때만 config_user.json 에서 true.
+IG_CSV_ENABLED = get('IG_CSV_ENABLED', False)
 # 필라멘트 ON(A)·OFF(B) 직후 E 무응답·불완전 응답을 실패로 세지 않는 시간(초). 2026-10-14 1:1 실측:
 #  A 뒤 약 5.9초 무응답(0바이트 5회, 끝에 늦은 E 응답 1개만 도착 — 쌓였다 몰려오지 않음),
 #  켜져 있던 필라멘트에 B 뒤 약 4.9초 무응답(0바이트 1회 + 7바이트 한 줄 응답 3회).
