@@ -311,6 +311,11 @@ def heater_est_current(mv) -> float:
 HEATER_ENABLED          = get('HEATER_ENABLED',          True)
 HEATER_TEMP_SCALE       = get('HEATER_TEMP_SCALE',       0.1)   # ★ 실측 후 확정
 HEATER_WD_PERIOD_MS     = get('HEATER_WD_PERIOD_MS',     3000)  # PLC 10초의 1/3
+# 폴링(200 ms)이 하트비트를 대신 쓰는 간격(초). 래더는 D00014 가 10초(TON) 동안 안 바뀌면 히터를 끈다.
+#  하트비트 타이머(3초)는 다른 Modbus 작업과 겹치면 늦어질 수 있어(2026-10-14 RF 램프업 중 3회 연속 건너뜀 →
+#  워치독 트립), 마지막 성공 뒤 2초가 지나면 폴링이 같은 잠금 안에서 1 증가시켜 쓴다 — 하트비트 간격이
+#  2초 남짓을 넘지 않아 10초 TON 에 4배 이상 여유.
+HEATER_WD_FORCE_SEC = get('HEATER_WD_FORCE_SEC', 2.0)
 HEATER_MAX_TEMP         = get('HEATER_MAX_TEMP',         500.0) # UI 입력 상한
 HEATER_SOAK_TOLERANCE   = get('HEATER_SOAK_TOLERANCE',   3.0)   # °C
 HEATER_SOAK_TIME_SEC    = get('HEATER_SOAK_TIME_SEC',    60)    # 공정 레시피 전용

@@ -23,7 +23,7 @@ from lib.config import (
     RF_FORWARD_SCALING_MAX_WATT,
     RF_REFLECTED_SCALING_MAX_WATT,
     PLC_MV_COIL, PLC_MV_INTERLOCK_COIL,
-    HEATER_ENABLED, HEATER_TEMP_SCALE, HEATER_WD_PERIOD_MS,
+    HEATER_ENABLED, HEATER_TEMP_SCALE, HEATER_WD_PERIOD_MS, HEATER_WD_FORCE_SEC,
     HEATER_MV_MIN, HEATER_MV_ABS_MAX, HEATER_MV_LIMIT,
     heater_est_current,
     HEATER_REG_BLOCK_START, HEATER_REG_BLOCK_COUNT,
@@ -112,6 +112,11 @@ HEATER_SV_LOG_MIN_INTERVAL_SEC = 30.0
 # DAC    Ch3    data     D00043    U02.06
 # DAC    Ch3    ERR                U02.00.3
 
+# 하트비트가 잠금을 기다리는 최대 시간 / 못 잡았을 때 다시 시도까지(다른 스레드 트랜잭션은 보통 수십 ms)
+HEATER_WD_LOCK_TIMEOUT_MS = 1000
+HEATER_WD_RETRY_MS = 200
+
+
 class PLCController(QObject):
     status_message = Signal(str, str)
     update_button_display = Signal(str, bool)
@@ -189,6 +194,11 @@ class PLCController(QObject):
         self._heater_wd_timer = QTimer(self)
         self._heater_wd_timer.setInterval(int(HEATER_WD_PERIOD_MS))
         self._heater_wd_timer.timeout.connect(self._kick_heater_watchdog)
+        # 잠금을 HEATER_WD_LOCK_TIMEOUT_MS 안에 못 잡으면 HEATER_WD_RETRY_MS 뒤 다시(건너뛰지 않는다)
+        self._heater_wd_retry_timer = QTimer(self)
+        self._heater_wd_retry_timer.setSingleShot(True)
+        self._heater_wd_retry_timer.timeout.connect(self._kick_heater_watchdog)
+        self._heater_wd_last_ok: float = time.monotonic()   # 마지막 하트비트 쓰기 성공 시각
 
         # ★ 히터: 상태 캐시 / 이상 중복 알림 방지
         self._heater_last: Dict[str, object] = {}
@@ -248,6 +258,7 @@ class PLCController(QObject):
         self._heater_sv_log_last_t = 0.0
         self.polling_timer.start()
         if HEATER_ENABLED:
+            self._heater_wd_last_ok = time.monotonic()
             self._heater_wd_timer.start()      # ★ 하트비트 시작
 
         self.instrument, reason = open_guarded(self._make_instrument, 2.0)
@@ -318,6 +329,7 @@ class PLCController(QObject):
         (a) 링크가 살아 있으면 히터 RUN=0 1회(_mb, ≤1.6초) (b) 포트는 close_guarded 로 넘기고 즉시 반환."""
         self.polling_timer.stop()
         self._heater_wd_timer.stop()               # ★
+        self._heater_wd_retry_timer.stop()
         self._is_running = False
         inst = self.instrument
         off_ok = False
@@ -704,6 +716,12 @@ class PLCController(QObject):
             # 3) ★ 히터 상태 읽기
             if HEATER_ENABLED:
                 self._poll_heater()
+                # 하트비트 간격 보장 — 타이머가 늦어져도 마지막 성공 뒤 HEATER_WD_FORCE_SEC 가 지나면 여기서 쓴다
+                if (time.monotonic() - self._heater_wd_last_ok) >= float(HEATER_WD_FORCE_SEC):
+                    try:
+                        self._write_heater_wd("워치독(폴링)")
+                    except Exception:
+                        pass       # 실패는 하트비트 나이(_heater_wd_last_ok)로 드러난다
 
             # 4) ★ 재기동 감지 마커(≈1초마다) + 블랙박스 스냅샷
             self._check_marker()
@@ -1085,21 +1103,37 @@ class PLCController(QObject):
 
     @Slot()
     def _kick_heater_watchdog(self):
-        """PLC에 '파이썬 살아있음'을 알리는 하트비트. 값이 바뀌기만 하면 됨."""
-        if self.instrument is None or self._busy:
+        """PLC에 '파이썬 살아있음'을 알리는 하트비트. 값이 바뀌기만 하면 됨.
+
+        다른 Modbus 작업 중(_busy)이라고 건너뛰지 않는다 — 2026-10-14 RF 램프업(다른 스레드가 매초 PLC 트랜잭션)
+        중 3초 주기 하트비트가 3회 연속 건너뛰어져 래더 10초 TON 이 트립했다. 잠금을 기다려 잡고 쓴다
+        (다른 스레드의 트랜잭션 하나, 수십 ms). HEATER_WD_LOCK_TIMEOUT_MS 안에 못 잡으면 HEATER_WD_RETRY_MS 뒤 다시.
+        링크 다운이면 쓰지 않는다 — 실제 단절이면 PLC 가 10초에 히터를 끄는 것이 의도된 안전 동작이다."""
+        if self.instrument is None:
             return
         if self._link_down_skip("워치독"):
             return
+        if not self._mutex.tryLock(HEATER_WD_LOCK_TIMEOUT_MS):
+            self._heater_wd_retry_timer.start(HEATER_WD_RETRY_MS)
+            return
         self._busy = True
-        self._mutex.lock()
         try:
-            self._heater_wd = (self._heater_wd + 1) & 0x7FFF
-            self._mb("워치독", self.instrument.write_register, HEATER_REG_WD, self._heater_wd, functioncode=6)
+            self._write_heater_wd("워치독")
         except Exception:
-            pass          # 실패해도 조용히 — 다음 주기에 재시도, PLC가 알아서 트립
+            pass          # 실패는 하트비트 나이(_heater_wd_last_ok)로 드러난다 — 폴링이 2초 뒤 다시 쓴다
         finally:
             self._busy = False
             self._mutex.unlock()
+
+    def _write_heater_wd(self, what: str) -> None:
+        """D00014 를 1 증가시켜 쓴다. 호출자가 _mutex 를 잡고 있어야 한다. 성공하면 _heater_wd_last_ok 갱신."""
+        self._heater_wd = (self._heater_wd + 1) & 0x7FFF
+        self._mb(what, self.instrument.write_register, HEATER_REG_WD, self._heater_wd, functioncode=6)
+        self._heater_wd_last_ok = time.monotonic()
+
+    def heater_wd_age(self) -> float:
+        """마지막 하트비트 성공 뒤 경과 초(어느 스레드에서 읽어도 되는 float 하나)."""
+        return max(0.0, time.monotonic() - self._heater_wd_last_ok)
 
     @Slot(float)
     def set_heater_target(self, temp_c: float):
