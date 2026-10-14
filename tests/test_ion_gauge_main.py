@@ -14,7 +14,8 @@ from lib.comm_policy import ReconnectPolicy
 from test_main_heater import win  # noqa: F401  (픽스처 재사용 — 이 창은 이온 게이지가 꺼진 상태로 뜬다)
 from test_ion_gauge_driver import Script, FakeIgPort, spin
 
-EXPECTED_LINES = ["IG 9.0E-6 Torr", "게이지 A 하한 이하", "게이지 B 6.3E-3 Torr", "필라멘트 켜짐"]
+# 막 연결된 가짜 게이지는 방출이 처음 확인된 지 IG_SETTLE_SEC 안이라 1줄이 '(안정화 중)'(주의색)이다
+EXPECTED_LINES = ["IG 9.0E-6 Torr (안정화 중)", "게이지 A 하한 이하", "게이지 B 6.3E-3 Torr", "필라멘트 켜짐"]
 
 
 @pytest.fixture
@@ -63,7 +64,9 @@ def test_display_values_and_position(ig):
     assert texts(w)[0] == "IG 연결 중"
     spin(700)
     assert texts(w) == EXPECTED_LINES
-    assert w._ig_labels[0].styleSheet() == "color: #222222;"
+    assert w._ig_labels[0].styleSheet() == "color: #b35c00;" and w._ig_labels[1].styleSheet() == "color: #222222;"
+    tip = w._ig_labels[0].toolTip()
+    assert "원문 IG 9 -6 · A 0 -4 · B 63 -4 · 오류 코드 0" in tip                 # 툴팁에는 항상 원문
     assert ("IG", "이온 게이지 연결됨 (COM12)") in logs and ("IG", "이온 게이지 필라멘트 켜짐") in logs
     assert sum(m == "이온 게이지 필라멘트 켜짐" for _, m in logs) == 1   # 매초 로그 없음
     # 위치: Process List / Select File 아래 빈 공간(x 555~725, y 345~475) 안의 테두리 틀, UI.py 위젯과 겹치지 않는다
@@ -94,7 +97,7 @@ def test_csv_rows_and_process_log_line(ig, monkeypatch):
     monkeypatch.setattr(MAIN, "process_log_active", lambda: True)
     monkeypatch.setattr(MAIN, "log_message_to_file", lambda lv, m: lines.append((lv, m)))
     w._ig_process_log("시작")
-    assert lines == [("정보", "[IG] 시작 압력 IG 9.0E-6 Torr, 게이지 A 하한 이하, 게이지 B 6.3E-3 Torr (필라멘트 켜짐)")]
+    assert lines == [("정보", "[IG] 시작 압력 IG 9.0E-6 Torr (안정화 중), 게이지 A 하한 이하, 게이지 B 6.3E-3 Torr (필라멘트 켜짐)")]
     # ProcessPorts 의 공정 로그 열기/닫기가 한 줄씩 남긴다
     monkeypatch.setattr(MAIN, "set_process_log_file", lambda prefix="CHK": None)
     monkeypatch.setattr(MAIN, "clear_process_log_file", lambda: None)
@@ -111,7 +114,7 @@ def test_csv_rows_and_process_log_line(ig, monkeypatch):
         rows = list(csv.reader(f))
     assert rows[0] == LG.IG_CSV_COLUMNS
     ok = [r for r in rows[1:] if r[-1] == "정상"]
-    assert ok and ok[-1][1:] == ["9.0E-6", "하한 이하", "6.3E-3", "켜짐", "정상", "꺼짐", "0", "정상"]
+    assert ok and ok[-1][1:] == ["9.0E-6", "하한 이하(0 -4)", "6.3E-3", "켜짐", "정상", "꺼짐", "0", "정상"]
 
 
 def test_lost_comm_shows_age_and_logs_comm_event(ig):
@@ -156,7 +159,7 @@ def test_erp_state_has_ion_gauge(ig):
     assert list(st)[-1] == "ionGauge" and g["enabled"] is True and g["comm"] == "ok"
     assert g["ion"] == pytest.approx(9e-6) and g["gaugeA"] is None and g["gaugeB"] == pytest.approx(6.3e-3)
     assert (g["ionText"], g["gaugeAText"], g["gaugeBText"], g["filamentText"]) == (
-        "9.0E-6 Torr", "하한 이하", "6.3E-3 Torr", "필라멘트 켜짐")
+        "9.0E-6 Torr (안정화 중)", "하한 이하", "6.3E-3 Torr", "필라멘트 켜짐")
     assert g["ageSec"] is not None and g["ageSec"] <= 1
 
 

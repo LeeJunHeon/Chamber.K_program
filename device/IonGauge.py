@@ -31,7 +31,7 @@ from PyQt6.QtSerialPort import QSerialPort, QSerialPortInfo
 from lib.comm_policy import ReconnectPolicy
 from lib.config import (
     IG_PORT, IG_BAUD, IG_FILAMENT_SWITCH_QUIET_SEC, IG_FILAMENT_ON_TIMEOUT_SEC, IG_RESPONSE_TIMEOUT_MS,
-    IG_GAUGE_A_NAME, IG_GAUGE_B_NAME,
+    IG_GAUGE_A_NAME, IG_GAUGE_B_NAME, IG_SETTLE_SEC,
     COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
 )
 
@@ -58,14 +58,35 @@ FILAMENT_ERRORS = {
     17: "자동 필라멘트 모드에서 수동 꺼짐",
 }
 
+# 화면 필라멘트 줄의 짧은 오류 문구(매뉴얼 표 3.2). 표에 없는 코드는 "오류 N".
+FILAMENT_ERRORS_SHORT = {
+    3: "방출 상실",
+    4: "시동 시간 초과",
+    5: "자동 시동 실패",
+    6: "고전압 없음",
+    7: "필라멘트 전류 없음(단선·퓨즈)",
+    8: "필라멘트 전류 과다(단락)",
+    9: "설정 최대 압력 초과 차단",
+    12: "가스계수·감도 비기본값으로 9.9E-3 초과 차단",
+    14: "이온 전류 부족으로 9.9E-3 초과 차단",
+    15: "9.9E-3 Torr 초과 차단",
+    16: "자동 필라멘트 정상 꺼짐",
+    17: "자동 모드 중 수동 꺼짐",
+}
+FILAMENT_ERRORS_NOT_WARN = frozenset({16})     # 정상 동작이라 주의색이 아니다
+
 # 압력 상태 → 화면 문구(숫자 대신 이 말을 보여 준다)
 STATE_TEXT = {
-    "off": "꺼짐",
-    "below": "하한 이하",
-    "disconnected": "미연결",
-    "unzeroed": "영점 미조정",
-    "invalid": "값 오류",
+    "off": "꺼짐",                      # 이온: 필라멘트 꺼짐 + 가수 0
+    "preparing": "측정 준비 중",         # 이온: 필라멘트 켜짐 + 가수 0(꺼짐으로 보이지 않게)
+    "below": "하한 이하",                # 게이지: 가수 0, 또는 -5.0E-3 ≤ 값 < 0(정상 영점 범위)
+    "negative": "음수 — 영점·오염 확인",  # 게이지: 값 < -5.0E-3 Torr
+    "disconnected": "미연결",            # 게이지: -900
+    "unzeroed": "영점 미조정",            # 게이지: -999
+    "invalid": "값 오류",                # 형식이 안 맞는 응답 — 이것만 진짜 오류
 }
+# 매뉴얼: 컨벡션 게이지는 고진공에서 -5.0E-3 ~ +5.0E-3 Torr 를 읽는 것이 정상(벗어나면 오염 가능성)
+GAUGE_NEG_OK_TORR = -5.0e-3
 
 _PAIR_RE = re.compile(r"-?\d+(\s+-?\d+)?")
 _INVALID_RE = re.compile(r"999x", re.IGNORECASE)
@@ -114,23 +135,40 @@ def fmt_torr(v: float) -> str:
     return f"{m}E{int(e)}"
 
 
-def pressure_from_pair(text: str, kind: str) -> Tuple[Optional[float], str, str]:
-    """압력 한 항목 → (Torr 또는 None, 상태, 화면 문구). kind 'ion' = 이온 게이지, 'conv' = 게이지 A/B."""
-    mant, exp = parse_pair(text)
+def raw_pair_text(text: str) -> str:
+    """원문(가수 지수) — 공백을 한 칸으로."""
+    return " ".join((text or "").split())
+
+
+def pressure_from_pair(text: str, kind: str, filament_on: bool = False) -> Tuple[Optional[float], str, str]:
+    """압력 한 항목 → (Torr 또는 None, 상태, 화면 문구). kind 'ion' = 이온 게이지, 'conv' = 게이지 A/B.
+    이온: 가수 0 은 필라멘트가 꺼져 있으면 '꺼짐', 켜져 있으면 '측정 준비 중'. 형식이 다르면 IgParseError(그대로).
+    게이지: 0 과 -5.0E-3 ≤ 값 < 0 은 '하한 이하', 그보다 작은 음수는 '음수 — 영점·오염 확인',
+    -900 '미연결', -999 '영점 미조정', 형식이 안 맞으면 '값 오류(원문)'(이것만 진짜 오류)."""
+    raw = raw_pair_text(text)
     if kind == "ion":
+        mant, exp = parse_pair(text)
         if mant == 0:
-            return None, "off", STATE_TEXT["off"]
-    else:
-        if mant == -900:
-            return None, "disconnected", STATE_TEXT["disconnected"]
-        if mant == -999:
-            return None, "unzeroed", STATE_TEXT["unzeroed"]
-        if mant == 0:
-            return None, "below", STATE_TEXT["below"]
-    if mant < 0:
-        # -900/-999 가 아닌 음수(영점 드리프트 추정, 2026-10-14) — 해석하지 않고 원문을 남긴다(화면·IG CSV·ERP)
-        return None, "invalid", f"{STATE_TEXT['invalid']}({' '.join(text.split())})"
+            return (None, "preparing", STATE_TEXT["preparing"]) if filament_on else (None, "off", STATE_TEXT["off"])
+        if mant < 0:
+            return None, "invalid", f"{STATE_TEXT['invalid']}({raw})"
+        v = mant * (10.0 ** exp)
+        return v, "ok", fmt_torr(v)
+    try:
+        mant, exp = parse_pair(text)
+    except IgParseError:
+        return None, "invalid", f"{STATE_TEXT['invalid']}({raw})"
+    if mant == -900:
+        return None, "disconnected", STATE_TEXT["disconnected"]
+    if mant == -999:
+        return None, "unzeroed", STATE_TEXT["unzeroed"]
+    if mant == 0:
+        return None, "below", STATE_TEXT["below"]
     v = mant * (10.0 ** exp)
+    if v < 0:
+        if v >= GAUGE_NEG_OK_TORR - 1e-12:        # 경계 -5.0E-3 포함(부동소수 오차 여유)
+            return None, "below", STATE_TEXT["below"]
+        return None, "negative", STATE_TEXT["negative"]
     return v, "ok", fmt_torr(v)
 
 
@@ -184,6 +222,9 @@ class IgReading:
     sp_a: float                # 22
     sp_b: float                # 23
     t: float                   # 응답 시각(epoch 초)
+    ion_raw: str = ""          # 24 원문(가수 지수)
+    a_raw: str = ""            # 25 원문
+    b_raw: str = ""            # 26 원문
 
 
 def parse_status(data: bytes, t: Optional[float] = None) -> IgReading:
@@ -202,7 +243,8 @@ def parse_status(data: bytes, t: Optional[float] = None) -> IgReading:
         except ValueError:
             raise IgParseError(f"{n}번 항목이 정수가 아님: {s!r}")
 
-    ion = pressure_from_pair(it[23], "ion")
+    fil_on = _int(2) == 1
+    ion = pressure_from_pair(it[23], "ion", filament_on=fil_on)
     a = pressure_from_pair(it[24], "conv")
     b = pressure_from_pair(it[25], "conv")
     code = _int(5)
@@ -221,18 +263,33 @@ def parse_status(data: bytes, t: Optional[float] = None) -> IgReading:
         gas_factor=_int(20) / 100.0, sensitivity=_int(21) / 10.0,
         sp_a=setpoint_from_pair(it[21]), sp_b=setpoint_from_pair(it[22]),
         t=time.time() if t is None else float(t),
+        ion_raw=raw_pair_text(it[23]), a_raw=raw_pair_text(it[24]), b_raw=raw_pair_text(it[25]),
     )
 
 
 def filament_text(r: Optional[IgReading]) -> str:
-    """화면·로그용 필라멘트 문구 — 오류가 있으면 오류 문구가 우선."""
+    """화면·로그용 필라멘트 줄. "필라멘트 켜짐/꺼짐", 오류면 " — 오류 15: 9.9E-3 Torr 초과 차단"(표에 없으면 "오류 N"),
+    켜짐인데 방출 이상이면 " · 방출 이상", 디개스 중이면 끝에 " · 디개스 중"."""
     if r is None:
         return ""
+    t = "필라멘트 켜짐" if r.filament_on else "필라멘트 꺼짐"
     if r.error_code:
-        return f"필라멘트 오류 {r.error_code}: {r.error_text}"
-    if not r.filament_on:
-        return "필라멘트 꺼짐"
-    return "필라멘트 켜짐" + ("" if r.emission_ok else " · 방출 이상")
+        short = FILAMENT_ERRORS_SHORT.get(int(r.error_code))
+        t += f" — 오류 {int(r.error_code)}" + (f": {short}" if short else "")
+    elif r.filament_on and not r.emission_ok:
+        t += " · 방출 이상"
+    if r.degas_on:
+        t += " · 디개스 중"
+    return t
+
+
+def filament_warn(r: Optional[IgReading]) -> bool:
+    """필라멘트 줄 주의색 — 오류 코드(16 제외) 또는 켜짐인데 방출 이상."""
+    if r is None:
+        return False
+    if r.error_code:
+        return int(r.error_code) not in FILAMENT_ERRORS_NOT_WARN
+    return bool(r.filament_on and not r.emission_ok)
 
 
 # ===== 통신 상태 =====
@@ -630,27 +687,35 @@ class IonGaugeController(QObject):
         self.status_message.emit("IG(경고)", f"이온 게이지 {text} — {detail}")
 
     def _log_gauge_changes(self, r: IgReading) -> None:
-        """게이지 A/B 상태가 바뀔 때만 1줄(원문 포함). 예) "[IG] 게이지 A 하한 이하 → 값 오류(-12 -4)".
-        첫 값은 '값 오류'일 때만 남긴다(원문 확보용)."""
-        for key, name, state, text in (("a", IG_GAUGE_A_NAME, r.a_state, _with_unit(r.a_text, r.a_state)),
-                                       ("b", IG_GAUGE_B_NAME, r.b_state, _with_unit(r.b_text, r.b_state))):
+        """이온·게이지 A/B 상태 '종류'가 바뀔 때만 1줄(원문 포함). 예) "[IG] 게이지 A 하한 이하(0 -4) → 음수 — 영점·오염 확인(-60 -4)".
+        하한 이하 ↔ 작은 음수(정상 영점 범위)는 같은 종류라 남기지 않는다. 값만 바뀌어도 남기지 않는다.
+        첫 값은 주의 종류(음수·영점 미조정·값 오류)일 때만 남긴다(원문 확보용)."""
+        for key, name, state, text, raw in (
+                ("ion", "IG", r.ion_state, _with_unit(r.ion_text, r.ion_state), r.ion_raw),
+                ("a", IG_GAUGE_A_NAME, r.a_state, _with_unit(r.a_text, r.a_state), r.a_raw),
+                ("b", IG_GAUGE_B_NAME, r.b_state, _with_unit(r.b_text, r.b_state), r.b_raw)):
+            shown = text if state in ("ok", "invalid") else f"{text}({raw})"
             prev = self._gauge_prev.get(key)
-            self._gauge_prev[key] = (state, text)
+            self._gauge_prev[key] = (state, shown)
             if prev is None:
-                if state == "invalid":
-                    self.status_message.emit("IG(경고)", f"[IG] {name} {text}")
+                if state in _WARN_STATES:
+                    self.status_message.emit("IG(경고)", f"[IG] {name} {shown}")
                 continue
             if prev[0] != state:
-                self.status_message.emit("IG(경고)" if state == "invalid" else "IG",
-                                         f"[IG] {name} {prev[1]} → {text}")
+                self.status_message.emit("IG(경고)" if state in _WARN_STATES else "IG",
+                                         f"[IG] {name} {prev[1]} → {shown}")
 
     def _log_device_changes(self, r: IgReading) -> None:
         key = (r.filament_on, r.emission_ok, r.degas_on, r.error_code)
         if key == self._device_key:
             return
+        prev_code = None if self._device_key is None else self._device_key[3]
         self._device_key = key
-        msg = f"이온 게이지 {filament_text(r)}" + (" · 디개스 켜짐" if r.degas_on else "")
-        self.status_message.emit("IG(경고)" if r.error_code else "IG", msg)
+        level = "IG(경고)" if filament_warn(r) else "IG"
+        if r.error_code and not prev_code:
+            self.status_message.emit(level, f"[IG] {filament_text(r)}")      # 오류 코드 0 → N
+            return
+        self.status_message.emit(level, f"이온 게이지 {filament_text(r)}")
 
     # ==================== 내보내기 ====================
     def _emit_snapshot(self, fresh: bool) -> None:
@@ -772,28 +837,80 @@ class IonGaugeController(QObject):
 
 
 # ===== 화면·기록 문구 (main 이 쓰는 순수 함수) =====
+_WARN_STATES = frozenset({"negative", "unzeroed", "invalid"})   # 게이지·이온 줄 주의색
+
+
 def _with_unit(text: str, state: str) -> str:
     return f"{text} Torr" if state == "ok" else text
 
 
-def display_lines(snap: Optional[IgSnapshot], a_name: str, b_name: str,
-                  now: Optional[float] = None) -> Tuple[List[str], str]:
-    """화면 4줄과 표시 등급('ok' / 'warn' / 'lost'). 꺼짐·미연결·영점 미조정은 숫자 대신 그 말로 보여 준다."""
+def _settling(snap: IgSnapshot, now: Optional[float] = None) -> bool:
+    r = snap.reading
+    return bool(r is not None and r.ion_state == "ok" and r.filament_on and r.emission_ok
+                and snap.emission_since is not None
+                and ((time.time() if now is None else now) - snap.emission_since) < float(IG_SETTLE_SEC))
+
+
+def ion_line(snap: IgSnapshot, now: Optional[float] = None) -> Tuple[str, str]:
+    """이온 줄 문구('IG ' 제외)와 등급. 방출 확인 후 IG_SETTLE_SEC 이내면 '(안정화 중)' 주의색."""
+    r = snap.reading
+    text = _with_unit(r.ion_text, r.ion_state)
+    if _settling(snap, now):
+        return f"{text} (안정화 중)", "warn"
+    return text, ("warn" if r.ion_state in _WARN_STATES else "ok")
+
+
+def gauge_line(state: str, text: str) -> Tuple[str, str]:
+    return _with_unit(text, state), ("warn" if state in _WARN_STATES else "ok")
+
+
+def _view(snap: Optional[IgSnapshot], a_name: str, b_name: str, now: Optional[float] = None):
+    """(4줄, 줄별 등급, 전체 등급). 줄 등급: ok / warn / lost(끊김 제목) / dim(끊김 때 나머지)."""
     if snap is None:
-        return ["IG 연결 중", "", "", ""], "lost"
+        return ["IG 연결 중", "", "", ""], ["lost", "dim", "dim", "dim"], "lost"
     r = snap.reading
     if snap.comm in ("starting", "stopping"):
-        return [f"IG {COMM_TEXT[snap.comm]}", "", "", ""], "warn"
+        return [f"IG {COMM_TEXT[snap.comm]}", "", "", ""], ["warn", "ok", "ok", "ok"], "warn"
     if snap.ok:
-        fil = filament_text(r)
-        return ([f"IG {_with_unit(r.ion_text, r.ion_state)}",
-                 f"{a_name} {_with_unit(r.a_text, r.a_state)}",
-                 f"{b_name} {_with_unit(r.b_text, r.b_state)}",
-                 fil], ("warn" if (r.error_code or not r.filament_on) else "ok"))
+        ion, l0 = ion_line(snap, now)
+        a, l1 = gauge_line(r.a_state, r.a_text)
+        b, l2 = gauge_line(r.b_state, r.b_text)
+        l3 = "warn" if filament_warn(r) else "ok"
+        levels = [l0, l1, l2, l3]
+        return ([f"IG {ion}", f"{a_name} {a}", f"{b_name} {b}", filament_text(r)], levels,
+                ("warn" if "warn" in levels else "ok"))
     age = snap.age_sec(now)
     last = "받은 값 없음" if age is None else f"마지막 값 {age:.0f}초 전"
     old = "" if r is None else f"IG {_with_unit(r.ion_text, r.ion_state)}"
-    return ["IG 통신 끊김", snap.comm_text, last, old], "lost"
+    return ["IG 통신 끊김", snap.comm_text, last, old], ["lost", "dim", "dim", "dim"], "lost"
+
+
+def display_lines(snap: Optional[IgSnapshot], a_name: str, b_name: str,
+                  now: Optional[float] = None) -> Tuple[List[str], str]:
+    """화면 4줄과 전체 등급('ok' / 'warn' / 'lost')."""
+    lines, _levels, level = _view(snap, a_name, b_name, now)
+    return lines, level
+
+
+def line_levels(snap: Optional[IgSnapshot], a_name: str = "", b_name: str = "",
+                now: Optional[float] = None) -> List[str]:
+    """줄별 색 등급 — ok #222222 / warn #b35c00 / lost #c62828 / dim(끊김 때 나머지 줄) #8a8a8a."""
+    return _view(snap, a_name, b_name, now)[1]
+
+
+def raw_summary(snap: Optional[IgSnapshot]) -> str:
+    """툴팁용 원문 한 줄 — 예) "원문 IG 99 -7 · A -5 -4 · B 61 -4 · 오류 코드 0"."""
+    r = getattr(snap, "reading", None)
+    if r is None:
+        return ""
+    return f"원문 IG {r.ion_raw} · A {r.a_raw} · B {r.b_raw} · 오류 코드 {r.error_code}"
+
+
+def _csv_text(state: str, text: str, raw: str) -> str:
+    """IG CSV — 정상 양수는 값 그대로, 그 밖은 문구에 원문을 괄호로(값 오류는 이미 원문 포함)."""
+    if state == "ok" or state == "invalid":
+        return text
+    return f"{text}({raw})"
 
 
 def csv_row(snap: IgSnapshot) -> dict:
@@ -802,7 +919,9 @@ def csv_row(snap: IgSnapshot) -> dict:
            "통신 상태": snap.comm_text}
     if snap.ok:
         r = snap.reading
-        row.update({"IG(Torr)": r.ion_text, "게이지A(Torr)": r.a_text, "게이지B(Torr)": r.b_text,
+        row.update({"IG(Torr)": _csv_text(r.ion_state, r.ion_text, r.ion_raw),
+                    "게이지A(Torr)": _csv_text(r.a_state, r.a_text, r.a_raw),
+                    "게이지B(Torr)": _csv_text(r.b_state, r.b_text, r.b_raw),
                     "필라멘트": "켜짐" if r.filament_on else "꺼짐",
                     "방출": "정상" if r.emission_ok else "이상",
                     "디개스": "켜짐" if r.degas_on else "꺼짐",
@@ -816,8 +935,8 @@ def process_log_line(snap: Optional[IgSnapshot], phase: str, a_name: str, b_name
     head = f"[IG] {phase} 압력"
     if snap is not None and snap.ok:
         r = snap.reading
-        return (f"{head} IG {_with_unit(r.ion_text, r.ion_state)}, {a_name} {_with_unit(r.a_text, r.a_state)}, "
-                f"{b_name} {_with_unit(r.b_text, r.b_state)} ({filament_text(r)})")
+        return (f"{head} IG {ion_line(snap, now)[0]}, {a_name} {gauge_line(r.a_state, r.a_text)[0]}, "
+                f"{b_name} {gauge_line(r.b_state, r.b_text)[0]} ({filament_text(r)})")
     if snap is None:
         return f"{head} — 아직 받은 값 없음"
     lines, _ = display_lines(snap, a_name, b_name, now)
@@ -850,8 +969,8 @@ def erp_state_dict(snap: Optional[IgSnapshot], enabled: bool, a_name: str, b_nam
     if snap.ok:
         r = snap.reading
         d.update(ion=r.ion_torr, gaugeA=r.a_torr, gaugeB=r.b_torr,
-                 ionText=_with_unit(r.ion_text, r.ion_state), gaugeAText=_with_unit(r.a_text, r.a_state),
-                 gaugeBText=_with_unit(r.b_text, r.b_state),
+                 ionText=ion_line(snap, now)[0], gaugeAText=gauge_line(r.a_state, r.a_text)[0],
+                 gaugeBText=gauge_line(r.b_state, r.b_text)[0],
                  filamentOn=r.filament_on, emissionOk=r.emission_ok, degasOn=r.degas_on,
                  errorCode=r.error_code, errorText=r.error_text, filamentText=filament_text(r))
     return d

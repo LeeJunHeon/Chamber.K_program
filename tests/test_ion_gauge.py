@@ -86,12 +86,15 @@ def test_special_values():
     assert pressure_from_pair("-900", "conv") == (None, "disconnected", "미연결")
     assert pressure_from_pair("-900     0", "conv") == (None, "disconnected", "미연결")
     assert pressure_from_pair("-999", "conv") == (None, "unzeroed", "영점 미조정")
-    assert pressure_from_pair("-5  -3", "conv")[1] == "invalid"
+    assert pressure_from_pair("-5  -3", "conv")[1:] == ("below", "하한 이하")     # -5.0E-3 = 정상 영점 범위 경계
     items = list(E_ITEMS)
+    items[1] = "0"                                                          # 필라멘트 꺼짐 + 이온 0 → 꺼짐
     items[23], items[24], items[25] = "0", "-900", "-999"
     r = parse_status(e_reply(items))
     assert (r.ion_torr, r.a_torr, r.b_torr) == (None, None, None)
     assert (r.ion_text, r.a_text, r.b_text) == ("꺼짐", "미연결", "영점 미조정")
+    items[1] = "1"                                                          # 필라멘트 켜짐 + 이온 0 → 측정 준비 중
+    assert parse_status(e_reply(items)).ion_text == "측정 준비 중"
 
 
 def test_invalid_command_reply():
@@ -119,8 +122,8 @@ def test_fewer_than_26_items_and_bad_format():
 def test_error_codes_and_texts():
     items = list(E_ITEMS); items[1] = "0"; items[4] = "7"
     r = parse_status(e_reply(items))
-    assert r.error_code == 7 and "단선" in r.error_text
-    assert filament_text(r) == "필라멘트 오류 7: 필라멘트 전류 없음(필라멘트·케이블 단선 가능)"
+    assert r.error_code == 7 and "단선" in r.error_text                      # error_text(긴 문구)는 그대로
+    assert filament_text(r) == "필라멘트 꺼짐 — 오류 7: 필라멘트 전류 없음(단선·퓨즈)"
     assert filament_error_text(99) == "알 수 없는 필라멘트 오류 코드 99"
     items = list(E_ITEMS); items[1] = "0"
     assert filament_text(parse_status(e_reply(items))) == "필라멘트 꺼짐"
@@ -148,7 +151,7 @@ def test_display_lines_states():
     items = list(E_ITEMS); items[1] = "0"; items[4] = "4"; items[23], items[24], items[25] = "0", "-900", "-999"
     lines, level = display_lines(_snap(parse_status(e_reply(items), t=1000.0)), "Pirani", "Conv")
     assert lines == ["IG 꺼짐", "Pirani 미연결", "Conv 영점 미조정",
-                     "필라멘트 오류 4: 필라멘트가 제한 시간 안에 안 켜짐(게이지 불량 가능)"] and level == "warn"
+                     "필라멘트 꺼짐 — 오류 4: 시동 시간 초과"] and level == "warn"
     lost = _snap(r, comm="timeout", fresh=False)
     assert display_lines(lost, "A", "B", now=1012.4) == (["IG 통신 끊김", "응답 없음", "마지막 값 12초 전", "IG 9.0E-6 Torr"], "lost")
     assert display_lines(_snap(None, comm="no_port", fresh=False), "A", "B")[0] == ["IG 통신 끊김", "포트 없음", "받은 값 없음", ""]
@@ -159,7 +162,7 @@ def test_csv_row_and_process_line():
     r = parse_status(E_REPLY, t=1000.0)
     row = csv_row(_snap(r, t=1000.0))
     assert {k: row[k] for k in ("IG(Torr)", "게이지A(Torr)", "게이지B(Torr)", "필라멘트", "방출", "디개스", "오류 코드", "통신 상태")} == {
-        "IG(Torr)": "9.0E-6", "게이지A(Torr)": "하한 이하", "게이지B(Torr)": "6.3E-3", "필라멘트": "켜짐",
+        "IG(Torr)": "9.0E-6", "게이지A(Torr)": "하한 이하(0 -4)", "게이지B(Torr)": "6.3E-3", "필라멘트": "켜짐",
         "방출": "정상", "디개스": "꺼짐", "오류 코드": 0, "통신 상태": "정상"}
     lost = csv_row(_snap(r, comm="timeout", fresh=False, t=1001.0))
     assert set(lost) == {"시각", "통신 상태"} and lost["통신 상태"] == "응답 없음"      # 끊긴 주기는 압력 칸 비움
@@ -212,16 +215,119 @@ def test_stopping_state_display_and_erp():
 
 
 # ───────────── 게이지 A/B '값 오류' 원문 ─────────────
-def test_invalid_negative_mantissa_keeps_raw_text():
-    assert pressure_from_pair("-12      -4", "conv") == (None, "invalid", "값 오류(-12 -4)")
-    assert pressure_from_pair("-3", "conv") == (None, "invalid", "값 오류(-3)")
-    assert pressure_from_pair("-900", "conv")[2] == "미연결"
-    assert pressure_from_pair("-999", "conv")[2] == "영점 미조정"
-    assert pressure_from_pair("0       -4", "conv")[2] == "하한 이하"
-    items = list(E_ITEMS); items[24] = "-12      -4"
+def test_broken_gauge_string_is_the_only_real_error():
+    assert pressure_from_pair("12a  -4", "conv") == (None, "invalid", "값 오류(12a -4)")
+    items = list(E_ITEMS); items[24] = "1.2  -4"
     r = parse_status(e_reply(items), t=1000.0)
-    assert r.a_state == "invalid" and r.a_text == "값 오류(-12 -4)" and r.a_torr is None
-    assert display_lines(_snap(r), "게이지 A", "게이지 B")[0][1] == "게이지 A 값 오류(-12 -4)"
-    assert csv_row(_snap(r))["게이지A(Torr)"] == "값 오류(-12 -4)"              # IG CSV 열은 그대로
+    assert r.a_state == "invalid" and r.a_text == "값 오류(1.2 -4)" and r.a_raw == "1.2 -4"
+    assert display_lines(_snap(r), "게이지 A", "게이지 B")[0][1] == "게이지 A 값 오류(1.2 -4)"
+    assert csv_row(_snap(r))["게이지A(Torr)"] == "값 오류(1.2 -4)"              # 원문이 이미 들어 있어 한 번만
     from device.IonGauge import erp_state_dict
-    assert erp_state_dict(_snap(r), True, "A", "B")["gaugeAText"] == "값 오류(-12 -4)"
+    assert erp_state_dict(_snap(r), True, "A", "B")["gaugeAText"] == "값 오류(1.2 -4)"
+
+
+# ───────────── 원문 → 화면 / CSV 대응표 ─────────────
+from device.IonGauge import line_levels, raw_summary, erp_state_dict, FILAMENT_ERRORS_SHORT  # noqa: E402
+
+
+def _reading(ion="9       -6", a="0       -4", b="63      -4", fil=1, emis=1, code=0, degas=0):
+    items = list(E_ITEMS)
+    items[0], items[1], items[2], items[4] = str(degas), str(fil), str(emis), str(code)
+    items[23], items[24], items[25] = ion, a, b
+    return parse_status(e_reply(items), t=1000.0)
+
+
+def _view(r, settle_ago=None, now=1000.0):
+    sn = IgSnapshot(comm="ok", comm_text="정상", detail="", reading=r, fresh=True, last_ok_wall=r.t, t=r.t,
+                    emission_since=(None if settle_ago is None else now - settle_ago))
+    lines, _ = display_lines(sn, "게이지 A", "게이지 B", now=now)
+    return lines, line_levels(sn, "게이지 A", "게이지 B", now=now), csv_row(sn), erp_state_dict(sn, True, "게이지 A", "게이지 B", now=now)
+
+
+ION_TABLE = [
+    # (원문, fil, emis, 화면 1줄, 등급, CSV IG 칸)
+    ("0", 0, 0, "IG 꺼짐", "ok", "꺼짐(0)"),
+    ("0", 1, 1, "IG 측정 준비 중", "ok", "측정 준비 중(0)"),
+    ("0       -4", 1, 0, "IG 측정 준비 중", "ok", "측정 준비 중(0 -4)"),
+    ("8       -4", 1, 1, "IG 8.0E-4 Torr", "ok", "8.0E-4"),
+    ("99      -7", 1, 1, "IG 9.9E-6 Torr", "ok", "9.9E-6"),
+    ("15      -7", 1, 1, "IG 1.5E-6 Torr", "ok", "1.5E-6"),
+    ("10      -6", 1, 1, "IG 1.0E-5 Torr", "ok", "1.0E-5"),
+]
+
+
+@pytest.mark.parametrize("raw,fil,emis,line,level,csv_text", ION_TABLE)
+def test_ion_table(raw, fil, emis, line, level, csv_text):
+    lines, levels, row, erp = _view(_reading(ion=raw, fil=fil, emis=emis))
+    assert lines[0] == line and levels[0] == level and row["IG(Torr)"] == csv_text
+    assert erp["ionText"] == line[3:] and "(" not in erp["ionText"]          # ERP 는 화면 문구, 원문 없음
+
+
+GAUGE_TABLE = [
+    # (원문, 화면 2줄, 등급, CSV 칸, 상태)
+    ("0", "게이지 A 하한 이하", "ok", "하한 이하(0)", "below"),
+    ("-5      -4", "게이지 A 하한 이하", "ok", "하한 이하(-5 -4)", "below"),
+    ("-4      -4", "게이지 A 하한 이하", "ok", "하한 이하(-4 -4)", "below"),
+    ("-50     -4", "게이지 A 하한 이하", "ok", "하한 이하(-50 -4)", "below"),            # = -5.0E-3 경계
+    ("-6      -3", "게이지 A 음수 — 영점·오염 확인", "warn", "음수 — 영점·오염 확인(-6 -3)", "negative"),
+    ("-900", "게이지 A 미연결", "ok", "미연결(-900)", "disconnected"),
+    ("-999", "게이지 A 영점 미조정", "warn", "영점 미조정(-999)", "unzeroed"),
+    ("61      -4", "게이지 A 6.1E-3 Torr", "ok", "6.1E-3", "ok"),
+    ("76      1", "게이지 A 7.6E2 Torr", "ok", "7.6E2", "ok"),
+    ("x7#  -4", "게이지 A 값 오류(x7# -4)", "warn", "값 오류(x7# -4)", "invalid"),
+]
+
+
+@pytest.mark.parametrize("raw,line,level,csv_text,state", GAUGE_TABLE)
+def test_gauge_table(raw, line, level, csv_text, state):
+    r = _reading(a=raw)
+    lines, levels, row, erp = _view(r)
+    assert r.a_state == state and lines[1] == line and levels[1] == level and row["게이지A(Torr)"] == csv_text
+    assert erp["gaugeAText"] == line[len("게이지 A "):]
+    if state != "invalid":
+        assert "(" not in erp["gaugeAText"]                                      # ERP 는 원문 없음
+
+
+@pytest.mark.parametrize("code", sorted(FILAMENT_ERRORS_SHORT) + [99])
+def test_filament_error_codes(code):
+    lines, levels, row, erp = _view(_reading(fil=0, emis=0, code=code, ion="0"))
+    short = FILAMENT_ERRORS_SHORT.get(code)
+    want = f"필라멘트 꺼짐 — 오류 {code}" + (f": {short}" if short else "")
+    assert lines[3] == want and erp["filamentText"] == want and row["오류 코드"] == code
+    assert levels[3] == ("ok" if code == 16 else "warn")                      # 16(자동 정상 꺼짐)은 주의색 아님
+
+
+def test_filament_error_examples():
+    assert _view(_reading(fil=0, emis=0, code=15, ion="0"))[0][3] == "필라멘트 꺼짐 — 오류 15: 9.9E-3 Torr 초과 차단"
+    assert _view(_reading(fil=0, emis=0, code=99, ion="0"))[0][3] == "필라멘트 꺼짐 — 오류 99"
+
+
+def test_filament_emission_and_degas():
+    lines, levels, *_ = _view(_reading(fil=1, emis=0))
+    assert lines[3] == "필라멘트 켜짐 · 방출 이상" and levels[3] == "warn"
+    lines, levels, *_ = _view(_reading(fil=1, emis=1, degas=1))
+    assert lines[3] == "필라멘트 켜짐 · 디개스 중" and levels[3] == "ok"
+    lines, levels, *_ = _view(_reading(fil=0, emis=0, ion="0"))
+    assert lines[3] == "필라멘트 꺼짐" and levels[3] == "ok"
+
+
+def test_settling_shown_until_settle_sec_then_gone():
+    from lib.config import IG_SETTLE_SEC
+    r = _reading(ion="99      -7")
+    lines, levels, row, erp = _view(r, settle_ago=float(IG_SETTLE_SEC) - 0.5)
+    assert lines[0] == "IG 9.9E-6 Torr (안정화 중)" and levels[0] == "warn"
+    assert erp["ionText"] == "9.9E-6 Torr (안정화 중)" and row["IG(Torr)"] == "9.9E-6"   # CSV 는 숫자 그대로
+    lines, levels, *_ = _view(r, settle_ago=float(IG_SETTLE_SEC) + 0.1)
+    assert lines[0] == "IG 9.9E-6 Torr" and levels[0] == "ok"
+
+
+def test_raw_summary_for_tooltip():
+    r = _reading(ion="99      -7", a="-5      -4", b="61      -4")
+    assert raw_summary(_snap(r)) == "원문 IG 99 -7 · A -5 -4 · B 61 -4 · 오류 코드 0"
+    assert raw_summary(None) == ""
+
+
+def test_lost_and_switching_levels():
+    r = _reading()
+    assert line_levels(_snap(r, comm="timeout", fresh=False), "A", "B") == ["lost", "dim", "dim", "dim"]
+    assert line_levels(_snap(r, comm="starting", fresh=False), "A", "B")[0] == "warn"
