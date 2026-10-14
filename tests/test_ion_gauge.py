@@ -26,7 +26,7 @@ E_REPLY = e_reply()
 def test_measured_single_replies():
     assert parse_pair(F_REPLY.decode()) == (10, -6)
     assert pressure_from_pair("10      -6", "ion") == (pytest.approx(1.0e-5), "ok", "1.0E-5")
-    assert pressure_from_pair("0       -4", "conv")[1:] == ("below", "하한 이하")
+    assert pressure_from_pair("0       -4", "conv")[1:] == ("below", "< 1.0E-3")
     v, st, txt = pressure_from_pair("61      -4", "conv")
     assert v == pytest.approx(6.1e-3) and st == "ok" and txt == "6.1E-3"
     for raw in (F_REPLY, G_REPLY, H_REPLY):
@@ -36,7 +36,7 @@ def test_measured_single_replies():
 def test_measured_status_reply():
     r = parse_status(E_REPLY, t=123.0)
     assert r.ion_torr == pytest.approx(9.0e-6) and r.ion_text == "9.0E-6" and r.ion_state == "ok"
-    assert r.a_torr is None and r.a_state == "below" and r.a_text == "하한 이하"
+    assert r.a_torr is None and r.a_state == "below" and r.a_text == "< 1.0E-3"
     assert r.b_torr == pytest.approx(6.3e-3) and r.b_text == "6.3E-3"
     assert r.filament_on and r.emission_ok and not r.degas_on
     assert r.error_code == 0 and r.error_text == ""
@@ -86,7 +86,7 @@ def test_special_values():
     assert pressure_from_pair("-900", "conv") == (None, "disconnected", "미연결")
     assert pressure_from_pair("-900     0", "conv") == (None, "disconnected", "미연결")
     assert pressure_from_pair("-999", "conv") == (None, "unzeroed", "영점 미조정")
-    assert pressure_from_pair("-5  -3", "conv")[1:] == ("below", "하한 이하")     # -5.0E-3 = 정상 영점 범위 경계
+    assert pressure_from_pair("-5  -3", "conv")[1:] == ("below", "< 1.0E-3")     # -5.0E-3 = 정상 영점 범위 경계
     items = list(E_ITEMS)
     items[1] = "0"                                                          # 필라멘트 꺼짐 + 이온 0 → 꺼짐
     items[23], items[24], items[25] = "0", "-900", "-999"
@@ -147,7 +147,7 @@ def _snap(reading, comm="ok", fresh=True, t=1000.0):
 def test_display_lines_states():
     r = parse_status(E_REPLY, t=1000.0)
     assert display_lines(_snap(r), "게이지 A", "게이지 B") == (
-        ["IG 9.0E-6 Torr", "게이지 A 하한 이하", "게이지 B 6.3E-3 Torr", "필라멘트 켜짐"], "ok")
+        ["IG 9.0E-6 Torr", "게이지 A < 1.0E-3 Torr", "게이지 B 6.3E-3 Torr", "필라멘트 켜짐"], "ok")
     items = list(E_ITEMS); items[1] = "0"; items[4] = "4"; items[23], items[24], items[25] = "0", "-900", "-999"
     lines, level = display_lines(_snap(parse_status(e_reply(items), t=1000.0)), "Pirani", "Conv")
     assert lines == ["IG 꺼짐", "Pirani 미연결", "Conv 영점 미조정",
@@ -162,12 +162,12 @@ def test_csv_row_and_process_line():
     r = parse_status(E_REPLY, t=1000.0)
     row = csv_row(_snap(r, t=1000.0))
     assert {k: row[k] for k in ("IG(Torr)", "게이지A(Torr)", "게이지B(Torr)", "필라멘트", "방출", "디개스", "오류 코드", "통신 상태")} == {
-        "IG(Torr)": "9.0E-6", "게이지A(Torr)": "하한 이하(0 -4)", "게이지B(Torr)": "6.3E-3", "필라멘트": "켜짐",
+        "IG(Torr)": "9.0E-6", "게이지A(Torr)": "< 1.0E-3(0 -4)", "게이지B(Torr)": "6.3E-3", "필라멘트": "켜짐",
         "방출": "정상", "디개스": "꺼짐", "오류 코드": 0, "통신 상태": "정상"}
     lost = csv_row(_snap(r, comm="timeout", fresh=False, t=1001.0))
     assert set(lost) == {"시각", "통신 상태"} and lost["통신 상태"] == "응답 없음"      # 끊긴 주기는 압력 칸 비움
     assert process_log_line(_snap(r), "시작", "게이지 A", "게이지 B") == \
-        "[IG] 시작 압력 IG 9.0E-6 Torr, 게이지 A 하한 이하, 게이지 B 6.3E-3 Torr (필라멘트 켜짐)"
+        "[IG] 시작 압력 IG 9.0E-6 Torr, 게이지 A < 1.0E-3 Torr, 게이지 B 6.3E-3 Torr (필라멘트 켜짐)"
     assert process_log_line(_snap(r, comm="timeout", fresh=False), "종료", "A", "B", now=1030.0) == \
         "[IG] 종료 압력 — 통신 끊김(응답 없음), 마지막 값 30초 전: IG 9.0E-6 Torr"
     assert process_log_line(None, "시작", "A", "B") == "[IG] 시작 압력 — 아직 받은 값 없음"
@@ -185,7 +185,7 @@ def test_erp_state_dict():
     d = erp_state_dict(_snap(r), True, "게이지 A", "게이지 B", now=1002.0)
     assert d["enabled"] is True and d["comm"] == "ok" and d["commText"] == "정상"
     assert d["ion"] == pytest.approx(9e-6) and d["gaugeA"] is None and d["gaugeB"] == pytest.approx(6.3e-3)
-    assert (d["ionText"], d["gaugeAText"], d["gaugeBText"]) == ("9.0E-6 Torr", "하한 이하", "6.3E-3 Torr")
+    assert (d["ionText"], d["gaugeAText"], d["gaugeBText"]) == ("9.0E-6 Torr", "< 1.0E-3 Torr", "6.3E-3 Torr")
     assert (d["filamentOn"], d["emissionOk"], d["degasOn"], d["errorCode"], d["errorText"]) == (True, True, False, 0, "")
     assert d["filamentText"] == "필라멘트 켜짐" and d["lastResponse"] == "1970-01-01T00:16:40+00:00" and d["ageSec"] == 2
     lost = erp_state_dict(_snap(r, comm="timeout", fresh=False), True, "A", "B", now=1030.0)
@@ -265,10 +265,10 @@ def test_ion_table(raw, fil, emis, line, level, csv_text):
 
 GAUGE_TABLE = [
     # (원문, 화면 2줄, 등급, CSV 칸, 상태)
-    ("0", "게이지 A 하한 이하", "ok", "하한 이하(0)", "below"),
-    ("-5      -4", "게이지 A 하한 이하", "ok", "하한 이하(-5 -4)", "below"),
-    ("-4      -4", "게이지 A 하한 이하", "ok", "하한 이하(-4 -4)", "below"),
-    ("-50     -4", "게이지 A 하한 이하", "ok", "하한 이하(-50 -4)", "below"),            # = -5.0E-3 경계
+    ("0", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(0)", "below"),
+    ("-5      -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(-5 -4)", "below"),
+    ("-4      -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(-4 -4)", "below"),
+    ("-50     -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(-50 -4)", "below"),            # = -5.0E-3 경계
     ("-6      -3", "게이지 A 음수 — 영점·오염 확인", "warn", "음수 — 영점·오염 확인(-6 -3)", "negative"),
     ("-900", "게이지 A 미연결", "ok", "미연결(-900)", "disconnected"),
     ("-999", "게이지 A 영점 미조정", "warn", "영점 미조정(-999)", "unzeroed"),
@@ -331,3 +331,27 @@ def test_lost_and_switching_levels():
     r = _reading()
     assert line_levels(_snap(r, comm="timeout", fresh=False), "A", "B") == ["lost", "dim", "dim", "dim"]
     assert line_levels(_snap(r, comm="starting", fresh=False), "A", "B")[0] == "warn"
+
+
+@pytest.mark.parametrize("raw", ["0", "-4      -4", "-5      -4", "-50     -4"])
+def test_below_range_shown_as_less_than_1e3(raw):
+    lines, levels, row, erp = _view(_reading(a=raw))
+    norm = " ".join(raw.split())
+    assert lines[1] == "게이지 A < 1.0E-3 Torr" and levels[1] == "ok"
+    assert row["게이지A(Torr)"] == f"< 1.0E-3({norm})" and erp["gaugeAText"] == "< 1.0E-3 Torr"
+
+
+def test_minus_6e3_still_negative_check():
+    lines, levels, row, erp = _view(_reading(a="-6      -3"))
+    assert lines[1] == "게이지 A 음수 — 영점·오염 확인" and levels[1] == "warn"
+    assert row["게이지A(Torr)"] == "음수 — 영점·오염 확인(-6 -3)"
+
+
+def test_tooltip_has_below_note():
+    from device.IonGauge import tooltip_lines, BELOW_NOTE
+    r = _reading(a="-4      -4")
+    assert tooltip_lines(_snap(r)) == ["원문 IG 9 -6 · A -4 -4 · B 63 -4 · 오류 코드 0",
+                                       "컨벡션 게이지 측정 하한(1E-3 Torr) 아래 — 영점 근처 잡음"] == [raw_summary(_snap(r)), BELOW_NOTE]
+    r2 = _reading(a="61      -4", b="63      -4")
+    assert tooltip_lines(_snap(r2)) == [raw_summary(_snap(r2))]          # 둘 다 측정 범위 안이면 설명 없음
+    assert tooltip_lines(None) == []

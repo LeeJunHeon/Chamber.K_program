@@ -79,7 +79,8 @@ FILAMENT_ERRORS_NOT_WARN = frozenset({16})     # 정상 동작이라 주의색�
 STATE_TEXT = {
     "off": "꺼짐",                      # 이온: 필라멘트 꺼짐 + 가수 0
     "preparing": "측정 준비 중",         # 이온: 필라멘트 켜짐 + 가수 0(꺼짐으로 보이지 않게)
-    "below": "하한 이하",                # 게이지: 가수 0, 또는 -5.0E-3 ≤ 값 < 0(정상 영점 범위)
+    "below": "< 1.0E-3",                 # 게이지: 가수 0, 또는 -5.0E-3 ≤ 값 < 0(정상 영점 범위). 화면은 "< 1.0E-3 Torr"
+                                         #  — 컨벡션 게이지 측정 범위 1E-3 ~ 1200 Torr(매뉴얼), 하한 아래는 영점 잡음이라 숫자로 안 보인다
     "negative": "음수 — 영점·오염 확인",  # 게이지: 값 < -5.0E-3 Torr
     "disconnected": "미연결",            # 게이지: -900
     "unzeroed": "영점 미조정",            # 게이지: -999
@@ -143,7 +144,7 @@ def raw_pair_text(text: str) -> str:
 def pressure_from_pair(text: str, kind: str, filament_on: bool = False) -> Tuple[Optional[float], str, str]:
     """압력 한 항목 → (Torr 또는 None, 상태, 화면 문구). kind 'ion' = 이온 게이지, 'conv' = 게이지 A/B.
     이온: 가수 0 은 필라멘트가 꺼져 있으면 '꺼짐', 켜져 있으면 '측정 준비 중'. 형식이 다르면 IgParseError(그대로).
-    게이지: 0 과 -5.0E-3 ≤ 값 < 0 은 '하한 이하', 그보다 작은 음수는 '음수 — 영점·오염 확인',
+    게이지: 0 과 -5.0E-3 ≤ 값 < 0 은 '< 1.0E-3'(측정 하한 아래), 그보다 작은 음수는 '음수 — 영점·오염 확인',
     -900 '미연결', -999 '영점 미조정', 형식이 안 맞으면 '값 오류(원문)'(이것만 진짜 오류)."""
     raw = raw_pair_text(text)
     if kind == "ion":
@@ -687,14 +688,14 @@ class IonGaugeController(QObject):
         self.status_message.emit("IG(경고)", f"이온 게이지 {text} — {detail}")
 
     def _log_gauge_changes(self, r: IgReading) -> None:
-        """이온·게이지 A/B 상태 '종류'가 바뀔 때만 1줄(원문 포함). 예) "[IG] 게이지 A 하한 이하(0 -4) → 음수 — 영점·오염 확인(-60 -4)".
-        하한 이하 ↔ 작은 음수(정상 영점 범위)는 같은 종류라 남기지 않는다. 값만 바뀌어도 남기지 않는다.
+        """이온·게이지 A/B 상태 '종류'가 바뀔 때만 1줄(원문 포함). 예) "[IG] 게이지 A < 1.0E-3(0 -4) → 음수 — 영점·오염 확인(-60 -4)".
+        하한 아래(0) ↔ 작은 음수(정상 영점 범위)는 같은 종류라 남기지 않는다. 값만 바뀌어도 남기지 않는다.
         첫 값은 주의 종류(음수·영점 미조정·값 오류)일 때만 남긴다(원문 확보용)."""
         for key, name, state, text, raw in (
-                ("ion", "IG", r.ion_state, _with_unit(r.ion_text, r.ion_state), r.ion_raw),
-                ("a", IG_GAUGE_A_NAME, r.a_state, _with_unit(r.a_text, r.a_state), r.a_raw),
-                ("b", IG_GAUGE_B_NAME, r.b_state, _with_unit(r.b_text, r.b_state), r.b_raw)):
-            shown = text if state in ("ok", "invalid") else f"{text}({raw})"
+                ("ion", "IG", r.ion_state, r.ion_text, r.ion_raw),
+                ("a", IG_GAUGE_A_NAME, r.a_state, r.a_text, r.a_raw),
+                ("b", IG_GAUGE_B_NAME, r.b_state, r.b_text, r.b_raw)):
+            shown = _with_unit(text, state) if state == "ok" else _csv_text(state, text, raw)
             prev = self._gauge_prev.get(key)
             self._gauge_prev[key] = (state, shown)
             if prev is None:
@@ -841,7 +842,7 @@ _WARN_STATES = frozenset({"negative", "unzeroed", "invalid"})   # 게이지·이
 
 
 def _with_unit(text: str, state: str) -> str:
-    return f"{text} Torr" if state == "ok" else text
+    return f"{text} Torr" if state in ("ok", "below") else text
 
 
 def _settling(snap: IgSnapshot, now: Optional[float] = None) -> bool:
@@ -904,6 +905,20 @@ def raw_summary(snap: Optional[IgSnapshot]) -> str:
     if r is None:
         return ""
     return f"원문 IG {r.ion_raw} · A {r.a_raw} · B {r.b_raw} · 오류 코드 {r.error_code}"
+
+
+BELOW_NOTE = "컨벡션 게이지 측정 하한(1E-3 Torr) 아래 — 영점 근처 잡음"
+
+
+def tooltip_lines(snap: Optional[IgSnapshot]) -> List[str]:
+    """툴팁에 덧붙일 줄 — 원문, 게이지 A/B 가 측정 하한 아래면 그 설명."""
+    r = getattr(snap, "reading", None)
+    if r is None:
+        return []
+    out = [raw_summary(snap)]
+    if "below" in (r.a_state, r.b_state):
+        out.append(BELOW_NOTE)
+    return out
 
 
 def _csv_text(state: str, text: str, raw: str) -> str:

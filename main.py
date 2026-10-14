@@ -50,7 +50,7 @@ from device.RFpower import RFPowerController
 from device.RFpulse import RFPulseController
 from device.IonGauge import (IonGaugeController, display_lines, csv_row as ig_csv_row, process_log_line,
                              erp_state_dict as ig_erp_state_dict, line_levels as ig_line_levels,
-                             raw_summary as ig_raw_summary)
+                             tooltip_lines as ig_tooltip_lines)
 from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_ENABLED, HEATER_MAX_TEMP,
                         HEATER_MV_LIMIT, HEATER_MV_MIN, HEATER_LOG_ENABLED,
@@ -1362,9 +1362,7 @@ class MainDialog(QDialog):
         full = [t for t in lines if t]
         if snap is not None and snap.reading is not None and snap.reading.error_code:
             full.append(f"필라멘트 오류 코드 {snap.reading.error_code}: {snap.reading.error_text}")
-        raw = ig_raw_summary(snap)
-        if raw:
-            full.append(raw)                                # 툴팁에는 항상 원문(가수 지수)
+        full.extend(ig_tooltip_lines(snap))                 # 툴팁에는 항상 원문(가수 지수), 측정 하한 아래면 그 설명
         tip = "이온 게이지 (Terranova 934)\n" + "\n".join(full)
         for lab, text, lv in zip(self._ig_labels, lines, levels):
             lab.setText(lab.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, lab.width()))

@@ -130,7 +130,7 @@ def test_normal_cycle_identity_then_e(qapp):
     fresh = [x for x in rec["snap"] if x.fresh]
     assert fresh and all(x.comm == "ok" and x.ok for x in fresh)
     r = fresh[-1].reading
-    assert r.ion_text == "9.0E-6" and r.a_text == "하한 이하" and r.b_text == "6.3E-3" and r.filament_on
+    assert r.ion_text == "9.0E-6" and r.a_text == "< 1.0E-3" and r.b_text == "6.3E-3" and r.filament_on
     assert fresh[-1].age_sec() < 1.0
     # 상태가 바뀔 때만 로그: 연결 1줄 + 필라멘트 1줄, 매 주기 반복 없음
     assert [m for _, m in rec["msg"]] == ["이온 게이지 연결됨 (COM12)", "이온 게이지 필라멘트 켜짐"]
@@ -620,7 +620,7 @@ def test_over_1200ms_reply_counts_one_failure(qapp):
 def test_gauge_kind_change_logged_once_with_raw(qapp):
     from test_ion_gauge import e_reply, E_ITEMS
     seq = {"n": 0}
-    # 하한 이하(0) → 작은 음수(같은 종류, 로그 없음) → 큰 음수(로그) → 다른 큰 음수(같은 종류) → 하한 이하(로그)
+    # < 1.0E-3(0) → 작은 음수(같은 종류, 로그 없음) → 큰 음수(로그) → 다른 큰 음수(같은 종류) → < 1.0E-3(로그)
     raws = ["0       -4", "-5      -4", "-4      -4", "-60     -4", "-70     -4", "0       -4", "0       -4"]
 
     def e():
@@ -635,8 +635,8 @@ def test_gauge_kind_change_logged_once_with_raw(qapp):
     spin(1300)
     c.cleanup()
     lines = [(lv, m) for lv, m in rec["msg"] if m.startswith("[IG] 게이지")]
-    assert lines == [("IG(경고)", "[IG] 게이지 A 하한 이하(-4 -4) → 음수 — 영점·오염 확인(-60 -4)"),
-                     ("IG", "[IG] 게이지 A 음수 — 영점·오염 확인(-70 -4) → 하한 이하(0 -4)")]
+    assert lines == [("IG(경고)", "[IG] 게이지 A < 1.0E-3(-4 -4) → 음수 — 영점·오염 확인(-60 -4)"),
+                     ("IG", "[IG] 게이지 A 음수 — 영점·오염 확인(-70 -4) → < 1.0E-3(0 -4)")]
 
 
 def test_first_reading_warn_kind_is_logged(qapp):
