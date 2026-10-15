@@ -47,6 +47,7 @@ class Rule:
     v1: str = ""
     pending_confirm: bool = False
     needs: str = ""               # 래더·배선 변경 필요
+    on_hold: bool = False         # 보류(사용자 결정) — 구현하지 않음
 
 
 def _abort(code):
@@ -258,7 +259,8 @@ RULES: tuple = (
     R("S46", "PC 하트비트 → 출력 끄기(래더)", "maintain", "worker",
       "PLC worker 가 1초마다 PC_ALIVE(=D00014 공용) 증가. 래더가 약 3 s 변화 없으면 RF DAC 0·enable OFF, Ar/O2 OFF(+배선 시 RF·RF Pulse·DC 인터록)",
       ("plc.wd_counter",), ("HEATER_WD_PERIOD_MS",), v1="devices.PC_DEAD_PLAN PD1~PD6", pending_confirm=True,
-      needs="래더 변경(PD1~PD3), 배선(PD4~PD6)"),
+      needs="래더 변경(PD1~PD3), 배선(PD4~PD6) — 보류(2026-10-15). 만들 때 v1 이 D00014 를 3 s 마다 쓰는 동안은 "
+            "판정 시간 10 s 이상", on_hold=True),
     R("S47", "베이스 압력은 이온 게이지 필요", "reject", "command", "base_pressure 행이 있는데 IG_ENABLED 거짓이면 적재·시작 거부",
       params=("IG_ENABLED",), actions=(_rej("IG_DISABLED"),), v1="v1 은 경고만 하고 베이스 대기를 건너뜀(process_controller:1036)"),
     R("S48", "공정 중 H 등급 설정 금지", "reject", "config", "공정 진행 중 CONFIG_APPLY 에 H 등급 변경이 있으면 거부, idle 키는 대기",
@@ -298,13 +300,16 @@ STOP_SEQUENCE: tuple = (
     SeqStep(11, Act("GAS_VALVES_CLOSE"), "", True, "", "Ar·O2 차단밸브 닫기"),
 )
 
-# ALL STOP — 각 단계 독립(앞 단계 예외와 무관). 펌프 유지 여부는 ALL_STOP_KEEP_PUMPS(pending_confirm).
+# ALL STOP — 각 단계 독립(앞 단계 예외와 무관). 펌프 계통 유지 여부는 ALL_STOP_KEEP_PUMPS(pending_confirm).
+# 펌프 계통 = Rotary·Turbo·RV·FV — true 면 ALL STOP 이 이 코일을 건드리지 않는다(터보가 도는 동안 FV 를 닫지 않기 위함).
+ALL_STOP_KEEP_COILS: tuple = ("rotary", "turbo", "rv", "fv")
 ALL_STOP_SEQUENCE: tuple = (
     SeqStep(1, Act("HEATER_RECIPE_ABORT", {"reason": "ALL_STOP"}), "", True, "히터 레시피 실행 중", "히터 레시피 중단"),
     SeqStep(2, Act("PROCESS_ABORT", {"reason": "ALL_STOP"}), "", True, "공정 진행 중",
             "중단 표시를 PLC OFF 보다 먼저(S4 — MV 닫힘 이중 중단 방지). 공정은 STOPPING 으로"),
     SeqStep(3, Act("PLC_OUTPUTS_OFF"), "", True, "",
-            "전원·가스·셔터·MV·도어 코일 OFF. ALL_STOP_KEEP_PUMPS=true 면 Rotary·Turbo(·RV·FV) 유지, false 면 v1 처럼 전부 0"),
+            "전원·가스·셔터·MV·도어 코일 OFF. ALL_STOP_KEEP_PUMPS=true 면 펌프 계통(ALL_STOP_KEEP_COILS: "
+            "Rotary·Turbo·RV·FV)은 지금 상태 그대로, false 면 v1 처럼 전부 0"),
     SeqStep(4, Act("HEATER_FORCE_OFF"), "", True, "", "히터 RUN=0"),
     SeqStep(5, Act("RF_SAFE_OFF"), "", True, "", "RF DAC enable OFF + D00040=0(v1 은 D00040 을 0 으로 쓰지 않았다)"),
     SeqStep(6, Act("DC_SAFE_OFF"), "", True, "", "DC OFF 직결 확인형 — 공정 여부와 무관"),

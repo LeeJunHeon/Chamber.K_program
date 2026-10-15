@@ -28,7 +28,7 @@ MISSING_DOCS: tuple = (
     ("PLC", "실제 XG5000 프로젝트(.xgwx) — CPU 형명, 래더(히터 워치독·인터록), 사용 중 D 주소"),
     ("DC", "EX 사양표 원본(PDF p.101~103 이미지) — 정격 V/I/P, 응답 시간"),
     ("DC", "아날로그 리모트 옵션(TER1) 장착 여부와 RS-232 제어와 동시 사용 가능 여부 — ODA 문의"),
-    ("RF", "YSR 매뉴얼 p.16 원본(한글 깨짐) — 핀 2·3 할당, 반사파 스케일"),
+    ("RF", "YSR 매뉴얼 p.16 원본(한글 깨짐) — 핀 2·3 할당 (반사파 스케일은 사용자 확인으로 v1 값 유지, 2026-10-15)"),
     ("RF", "현재 15핀 배선도 — 4·9(RF ON), 12·15(EXT LOOP) 연결 상태"),
     ("MFC", "장비 실제 설정 — R70/R71 유량 FS, 압력 레인지 코드(E), Delimiter"),
     ("CESAR", "부품번호(15핀/25핀 User Port 변형) — 시리얼 태그 확인"),
@@ -148,7 +148,7 @@ MFC = Device(
         Diff("R7 이름", "READ_SYSTEM_STATUS", "Alternate status(MXYZ)", "v2 이름 정정", "[MFC p.81]"),
     ),
     bench=("R60·R5 응답 지연 분포", "무응답 0 이 되는 최소 간격(0/50/100/200 ms)", "쓰기 직후 읽기 간섭",
-           "R70/R71·E·Delimiter 실제 값"),
+           "R70/R71·E·Delimiter 실제 값", "압력 풀스케일(E 레인지)로 작업 압력 상한 1000 mTorr 가정 확인"),
 )
 
 # ═════════════ 3. DC 전원 — ODA EX 시리즈 ═════════════
@@ -216,12 +216,12 @@ RF = Device(
     interlock="EXT LOOP 12–15 [RF p.9], RF ON 입력 4(–9) [RF p.16]. v1 은 둘 다 PLC 로 구동하지 않음",
     diffs=(
         Diff("반사파 스케일", "ADC 4000 = 200 W (RF_REFLECTED_SCALING_MAX_WATT)",
-             "p.16 판독상 '0~1 V = 정격의 10%' → 4000 = 600 W 일 수 있음(v1 이 1/3 로 읽을 가능성)",
-             "원본 p.16 과 전면 미터 비교로 확정 — 확정 전 RF_REF_FULL_SCALE_W 변경 금지", "[RF p.16]"),
+             "p.16 판독(한글 깨짐)상 600 W 가능성이 있었으나 사용자 확인 완료(2026-10-15) — v1 값 유지",
+             "확정: 순방향 4000 = 594.5 W, 반사 4000 = 200 W (RF_FWD/REF_FULL_SCALE_W 기본값)", "[RF p.16], 사용자 확인"),
         Diff("순방향 스케일", "4000 = 594.5 W", "0~10 V = 0~600 W", "교정값(−0.9%)으로 타당", "[RF p.16]"),
         Diff("RF ON 핀", "구동 안 함(DAC enable 만)", "핀 4 RF ON 입력 있음", "PLC 릴레이로 핀 4 또는 EXT LOOP 구동 제안", "[RF p.16]"),
     ),
-    bench=("반사파 ADC 값 vs 전면 미터", "PLC CPU STOP 때 DAC 출력", "현재 핀 4·9·12·15 배선"),
+    bench=("PLC CPU STOP 때 DAC 출력", "현재 핀 4·9·12·15 배선"),
 )
 
 # ═════════════ 5. RF Pulse — AE CESAR 1310 ═════════════
@@ -434,28 +434,63 @@ class PcDeadMeasure:
     needs_option: bool        # 장비 옵션·확인 필요
     priority: int             # 1 = 먼저
     source: str
+    status: str = "planned"   # planned(계획대로) / hold(보류)
+    note: str = ""
+
+
+# 보류 결정(사용자 2026-10-15): PLC 래더(PD1~PD3)·릴레이 배선(PD4~PD6) 모두 보류, PD9 는 매뉴얼을 구할 때까지 보류.
+# PD7·PD8 은 PLC 와 무관한 장비 자체 설정 — 연결할 때 prod 에서만 쓰고 되읽어 확인(보류 아님).
+# 전원 3종(RF·DC·RF Pulse) 중 PLC 와 연결된 것은 RF power(아날로그, DAC·ADC)뿐이다 — DC·RF Pulse 는 시리얼만.
+PLC_CONNECTED_POWER = ("rf",)
+_HOLD = "보류(2026-10-15)"
+_HB_NOTE = ("나중에 PC 하트비트 래더를 만들 때: v1 이 D00014 를 3 s 마다 쓰는 동안(v1·v2 병행·되돌리기 기간)은 "
+            "판정 시간을 10 s 이상으로 해야 오작동하지 않는다")
 
 
 PC_DEAD_PLAN: tuple = (
     PcDeadMeasure("PD1", "공통 하트비트", "히터 워치독 D00014(TON 10 s)를 'PC_ALIVE' 로 넓혀 PC 가 1초 tick 마다 증가. "
                   "래더가 약 3 s 동안 안 바뀌면 아래 PD2~PD5 를 실행. 펌프·MV 는 그대로", True, False, False, 1,
-                  "v1 lib/config.py:226, 313 + 매뉴얼 4종 모두 통신 워치독 없음"),
+                  "v1 lib/config.py:226, 313 + 매뉴얼 4종 모두 통신 워치독 없음", "hold", f"{_HOLD}. {_HB_NOTE}"),
     PcDeadMeasure("PD2", "RF(아날로그)", "PC_ALIVE 끊김 → M00200(DAC enable)=0, D00040=0", True, False, False, 1,
-                  "[RF p.16] 핀 5 = 0 V 면 출력 0"),
+                  "[RF p.16] 핀 5 = 0 V 면 출력 0", "hold", _HOLD),
     PcDeadMeasure("PD3", "가스", "PC_ALIVE 끊김 → Ar/O2 차단밸브 M00007/M00008 OFF", True, False, False, 1,
-                  "PLC 주소 맵.txt (P00047, P00164)"),
+                  "PLC 주소 맵.txt (P00047, P00164)", "hold", _HOLD),
     PcDeadMeasure("PD4", "RF(아날로그) 하드", "PLC 릴레이 출력을 RF 핀 4(RF ON) 또는 EXT LOOP 12–15 에 직렬 — PLC 가 죽어도 OFF",
-                  True, True, False, 2, "[RF p.9, p.16]"),
+                  True, True, False, 2, "[RF p.9, p.16]", "hold", _HOLD),
     PcDeadMeasure("PD5", "RF Pulse", "PLC 릴레이 접점을 CESAR 인터록 루프(15핀형 9핀 커넥터 1–2 / 25핀형 10–23)에 직렬. "
                   "열리면 E01 로 RF OFF, 다시 닫혀도 자동 재ON 안 됨(bench 확인)", True, True, False, 2,
-                  "[CESAR p.52 / 4-18, p.64-68 / 4-30~34, p.177 / 6-7]"),
+                  "[CESAR p.52 / 4-18, p.64-68 / 4-30~34, p.177 / 6-7]", "hold", _HOLD),
     PcDeadMeasure("PD6", "DC", "EX 아날로그 옵션 TER1 Direct(SW1-6, 7–10 접점) 또는 TTL Positive(SW1-7, 8–10)에 PLC 릴레이 — "
                   "개방 = 출력 OFF. 옵션 장착·RS-232 동시 사용 가능 여부를 ODA 확인", True, True, True, 3,
-                  "[DC p.56-63/58-65, p.44/46]"),
+                  "[DC p.56-63/58-65, p.44/46]", "hold", _HOLD),
     PcDeadMeasure("PD7", "DC 보조", "시작 때 VOLT:OVP·CURR:OCP 설정, FACT:LAST-STA SAF(정전 복귀 출력 OFF)", False, False, False, 2,
-                  "[DC p.87-88, p.92/94]"),
+                  "[DC p.87-88, p.92/94]", "planned", "연결할 때 prod 에서만 쓰고 되읽어 확인"),
     PcDeadMeasure("PD8", "RF Pulse 보조", "명령 33 반사 전력 자동 차단(1~255 s) 설정 — 통신과 무관한 장비 자체 보호", False, False, False, 2,
-                  "[CESAR p.107 / 4-73]"),
+                  "[CESAR p.107 / 4-73]", "planned", "연결할 때 prod 에서만 쓰고 되읽어 확인"),
     PcDeadMeasure("PD9", "PLC 자체", "PLC 가 STOP/전원 OFF 일 때 DAC·출력 상태 확인(모듈 매뉴얼 필요). 출력 소거가 아니면 PD4~PD6 하드 배선이 유일한 길",
-                  False, False, True, 1, "MISSING_DOCS (XBF-DV04A, XGB CPU)"),
+                  False, False, True, 1, "MISSING_DOCS (XBF-DV04A, XGB CPU)", "hold", f"{_HOLD} — 매뉴얼을 구할 때까지"),
+)
+
+
+# ═════════════ 확인 안 된 데이터 — 지금은 가정값으로 진행(사용자 2026-10-15), bench 에서 확인 ═════════════
+@dataclass(frozen=True)
+class Assumption:
+    item: str
+    assumed: str
+    device: str        # DEVICES 의 key
+    bench_item: str    # 그 장비 bench 목록에 있어야 하는 항목(일부 문자열)
+
+
+ASSUMPTIONS: tuple = (
+    Assumption("MFC 유량 풀스케일", "R60 %FS = sccm(FS 100) — v1 과 같게", "mfc", "R70/R71"),
+    Assumption("MFC 압력 레인지·작업 압력 상한", "FS 1 Torr(E=03) → 1000 mTorr, MFC_PRESSURE_SCALE 0.1", "mfc", "작업 압력 상한"),
+    Assumption("MFC 명령 간격", "100~200 ms", "mfc", "최소 간격"),
+    Assumption("DC 형명·정격", "600 V / 1 A / 600 W (v1 상한)", "dc", "*IDN?"),
+    Assumption("DC 쓰기→질의 간격", "500 ms (v1 실측)", "dc", "쓰기→질의"),
+    Assumption("DC 아날로그 옵션(TER1)", "없음으로 가정", "dc", "TER1"),
+    Assumption("CESAR User Port 커넥터 형식", "모름(15핀/25핀) — 인터록 배선 보류라 당장 영향 없음", "rfpulse", "15핀/25핀"),
+    Assumption("CESAR 응답 지연", "150 ms 이하(1초에 3질의)", "rfpulse", "지연"),
+    Assumption("PLC 트랜잭션 왕복", "10~25 ms", "plc", "왕복 시간"),
+    Assumption("PLC STOP 때 DAC 출력", "모름 — PD9 보류", "rf", "PLC CPU STOP"),
+    Assumption("이온 게이지 E 응답 분포", "250~300 ms, 최대 860 ms(v1 실측)", "ig", "E 바이트 수"),
 )

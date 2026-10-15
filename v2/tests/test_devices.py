@@ -61,3 +61,28 @@ def test_pc_dead_plan():
     assert len(ids) == len(set(ids))
     assert {"PD1", "PD2", "PD3"} <= set(ids)
     assert any(m.needs_wiring for m in D.PC_DEAD_PLAN)
+
+
+def test_pc_dead_plan_hold_decision():
+    """사용자 결정(2026-10-15): PD1~PD6·PD9 보류, PD7·PD8 은 계획대로(prod 에서만 쓰고 되읽기)."""
+    st = {m.id: m.status for m in D.PC_DEAD_PLAN}
+    assert {k for k, v in st.items() if v == "hold"} == {"PD1", "PD2", "PD3", "PD4", "PD5", "PD6", "PD9"}
+    assert st["PD7"] == st["PD8"] == "planned"
+    assert "10 s 이상" in {m.id: m for m in D.PC_DEAD_PLAN}["PD1"].note
+    assert D.PLC_CONNECTED_POWER == ("rf",)
+
+
+def test_rf_scale_confirmed():
+    from v2.chk import params as P
+    p = P.by_key()
+    assert p["RF_FWD_FULL_SCALE_W"].default == 594.5 and p["RF_REF_FULL_SCALE_W"].default == 200.0
+    diff = [x for x in D.RF.diffs if x.item == "반사파 스케일"][0]
+    assert "확인 완료" in diff.manual and "변경 금지" not in diff.action
+    assert not any("전면 미터" in b for b in D.RF.bench)
+
+
+def test_assumptions_in_bench_lists():
+    """가정값으로 진행하는 데이터는 그 장비 bench 확인 목록에 빠짐없이 있다."""
+    by = {d.key: d for d in D.DEVICES}
+    for a in D.ASSUMPTIONS:
+        assert any(a.bench_item in b for b in by[a.device].bench), (a.item, a.bench_item)

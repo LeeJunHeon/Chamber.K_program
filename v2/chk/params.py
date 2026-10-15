@@ -132,7 +132,8 @@ PARAMS: tuple = (
        src="device/PLC.py:178 (deque 300 × 200 ms)"),
     _p("ALL_STOP_KEEP_PUMPS", "plc", "ALL STOP 때 펌프 유지", "", B, True, safety=H, pending=True,
        src=_V2, v1_default=False,
-       desc="true: 전원·가스·히터 차단, 셔터·MV 닫기, Rotary·Turbo 유지. false: v1 처럼 PLC 코일 전부 0"),
+       desc="true: 전원·가스·히터 차단, 셔터·MV·도어 닫기, 펌프 계통(Rotary·Turbo·RV·FV)은 지금 상태 그대로 "
+            "— 터보가 도는 동안 FV 를 닫지 않기 위함. false: v1 처럼 PLC 코일 전부 0"),
 
     # ───────────── MFC(경고·알림만, 공정은 계속) ─────────────
     _p("FLOW_ERROR_TOLERANCE", "mfc", "유량 이탈 허용 비율", "비율", F, 0.10, 0.01, 0.5, apply=LIVE,
@@ -185,9 +186,9 @@ PARAMS: tuple = (
     _p("RF_MAX_POWER", "rf", "RF 파워 상한(DAC 풀스케일 환산)", "W", F, 600.0, 1.0, 600.0, safety=H,
        src="lib/config.py:561 (고정값)", desc="DAC 카운트 = (P/RF_MAX_POWER)×4000×gain + offset"),
     _p("RF_FWD_FULL_SCALE_W", "rf", "RF 순방향 ADC 풀스케일", "W", F, 594.5, 1.0, 2000.0, safety=H,
-       src="lib/config.py:558 (고정값)", desc="ADC 4000 카운트 = 이 값(W). 교정 상수"),
+       src="lib/config.py:558 (고정값)", desc="ADC 4000 카운트 = 이 값(W). 교정 상수 — 사용자 확인 완료(2026-10-15), v1 값"),
     _p("RF_REF_FULL_SCALE_W", "rf", "RF 반사 ADC 풀스케일", "W", F, 200.0, 1.0, 2000.0, safety=H,
-       src="lib/config.py:559 (고정값)"),
+       src="lib/config.py:559 (고정값)", desc="ADC 4000 카운트 = 이 값(W) — 사용자 확인 완료(2026-10-15), v1 값 유지"),
     _p("RF_CAL_OFFSET", "rf", "RF DAC 보정 오프셋", "count", F, 6.79, -400.0, 400.0, safety=H,
        src="UI.py:440 (offset_edit 기본값)", desc="v1 은 화면 입력칸 값을 공정마다 썼다"),
     _p("RF_CAL_GAIN", "rf", "RF DAC 보정 이득", "배", F, 1.0395, 0.5, 1.5, safety=H,

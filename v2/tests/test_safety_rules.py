@@ -99,3 +99,20 @@ def test_start_guards_exist():
     ids = SR.by_id()
     for g in SR.START_GUARDS:
         assert ids[g].kind == "reject"
+
+
+def test_all_stop_keeps_pump_system():
+    from v2.chk import devices as D
+    names = {a.name for a in D.PLC_ADDRS}
+    assert set(SR.ALL_STOP_KEEP_COILS) == {"rotary", "turbo", "rv", "fv"} <= names
+    assert "mv" not in SR.ALL_STOP_KEEP_COILS                   # MV 는 닫는다
+    step = [s for s in SR.ALL_STOP_SEQUENCE if s.act.kind == "PLC_OUTPUTS_OFF"][0]
+    assert "Rotary·Turbo·RV·FV" in step.desc and "ALL_STOP_KEEP_COILS" in step.desc
+    p = P.by_key()["ALL_STOP_KEEP_PUMPS"]
+    assert p.default is True and p.pending_confirm and "FV 를 닫지 않기" in p.desc
+
+
+def test_s46_on_hold():
+    r = SR.by_id()["S46"]
+    assert r.on_hold and r.pending_confirm and "10 s 이상" in r.needs
+    assert [x.id for x in SR.RULES if x.on_hold] == ["S46"]
