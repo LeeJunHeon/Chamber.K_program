@@ -78,7 +78,9 @@ COMMON_REASONS: tuple = (
     Reason("CONFIG_HASH_MISMATCH", "설정 정의(스키마)가 장비와 다름", "reject"),
     Reason("CONFIG_VERSION_STALE", "이미 적용한 버전보다 오래된 설정", "reject"),
     Reason("CONFIG_SECRET_FROM_WEB", "비밀값은 웹에서 받지 않음", "reject"),
-    Reason("BENCH_READ_ONLY", "bench 모드 — 장비 쓰기 금지", "reject"),
+    # bench 는 STOP·ALL STOP 같은 safety 쓰기까지 거부한다(사용자 결정 유지). 그래서 로컬 화면 단계에서
+    # bench 모드일 때 "읽기 전용 — 조작은 장비 앞면으로" 를 크게 표시하고 STOP·ALL STOP 버튼을 비활성 표시해야 한다.
+    Reason("BENCH_READ_ONLY", "bench 모드 — 장비 쓰기 금지(읽기 전용 — 조작은 장비 앞면으로)", "reject"),
     Reason("QUEUE_FULL", "장비 요청 큐가 가득 참", "reject"),
     Reason("CANCELLED", "안전 요청이 앞질러 취소됨", "fail"),
     Reason("TIMEOUT", "시간 초과", "fail"),

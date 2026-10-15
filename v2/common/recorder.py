@@ -3,12 +3,13 @@
 - put_row / put_event 는 큐에 넣기만 한다(가득 차면 버리고 dropped 를 센다 — tick 은 절대 기다리지 않음).
 - 쓰기 스레드: 일별 SQLite(WAL) snap_YYYYMMDD.sqlite 의 snapshot·events 표에 쓴다. 1초마다 commit.
   날이 바뀌면 지난 날을 CSV(snap_YYYYMMDD.csv, utf-8-sig)로 내보내고 보관 기간이 지난 로컬 파일을 지운다.
-- NAS 사본 스레드: nas_period_s 마다 지난 날 파일(.sqlite·.csv)을 복사하고, 오늘 DB 는 SQLite backup 으로
+- NAS 사본 스레드: nas_period_s 마다 지난 날 파일(.sqlite·.csv)을 복사하고, nas_today_period_s 마다 오늘 DB 를 SQLite backup 으로
   만든 일관된 사본(staging)을 복사한다. 실패하면 다음 회차에 다시. 복사가 멈춰도 쓰기·tick 과 무관.
   NAS 쪽은 지우지 않는다(사본 전체 보관).
 """
 from __future__ import annotations
 
+import collections
 import csv
 import datetime as _dt
 import json
@@ -22,6 +23,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 PREFIX = "snap_"
+# 설정으로 두지 않는 상수(이유)
+COMMIT_EVERY_S = 1.0     # SQLite commit 간격 — 정전 때 잃는 양(≤1 s)과 디스크 쓰기 횟수의 균형. 운영자가 바꿀 일 없음
+MAX_QUEUE = 20000        # 기록 큐 — 1초 1행 기준 5시간 이상 디스크가 멈춰도 버리지 않는 양(메모리 수십 MB 이하)
+ERRORS_KEEP = 200        # 오류 목록은 최근 이만큼만(무한히 늘지 않게)
 
 
 def _day_of(ts_iso: str) -> str:
@@ -34,8 +39,8 @@ def _q(name: str) -> str:
 
 class Recorder:
     def __init__(self, directory: Path, columns: Sequence[str], retention_days: int = 180,
-                 max_queue: int = 20000, commit_every_s: float = 1.0,
-                 nas_dir: Optional[Path] = None, nas_period_s: float = 60.0,
+                 max_queue: int = MAX_QUEUE, commit_every_s: float = COMMIT_EVERY_S,
+                 nas_dir: Optional[Path] = None, nas_period_s: float = 60.0, nas_today_period_s: float = 600.0,
                  copy_fn: Callable[[str, str], Any] = shutil.copy2,
                  today_fn: Callable[[], _dt.date] = _dt.date.today) -> None:
         self.dir = Path(directory)
@@ -47,6 +52,8 @@ class Recorder:
         self.commit_every_s = commit_every_s
         self.nas_dir = Path(nas_dir) if nas_dir else None
         self.nas_period_s = nas_period_s
+        self.nas_today_period_s = nas_today_period_s
+        self._last_today_copy: Optional[float] = None
         self.copy_fn = copy_fn
         self.today_fn = today_fn
         self._q: "queue.Queue" = queue.Queue(maxsize=max_queue)
@@ -54,7 +61,7 @@ class Recorder:
         self.written = 0
         self.nas_copied = 0
         self.nas_failures = 0
-        self.errors: List[str] = []
+        self.errors: "collections.deque[str]" = collections.deque(maxlen=ERRORS_KEEP)
         self._db: Optional[sqlite3.Connection] = None
         self._day: Optional[str] = None
         self._stop = threading.Event()
@@ -202,8 +209,8 @@ class Recorder:
         return removed
 
     # ───────── NAS 사본 ─────────
-    def nas_round(self) -> None:
-        """한 회차: 지난 날 파일 복사(크기가 다르면), 오늘 DB 는 backup 사본을 복사."""
+    def nas_round(self, copy_today: bool = True) -> None:
+        """한 회차: 지난 날 파일 복사(크기가 다르면). copy_today 면 오늘 DB 의 backup 사본도 복사."""
         assert self.nas_dir is not None
         today = self._day
         for p in sorted(self.dir.glob(f"{PREFIX}*")):
@@ -220,7 +227,7 @@ class Recorder:
             except Exception as e:
                 self.nas_failures += 1
                 self.errors.append(f"NAS {p.name}: {e!r}")
-        if today is not None:
+        if today is not None and copy_today:
             staging = self.dir / "staging"
             staging.mkdir(exist_ok=True)
             snap = staging / f"{PREFIX}{today}.sqlite"
@@ -247,7 +254,11 @@ class Recorder:
         while not self._stop.wait(self.nas_period_s):
             try:
                 self.nas_dir.mkdir(parents=True, exist_ok=True)
-                self.nas_round()
+                now = time.monotonic()
+                today = self._last_today_copy is None or now - self._last_today_copy >= self.nas_today_period_s
+                self.nas_round(copy_today=today)
+                if today:
+                    self._last_today_copy = now
             except Exception as e:
                 self.nas_failures += 1
                 self.errors.append(f"NAS 회차: {e!r}")

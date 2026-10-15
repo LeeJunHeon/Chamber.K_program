@@ -154,7 +154,7 @@ def test_recorder_sqlite_csv_rollover(tmp_path):
     db2 = sqlite3.connect(tmp_path / "snap_20261016.sqlite")
     assert db2.execute("SELECT flag FROM snapshot").fetchall() == [(0,)]
     db2.close()
-    assert r.errors == []
+    assert list(r.errors) == []
 
 
 def test_recorder_prune(tmp_path):
@@ -229,3 +229,25 @@ def test_nas_hang_does_not_affect_ticks(tmp_path):
         gate.set()
         rec.stop()
         wa.stop(), wb.stop()
+
+
+def test_recorder_errors_bounded(tmp_path):
+    from v2.common.recorder import ERRORS_KEEP
+    r = Recorder(tmp_path, COLS)
+    for i in range(ERRORS_KEEP + 50):
+        r.errors.append(f"e{i}")
+    assert len(r.errors) == ERRORS_KEEP and r.errors[-1] == f"e{ERRORS_KEEP + 49}"
+
+
+def test_nas_round_without_today(tmp_path):
+    local, nas = tmp_path / "local", tmp_path / "nas"
+    nas.mkdir()
+    r = Recorder(local, COLS, nas_dir=nas, today_fn=lambda: dt.date(2026, 10, 16))
+    r.start()
+    r.put_row(_row("2026-10-15T10:00:00", 1))
+    r.put_row(_row("2026-10-16T10:00:00", 2))
+    r.flush()
+    r.nas_round(copy_today=False)
+    names = {p.name for p in nas.iterdir()}
+    assert "snap_20261015.sqlite" in names and "snap_20261016.sqlite" not in names
+    r.stop()

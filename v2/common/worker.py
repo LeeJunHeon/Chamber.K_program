@@ -160,7 +160,8 @@ class Worker:
                  fail_streak: int = 3, reconnect_start_s: float = 1.0, reconnect_max_s: float = 60.0,
                  long_outage_s: float = 600.0, probe_s: float = 60.0, log_every_s: float = 600.0,
                  on_event: Optional[Callable[[WorkerEvent], None]] = None,
-                 on_connect: Optional[Callable[[Session], None]] = None) -> None:
+                 on_connect: Optional[Callable[[Session], None]] = None,
+                 connect_init_timeout_s: float = 5.0) -> None:
         self.name = name
         self.transport = transport
         self.clock = transport.clock
@@ -169,6 +170,7 @@ class Worker:
         self.backoff = Backoff(self.clock, reconnect_start_s, reconnect_max_s, long_outage_s, probe_s, log_every_s)
         self.on_event = on_event
         self.on_connect = on_connect
+        self.connect_init_timeout_s = connect_init_timeout_s
         self.queue = ClockQueue(self.clock)
         self.connected = False
         self.last_ok: Optional[float] = None
@@ -300,11 +302,21 @@ class Worker:
         self.backoff.on_success()
         self._emit("connected", f"단절 {was_outage:.1f}s 뒤" if was_outage else "")
         if self.on_connect:
-            sess = Session(self.transport, self.clock.monotonic() + 5.0, CancelToken(self.clock))
+            cancel = CancelToken(self.clock)
+            with self.clock.cond:
+                self._cancel = cancel          # stop()·safety 가 초기화도 끊을 수 있게
+            sess = Session(self.transport, self.clock.monotonic() + self.connect_init_timeout_s, cancel)
             try:
                 self.on_connect(sess)
+            except Cancelled:
+                self.transport.reset_input()
             except (TransportError, ReadTimeout) as e:
                 self._disconnect(f"연결 초기화 실패: {e}")
+            except Exception as e:             # 드라이버 초기화 오류(형식·되읽기 불일치 등) — 끊고 다시
+                self._disconnect(f"연결 초기화 오류: {e!r}")
+            finally:
+                with self.clock.cond:
+                    self._cancel = None
 
     def _disconnect(self, why: str) -> None:
         self.transport.close()

@@ -77,6 +77,16 @@ PARAMS: tuple = (
           src="lib/config.py:735"),
     _inst("HEATER_ENABLED", "히터 기능 사용", B, True, safety=H,
           desc="false 면 히터 명령·레시피 히터 행을 거부한다. 워치독 하트비트는 항상 쓴다"),
+    _inst("PLC_FAIL_STREAK", "PLC 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="v2 (3단계 worker 기본값)",
+          desc="연속 무응답이 이 횟수면 포트를 닫고 백오프 재연결"),
+    _inst("MFC_FAIL_STREAK", "MFC 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="v2 (v1 은 무응답 1회에 닫음)"),
+    _inst("DC_FAIL_STREAK", "DC 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="device/DCpower.py:28"),
+    _inst("RFPULSE_FAIL_STREAK", "RF Pulse 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="v2 (3단계 worker 기본값)"),
+    _inst("IG_FAIL_STREAK", "이온 게이지 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="device/IonGauge.py (3회)"),
+    _inst("PORT_OPEN_TIMEOUT_SEC", "포트 열기 제한 시간", F, 2.0, lo=0.5, hi=30.0, unit="s", src="lib/serial_guard.py (v1 2 s)",
+          desc="포트 열기를 별도 스레드에서 이만큼만 기다린다(2026-09-16 사고)"),
+    _inst("CONNECT_INIT_TIMEOUT_SEC", "연결 직후 초기화 제한 시간", F, 5.0, lo=1.0, hi=60.0, unit="s", src="v2 (3단계 worker 상수)",
+          desc="연결 직후 장비 초기화(설정 쓰기·되읽기 등) 한도"),
     _inst("LOCAL_HMI_PORT", "로컬 화면 포트", I, 8710, lo=1024, hi=65535, safety=L, src=_V2,
           desc="127.0.0.1 에서만 연다"),
     _inst("LOCAL_DATA_DIR", "로컬 기록 폴더", S, r"C:\ChamberK_v2\data", pattern=r".+", safety=L,
@@ -419,7 +429,10 @@ PARAMS: tuple = (
 
     # ───────────── 기록(record) ─────────────
     _p("SNAPSHOT_RETENTION_DAYS", "record", "1초 기록 보관 기간", "일", I, 180, 7, 3650, safety=L, src=_V2),
-    _p("NAS_SYNC_PERIOD_SEC", "record", "NAS 사본 주기", "s", I, 60, 10, 3600, safety=L, apply=LIVE, src=_V2),
+    _p("NAS_SYNC_PERIOD_SEC", "record", "NAS 사본 주기(지난 날 파일)", "s", I, 60, 10, 3600, safety=L, apply=RESTART,
+       src=_V2),
+    _p("NAS_TODAY_COPY_SEC", "record", "NAS 오늘 DB 사본 주기", "s", I, 600, 60, 86400, safety=L, apply=RESTART, src=_V2,
+       desc="오늘 DB 를 SQLite backup 으로 떠서 NAS 로 복사하는 주기"),
 )
 
 

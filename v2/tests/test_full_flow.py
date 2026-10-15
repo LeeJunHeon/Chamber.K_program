@@ -26,7 +26,7 @@ def test_full_flow(tmp_path):
         rig.loop.run(30)
     finally:
         rig.stop()
-    assert rig.recorder.flush() and rig.recorder.errors == [] and rig.recorder.dropped == 0
+    assert rig.recorder.flush() and list(rig.recorder.errors) == [] and rig.recorder.dropped == 0
 
     day = sorted(tmp_path.glob("snap_*.sqlite"))
     assert len(day) == 1
@@ -69,6 +69,9 @@ def test_full_flow(tmp_path):
     assert rows[26]["alt.q"] == "ok"
 
 
-def test_tick_bench_refuses_real_ports():
-    assert tick_bench.main(["--seconds", "1", "--mode", "bench"]) == 2
-    assert tick_bench.main(["--seconds", "1", "--mode", "prod"]) == 2
+def test_tick_bench_accepts_only_sim():
+    import pytest
+    for mode in ("bench", "prod"):
+        with pytest.raises(SystemExit) as e:
+            tick_bench.main(["--seconds", "1", "--mode", mode])
+        assert e.value.code == 2

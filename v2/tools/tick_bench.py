@@ -2,7 +2,7 @@
 
     python -m v2.tools.tick_bench --seconds 60 --mode sim
 
-기록은 임시 폴더에만 쓴다(끝에 경로 출력). bench·prod 는 실제 포트라 이번 단계에서는 거부한다.
+기록은 임시 폴더에만 쓴다(끝에 경로 출력). --mode 는 sim 만 받는다(bench·prod 는 실제 포트).
 """
 from __future__ import annotations
 
@@ -28,11 +28,9 @@ def pct(xs, p):
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="v2 1초 tick 실제 시간 측정(가짜 장비)")
     ap.add_argument("--seconds", type=int, default=60)
-    ap.add_argument("--mode", default="sim", choices=["sim", "bench", "prod"])
+    # sim 만 받는다 — 실수로 실제 장비 모드(bench·prod)로 돌리지 않도록
+    ap.add_argument("--mode", default="sim", choices=["sim"])
     a = ap.parse_args(argv)
-    if a.mode != "sim":
-        print("bench·prod 는 실제 COM 포트를 연다 — 3단계에서는 sim 만 허용", file=sys.stderr)
-        return 2
     out = Path(tempfile.mkdtemp(prefix="v2_tick_bench_"))
     clock = RealClock()
     rig = Rig(clock, out)

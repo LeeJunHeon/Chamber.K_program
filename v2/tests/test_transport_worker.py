@@ -321,3 +321,19 @@ def test_port_guard_open_timeout_and_late_close():
             break
         time.sleep(0.01)
     assert guard.stuck == 0 and late.closed       # 늦게 열린 객체는 스스로 닫힘
+
+
+def test_connect_init_timeout():
+    """연결 직후 초기화가 제한 시간 안에 응답이 없으면 끊고 백오프."""
+    dev = LineDevice("d", {"a": 1}, latency_s=0.05)
+    dev.add_fault("no_response", 0.0, 100.0)
+    c = VirtualClock()
+    c.register()
+    ev = Box(c)
+    w = Worker("dev", SimTransport(c, dev), on_event=ev.cb, connect_init_timeout_s=2.0,
+               on_connect=lambda s: line_read_many(s, "d", ["a"]))
+    w.start()
+    c.wait_until(3.5)
+    kinds = [(e.kind, round(e.t, 3)) for e in ev.items]
+    assert ("connected", 0.0) in kinds and ("disconnected", 2.0) in kinds and ("connected", 3.0) in kinds
+    w.stop()

@@ -52,7 +52,9 @@ def iso_local(t_wall: float) -> str:
 
 
 class SnapshotBus:
-    SETTLE_S = 0.05     # 행 닫힘 이전 마감인 요청의 결과를 기다리는 여유(실제 시계 스레드 지연용)
+    # 행 닫힘 이전이 마감인 요청의 결과를 기다리는 여유. 설정으로 두지 않는 이유: 장비·공정과 무관한
+    # 스레드 전달 지연(수 ms) 흡수용이고, 키우면 행 닫힘이 늦어져 다음 tick 에 닿을 수 있다.
+    SETTLE_S = 0.05
 
     def __init__(self, clock, blocks: Sequence[DeviceBlock], sources: Sequence[Source],
                  tick_deadline_ms: int = 900, extra_fields: Sequence[FieldDef] = ()) -> None:

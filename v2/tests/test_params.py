@@ -163,3 +163,11 @@ def test_secrets_not_in_schema():
 def test_pending_confirm_marked():
     pend = {p.key for p in P.PARAMS if p.pending_confirm}
     assert {"ALL_STOP_KEEP_PUMPS", "HEATER_RECIPE_HOLD_AT_END", "HEATER_RECIPE_MAX_REPEAT"} <= pend
+
+
+def test_comm_install_params():
+    p = P.by_key()
+    for k in ("PLC_FAIL_STREAK", "MFC_FAIL_STREAK", "DC_FAIL_STREAK", "RFPULSE_FAIL_STREAK", "IG_FAIL_STREAK"):
+        assert p[k].default == 3 and p[k].scope is Scope.INSTALL and p[k].role is Role.ADMIN and p[k].apply is Apply.RESTART
+    assert p["PORT_OPEN_TIMEOUT_SEC"].default == 2.0 and p["CONNECT_INIT_TIMEOUT_SEC"].default == 5.0
+    assert p["NAS_TODAY_COPY_SEC"].default == 600

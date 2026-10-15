@@ -193,7 +193,8 @@ C = CommandDef
 STOPPABLE = ACTIVE_STATES + ("STOPPING",)
 
 COMMANDS: tuple = (
-    # 정지 — 로컬 화면에서도
+    # 정지 — 로컬 화면에서도. bench 모드에서는 worker 가 BENCH_READ_ONLY 로 거부하므로 로컬 화면은
+    # "읽기 전용 — 조작은 장비 앞면으로" 를 표시해야 한다(로컬 화면 단계 할 일)
     C("PROCESS_STOP", "공정 STOP", (WEB, HMI), "operator", STOPPABLE, v1="PROCESS_STOP"),
     C("ALL_STOP", "ALL STOP", (WEB, HMI, INT), "operator", (ANY_STATE,), desc="공정 여부와 무관 — safety_rules.ALL_STOP_SEQUENCE",
       v1="ALL_STOP"),
