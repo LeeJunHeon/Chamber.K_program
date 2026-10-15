@@ -206,6 +206,32 @@ def test_timeout_aborts_with_target_last_and_elapsed(pc, monkeypatch):
     assert any(m.startswith("[IG] 베이스 대기 실패 — 베이스 압력 대기 시간 초과") for m in msgs(pc))
 
 
+def test_base_wait_timeout_default_1800s():
+    """10/15 CeO2 600°C: 10분 동안 1.5E-5 → 1.3E-5 로 천천히 내려가다 600초 한도에 걸렸다 → 1800초."""
+    import json
+    import os
+    import lib.config as CFG
+    assert PC.IG_BASE_WAIT_TIMEOUT_SEC == CFG.IG_BASE_WAIT_TIMEOUT_SEC == 1800
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(CFG.__file__))), "config_user.json")
+    with open(path, encoding="utf-8") as f:
+        assert json.load(f)["IG_BASE_WAIT_TIMEOUT_SEC"] == 1800
+
+
+def test_timeout_1800_follows_setting_in_stage_and_reason(pc):
+    pc._ig_base_wait_start(1e-5)
+    tick(pc, snap(ion=1.5e-5), dt=1.0)
+    assert pc.rec["stage"][-1].endswith("(00:01 / 30:00)")
+    tick(pc, snap(ion=1.3e-5), dt=598.0)                     # 옛 한도(10:00)를 넘어도 계속
+    tick(pc, snap(ion=1.3e-5), dt=2.0)
+    for _ in range(36):                                      # 통신은 정상 — 1분 끊김 중단과 섞이지 않게 30초 간격
+        tick(pc, snap(ion=1.3e-5), dt=30.0)
+    assert pc.rec["stop"] == [] and pc.rec["stage"][-1].endswith("(28:01 / 30:00)")
+    tick(pc, snap(ion=1.3e-5), dt=119.0)                     # 30:00 — 아직(초과일 때만 중단)
+    assert pc.rec["stop"] == []
+    tick(pc, snap(ion=1.3e-5), dt=1.0)
+    assert pc.rec["stop"] == [1] and "경과 30:01" in pc.rec["crit"][-1] and "마지막 1.3E-05 Torr" in pc.rec["crit"][-1]
+
+
 def test_comm_lost_over_60s_aborts(pc):
     pc._ig_base_wait_start(1e-5)
     lost = snap(ion=5e-6, fresh=False, comm="timeout")
@@ -244,7 +270,7 @@ def test_relight_result_failure_retries_then_aborts(pc):
 def test_stage_every_tick_and_no_30s_line(pc):
     pc._ig_base_wait_start(1e-5)
     tick(pc, snap(ion=3.2e-5), dt=1.0)
-    assert pc.rec["stage"] == ["베이스 대기 3.2E-05 → 목표 1.0E-05 (00:01 / 10:00)"]
+    assert pc.rec["stage"] == ["베이스 대기 3.2E-05 → 목표 1.0E-05 (00:01 / 30:00)"]   # 한도는 설정값(1800초)
     for _ in range(29):
         tick(pc, snap(ion=3.2e-5), dt=1.0)
     assert len(pc.rec["stage"]) == 30

@@ -757,7 +757,10 @@ IG_RESPONSE_TIMEOUT_MS = get('IG_RESPONSE_TIMEOUT_MS', 1200)
 # 이온 압력 ≤ 목표가 이 횟수(1초 간격) 연속이어야 베이스 도달. 레인지 전환 직후 한두 번 낮게 튀는 값을 거른다.
 IG_BASE_STABLE_COUNT = get('IG_BASE_STABLE_COUNT', 5)
 # 베이스 압력 대기 최대 시간(초). 넘으면 공정 중단(목표·마지막 압력·경과 시간을 사유에 남긴다).
-IG_BASE_WAIT_TIMEOUT_SEC = get('IG_BASE_WAIT_TIMEOUT_SEC', 600)
+#  600 → 1800(2026-10-15): 10/15 00:24 CeO2 600°C 공정에서 승온 뒤 이온 압력이 10분 동안 1.5E-5 → 1.3E-5 로
+#  천천히 내려가다 600초 한도에 걸려 중단됐다(2시간 승온 손실). 대기 중 히터는 유지 모드(TC2)로 600°C 를
+#  유지하고 있었으므로 대기를 늘려도 공정 조건에는 영향이 없다.
+IG_BASE_WAIT_TIMEOUT_SEC = get('IG_BASE_WAIT_TIMEOUT_SEC', 1800)
 # 베이스 대기 중 이온 압력을 모니터·공정 로그에 남기는 간격(초). 10/14 시험은 20초 만에 끝나 30초 진행 줄이 한 번도
 #  안 나왔다 — 압력이 내려가는 과정을 보려고 5초. 베이스 대기 밖에서는 주기 기록을 하지 않는다.
 IG_BASE_LOG_INTERVAL_SEC = get('IG_BASE_LOG_INTERVAL_SEC', 5)
