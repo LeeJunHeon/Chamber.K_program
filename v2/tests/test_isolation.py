@@ -1,4 +1,4 @@
-"""v2 는 v1 모듈을 import 하지 않고, 외부 라이브러리 없이 표준 라이브러리만 쓴다(이번 단계)."""
+"""v2 는 v1 모듈을 import 하지 않고, 표준 라이브러리 + pyserial(serial) + pytest 만 쓴다."""
 import ast
 import sys
 from pathlib import Path
@@ -28,7 +28,7 @@ def test_no_v1_imports():
 
 
 def test_stdlib_only_except_pytest():
-    allowed = set(sys.stdlib_module_names) | {"v2", "pytest", "__future__"}
+    allowed = set(sys.stdlib_module_names) | {"v2", "pytest", "__future__", "serial"}
     bad = []
     for py in V2_DIR.rglob("*.py"):
         for top, line in _imports(py):
