@@ -11,7 +11,7 @@ START(여러 tick 에 걸친 Sequence): 14 Host → 1 RF OFF(사전, v1 과 같�
 RF OFF(안전): 1 → CSR 0 → 162 로 출력 꺼짐 확인, 안 되면 한 번 더, 끝내 못 하면 RFP_OFF_UNCONFIRMED.
 연결: 128·130·198 로 기종·용량·SW 버전 기록. 쓰기 허용(prod·sim)이면 명령 33 = RFPULSE_REFP_AUTO_OFF_SEC 를 쓰고 152 로 되읽기
   (Host 모드가 아니면 출력이 꺼져 있을 때만 14 Host 로 바꾼 뒤 — 켜져 있으면 건너뛰고 이벤트).
-bench: 162·165·166·155·128·130·198 질의만, 상태를 바꾸는 명령(1~127)은 모두 거부.
+bench: 162·165·166·155·128·130·198·152 질의만(152 = 명령 33 현재 값), 상태를 바꾸는 명령(1~127)은 모두 거부.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from v2.common.worker import SEQ_DONE, Request, Sequence, Worker
 
 RF_OFF, RF_ON, SET_MODE, SET_SETPOINT, SET_CONTROL, SET_PULSING, SET_AUTO_OFF, SET_FREQ, SET_DUTY = 1, 2, 3, 8, 14, 27, 33, 93, 96
 Q_MODEL, Q_CAPACITY, Q_AUTO_OFF, Q_CONTROL, Q_STATUS, Q_FWD, Q_REF, Q_FREQ, Q_DUTY, Q_SW = 128, 130, 152, 155, 162, 165, 166, 193, 196, 198
-BENCH_QUERIES = frozenset({Q_STATUS, Q_FWD, Q_REF, Q_CONTROL, Q_MODEL, Q_CAPACITY, Q_SW})
+BENCH_QUERIES = frozenset({Q_STATUS, Q_FWD, Q_REF, Q_CONTROL, Q_MODEL, Q_CAPACITY, Q_SW, Q_AUTO_OFF})   # 152: 명령 33 현재 값(읽기만)
 CSR_TEXT = {0: "accepted", 1: "wrong control mode(Host 아님)", 2: "RF output is on", 4: "data out of range",
             5: "User Port RF signal off", 7: "active fault(s)", 9: "data byte count", 19: "recipe mode",
             50: "frequency out of range", 51: "duty out of range", 99: "not implemented"}   # [CESAR p.96 / 4-62]
@@ -111,6 +111,14 @@ class RfPulseDriver:
         sw = self._x(session, Q_SW).decode("ascii", errors="replace")
         self._emit("identity", f"{self.model} · {cap} W · SW {sw}")
         if not self.writes_allowed:
+            try:                                          # bench: 명령 33 현재 값·제어 모드를 읽기만(보고용)
+                cur = self._x(session, Q_AUTO_OFF)
+                ctl = self._x(session, Q_CONTROL)
+                self._emit("auto_off_read", f"명령 33 현재 {cur[0] if cur else '?'} s · 제어 모드 {ctl[0] if ctl else '?'}")
+            except Cancelled:
+                raise
+            except Exception as e:
+                self._emit("auto_off_read", f"명령 33 현재 값 못 읽음: {type(e).__name__}")
             return
         sec = int(self.cfg["RFPULSE_REFP_AUTO_OFF_SEC"])
         if self._x(session, Q_CONTROL)[0] != 2:
