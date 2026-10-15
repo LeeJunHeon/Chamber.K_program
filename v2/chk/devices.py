@@ -417,8 +417,9 @@ TICK_PLAN: tuple = (
              "L > 250 ms 이면: 166(반사)은 매초, 165 와 162 를 번갈아 — fwd·status own_quality",
              "RFPULSE_READ_DEADLINE_MS"),
     TickPlan("ig", ("E",), 160.0, "실측 250~300 ms, 레인지 찾기 860 ms", "yes",
-             "응답 대기 중이면 그 tick 은 보내지 않음(stale). 필라멘트 A/B 뒤 무응답은 suppressed. F/G/H 는 끼우지 않음",
-             "IG_READ_DEADLINE_MS"),
+             "응답을 IG_RESPONSE_LIMIT_MS(1200)까지 기다려 늦으면 다음 행에 late, 그동안 E 를 보내지 않음(stale). "
+             "필라멘트 A/B 뒤 무응답은 suppressed. F/G/H 는 끼우지 않음",
+             "IG_RESPONSE_LIMIT_MS"),
     TickPlan("rf", ("PLC FC3 D0~D1 에 포함",), 0.0, "PLC 블록에 포함 — 추가 0", "yes", "—", "PLC_READ_DEADLINE_MS"),
 )
 

@@ -19,6 +19,11 @@
 
 조치(actions)는 commands.COMMANDS 의 내부 명령(kind)과 인자다. 사유는 commands 의 사유 코드.
 values 는 snapshot_fields.columns() 의 열 이름이다(시험이 존재를 확인한다).
+
+지속 시간(duration)은 실제 시각이다(4-3 결정): v1 은 장비마다 다른 주기로 횟수를 셌으므로 v2 는 v1 에서 실제로 걸리던
+시간(횟수 × v1 판정 주기)을 *_SEC 파라미터로 쓴다(params 의 v1_period_s). 판정은 v2.common.judge.Persist —
+값이 ok·late 인 표본만 판정에 쓰고, stale·fail·suppressed tick 은 판정을 바꾸지 않는다(시작 시각을 지우지도 확정하지도 않음).
+통신이 끊긴 경우는 따로 두절 규칙(S6·S30·S34C·S39B)이 잡는다.
 """
 from __future__ import annotations
 
@@ -117,9 +122,9 @@ RULES: tuple = (
       ("heater.fault", "heater.ot", "heater.tc_err", "heater.wd_err"), states=("*",),
       actions=(Act("HEATER_FORCE_OFF"), _abort("HEATER_FAULT"), Act("HEATER_RECIPE_ABORT", {"reason": "HEATER_FAULT"})),
       release="공정·히터 레시피가 히터를 쓰지 않으면 RUN OFF·알림만", v1="device/PLC.py:1054, main.py:3572, 3606"),
-    R("S17", "히터 출력 죽음", "notify", "plc250", "heater.run 참 · fault 거짓 · heater.mv < HEATER_MV_MIN 이 HEATER_OUT_DEAD_COUNT 회(유예 뒤)",
-      ("heater.run", "heater.fault", "heater.mv"), ("HEATER_MV_MIN", "HEATER_OUT_DEAD_COUNT", "HEATER_OUT_DEAD_GRACE_SEC"),
-      "HEATER_OUT_DEAD_COUNT", actions=(_note("warn", "HEATER_OUTPUT_DEAD_WARN"),), v1="device/PLC.py:1040"),
+    R("S17", "히터 출력 죽음", "notify", "plc250", "heater.run 참 · fault 거짓 · heater.mv < HEATER_MV_MIN 이 HEATER_OUT_DEAD_SEC 동안(유예 뒤)",
+      ("heater.run", "heater.fault", "heater.mv"), ("HEATER_MV_MIN", "HEATER_OUT_DEAD_SEC", "HEATER_OUT_DEAD_GRACE_SEC"),
+      "HEATER_OUT_DEAD_SEC", actions=(_note("warn", "HEATER_OUTPUT_DEAD_WARN"),), v1="device/PLC.py:1040"),
     R("S18A", "히터 레시피: 출력 죽음 지속", "trip", "tick", "S17 조건이 HEATER_OUT_DEAD_LIMIT_SEC 지속(레시피 실행 중)",
       ("heater.run", "heater.mv"), ("HEATER_OUT_DEAD_LIMIT_SEC",), "HEATER_OUT_DEAD_LIMIT_SEC",
       actions=(Act("HEATER_RECIPE_ABORT", {"reason": "HEATER_OUTPUT_DEAD"}),), v1="controller/heater_recipe.py:1161"),
@@ -181,30 +186,30 @@ RULES: tuple = (
       ("DC_COMM_LOSS_ABORT_SEC",), "DC_COMM_LOSS_ABORT_SEC", ACT, (_abort("DC_COMM_LOST"), Act("DC_SAFE_OFF")),
       release="복구 때 공정이 없으면 DC_SAFE_OFF 다시", v1="device/DCpower.py:240-253, main.py:1488"),
     R("S31A", "DC 램프업 무출력", "trip", "tick", "dc.i_set ≥ DC_FAIL_ISET_A 이고 dc.p ≤ DC_FAIL_POWER_W", ("dc.i_set", "dc.p"),
-      ("DC_FAIL_ISET_A", "DC_FAIL_POWER_W", "DC_FAIL_MAX_TICKS"), "DC_FAIL_MAX_TICKS", ("POWER_WAIT",),
+      ("DC_FAIL_ISET_A", "DC_FAIL_POWER_W", "DC_FAIL_SEC"), "DC_FAIL_SEC", ("POWER_WAIT",),
       (_abort("DC_NO_OUTPUT"),), v1="device/DCpower.py:604-612"),
     R("S31B", "DC 저전류", "trip", "tick", "유지 중 dc.i ≤ DC_MIN_CURRENT_ABORT", ("dc.i",),
-      ("DC_MIN_CURRENT_ABORT", "DC_MIN_CURRENT_ABORT_COUNT"), "DC_MIN_CURRENT_ABORT_COUNT", ACT,
+      ("DC_MIN_CURRENT_ABORT", "DC_MIN_CURRENT_ABORT_SEC"), "DC_MIN_CURRENT_ABORT_SEC", ACT,
       (_abort("DC_LOW_CURRENT"),), v1="device/DCpower.py:631"),
     R("S31C", "DC 파워 이탈", "trip", "tick", "|dc.p − set_w| > max(DC_TOLERANCE_W, set_w × DC_POWER_ERROR_RATIO) — SHUTTER_DELAY·MAIN 에서만",
-      ("dc.p", "dc.set_w"), ("DC_POWER_ERROR_RATIO", "DC_POWER_ERROR_MAX_COUNT", "DC_TOLERANCE_W"), "DC_POWER_ERROR_MAX_COUNT",
+      ("dc.p", "dc.set_w"), ("DC_POWER_ERROR_RATIO", "DC_POWER_ERROR_SEC", "DC_TOLERANCE_W"), "DC_POWER_ERROR_SEC",
       ("SHUTTER_DELAY", "MAIN"), (_abort("DC_POWER_DEVIATION"),), v1="device/DCpower.py:659-675"),
     # ── RF(아날로그) ──
     R("S32", "RF 반사파", "trip", "tick", "rf.ref_w ≥ RF_REFP_ABORT_THRESHOLD 지속", ("rf.ref_w",),
       ("RF_REFP_ABORT_THRESHOLD", "RF_REFP_WAIT_SEC"), "RF_REFP_WAIT_SEC", ACT,
       (_abort("RF_REFLECTED_HIGH"), Act("RF_SAFE_OFF")), v1="device/RFpower.py:91-106"),
     R("S33A", "RF 램프업 무출력", "trip", "tick", "rf.dac ≥ RF_FAIL_DAC_COUNTS 이고 rf.fwd_w ≤ RF_FAIL_FWD_W", ("rf.dac", "rf.fwd_w"),
-      ("RF_FAIL_DAC_COUNTS", "RF_FAIL_FWD_W", "RF_FAIL_MAX_TICKS"), "RF_FAIL_MAX_TICKS", ("POWER_WAIT",),
+      ("RF_FAIL_DAC_COUNTS", "RF_FAIL_FWD_W", "RF_FAIL_SEC"), "RF_FAIL_SEC", ("POWER_WAIT",),
       (_abort("RF_NO_OUTPUT"), Act("RF_SAFE_OFF")), v1="device/RFpower.py:118-130"),
     R("S33B", "RF 파워 이탈", "trip", "tick", "유지 중 |rf.fwd_w − set_w| > max(RF_TOLERANCE_W, set_w × RF_POWER_ERROR_RATIO)",
-      ("rf.fwd_w", "rf.set_w"), ("RF_POWER_ERROR_RATIO", "RF_POWER_ERROR_MAX_COUNT", "RF_TOLERANCE_W"),
-      "RF_POWER_ERROR_MAX_COUNT", ACT, (_abort("RF_POWER_DEVIATION"), Act("RF_SAFE_OFF")), v1="device/RFpower.py:150-165"),
+      ("rf.fwd_w", "rf.set_w"), ("RF_POWER_ERROR_RATIO", "RF_POWER_ERROR_SEC", "RF_TOLERANCE_W"),
+      "RF_POWER_ERROR_SEC", ACT, (_abort("RF_POWER_DEVIATION"), Act("RF_SAFE_OFF")), v1="device/RFpower.py:150-165"),
     # ── RF Pulse ──
     R("S34A", "RF Pulse 순방향 이탈", "trip", "tick", "|rfp.fwd_w − set_w| > set_w × RFPULSE_FORP_TOLERANCE_PERCENT %",
-      ("rfp.fwd_w", "rfp.set_w"), ("RFPULSE_FORP_TOLERANCE_PERCENT", "RFPULSE_FORP_CONSECUTIVE_LIMIT"),
-      "RFPULSE_FORP_CONSECUTIVE_LIMIT", ACT, (_abort("RFP_FORWARD_DEVIATION"), Act("RFP_SAFE_OFF")), v1="device/RFpulse.py:1240"),
+      ("rfp.fwd_w", "rfp.set_w"), ("RFPULSE_FORP_TOLERANCE_PERCENT", "RFPULSE_FORP_SEC"),
+      "RFPULSE_FORP_SEC", ACT, (_abort("RFP_FORWARD_DEVIATION"), Act("RFP_SAFE_OFF")), v1="device/RFpulse.py:1240"),
     R("S34B", "RF Pulse 반사파", "trip", "tick", "rfp.ref_w ≥ RFPULSE_REFP_LIMIT_WATTS", ("rfp.ref_w",),
-      ("RFPULSE_REFP_LIMIT_WATTS", "RFPULSE_REFP_CONSECUTIVE_LIMIT"), "RFPULSE_REFP_CONSECUTIVE_LIMIT", ACT,
+      ("RFPULSE_REFP_LIMIT_WATTS", "RFPULSE_REFP_SEC"), "RFPULSE_REFP_SEC", ACT,
       (_abort("RFP_REFLECTED_HIGH"), Act("RFP_SAFE_OFF")), v1="device/RFpulse.py:1267"),
     R("S34C", "RF Pulse 통신 두절", "trip", "tick", "RF Pulse 사용 공정에서 rfp.age_s ≥ RFPULSE_COMM_LOSS_ABORT_SEC",
       ("rfp.q", "rfp.age_s"), ("RFPULSE_COMM_LOSS_ABORT_SEC", "RFPULSE_COMM_REOPEN_SEC"), "RFPULSE_COMM_LOSS_ABORT_SEC", ACT,
@@ -221,16 +226,16 @@ RULES: tuple = (
       params=("POWER_WAIT_TIMEOUT_SEC", "POWER_WAIT_TIMEOUT_MAX_SEC", "POWER_WAIT_EST_FACTOR", "POWER_WAIT_EST_MARGIN_SEC"),
       duration="formula", states=("POWER_WAIT",), actions=(_abort("POWER_WAIT_TIMEOUT"),), v1="controller/process_controller.py:941"),
     R("S37", "SP1 압력 미도달", "trip", "state:PRESSURE_SP1", "SP1_TIMEOUT_SEC 안에 ±PRESSURE_WAIT_TOL_RATIO 를 STABLE_COUNT 연속 못 함",
-      ("mfc.pressure_mtorr",), ("SP1_TIMEOUT_SEC", "PRESSURE_WAIT_TOL_RATIO", "PRESSURE_WAIT_STABLE_COUNT"), "SP1_TIMEOUT_SEC",
+      ("mfc.pressure_mtorr",), ("SP1_TIMEOUT_SEC", "PRESSURE_WAIT_TOL_RATIO", "PRESSURE_WAIT_STABLE_SEC"), "SP1_TIMEOUT_SEC",
       ("PRESSURE_SP1",), (_abort("SP1_TIMEOUT"),), v1="controller/process_controller.py:626"),
     R("S38A", "가스 유량 이탈", "notify", "tick", "|유량 − 설정| > 설정 × FLOW_ERROR_TOLERANCE 연속", ("mfc.ar_sccm", "mfc.o2_sccm"),
-      ("FLOW_ERROR_TOLERANCE", "FLOW_ERROR_MAX_COUNT"), "FLOW_ERROR_MAX_COUNT", ("MAIN",),
+      ("FLOW_ERROR_TOLERANCE", "FLOW_ERROR_SEC"), "FLOW_ERROR_SEC", ("MAIN",),
       (_note("warn", "FLOW_DEVIATION"),), release="경고만 — 공정 계속", v1="device/MFC.py:1300-1311"),
     R("S38B", "압력 이탈", "notify", "tick", "|압력 − SP1| > SP1 × MFC_PRESSURE_WARN_RATIO 연속", ("mfc.pressure_mtorr",),
-      ("MFC_PRESSURE_WARN_RATIO", "MFC_PRESSURE_WARN_COUNT"), "MFC_PRESSURE_WARN_COUNT", ("MAIN",),
+      ("MFC_PRESSURE_WARN_RATIO", "MFC_PRESSURE_WARN_SEC"), "MFC_PRESSURE_WARN_SEC", ("MAIN",),
       (_note("warn", "PRESSURE_DEVIATION"),), release="경고만 — 공정 계속", v1="device/MFC.py:1333-1342"),
     R("S39A", "베이스 압력 대기 한도", "trip", "state:BASE_WAIT", "IG_BASE_WAIT_TIMEOUT_SEC 안에 도달 못 함",
-      ("ig.ion_torr", "ig.filament", "ig.emission"), ("IG_BASE_WAIT_TIMEOUT_SEC", "IG_BASE_STABLE_COUNT", "IG_SETTLE_SEC",
+      ("ig.ion_torr", "ig.filament", "ig.emission"), ("IG_BASE_WAIT_TIMEOUT_SEC", "IG_BASE_STABLE_SEC", "IG_SETTLE_SEC",
                                                     "IG_VALUE_MAX_AGE_SEC"),
       "IG_BASE_WAIT_TIMEOUT_SEC", ("BASE_WAIT",), (_abort("BASE_WAIT_TIMEOUT"), Act("IG_FILAMENT_OFF")),
       v1="controller/process_controller.py:1175"),

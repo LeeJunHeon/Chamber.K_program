@@ -72,6 +72,7 @@ class ParamDef:
     v1_source: str = ""             # v1 근거 위치 ("config_user.json", "controller/process_controller.py:35" …)
     pending_confirm: bool = False   # 사용자 확인 대기 — 권장안으로 넣어 둠
     note: str = ""
+    v1_period_s: Optional[float] = None   # v1 판정 주기 — v1 은 횟수, v2 기본값 = v1 횟수 × 이 주기(초, 시간 기반 판정)
 
     def public_dict(self) -> dict:
         """웹으로 보내는 정의. secret 은 기본값을 싣지 않는다."""

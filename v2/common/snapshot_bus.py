@@ -45,6 +45,7 @@ class _SrcState:
     fields: Dict[str, tuple] = field(default_factory=dict)   # 열 → (값, 요청 tick 시각, 늦게 도착 & 아직 안 쓰임)
     newest_t: Optional[float] = None
     newest_late_unused: bool = False
+    late_fail: bool = False          # 행이 닫힌 뒤 실패로 끝난 요청 — 다음 행에 fail
 
 
 def iso_local(t_wall: float) -> str:
@@ -114,6 +115,8 @@ class SnapshotBus:
                         st.newest_late_unused = not on_time
                 if on_time:
                     st.result = res
+                elif res.status != Status.OK:
+                    st.late_fail = True
                 self.clock.cond.notify_all()
         return cb
 
@@ -153,7 +156,8 @@ class SnapshotBus:
                 q = Quality.OK
             elif s.worker.suppressed(now):
                 q = Quality.SUPPRESSED
-            elif st.result is not None or (not s.worker.connected and not st.sent_this_tick):
+            elif (st.result is not None or st.late_fail
+                  or (not s.worker.connected and not st.sent_this_tick)):
                 q = Quality.FAIL
             elif st.newest_late_unused:
                 q = Quality.LATE
@@ -189,6 +193,7 @@ class SnapshotBus:
         # 늦게 도착한 값은 처음 쓰인 이 행에서만 late — 다음 행부터 stale
         for st in self._st.values():
             st.newest_late_unused = False
+            st.late_fail = False
             st.fields = {k: (v[0], v[1], False) for k, v in st.fields.items()}
         return row
 

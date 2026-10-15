@@ -63,7 +63,7 @@ class Rig:
 
     def bus(self):
         return SnapshotBus(self.c, (SF.IG_BLOCK,), [Source("ig", self.w, self.d.source_read, ("ig",),
-                                                            CFG["IG_READ_DEADLINE_MS"])], CFG["TICK_DEADLINE_MS"])
+                                                            CFG["IG_RESPONSE_LIMIT_MS"])], CFG["TICK_DEADLINE_MS"])
 
     def run(self, n, at=None):
         rows = []
@@ -164,16 +164,20 @@ def test_bench_rejects_filament_allows_queries():
     r.done()
 
 
-def test_slow_reply_is_fail_and_never_piles_up():
+def test_late_reply_window_and_limit():
+    """900~1200 ms 응답은 다음 행에 late(그동안 E 를 보내지 않음 — stale), 1200 ms 를 넘기면 fail."""
     r = Rig()
-    r.sim.add_fault("delay", 2.0, 4.0, extra_s=1.2)                    # E 가 약 1.5 s — 마감(900 ms) 넘김
+    r.sim.add_fault("delay", 2.0, 2.5, extra_s=0.8)                    # seq 1(t 2.0): E 약 1.05~1.1 s
+    r.sim.add_fault("delay", 5.0, 5.5, extra_s=1.0)                    # seq 4(t 5.0): E 1.25 s 이상 → 제한 초과
     rows = r.run(8)
-    q = {x["seq"]: x["ig.q"] for x in rows}
-    assert q[1] == "fail" and q[2] == "fail" and q[3] == "ok"          # seq n = t n+1 s. 마감을 넘기면 fail, 다시 정상
-    assert r.w.connected                                                # 2회 — 끊김 기준(3회) 전
-    times = [t for t, d in r.sim.received if d == b"E"]
-    assert all(b - a >= 0.99 for a, b in zip(times, times[1:]))         # E 를 겹쳐 보내지 않음
-    assert not [e for e in r.events if e.kind == "parse_error"]         # 늦게 온 바이트가 다음 응답에 섞이지 않음
+    q = {x["seq"]: (x["ig.q"], x["ig.age_s"]) for x in rows}
+    assert q[1][0] == "stale"                                           # 보낸 tick — 마감(900 ms)까지 없음
+    assert q[2] == ("late", 1.0)                                        # 늦게 온 값이 다음 행에 late
+    assert q[3] == ("ok", 0.0)
+    assert q[4][0] == "stale" and q[5][0] == "fail" and q[6] == ("ok", 0.0)
+    e_times = [round(t, 3) for t, d in r.sim.received if d == b"E"]
+    assert 3.0 not in e_times and 6.0 not in e_times                    # 응답을 기다리는 동안 다음 E 를 보내지 않음
+    assert r.w.connected and not [e for e in r.events if e.kind == "parse_error"]
     r.done()
 
 

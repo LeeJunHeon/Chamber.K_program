@@ -187,3 +187,19 @@ def test_plasma_and_faults_through_driver():
     v = r.read().value
     assert v["dc.i"] == 0.0 and v["dc.v"] == 600.0                      # 점화 실패 — 무부하(S31A 시험용)
     r.done()
+
+
+def test_off_tick_measurement_suppressed():
+    r = Rig()
+    r.seq_wait(lambda on_done: r.d.start_output(600.0, 0.1, on_done=on_done))
+    bus = SnapshotBus(r.c, (SF.DC_BLOCK,), [Source("dc", r.w, r.d.source_read, ("dc",), CFG["DC_READ_DEADLINE_MS"])],
+                      CFG["TICK_DEADLINE_MS"])
+    rows = []
+    loop = TickLoop(r.c, bus, [rows.append],
+                    tick_hooks=[lambda t: r.d.output_off_confirmed() if t.seq == 2 else None])
+    loop.run(5)
+    q = [x["dc.q"] for x in rows]
+    assert "fail" not in q and q[2] == "suppressed" and q[4] == "ok"     # OFF 를 보낸 tick 은 suppressed
+    assert r.w._streak == 0 and r.w.connected                           # 연속 실패에 들어가지 않음
+    assert "off_confirmed" in r.kinds()
+    r.done()

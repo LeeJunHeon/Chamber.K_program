@@ -3,7 +3,8 @@
 명령: 질의 E(상태 26항목)·F(이온 압력 한 줄)만 읽기 경로로, 필라멘트 A(켜기)·B(끄기)는 filament_on/off 로만.
   그 밖의 글자(C·D 디개스 등)는 포트에 닿기 전에 거부(COMMAND_NOT_ALLOWED).
 읽기: tick 마다 E 1회(스냅샷 묶기 소스). 응답 대기 중이면 묶기가 보내지 않는다(stale).
-  E 마감은 IG_READ_DEADLINE_MS(≤ tick 마감) — 넘으면 그 tick 은 fail 이고, 늦게 온 바이트는 다음 질의 전에 비운다.
+  E 응답 제한은 IG_RESPONSE_LIMIT_MS(1200, tick 마감 뒤까지 — X25): 마감(900) 뒤 도착하면 다음 행에 late,
+  그동안 다음 tick 의 E 는 보내지 않는다(stale). 제한을 넘기면 fail, 늦게 온 바이트는 다음 질의 전에 비운다.
 필라멘트: A·B 에는 응답이 없다(confirms_link=False) — 결과는 다음 E 의 2번(필라멘트)·3번(방출)·5번(오류)으로 판정,
   기한(켜기 IG_FILAMENT_ON_TIMEOUT_SEC, 끄기 IG_FILAMENT_OFF_TIMEOUT_SEC)을 넘으면 실패 이벤트.
   A·B 뒤 IG_FILAMENT_SWITCH_QUIET_SEC 동안은 무응답을 실패로 세지 않는다(worker 억제 → 스냅샷 품질 suppressed),

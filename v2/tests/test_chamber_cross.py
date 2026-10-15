@@ -35,7 +35,7 @@ def test_plc_ig_dc_share_one_chamber():
     bus = SnapshotBus(c, blocks, [
         Source("plc", w["plc"], plc.source_read, ("plc", "heater", "rf"), CFG["PLC_READ_DEADLINE_MS"]),
         Source("dc", w["dc"], dc.source_read, ("dc",), CFG["DC_READ_DEADLINE_MS"]),
-        Source("ig", w["ig"], ig.source_read, ("ig",), CFG["IG_READ_DEADLINE_MS"]),
+        Source("ig", w["ig"], ig.source_read, ("ig",), CFG["IG_RESPONSE_LIMIT_MS"]),
     ], CFG["TICK_DEADLINE_MS"])
     rows = []
     actions = {

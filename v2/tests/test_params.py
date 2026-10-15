@@ -60,9 +60,10 @@ def test_defaults_equal_v1_operating_values():
     diff = []
     for k, v in _v1_json().items():
         if k in keymap:
-            d = defs[keymap[k]].default
-            if d != v or isinstance(d, bool) != isinstance(v, bool):
-                diff.append((k, v, d))
+            p = defs[keymap[k]]
+            want = v * p.v1_period_s if p.v1_period_s else v          # 횟수 → 시간(횟수 × v1 판정 주기)
+            if p.default != want or isinstance(p.default, bool) != isinstance(v, bool):
+                diff.append((k, v, p.default))
     assert not diff, diff
 
 
@@ -171,3 +172,22 @@ def test_comm_install_params():
         assert p[k].default == 3 and p[k].scope is Scope.INSTALL and p[k].role is Role.ADMIN and p[k].apply is Apply.RESTART
     assert p["PORT_OPEN_TIMEOUT_SEC"].default == 2.0 and p["CONNECT_INIT_TIMEOUT_SEC"].default == 5.0
     assert p["NAS_TODAY_COPY_SEC"].default == 600
+
+
+
+def test_count_params_converted_to_seconds():
+    """안전·판정용 횟수 파라미터는 없다 — 시간(*_SEC) 기본값 = v1 횟수 × v1 판정 주기."""
+    keys = set(P.by_key())
+    for old in ("FLOW_ERROR_MAX_COUNT", "MFC_PRESSURE_WARN_COUNT", "DC_POWER_ERROR_MAX_COUNT", "DC_MIN_CURRENT_ABORT_COUNT",
+                "DC_FAIL_MAX_TICKS", "RF_POWER_ERROR_MAX_COUNT", "RF_FAIL_MAX_TICKS", "RFPULSE_FORP_CONSECUTIVE_LIMIT",
+                "RFPULSE_REFP_CONSECUTIVE_LIMIT", "IG_BASE_STABLE_COUNT", "HEATER_OUT_DEAD_COUNT",
+                "PRESSURE_WAIT_STABLE_COUNT"):
+        assert old not in keys
+    conv = {p.key: (p.v1_default, p.v1_period_s, p.default) for p in P.PARAMS if p.v1_period_s}
+    assert len(conv) == 12
+    for k, (n, period, sec) in conv.items():
+        assert k.endswith("_SEC") and sec == pytest.approx(n * period), k
+    assert conv["RFPULSE_REFP_SEC"][2] == 15.0 and conv["FLOW_ERROR_SEC"][2] == 10.0
+    assert P.by_key()["RFPULSE_REFP_AUTO_OFF_SEC"].default > conv["RFPULSE_REFP_SEC"][2]
+    left = [k for k in keys if re.search(r"_(MAX_COUNT|CONSECUTIVE_LIMIT|STABLE_COUNT|DEAD_COUNT|MAX_TICKS)$", k)]
+    assert left == []

@@ -43,12 +43,12 @@ def test_fresh_install_defaults_sim(tmp_path):
 def test_apply_and_reload(tmp_path):
     s = _store(tmp_path)
     s.load()
-    r = s.apply(1, _web_values(FLOW_ERROR_MAX_COUNT=7), SH, busy=False)
-    assert r.status == "applied" and r.applied_keys == ["FLOW_ERROR_MAX_COUNT"]
-    assert s.values["FLOW_ERROR_MAX_COUNT"] == 7
+    r = s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False)
+    assert r.status == "applied" and r.applied_keys == ["FLOW_ERROR_SEC"]
+    assert s.values["FLOW_ERROR_SEC"] == 7
     s2 = _store(tmp_path)
-    assert s2.load()["FLOW_ERROR_MAX_COUNT"] == 7 and s2.version == 1 and s2.source == "active"
-    r = s.apply(2, _web_values(FLOW_ERROR_MAX_COUNT=8), SH, busy=False)
+    assert s2.load()["FLOW_ERROR_SEC"] == 7 and s2.version == 1 and s2.source == "active"
+    r = s.apply(2, _web_values(FLOW_ERROR_SEC=8), SH, busy=False)
     assert r.status == "applied" and (tmp_path / PREV).exists()
     assert json.loads((tmp_path / PREV).read_text(encoding="utf-8"))["version"] == 1
 
@@ -62,7 +62,7 @@ def test_apply_rejects_whole_version(tmp_path, patch, reason):
     s = _store(tmp_path)
     s.load()
     before = dict(s.values)
-    r = s.apply(1, _web_values(FLOW_ERROR_MAX_COUNT=7, **patch), SH, busy=False)
+    r = s.apply(1, _web_values(FLOW_ERROR_SEC=7, **patch), SH, busy=False)
     assert r.status == "rejected" and r.reason == reason
     assert s.values == before and not (tmp_path / ACTIVE).exists()      # 부분 적용 없음
 
@@ -79,13 +79,13 @@ def test_busy_rules(tmp_path):
     s = _store(tmp_path)
     s.load()
     # H 등급 변경은 공정 중 거부(S48)
-    r = s.apply(1, _web_values(DC_POWER_ERROR_MAX_COUNT=6), SH, busy=True)
+    r = s.apply(1, _web_values(DC_POWER_ERROR_SEC=6.0), SH, busy=True)
     assert r.reason == "CONFIG_H_IN_PROCESS"
     # live 는 즉시, idle 은 대기
-    r = s.apply(1, _web_values(FLOW_ERROR_MAX_COUNT=7, DC_SMALL_ERROR_GAIN=0.6), SH, busy=True)
+    r = s.apply(1, _web_values(FLOW_ERROR_SEC=7, DC_SMALL_ERROR_GAIN=0.6), SH, busy=True)
     assert r.status == "pending_idle"
-    assert r.applied_keys == ["FLOW_ERROR_MAX_COUNT"] and r.pending_keys == ["DC_SMALL_ERROR_GAIN"]
-    assert s.values["FLOW_ERROR_MAX_COUNT"] == 7 and s.values["DC_SMALL_ERROR_GAIN"] == 0.5
+    assert r.applied_keys == ["FLOW_ERROR_SEC"] and r.pending_keys == ["DC_SMALL_ERROR_GAIN"]
+    assert s.values["FLOW_ERROR_SEC"] == 7 and s.values["DC_SMALL_ERROR_GAIN"] == 0.5
     assert s.on_idle() == ["DC_SMALL_ERROR_GAIN"] and s.values["DC_SMALL_ERROR_GAIN"] == 0.6
 
 
@@ -100,12 +100,12 @@ def test_restart_keys_wait_for_restart(tmp_path):
 def test_corrupt_active_falls_back_to_prev(tmp_path):
     s = _store(tmp_path)
     s.load()
-    s.apply(1, _web_values(FLOW_ERROR_MAX_COUNT=7), SH, busy=False)
-    s.apply(2, _web_values(FLOW_ERROR_MAX_COUNT=8), SH, busy=False)
+    s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False)
+    s.apply(2, _web_values(FLOW_ERROR_SEC=8), SH, busy=False)
     p = tmp_path / ACTIVE
     p.write_text(p.read_text(encoding="utf-8")[:-40], encoding="utf-8")      # 잘린 파일
     s2 = _store(tmp_path)
-    assert s2.load()["FLOW_ERROR_MAX_COUNT"] == 7 and s2.source == "prev" and s2.version == 1
+    assert s2.load()["FLOW_ERROR_SEC"] == 7 and s2.source == "prev" and s2.version == 1
     assert any("사용 불가" in n for n in s2.notes)
 
 
@@ -113,7 +113,7 @@ def test_tampered_value_detected(tmp_path):
     s = _store(tmp_path)
     s.load()
     s.apply(1, _web_values(), SH, busy=False)
-    s.apply(2, _web_values(FLOW_ERROR_MAX_COUNT=8), SH, busy=False)
+    s.apply(2, _web_values(FLOW_ERROR_SEC=8), SH, busy=False)
     p = tmp_path / ACTIVE
     obj = json.loads(p.read_text(encoding="utf-8"))
     obj["values"]["HEATER_MV_LIMIT"] = 1299            # 범위 안이지만 해시가 다름
@@ -136,17 +136,17 @@ def test_both_broken_refuses_start(tmp_path):
 def test_active_missing_uses_prev(tmp_path):
     s = _store(tmp_path)
     s.load()
-    s.apply(1, _web_values(FLOW_ERROR_MAX_COUNT=7), SH, busy=False)
-    s.apply(2, _web_values(FLOW_ERROR_MAX_COUNT=8), SH, busy=False)
+    s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False)
+    s.apply(2, _web_values(FLOW_ERROR_SEC=8), SH, busy=False)
     (tmp_path / ACTIVE).unlink()                         # 바꿔치기 중간에 멈춘 경우
     s2 = _store(tmp_path)
-    assert s2.load()["FLOW_ERROR_MAX_COUNT"] == 7 and s2.source == "prev"
+    assert s2.load()["FLOW_ERROR_SEC"] == 7 and s2.source == "prev"
 
 
 def test_schema_change_fills_new_keys(tmp_path):
     s = _store(tmp_path)
     s.load()
-    s.apply(1, _web_values(FLOW_ERROR_MAX_COUNT=7), SH, busy=False)
+    s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False)
     # 예전 코드가 저장한 파일처럼: 키 하나 없고, 모르는 키 하나 있고, 해시 다름
     import v2.common.config_store as cs
     p = tmp_path / ACTIVE
@@ -158,7 +158,7 @@ def test_schema_change_fills_new_keys(tmp_path):
     p.write_text(json.dumps(obj), encoding="utf-8")
     s2 = _store(tmp_path)
     vals = s2.load()
-    assert vals["FLOW_ERROR_MAX_COUNT"] == 7 and vals["NAS_SYNC_PERIOD_SEC"] == 60 and "OLD_KEY" not in vals
+    assert vals["FLOW_ERROR_SEC"] == 7 and vals["NAS_SYNC_PERIOD_SEC"] == 60 and "OLD_KEY" not in vals
     assert any("정의가 바뀜" in n for n in s2.notes)
 
 
@@ -175,7 +175,7 @@ def test_override_install_and_secret(tmp_path):
 
 
 @pytest.mark.parametrize("vals", [
-    {"FLOW_ERROR_MAX_COUNT": 3},          # process 키는 덮어쓰기 불가
+    {"FLOW_ERROR_SEC": 3},          # process 키는 덮어쓰기 불가
     {"RUN_MODE": "production"},           # 허용값 아님
     {"NOPE": 1},
 ])

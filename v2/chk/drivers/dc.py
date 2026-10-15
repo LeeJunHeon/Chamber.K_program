@@ -7,7 +7,8 @@
 정전류 제어: ΔI 계산은 공정 엔진이 tick 마다, 드라이버는 CURR 쓰기만. tick 안 순서 t0 MEAS:ALL? → t0 + CURR_WRITE_DELAY_S
   CURR(not_before) — 다음 MEAS 까지 약 900 ms 라 간격 규칙을 지킨다.
 OFF 확인(S29): Sequence — OUTP OFF → 0.5 s → OUTP? 최대 DC_OFF_VERIFY_TRIES 회("0" 이면 끝, "1"·무응답이면 OUTP OFF 다시).
-  끝까지 확인 못 하면 DC_OFF_UNCONFIRMED. OFF 는 늦추지 않는다(안전이 먼저 — 그 tick 의 측정 하나가 fail 일 수 있다).
+  끝까지 확인 못 하면 DC_OFF_UNCONFIRMED. OFF 는 늦추지 않는다(안전이 먼저). OFF 를 쓴 뒤 질의 금지 시간의 측정은
+  suppressed(실패·두절 판정에 넣지 않음).
   출력 켜기 시퀀스는 tick 을 주면 그 tick 의 측정 뒤에 시작한다.
 연결 때: *IDN? 로 형명 기록, SYST:ERR? 1회. 쓰기 허용(prod·sim)이면 FACT:LAST-STA 를 읽고 SAF 가 아닐 때만 쓰고 되읽기,
   DC_SET_PROTECTION 이면 VOLT:OVP·CURR:OCP 를 쓰고 되읽기(기본 끔 — bench 확인 뒤 켬).
@@ -165,6 +166,10 @@ class DcDriver:
                                              confirms_link=False,
                                              start_after=(tick.t_mono + CURR_WRITE_DELAY_S) if tick else None))
 
+    def _suppress_after_off(self) -> None:
+        """OFF 를 쓴 뒤 질의 금지 시간 동안의 측정은 실패가 아니라 suppressed — 연속 실패·두절 판정에 넣지 않는다."""
+        self.worker.suppress(self._last_write + self.gap_s + 0.1, "DC OFF 확인 중")
+
     def output_off_confirmed(self, on_done: Optional[Callable[[str, Optional[str], list], None]] = None) -> None:
         tries = self.cfg["DC_OFF_VERIFY_TRIES"]
         answers = []
@@ -172,6 +177,7 @@ class DcDriver:
         def off(s):
             self._write(s, "OUTP OFF")
             self.out = False
+            self._suppress_after_off()
 
         def verify(k):
             def fn(s):
@@ -188,6 +194,7 @@ class DcDriver:
                 if k >= tries:
                     raise DcOffUnconfirmed("OUTP? 응답 " + "/".join(answers))
                 self._write(s, "OUTP OFF")
+                self._suppress_after_off()
             return fn
 
         def done(name, reason, results):
