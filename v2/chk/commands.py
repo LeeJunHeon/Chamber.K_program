@@ -42,6 +42,9 @@ CHK_REASONS: tuple = (
     Reason("HEATER_GAS_NOT_ACTIVE", "유지 중인 히터 가스 없음", "reject"),
     Reason("HEATER_OWNED_BY_PROCESS", "공정이 히터를 쓰는 중", "reject"),
     Reason("IG_DISABLED", "이온 게이지 꺼짐(base_pressure 공정 불가)", "reject"),
+    Reason("IG_ATM_FILAMENT_ON", "대기압(PLC ATM 센서) — 이온 게이지 필라멘트 켜기 금지", "reject"),
+    Reason("IG_FILAMENT_FAILED_CMD", "필라멘트 명령 결과 확인 실패", "fail"),
+    Reason("COMMAND_NOT_ALLOWED", "장비에 보내지 않는 명령(예: 이온 게이지 디개스 C·D)", "reject"),
     Reason("REMOTE_LOCKED_IN_PROCESS", "공정 중 원격 조작 금지 버튼", "reject"),
     Reason("DOOR_CONFLICT", "도어 올림·내림 동시 요청", "reject"),
     Reason("CONFIG_H_IN_PROCESS", "공정 중 H 등급 설정 변경 금지", "reject"),
@@ -135,6 +138,8 @@ PRECONDITIONS: tuple = (
     Pre("IG_FOR_BASE", "base_pressure 행이 있으면 IG_ENABLED", "IG_DISABLED"),
     Pre("RECIPE_VALID", "레시피 모든 행 검사 통과(recipe.check_process_row)", "RECIPE_INVALID", "process_service 적재 검사"),
     Pre("CONFIG_LIVE_ONLY_IN_PROCESS", "공정 중이면 apply=live 키만 즉시 적용, H 등급 변경은 거부", "CONFIG_H_IN_PROCESS"),
+    Pre("IG_ON_NOT_ATM", "필라멘트 켜기(on=true)일 때 PLC ATM 센서가 꺼져 있고 값이 신선", "IG_ATM_FILAMENT_ON",
+        "v2 (사용자 결정 2026-10-15)"),
 )
 
 
@@ -239,8 +244,9 @@ COMMANDS: tuple = (
     C("PLC_BUTTON", "PLC 버튼", (WEB,), "admin", (ANY_STATE,), ("PLC_LINK_UP",),
       (_a("target", "enum", enum=tuple(b.target for b in PLC_BUTTONS)), _a("on", "bool")),
       desc="공정 중에는 PLC_BUTTONS.remote_in_process=False 인 버튼 거부(REMOTE_LOCKED_IN_PROCESS)", v1="PLC 버튼 14종"),
-    C("IG_FILAMENT", "이온 게이지 필라멘트", (WEB,), "operator", IDLE_STATES, (), (_a("on", "bool"),),
-      desc="공정 중에는 공정 엔진이 필라멘트를 다룬다"),
+    C("IG_FILAMENT", "이온 게이지 필라멘트", (WEB,), "operator", IDLE_STATES, ("IG_ON_NOT_ATM",), (_a("on", "bool"),),
+      desc="유휴 상태에서만(공정 중에는 공정 엔진만 A/B). 켜기는 ATM 센서가 켜져 있으면 거부. "
+           "무응답 유예 IG_FILAMENT_SWITCH_QUIET_SEC, B 뒤 IG_RELIGHT_LOCKOUT_SEC 안의 A 는 늦춤"),
     # 설정
     C("CONFIG_APPLY", "설정 적용", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),
       (_a("version", "int", min=1), _a("values", "obj"), _a("schemaHash", "str")),
@@ -295,4 +301,16 @@ def check_command(kind: str, source: Source, state: str, args: Optional[dict] = 
         running = (state in STOPPABLE) if in_process is None else in_process
         if running and not btn.remote_in_process:
             return "REMOTE_LOCKED_IN_PROCESS"
+    return None
+
+
+def check_ig_filament(source, state: str, on: bool, plc_atm: Optional[bool], plc_fresh: bool) -> Optional[str]:
+    """웹 IG_FILAMENT 판정: 경로·상태(유휴만) → 켜기면 ATM 센서(값이 신선해야). 통과면 None."""
+    r = check_command("IG_FILAMENT", source, state, {"on": on})
+    if r:
+        return r
+    if on and (not plc_fresh or plc_atm is None):
+        return "IG_ATM_FILAMENT_ON"            # ATM 을 모르면 켜지 않는다
+    if on and plc_atm:
+        return "IG_ATM_FILAMENT_ON"
     return None

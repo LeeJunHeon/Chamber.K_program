@@ -488,6 +488,8 @@ ASSUMPTIONS: tuple = (
     Assumption("DC 형명·정격", "600 V / 1 A / 600 W (v1 상한)", "dc", "*IDN?"),
     Assumption("DC 쓰기→질의 간격", "500 ms (v1 실측)", "dc", "쓰기→질의"),
     Assumption("DC 아날로그 옵션(TER1)", "없음으로 가정", "dc", "TER1"),
+    Assumption("DC Delimiter", "LF(v1 송신과 같게)", "dc", "Response 설정"),
+    Assumption("DC LAST-STA 현재 값", "모름 — 연결 때 읽고 SAF 가 아니면 씀(prod)", "dc", "*IDN?"),
     Assumption("CESAR User Port 커넥터 형식", "모름(15핀/25핀) — 인터록 배선 보류라 당장 영향 없음", "rfpulse", "15핀/25핀"),
     Assumption("CESAR 응답 지연", "150 ms 이하(1초에 3질의)", "rfpulse", "지연"),
     Assumption("PLC 트랜잭션 왕복", "10~25 ms", "plc", "왕복 시간"),

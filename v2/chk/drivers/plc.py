@@ -28,7 +28,6 @@ from v2.chk import snapshot_fields as SF
 COILS_A = (0, 96)        # FC1 0..95
 COILS_B = (160, 161)     # FC1 160..320
 REGS = (0, 61)           # FC3 D0..D60
-TXN_TIMEOUT_S = 0.15     # 트랜잭션 하나 응답 제한(devices.PLC diff: 150 ms·재시도) — 회선 시간 약 10~25 ms 의 6배 이상
 
 _ADDR = {a.name: a for a in D.PLC_ADDRS}
 _TEMP_REGS = {"heater_pv", "heater_pv2", "heater_sv", "heater_cur_sv", "heater_sv_ramp", "heater_sv2"}
@@ -119,7 +118,8 @@ class PlcDriver:
             self.on_event(PlcEvent(kind, detail, reason, data))
 
     def _client(self, session) -> ModbusClient:
-        return ModbusClient(session, self.slave, TXN_TIMEOUT_S, retries=self.cfg["PLC_RETRY_COUNT"],
+        return ModbusClient(session, self.slave, self.cfg["PLC_TXN_TIMEOUT_MS"] / 1000.0,
+                            retries=self.cfg["PLC_RETRY_COUNT"],
                             retry_delay_s=self.cfg["PLC_RETRY_DELAY_MS"] / 1000.0,
                             read_only=not self.writes_allowed,
                             on_frame=(self._frame if self.frame_listeners else None))

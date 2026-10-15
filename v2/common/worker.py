@@ -51,6 +51,7 @@ class Request:
     not_before: Optional[float] = None
     purge: bool = False                         # safety: 큐 비우기·진행 중 읽기 취소
     exec_timeout_s: Optional[float] = None      # 실행 시작 기준 마감(시퀀스 단계) — 없으면 deadline
+    confirms_link: bool = True                  # 성공하면 통신 정상으로 셈. 응답 없는 쓰기는 False(장비가 답해야 정상)
     id: int = field(default_factory=lambda: next(_ids))
 
 
@@ -144,13 +145,19 @@ class Backoff:
         return False
 
 
+SEQ_DONE = object()      # 시퀀스 단계 fn 이 이것을 돌려주면 남은 단계 없이 성공으로 끝낸다
+
+
 class Sequence:
-    """여러 tick 에 걸쳐 한 단계씩 실행하는 쓰기. steps = [(이름, fn(session))]."""
+    """여러 tick 에 걸쳐 한 단계씩 실행하는 쓰기. steps = [(이름, fn(session))].
+    단계 fn 이 SEQ_DONE 을 돌려주면 성공으로 일찍 끝내고, 예외면 실패로 끝낸다."""
 
     def __init__(self, name: str, steps: List[tuple], gap_s: float = 0.0, step_timeout_s: float = 0.5,
-                 on_done: Optional[Callable[[str, Optional[str], List[Result]], None]] = None) -> None:
+                 on_done: Optional[Callable[[str, Optional[str], List[Result]], None]] = None,
+                 confirms_link: bool = True) -> None:
         self.name, self.steps, self.gap_s, self.step_timeout_s = name, list(steps), gap_s, step_timeout_s
         self.on_done = on_done
+        self.confirms_link = confirms_link
         self.results: List[Result] = []
         self.finished = False
 
@@ -248,13 +255,15 @@ class Worker:
                 return
             if res.status != Status.OK:
                 self._end_seq(seq, res.reason or res.status)
+            elif res.value is SEQ_DONE:                      # 단계가 일찍 끝냄(성공)
+                self._end_seq(seq, None)
             elif i + 1 < len(seq.steps):
                 self._queue_step(seq, i + 1, self.clock.monotonic() + seq.gap_s)
             else:
                 self._end_seq(seq, None)
 
         req = Request("write", fn, on_done=done, name=f"{seq.name}:{name}", not_before=not_before,
-                      exec_timeout_s=seq.step_timeout_s)
+                      exec_timeout_s=seq.step_timeout_s, confirms_link=seq.confirms_link)
         self.submit(req)
 
     def _end_seq(self, seq: Sequence, reason: Optional[str]) -> None:
@@ -346,8 +355,9 @@ class Worker:
         try:
             res.value = req.fn(Session(self.transport, deadline, cancel))
             res.status = Status.OK
-            self._streak = 0
-            self.last_ok = self.clock.monotonic()
+            if req.confirms_link:
+                self._streak = 0
+                self.last_ok = self.clock.monotonic()
         except Cancelled:
             res.status, res.reason = Status.CANCELLED, "CANCELLED"
             self.transport.reset_input()

@@ -98,16 +98,16 @@ def test_mv_interlock_and_pressure():
     sim.advance_to(0.2)
     assert not sim.coil("mv_interlock")
     sim.itl_fault = False
-    sim.gas_sccm = 20.0
+    sim.chamber.gas_sccm["ar"] = 20.0                     # 공용 챔버 모델
     sim.advance_to(30.0)
-    assert abs(sim.pressure - 2e-3) < 2e-4                # 20 sccm → 약 2 mTorr
+    assert abs(sim.chamber.pressure - 2e-3) < 2e-4        # 20 sccm → 약 2 mTorr
     sim.coils[A["mv"]] = False
     sim.coils[A["vent"]] = True
     sim.advance_to(200.0)
-    assert sim.coil("atm") and not sim.coil("mv_interlock")
-    sim.pressure_override = 1e-6
+    assert sim.coil("atm") and not sim.coil("mv_interlock") and sim.chamber.valves["vent"]
+    sim.chamber.pressure_override = 1e-6
     sim.advance_to(200.1)
-    assert sim.pressure == 1e-6
+    assert sim.chamber.pressure == 1e-6
 
 
 def test_restart_clears_memory():

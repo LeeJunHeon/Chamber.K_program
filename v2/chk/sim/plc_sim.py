@@ -14,11 +14,11 @@
     셋 다 FAULT 래치 + RUN OFF. 리셋 M00043(래더가 스스로 0 으로) — 원인이 없어졌을 때만 해제.
   - 래더 강제: D27 = 100(10.0 °C), D18 ≤ 1600, SV ≤ D13, D36 = D34 − 500.
   - MV 인터록 M00032 = MV(M00003) ∧ 진공(¬ATM) ∧ ¬주입 고장. 도어 올림·내림은 소프트웨어 상호배타라 모델 안 함.
-  - 진공 센서: ATM = 압력 > 700 Torr. Air·G1·G2·Water 는 설정값.
+  - 진공 센서: ATM = 챔버 압력 > 700 Torr. Air·G1·G2·Water 는 설정값.
   - RF: DAC enable(M00200) ∧ D40>0 → 순방향 = D40/4000 × RF_GEN_FULL_W(1차 지연 0.5 s), 반사 = 순방향 × 반사 비율
     (+ 주입 W). ADC: 순방향 4000 = 594.5 W, 반사 4000 = 200 W(드라이버와 같은 스케일).
-  - 압력: 1차 모델 — Vent 면 760 Torr 쪽(τ 20 s), MV·Turbo 면 기본 + 유량×K(τ 5 s), 러핑이면 0.05 Torr 쪽.
-    MFC 시뮬레이터가 붙기 전에는 gas_sccm 으로 유량을, pressure_override 로 압력을 직접 넣는다.
+  - 압력: 공용 챔버 모델(v2.chk.sim.chamber.Chamber) — PLC 시뮬레이터는 밸브 코일 상태를 챔버에 넣고 압력을 읽는다.
+    IG·DC(이후 MFC·RF Pulse) 시뮬레이터가 같은 챔버를 쓴다.
   - 재기동(restart): 메모리 전체 초기화(D60 마커 포함) — 래더 초기값만 남는다.
 """
 from __future__ import annotations
@@ -32,6 +32,7 @@ from v2.common.modbus_rtu import (
 )
 from v2.common.simdev import SimDevice
 from v2.chk import devices as D
+from v2.chk.sim.chamber import Chamber
 
 A = {a.name: a.addr for a in D.PLC_ADDRS}
 
@@ -51,7 +52,7 @@ LADDER_INIT = {13: 5000, 18: 1200, 20: 2, 21: 20, 26: 5500, 27: 100, 28: 1, 34: 
 
 class PlcSim(SimDevice):
     def __init__(self, slave: int = 1, baud: int = 115200, scan_delay_s: float = 0.005,
-                 usb_latency_s: float = 0.002, start: float = 0.0) -> None:
+                 usb_latency_s: float = 0.002, start: float = 0.0, chamber: Optional[Chamber] = None) -> None:
         super().__init__("plc", latency_s=0.0)
         self.slave, self.baud = slave, baud
         self.scan_delay_s, self.usb_latency_s = scan_delay_s, usb_latency_s
@@ -63,8 +64,7 @@ class PlcSim(SimDevice):
         self.tc_fail = False
         self.tc2_fail = False
         self.ref_inject_w = 0.0
-        self.gas_sccm = 0.0
-        self.pressure_override: Optional[float] = None
+        self.chamber = chamber or Chamber(start)
         self.forced_regs: Dict[int, int] = {}          # 래더가 강제하는 값 흉내(되읽기 불일치 시험)
         self._init_memory()
 
@@ -78,7 +78,6 @@ class PlcSim(SimDevice):
         self.sv_ramp = T_AMB
         self.integ = 0.0
         self.rf_fwd_w = 0.0
-        self.pressure = 5e-7          # 고진공에서 시작
         self.wd_last_val = self.regs[A["heater_wd"]]
         self.wd_last_change = self.t
         self.coils[A["mv"]] = True    # 진공 운전 중 상태로 시작
@@ -163,19 +162,9 @@ class PlcSim(SimDevice):
         # RF
         target_w = (r[A["rf_dac"]] / D.RF_DAC_FULL_SCALE * RF_GEN_FULL_W) if c[A["rf_dac_enable"]] else 0.0
         self.rf_fwd_w += (target_w - self.rf_fwd_w) * min(1.0, dt / RF_TAU_S)
-        # 압력
-        if self.pressure_override is not None:
-            self.pressure = self.pressure_override
-        else:
-            if c[A["vent"]]:
-                tgt, tau = 760.0, 20.0
-            elif c[A["mv"]] and c[A["turbo"]]:
-                tgt, tau = 5e-7 + self.gas_sccm * 1e-4, 5.0
-            elif c[A["rotary"]] and (c[A["rv"]] or c[A["fv"]]):
-                tgt, tau = 0.05, 10.0
-            else:
-                tgt, tau = self.pressure, 1.0
-            self.pressure += (tgt - self.pressure) * min(1.0, dt / tau)
+        # 압력 — 공용 챔버(밸브 코일 상태를 넣고 시각을 같이 진행)
+        self.chamber.set_valves(**{k: c[A[k]] for k in ("mv", "turbo", "rotary", "rv", "fv", "vent")})
+        self.chamber.advance_to(self.t + dt)
         self._ladder_outputs()
 
     def _p(self) -> float:
@@ -194,7 +183,7 @@ class PlcSim(SimDevice):
         ref = fwd * RF_REF_RATIO + (self.ref_inject_w if fwd > 1.0 else 0.0)
         r[A["rf_fwd_adc"]] = max(0, min(4000, int(round(fwd / 594.5 * 4000))))
         r[A["rf_ref_adc"]] = max(0, min(4000, int(round(ref / 200.0 * 4000))))
-        c[A["atm"]] = self.pressure > 700.0
+        c[A["atm"]] = self.chamber.pressure > 700.0
         for k, v in self.sensors.items():
             c[A[k]] = v
         c[A["mv_interlock"]] = bool(c[A["mv"]] and not c[A["atm"]] and not self.itl_fault)

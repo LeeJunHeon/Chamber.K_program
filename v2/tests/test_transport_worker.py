@@ -337,3 +337,24 @@ def test_connect_init_timeout():
     kinds = [(e.kind, round(e.t, 3)) for e in ev.items]
     assert ("connected", 0.0) in kinds and ("disconnected", 2.0) in kinds and ("connected", 3.0) in kinds
     w.stop()
+
+
+def test_write_without_reply_does_not_confirm_link():
+    from v2.common.worker import SEQ_DONE
+    dev = LineDevice("d", {"a": 1}, latency_s=0.05)
+    c, w, _ = make(dev)
+    box = Box(c)
+    w.submit(read_req(c, box))
+    box.wait(1)
+    t_ok = w.last_ok
+    c.wait_until(c.monotonic() + 1.0)
+    w.submit(Request("write", lambda s: s.write(b"W a=2\r"), deadline=c.monotonic() + 1, on_done=box.cb,
+                     confirms_link=False))
+    box.wait(2)
+    assert box.items[1].status == Status.OK and w.last_ok == t_ok      # 응답 없는 쓰기는 정상으로 세지 않음
+    done = Box(c)
+    w.submit_sequence(Sequence("early", [("a", lambda s: SEQ_DONE), ("never", lambda s: 1 / 0)],
+                               on_done=lambda n, r, res: done.cb((r, len(res)))))
+    done.wait(1)
+    assert done.items == [(None, 1)]                                    # 일찍 성공으로 끝남
+    w.stop()

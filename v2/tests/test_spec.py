@@ -235,3 +235,15 @@ def test_common_reasons_not_shadowed():
     common = {r.code for r in COMMON_REASONS}
     chk = {r.code for r in C.CHK_REASONS}
     assert not common & chk
+
+
+@pytest.mark.parametrize("src,state,on,atm,fresh,expect", [
+    (Source.WEB, "IDLE", True, False, True, None),
+    (Source.WEB, "LOADED", False, True, True, None),                  # 끄기는 ATM 이어도 허용
+    (Source.WEB, "IDLE", True, True, True, "IG_ATM_FILAMENT_ON"),
+    (Source.WEB, "IDLE", True, None, False, "IG_ATM_FILAMENT_ON"),    # ATM 을 모르면 켜지 않음
+    (Source.WEB, "BASE_WAIT", True, False, True, "STATE_NOT_ALLOWED"),  # 공정 중은 공정 엔진만
+    (Source.HMI, "IDLE", True, False, True, "SOURCE_NOT_ALLOWED"),
+])
+def test_ig_filament_web_rule(src, state, on, atm, fresh, expect):
+    assert C.check_ig_filament(src, state, on, atm, fresh) == expect
