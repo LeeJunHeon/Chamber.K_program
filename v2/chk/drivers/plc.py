@@ -344,7 +344,28 @@ class PlcDriver:
             c.write_reg(_ADDR["rf_dac"].addr, 0)
             c.write_coil(_ADDR["rf_dac_enable"].addr, False)
             self._rf_enabled, self._rf_set_w = False, 0.0
-        self.submit_write("RF OFF", fn, kind="safety")
+        self.submit_write("RF OFF", fn, kind="safety", on_done=on_done)
+
+    def rf_set_dac(self, counts: int, on_done=None) -> None:
+        """RF DAC 원시값(램프다운 단계용, safety 우선순위). enable 은 건드리지 않는다."""
+        counts = max(0, int(counts))
+
+        def fn(s):
+            self._client(s).write_reg(_ADDR["rf_dac"].addr, counts)
+        self.submit_write(f"RF DAC={counts}", fn, kind="safety", on_done=on_done)
+
+    def coils_off(self, names, on_done=None) -> None:
+        """여러 버튼 코일을 OFF — safety 우선순위 한 요청(셔터·차단밸브 닫기 등 정지 순서용)."""
+        addrs = [_ADDR[n].addr for n in names]
+        for n in names:
+            if _ADDR[n].kind != "coil" or "W" not in _ADDR[n].access:
+                raise ValueError(f"{n}: 쓸 수 없는 주소")
+
+        def fn(s):
+            c = self._client(s)
+            for a in addrs:
+                c.write_coil(a, False)
+        self.submit_write("OFF " + ",".join(names), fn, kind="safety", on_done=on_done)
 
     def outputs_off(self, keep_pumps: bool, on_done=None) -> None:
         """ALL STOP 의 PLC_OUTPUTS_OFF — 버튼 코일 OFF(펌프 계통은 keep_pumps 면 그대로).

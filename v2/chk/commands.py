@@ -94,6 +94,8 @@ CHK_REASONS: tuple = (
     Reason("HEATER_TC1_DEVIATION", "TC1 편차 큼", "info"),
     Reason("PLC_DISCONNECTED", "PLC 끊김 지속(알림)", "info"),
     Reason("PLC_RECOVERED_SAFE", "PLC 복구 뒤 안전 상태 다시 적용", "info"),
+    Reason("PLC_RECONNECTED", "PLC 끊김 알림 뒤 링크 복구", "info"),
+    Reason("MV_INTERLOCK_BLIP", "MV 인터록이 지속 시간 안에 다시 참(기록만)", "info"),
     Reason("COMM_LONG_OUTAGE", "장비 장기 두절", "info"),
     Reason("LINK_STALE", "장비 값이 오래됨 — 화면 잠금", "info"),
 )

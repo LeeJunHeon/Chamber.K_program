@@ -1,6 +1,8 @@
 """챔버K 시뮬레이터 시험대 — 실제 드라이버 5개(PLC·MFC·DC·RF Pulse·IG) + 시뮬레이터 + 공용 챔버 + 묶기 + 기록.
 
 sim 전용(SimTransport). RF power 는 PLC 드라이버 안(DAC·ADC). tick 훅: PLC 하트비트·링크, IG 필라멘트 기한.
+안전 규칙(ChkSafety): plc250 = PLC 폴링 직후(fast_listeners), tick = 행이 닫힌 뒤(sink), 드라이버 이벤트 → 이벤트 규칙.
+공정 쪽은 SimpleProcess(rig.process) — 시험이 상태·사용 장비를 정한다.
 scenario "light": 가스 20 sccm·SP1 5 mTorr(MFC) → 필라멘트 켜기(IG) → DC 0.3 A → RF Pulse 100 W → 끄기 —
   쓰기가 1초 읽기와 섞여도 tick 이 밀리지 않는지 보려는 것(공정 엔진 아님).
 """
@@ -21,6 +23,7 @@ from v2.chk.drivers.ig import IgDriver
 from v2.chk.drivers.mfc import CH_AR, MfcDriver
 from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
+from v2.chk.safety import ChkSafety, SimpleProcess
 from v2.chk.sim.cesar_sim import CesarSim
 from v2.chk.sim.chamber import Chamber
 from v2.chk.sim.dc_sim import DcSim
@@ -60,11 +63,22 @@ class ChkRig:
         ], c["TICK_DEADLINE_MS"], SF.PROCESS_FIELDS)
         self.recorder = Recorder(out_dir, self.bus.columns, retention_days=c["SNAPSHOT_RETENTION_DAYS"])
         self.fast = PlcFastPoller(clock, self.plc, c["PLC_FAST_POLL_MS"])
-        self.loop = TickLoop(clock, self.bus, [self.recorder.put_row], tick_hooks=[self._tick])
+        self.process = SimpleProcess()
+        self.safety = ChkSafety(clock, c, self.process, self.plc, self.mfc, self.dc, self.rfp, self.ig, on_event=self._sev)
+        self.plc.fast_listeners.append(self.safety.on_poll)
+        self.loop = TickLoop(clock, self.bus, [self.recorder.put_row, self.safety.on_row], tick_hooks=[self._tick])
         self.scenario = scenario
+
+    def _sev(self, e) -> None:
+        self.events.append(e)
+        if self.recorder is not None:
+            self.recorder.put_event(iso_local(self.clock.wall()), e.level, (e.code or e.kind).upper(),
+                                    f"safety:{e.rule}", e.detail)
 
     def _ev(self, e) -> None:
         self.events.append(e)
+        if getattr(self, "safety", None) is not None:
+            self.safety.on_driver_event(e)
         if self.recorder is None:
             return
         kind = getattr(e, "kind", "?")
