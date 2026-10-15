@@ -102,6 +102,7 @@ def make(script, **kw):
     kw.setdefault("timeout_ms", 80)
     kw.setdefault("min_gap_ms", 0)
     kw.setdefault("fail_limit", 3)
+    kw.setdefault("short_outage_sec", 0.0)      # 짧은 무응답 유예는 따로 시험(아래 가짜 시계) — 여기선 바로 경고
     kw.setdefault("policy", ReconnectPolicy(50, 200, 600, 1000, 600))
     c = IonGaugeController("COM12", 9600, port_factory=lambda parent: FakeIgPort(script, parent),
                            port_lister=lambda: script.ports, **kw)
@@ -159,8 +160,9 @@ def test_no_response_counts_fail_then_reopens_with_identity(qapp):
     kinds = [e["종류"] for e in rec["ev"]]
     assert kinds[0] == "실패" and kinds.count("실패") == 1       # 두절당 실패 1행
     assert set(kinds) <= {"실패", "재연결"}
-    warn = [m for lv, m in rec["msg"] if "26항목 미수신" in m]
-    assert len(warn) == 1                                       # 매초 로그 없음
+    warn = [m for lv, m in rec["msg"] if lv == "IG(경고)"]
+    assert warn and not any("26항목 미수신" in m for m in warn)   # 끊김 판정 전 1~2회 실패는 경고 없음
+    assert len(warn) == len(set(warn)) <= 3                      # 매초 로그 없음·같은 경고 두 번 없음
 
 
 def test_late_response_is_discarded_and_next_cycle_ok(qapp):
@@ -634,9 +636,9 @@ def test_gauge_kind_change_logged_once_with_raw(qapp):
     c.connect_device()
     spin(1300)
     c.cleanup()
-    lines = [(lv, m) for lv, m in rec["msg"] if m.startswith("[IG] 게이지")]
-    assert lines == [("IG(경고)", "[IG] 게이지 A < 1.0E-3(-4 -4) → 음수 — 영점·오염 확인(-60 -4)"),
-                     ("IG", "[IG] 게이지 A 음수 — 영점·오염 확인(-70 -4) → < 1.0E-3(0 -4)")]
+    lines = [(lv, m) for lv, m in rec["msg"] if m.startswith("게이지")]
+    assert lines == [("IG(경고)", "게이지 A < 1.0E-3(-4 -4) → 음수 — 영점·오염 확인(-60 -4)"),
+                     ("IG", "게이지 A 음수 — 영점·오염 확인(-70 -4) → < 1.0E-3(0 -4)")]
 
 
 def test_first_reading_warn_kind_is_logged(qapp):
@@ -647,7 +649,7 @@ def test_first_reading_warn_kind_is_logged(qapp):
     c.connect_device()
     spin(500)
     c.cleanup()
-    assert [m for _, m in rec["msg"] if m.startswith("[IG] 게이지")] == ["[IG] 게이지 B 음수 — 영점·오염 확인(-7 -3)"]
+    assert [m for _, m in rec["msg"] if m.startswith("게이지")] == ["게이지 B 음수 — 영점·오염 확인(-7 -3)"]
 
 
 def test_error_code_0_to_n_logged_once(qapp):
@@ -667,5 +669,100 @@ def test_error_code_0_to_n_logged_once(qapp):
     spin(900)
     c.cleanup()
     errs = [(lv, m) for lv, m in rec["msg"] if "오류 15" in m]
-    assert errs == [("IG(경고)", "[IG] 필라멘트 꺼짐 — 오류 15: 9.9E-3 Torr 초과 차단")]
-    assert [m for _, m in rec["msg"] if m.startswith("[IG] IG")] == ["[IG] IG 9.0E-6 Torr → 꺼짐(0)"]
+    assert errs == [("IG(경고)", "필라멘트 꺼짐 — 오류 15: 9.9E-3 Torr 초과 차단")]
+    assert [m for _, m in rec["msg"] if m.startswith("IG ")] == ["IG 9.0E-6 Torr → 꺼짐(0)"]
+    assert not any(m.startswith("[IG]") for _, m in rec["msg"])      # level 이 IG 라 모니터가 [IG] 를 붙인다 — 두 번 없음
+
+
+# ───────────── 짧은 무응답(가짜 시계, 포트·타이머 없이 상태 기계만) ─────────────
+class _Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+@pytest.fixture
+def outage(qapp, monkeypatch):
+    import device.IonGauge as IG
+    clk = _Clock()
+    monkeypatch.setattr(IG.time, "monotonic", clk)
+    c = IonGaugeController("COM12", fail_limit=3)              # 기본 short_outage_sec = 5초
+    rec = {"msg": [], "ev": []}
+    c.status_message.connect(lambda lv, m: rec["msg"].append((lv, m)))
+    c.comm_event.connect(lambda r: rec["ev"].append(r["종류"]))
+    c._set_comm("ok", "")                                       # 연결돼 있던 상태에서 시작
+    rec["msg"].clear()
+
+    def fail(n, step=1.2, kind="timeout"):
+        for _ in range(n):
+            c._cycle_failed(kind, "1200 ms 안에 26항목 미수신(받은 줄 0)")
+            clk.t += step
+
+    return c, clk, rec, fail
+
+
+def test_default_short_outage_is_5s():
+    assert IonGaugeController("COM12").short_outage_sec == 5.0
+
+
+@pytest.mark.parametrize("n", [1, 2])
+def test_one_or_two_failures_leave_no_monitor_line(outage, n):
+    c, clk, rec, fail = outage
+    fail(n)
+    c._check_short_outage()
+    c._set_comm("ok", "")
+    assert rec["msg"] == []                                     # 경고도 복구 줄도 없음
+    assert rec["ev"] == ["실패", "복구"]                         # COMM_events 는 지금처럼
+
+
+def test_cut_then_recovered_within_5s_is_one_info_line(outage):
+    c, clk, rec, fail = outage
+    fail(3)                                                     # t0 … 끊김 판정(3회째, t0+2.4) 뒤 clk = t0+3.6
+    t_cut = clk.t - 1.2
+    c._set_comm("no_identity", "F 응답 없음")                    # 재연결 시도 실패도 유예 중엔 조용히
+    for k in range(3):
+        clk.t = t_cut + 1 + k
+        c._check_short_outage()
+    clk.t = t_cut + 3.0                                         # 끊김 판정 3초 뒤 복구
+    c._set_comm("ok", "")
+    assert rec["msg"] == [("IG", "이온 게이지 짧은 무응답 5초 — 복구")]   # 무응답 전체 = 첫 실패부터 5.4초
+    assert rec["ev"] == ["실패", "복구"]
+
+
+def test_cut_and_8s_is_warning_then_recovery(outage):
+    c, clk, rec, fail = outage
+    fail(3)
+    t_cut = clk.t - 1.2
+    for k in range(1, 9):                                       # 1초마다 폴링 틱
+        clk.t = t_cut + k
+        c._check_short_outage()
+        if k == 6:
+            c._set_comm("no_identity", "F 응답 없음")           # 유예가 끝난 뒤 종류가 바뀌면 지금처럼 경고
+    c._set_comm("ok", "")
+    assert rec["msg"] == [
+        ("IG(경고)", "이온 게이지 응답 없음 — 연속 3회 실패 — 포트를 닫고 다시 연결"),   # 끊김 판정 5초 뒤 1회
+        ("IG(경고)", "이온 게이지 응답 없음/형식 다름 — F 응답 없음"),
+        ("IG", "이온 게이지 통신 복구 (단절 10.4초)")]
+    assert rec["ev"] == ["실패", "복구"]
+
+
+def test_front_panel_filament_change_blip_is_short_outage(outage):
+    """전면 패널로 필라멘트를 켜고 끈 직후의 무응답 — 프로그램이 A·B 를 보내지 않았으니 유예(quiet) 대상이 아니고,
+    짧은 무응답 규칙으로 처리된다(3~7초 무응답 실측 → 정보 1줄)."""
+    c, clk, rec, fail = outage
+    assert not c._in_quiet()
+    fail(3, step=1.0)
+    fail(2, step=1.0, kind="bad_response")                      # 재연결 직후 불완전 응답
+    c._set_comm("ok", "")
+    assert rec["msg"] == [("IG", "이온 게이지 짧은 무응답 5초 — 복구")]
+
+
+def test_program_a_b_quiet_unchanged(outage):
+    c, clk, rec, fail = outage
+    c._quiet_until = clk.t + 12.0                               # A·B 뒤 12초 유예는 그대로 — 실패로 세지 않는다
+    c._quiet_kind = "starting"
+    c._quiet_skip()
+    assert c._fail_streak == 0 and c._grace_deadline is None
+    assert rec["msg"] == [("IG", "이온 게이지 필라멘트 시동 중 — 무응답을 실패로 세지 않음")]

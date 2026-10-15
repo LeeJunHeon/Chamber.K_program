@@ -25,7 +25,7 @@ def ig(win, monkeypatch):
     s = Script(delay_ms=20)
     w = win
     w._setup_ion_gauge(enabled=True, port="COM12", csv_enabled=True, controller_factory=lambda: IonGaugeController(
-        "COM12", poll_ms=200, timeout_ms=150, min_gap_ms=0, fail_limit=2,
+        "COM12", poll_ms=200, timeout_ms=150, min_gap_ms=0, fail_limit=2, short_outage_sec=0.3,
         policy=ReconnectPolicy(100, 200, 600, 1000, 600),
         port_factory=lambda parent: FakeIgPort(s, parent), port_lister=lambda: s.ports))
     yield w, s, logs
@@ -132,7 +132,8 @@ def test_lost_comm_shows_age_and_logs_comm_event(ig):
         ig_rows = [r for r in csv.DictReader(f) if r["장비"] == "IG"]
     assert ig_rows and ig_rows[0]["종류"] == "실패"
     warn = [m for lv, m in logs if lv == "IG(경고)"]
-    assert 1 <= len(warn) <= 3                                   # 상태가 바뀔 때만
+    assert 1 <= len(warn) <= 3                                   # 상태가 바뀔 때만(끊김 판정 + 짧은 무응답 유예 뒤)
+    assert not any(m.startswith("[IG]") for lv, m in logs if lv.startswith("IG"))   # "[IG] [IG]" 이중 접두어 없음
     # 끊긴 주기의 CSV 행은 압력 칸이 비어 있다
     lost = [r for r in w._ig_rows if r["통신 상태"] != "정상"]
     assert lost and all("IG(Torr)" not in r for r in lost)

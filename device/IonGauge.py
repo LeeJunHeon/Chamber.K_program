@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -350,6 +351,11 @@ class IonGaugeController(QObject):
       중첩 이벤트 루프로 기다리지 않는다. 다음 요청 전에 남은 입력을 비운다. 명령 간격은 min_gap_ms 이상.
     [두절] 연속 fail_limit 회 실패하면 포트를 닫고 공통 ReconnectPolicy 일정으로 다시 연다. 다시 열면 F 로
       신원을 확인한 뒤에만 E 를 보낸다. 로그·COMM 이벤트는 상태가 바뀔 때만 낸다(매초 남기지 않는다).
+    [짧은 무응답] 10/14~15 실측: 전면 패널로 필라멘트를 켜고 끈 순간·가스 도입 직후에 3~7초 무응답(공정 영향 없음).
+      - 끊김 판정(fail_limit) 전의 1~2회 실패는 모니터에 남기지 않는다(COMM_events 의 실패·복구는 지금처럼).
+      - 끊김 판정 뒤 short_outage_sec(5초) 안에 복구되면 경고 대신 정보 1줄 "이온 게이지 짧은 무응답 N초 — 복구".
+      - 그 안에 복구되지 않으면 그때 지금과 같은 경고를 낸다(복구 때는 "통신 복구 (단절 N초)").
+      프로그램이 보낸 A·B 뒤 유예(quiet_sec)는 이것과 별개로 그대로다.
     [필라멘트] filament_on()/filament_off() 로만 A/B 를 보낸다(응답 없음). 진행 중인 E 가 끝난 뒤 보내고,
       보낸 뒤 e_block_sec(1초)는 E 를 보내지 않는다. B 뒤 relight_lockout_sec(5초) 안의 A 는 그만큼 늦춘다
       (매뉴얼: 끈 뒤 4초 안에는 다시 켤 수 없다). A·B 뒤 quiet_sec(IG_FILAMENT_SWITCH_QUIET_SEC) 동안은 E 무응답·
@@ -369,6 +375,7 @@ class IonGaugeController(QObject):
                  poll_ms: int = 1000, timeout_ms: Optional[int] = None, fail_limit: int = 3, min_gap_ms: int = 500,
                  quiet_sec: Optional[float] = None, on_timeout_sec: Optional[float] = None,
                  off_timeout_sec: float = 20.0, relight_lockout_sec: float = 5.0, e_block_sec: float = 1.0,
+                 short_outage_sec: float = 5.0,
                  port_factory: Optional[Callable[[QObject], object]] = None,
                  port_lister: Optional[Callable[[], Iterable[str]]] = None,
                  policy: Optional[ReconnectPolicy] = None, parent=None):
@@ -384,6 +391,7 @@ class IonGaugeController(QObject):
         self.off_timeout_sec = float(off_timeout_sec)
         self.relight_lockout_sec = float(relight_lockout_sec)
         self.e_block_sec = float(e_block_sec)
+        self.short_outage_sec = float(short_outage_sec)
         self._port_factory = port_factory
         self._port_lister = port_lister
         self._policy = policy or ReconnectPolicy(COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS,
@@ -404,6 +412,9 @@ class IonGaugeController(QObject):
         self._fail_streak = 0
         self._outage_t0: Optional[float] = None # 이번 두절의 시작(monotonic). None = 두절 아님
         self._reopened = False                  # 이번 두절 중 포트를 닫았다 다시 열었는가
+        # 짧은 무응답 유예 — 이 시각(monotonic) 전에는 통신 경고를 모니터에 내지 않는다. None = 유예 아님,
+        #  inf = 끊김 판정 전(1~2회 실패), 유한값 = 끊김 판정 시각 + short_outage_sec
+        self._grace_deadline: Optional[float] = None
         self._last_reading: Optional[IgReading] = None
         self._last_ok_wall: Optional[float] = None
         self._last_send_t = -1e9
@@ -497,6 +508,7 @@ class IonGaugeController(QObject):
         self._fil_queue = None
         self._fil_expect = None
         self._fil_deadline = None
+        self._grace_deadline = None
         for t in (self._poll_timer, self._resp_timer, self._reconnect_timer, self._fil_timer):
             if t is not None:
                 try:
@@ -548,6 +560,7 @@ class IonGaugeController(QObject):
         if not self._want:
             return
         self._check_filament_deadline()
+        self._check_short_outage()
         if not self._linked:
             self._emit_snapshot(fresh=False)    # 끊겨 있어도 1초에 한 번(화면·CSV 가 '끊김'을 그대로 보여 준다)
             return
@@ -637,9 +650,13 @@ class IonGaugeController(QObject):
     # ==================== 실패·재연결 ====================
     def _cycle_failed(self, kind: str, detail: str) -> None:
         self._fail_streak += 1
+        if self._outage_t0 is None and self._grace_deadline is None:
+            self._grace_deadline = math.inf     # 연결돼 있다가 처음 실패 — 끊김 판정 전에는 모니터에 남기지 않는다
         self._set_comm(kind, detail)
         self._emit_snapshot(fresh=False)
         if self._fail_streak >= self.fail_limit:
+            if self._grace_deadline == math.inf:
+                self._grace_deadline = time.monotonic() + self.short_outage_sec   # 끊김 판정 — 짧은 무응답 유예 시작
             self._link_failed(kind, f"연속 {self._fail_streak}회 실패 — 포트를 닫고 다시 연결")
 
     def _link_failed(self, kind: str, detail: str) -> None:
@@ -680,6 +697,11 @@ class IonGaugeController(QObject):
                 lost = time.monotonic() - self._outage_t0
                 self._outage_t0 = None
                 self._emit_event("복구", f"단절 {lost:.1f}초", lost=lost)
+                grace, self._grace_deadline = self._grace_deadline, None
+                if grace is not None and time.monotonic() < grace:
+                    if grace != math.inf:       # 끊김 판정 뒤 short_outage_sec 안에 복구 — 정보 1줄
+                        self.status_message.emit("IG", f"이온 게이지 짧은 무응답 {lost:.0f}초 — 복구")
+                    return                      # 끊김 판정 전(1~2회 실패) 복구는 모니터에 남기지 않는다
                 self.status_message.emit("IG", f"이온 게이지 통신 복구 (단절 {lost:.1f}초)")
             else:
                 self.status_message.emit("IG", f"이온 게이지 연결됨 ({self.port_name})")
@@ -691,10 +713,27 @@ class IonGaugeController(QObject):
         if self._outage_t0 is None:
             self._outage_t0 = time.monotonic()
             self._emit_event("실패", f"{text}: {detail}")
+        if self._in_grace():
+            return                              # 짧은 무응답 유예 중 — 경고는 유예가 끝나도 안 돌아오면 낸다
+        self._grace_deadline = None             # 경고를 냈다 — 미뤄 둔 경고를 또 내지 않는다
         self.status_message.emit("IG(경고)", f"이온 게이지 {text} — {detail}")
 
+    def _in_grace(self) -> bool:
+        return self._grace_deadline is not None and time.monotonic() < self._grace_deadline
+
+    def _check_short_outage(self) -> None:
+        """끊김 판정 뒤 short_outage_sec 가 지나도 복구되지 않았으면 미뤄 둔 경고를 지금 낸다(1회)."""
+        d = self._grace_deadline
+        if d is None or d == math.inf or time.monotonic() < d:
+            return
+        self._grace_deadline = None
+        if self._comm in ("ok", "starting", "stopping", "disabled", "connecting"):
+            return
+        self.status_message.emit("IG(경고)", f"이온 게이지 {COMM_TEXT.get(self._comm, self._comm)} — {self._detail}")
+
     def _log_gauge_changes(self, r: IgReading) -> None:
-        """이온·게이지 A/B 상태 '종류'가 바뀔 때만 1줄(원문 포함). 예) "[IG] 게이지 A < 1.0E-3(0 -4) → 음수 — 영점·오염 확인(-60 -4)".
+        """이온·게이지 A/B 상태 '종류'가 바뀔 때만 1줄(원문 포함). 예) "게이지 A < 1.0E-3(0 -4) → 음수 — 영점·오염 확인(-60 -4)".
+        level 이 "IG"/"IG(경고)" 라 모니터 줄에는 이미 [IG] 가 붙는다 — 메시지에는 접두어를 붙이지 않는다.
         하한 아래(0·작은 음수·1.0E-3 미만 양수) 안에서 오가는 것은 같은 종류라 남기지 않는다. 값만 바뀌어도 남기지 않는다.
         첫 값은 주의 종류(음수·영점 미조정·값 오류)일 때만 남긴다(원문 확보용)."""
         for key, name, state, text, raw in (
@@ -706,11 +745,11 @@ class IonGaugeController(QObject):
             self._gauge_prev[key] = (state, shown)
             if prev is None:
                 if state in _WARN_STATES:
-                    self.status_message.emit("IG(경고)", f"[IG] {name} {shown}")
+                    self.status_message.emit("IG(경고)", f"{name} {shown}")
                 continue
             if prev[0] != state:
                 self.status_message.emit("IG(경고)" if state in _WARN_STATES else "IG",
-                                         f"[IG] {name} {prev[1]} → {shown}")
+                                         f"{name} {prev[1]} → {shown}")
 
     def _log_device_changes(self, r: IgReading) -> None:
         key = (r.filament_on, r.emission_ok, r.degas_on, r.error_code)
@@ -720,7 +759,7 @@ class IonGaugeController(QObject):
         self._device_key = key
         level = "IG(경고)" if filament_warn(r) else "IG"
         if r.error_code and not prev_code:
-            self.status_message.emit(level, f"[IG] {filament_text(r)}")      # 오류 코드 0 → N
+            self.status_message.emit(level, filament_text(r))               # 오류 코드 0 → N
             return
         self.status_message.emit(level, f"이온 게이지 {filament_text(r)}")
 
