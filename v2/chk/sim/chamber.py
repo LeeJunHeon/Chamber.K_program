@@ -5,7 +5,8 @@
 
 압력(Torr) — 1차 모델(가정값):
   Vent 열림            → 760 쪽으로, τ 20 s
-  MV·Turbo            → BASE_TORR + 총 유량 × TORR_PER_SCCM 쪽으로, τ 5 s   (20 sccm ≈ 2 mTorr)
+  MV·Turbo            → BASE_TORR + 총 유량 × TORR_PER_SCCM / 유효 배기 쪽으로, τ 5 s   (20 sccm·완전 열림 ≈ 2 mTorr)
+                         유효 배기 = THROTTLE_MIN + (1 − THROTTLE_MIN) × throttle(압력 제어 밸브 열림 0~1, MFC 시뮬레이터가 넣음)
   러핑(Rotary·RV|FV)   → 0.05 쪽으로, τ 10 s
   그 밖               → 그대로
   pressure_override 가 있으면 그 값 고정.
@@ -25,6 +26,7 @@ from typing import Dict, Optional
 BASE_TORR = 5e-7
 TORR_PER_SCCM = 1e-4
 ROUGH_TORR = 0.05
+THROTTLE_MIN = 0.02      # 밸브를 다 닫아도 남는 배기(누설·바이패스)
 ATM_TORR = 760.0
 IGNITE_MIN_MTORR = 0.5
 IGNITE_MAX_MTORR = 100.0
@@ -40,6 +42,7 @@ class Chamber:
         self.valves: Dict[str, bool] = {"mv": True, "turbo": True, "rotary": True, "rv": False, "fv": True,
                                         "vent": False}
         self.gas_sccm: Dict[str, float] = {"ar": 0.0, "o2": 0.0}
+        self.throttle = 1.0                     # 압력 제어 밸브 열림(0~1) — MFC(GPC3000) 시뮬레이터가 넣는다
         self.ignite_fail = False
         self.low_current = False
         self.v_limit = False
@@ -71,7 +74,8 @@ class Chamber:
         if v["vent"]:
             tgt, tau = ATM_TORR, 20.0
         elif v["mv"] and v["turbo"]:
-            tgt, tau = BASE_TORR + self.total_sccm() * TORR_PER_SCCM, 5.0
+            eff = THROTTLE_MIN + (1.0 - THROTTLE_MIN) * min(1.0, max(0.0, self.throttle))
+            tgt, tau = BASE_TORR + self.total_sccm() * TORR_PER_SCCM / eff, 5.0
         elif v["rotary"] and (v["rv"] or v["fv"]):
             tgt, tau = ROUGH_TORR, 10.0
         else:
