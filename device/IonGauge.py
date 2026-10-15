@@ -79,8 +79,9 @@ FILAMENT_ERRORS_NOT_WARN = frozenset({16})     # 정상 동작이라 주의색�
 STATE_TEXT = {
     "off": "꺼짐",                      # 이온: 필라멘트 꺼짐 + 가수 0
     "preparing": "측정 준비 중",         # 이온: 필라멘트 켜짐 + 가수 0(꺼짐으로 보이지 않게)
-    "below": "< 1.0E-3",                 # 게이지: 가수 0, 또는 -5.0E-3 ≤ 값 < 0(정상 영점 범위). 화면은 "< 1.0E-3 Torr"
+    "below": "< 1.0E-3",                 # 게이지: -5.0E-3 ≤ 값 < 1.0E-3(0·작은 음수·하한 미만 양수). 화면은 "< 1.0E-3 Torr"
                                          #  — 컨벡션 게이지 측정 범위 1E-3 ~ 1200 Torr(매뉴얼), 하한 아래는 영점 잡음이라 숫자로 안 보인다
+                                         #  (10/15 실측: 고진공에서 "-1 -4" ↔ "1 -4" 를 오갔다 — 둘 다 같은 '하한 아래')
     "negative": "음수 — 영점·오염 확인",  # 게이지: 값 < -5.0E-3 Torr
     "disconnected": "미연결",            # 게이지: -900
     "unzeroed": "영점 미조정",            # 게이지: -999
@@ -88,6 +89,8 @@ STATE_TEXT = {
 }
 # 매뉴얼: 컨벡션 게이지는 고진공에서 -5.0E-3 ~ +5.0E-3 Torr 를 읽는 것이 정상(벗어나면 오염 가능성)
 GAUGE_NEG_OK_TORR = -5.0e-3
+# 컨벡션 게이지 측정 하한. 이 미만 양수도 영점 잡음이라 숫자로 보이지 않는다(1.0E-3 부터 숫자)
+GAUGE_MIN_TORR = 1.0e-3
 
 _PAIR_RE = re.compile(r"-?\d+(\s+-?\d+)?")
 _INVALID_RE = re.compile(r"999x", re.IGNORECASE)
@@ -144,8 +147,9 @@ def raw_pair_text(text: str) -> str:
 def pressure_from_pair(text: str, kind: str, filament_on: bool = False) -> Tuple[Optional[float], str, str]:
     """압력 한 항목 → (Torr 또는 None, 상태, 화면 문구). kind 'ion' = 이온 게이지, 'conv' = 게이지 A/B.
     이온: 가수 0 은 필라멘트가 꺼져 있으면 '꺼짐', 켜져 있으면 '측정 준비 중'. 형식이 다르면 IgParseError(그대로).
-    게이지: 0 과 -5.0E-3 ≤ 값 < 0 은 '< 1.0E-3'(측정 하한 아래), 그보다 작은 음수는 '음수 — 영점·오염 확인',
-    -900 '미연결', -999 '영점 미조정', 형식이 안 맞으면 '값 오류(원문)'(이것만 진짜 오류)."""
+    게이지: -5.0E-3 ≤ 값 < 1.0E-3(0·작은 음수·하한 미만 양수)은 '< 1.0E-3'(측정 하한 아래), 1.0E-3 이상만 숫자,
+    -5.0E-3 보다 작은 음수는 '음수 — 영점·오염 확인', -900 '미연결', -999 '영점 미조정',
+    형식이 안 맞으면 '값 오류(원문)'(이것만 진짜 오류)."""
     raw = raw_pair_text(text)
     if kind == "ion":
         mant, exp = parse_pair(text)
@@ -170,6 +174,8 @@ def pressure_from_pair(text: str, kind: str, filament_on: bool = False) -> Tuple
         if v >= GAUGE_NEG_OK_TORR - 1e-12:        # 경계 -5.0E-3 포함(부동소수 오차 여유)
             return None, "below", STATE_TEXT["below"]
         return None, "negative", STATE_TEXT["negative"]
+    if v < GAUGE_MIN_TORR * (1 - 1e-9):           # 경계 1.0E-3 은 숫자("10 -4" 의 부동소수 오차 여유)
+        return None, "below", STATE_TEXT["below"]
     return v, "ok", fmt_torr(v)
 
 
@@ -689,7 +695,7 @@ class IonGaugeController(QObject):
 
     def _log_gauge_changes(self, r: IgReading) -> None:
         """이온·게이지 A/B 상태 '종류'가 바뀔 때만 1줄(원문 포함). 예) "[IG] 게이지 A < 1.0E-3(0 -4) → 음수 — 영점·오염 확인(-60 -4)".
-        하한 아래(0) ↔ 작은 음수(정상 영점 범위)는 같은 종류라 남기지 않는다. 값만 바뀌어도 남기지 않는다.
+        하한 아래(0·작은 음수·1.0E-3 미만 양수) 안에서 오가는 것은 같은 종류라 남기지 않는다. 값만 바뀌어도 남기지 않는다.
         첫 값은 주의 종류(음수·영점 미조정·값 오류)일 때만 남긴다(원문 확보용)."""
         for key, name, state, text, raw in (
                 ("ion", "IG", r.ion_state, r.ion_text, r.ion_raw),

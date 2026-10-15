@@ -269,6 +269,14 @@ GAUGE_TABLE = [
     ("-5      -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(-5 -4)", "below"),
     ("-4      -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(-4 -4)", "below"),
     ("-50     -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(-50 -4)", "below"),            # = -5.0E-3 경계
+    # 10/15 실측: 하한 아래에서 "-1 -4" ↔ "1 -4" 를 오갔다 — 1.0E-3 미만 양수도 '하한 아래'
+    ("1       -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(1 -4)", "below"),
+    ("9       -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(9 -4)", "below"),
+    ("-1      -4", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(-1 -4)", "below"),
+    ("99      -5", "게이지 A < 1.0E-3 Torr", "ok", "< 1.0E-3(99 -5)", "below"),
+    ("10      -4", "게이지 A 1.0E-3 Torr", "ok", "1.0E-3", "ok"),                       # = 1.0E-3 경계부터 숫자
+    ("1       -3", "게이지 A 1.0E-3 Torr", "ok", "1.0E-3", "ok"),
+    ("10      -3", "게이지 A 1.0E-2 Torr", "ok", "1.0E-2", "ok"),
     ("-6      -3", "게이지 A 음수 — 영점·오염 확인", "warn", "음수 — 영점·오염 확인(-6 -3)", "negative"),
     ("-900", "게이지 A 미연결", "ok", "미연결(-900)", "disconnected"),
     ("-999", "게이지 A 영점 미조정", "warn", "영점 미조정(-999)", "unzeroed"),
@@ -333,7 +341,7 @@ def test_lost_and_switching_levels():
     assert line_levels(_snap(r, comm="starting", fresh=False), "A", "B")[0] == "warn"
 
 
-@pytest.mark.parametrize("raw", ["0", "-4      -4", "-5      -4", "-50     -4"])
+@pytest.mark.parametrize("raw", ["0", "-4      -4", "-5      -4", "-50     -4", "1       -4", "9       -4", "-1      -4"])
 def test_below_range_shown_as_less_than_1e3(raw):
     lines, levels, row, erp = _view(_reading(a=raw))
     norm = " ".join(raw.split())
@@ -355,3 +363,27 @@ def test_tooltip_has_below_note():
     r2 = _reading(a="61      -4", b="63      -4")
     assert tooltip_lines(_snap(r2)) == [raw_summary(_snap(r2))]          # 둘 다 측정 범위 안이면 설명 없음
     assert tooltip_lines(None) == []
+
+
+@pytest.mark.parametrize("raw,shown", [("1       -4", "< 1.0E-3 Torr"), ("9       -4", "< 1.0E-3 Torr"),
+                                       ("-1      -4", "< 1.0E-3 Torr"), ("0", "< 1.0E-3 Torr"),
+                                       ("10      -3", "1.0E-2 Torr"), ("-6      -3", "음수 — 영점·오염 확인")])
+def test_process_log_line_uses_same_gauge_text(raw, shown):
+    """공정 시작·종료 로그 줄도 화면과 같은 문구."""
+    line = process_log_line(_snap(_reading(a=raw)), "시작", "게이지 A", "게이지 B")
+    assert f"게이지 A {shown}, 게이지 B " in line
+
+
+def test_gauge_below_toggle_100_times_logs_nothing(qapp):
+    """-1 -4 ↔ 1 -4 (둘 다 하한 아래)를 100번 오가도 상태 변화 로그 0줄. 종류가 바뀌면 1줄."""
+    from device.IonGauge import IonGaugeController
+    c = IonGaugeController("COM12")
+    msgs = []
+    c.status_message.connect(lambda lv, m: msgs.append((lv, m)))
+    for i in range(200):
+        c._log_gauge_changes(_reading(a=("-1      -4" if i % 2 else "1       -4")))
+    assert msgs == []
+    c._log_gauge_changes(_reading(a="10      -3"))                       # 하한 아래 → 숫자: 종류가 바뀜
+    c._log_gauge_changes(_reading(a="-6      -3"))                       # 숫자 → 음수
+    assert [m.split("게이지 A ", 1)[1] for _, m in msgs] == [
+        "< 1.0E-3(-1 -4) → 1.0E-2 Torr", "1.0E-2 Torr → 음수 — 영점·오염 확인(-6 -3)"]
