@@ -3,7 +3,8 @@
 읽기(스냅샷 묶기 소스): 162(상태)·165(순방향)·166(반사), 질의 하나 RFPULSE_QUERY_TIMEOUT_MS(250), 사이 RFPULSE_CMD_GAP_MS.
   RFPULSE_READ_PLAN: full=매초 셋, alternate=166 매초 + 165(짝수 tick)/162(홀수 tick), auto=질의가 제한을 넘으면 번갈아로.
   순방향·상태 필드는 자기 품질(own_quality)이라 번갈아면 stale·나이 1.
-START(여러 tick 에 걸친 Sequence): 14 Host → 3 조절 모드 6(FWD) → 8 셋포인트 → 27 펄싱 1 → [93 주파수] → [96 듀티] → 2 RF ON
+START(여러 tick 에 걸친 Sequence): 14 Host → 1 RF OFF(사전, v1 과 같게) → 3 조절 모드 6(FWD) → 8 셋포인트 → 27 펄싱 1
+  → [93 주파수] → [96 듀티] → 2 RF ON
   → 193·196 되읽기. 불일치는 RFPULSE_VERIFY_PULSE_CONFIG: true 면 RF OFF 하고 실패(RFP_CONFIG_MISMATCH), false 면 경고만.
   CSR 자동 복구(v1 과 같은 규칙, START·설정 시퀀스 안에서만): CSR 1(Host 아님) → 14 Host 뒤 그 명령 다시,
   CSR 2(RF ON 중) → 1 RF OFF 뒤 다시 — 한 단계에 한 번, 이벤트를 남긴다. 그 밖의 CSR ≠ 0 → 실패(RFP_START_FAILED).
@@ -171,6 +172,7 @@ class RfPulseDriver:
             raise ValueError(f"목표 {target_w} W > RFPULSE_MAX_POWER")
         sp = int(round(target_w))
         steps = [("14 Host", self._step("Host", SET_CONTROL, b"\x02")),
+                 ("1 RF OFF", self._step("사전 RF OFF", RF_OFF)),        # v1 과 같게 — RF 가 켜진 채 설정이 바뀌지 않게
                  ("3 FWD", self._step("조절 모드", SET_MODE, b"\x06")),
                  ("8 셋포인트", self._step("셋포인트", SET_SETPOINT, aebus.le(sp, 2))),
                  ("27 펄싱", self._step("펄싱", SET_PULSING, b"\x01"))]
