@@ -102,8 +102,6 @@ class PlcSim(SimDevice):
         r, c = self.regs, self.coils
         # 래더 강제값
         r[A["heater_slow_zone"]] = 100
-        for k, v in self.forced_regs.items():
-            r[k] = v
         r[A["heater_mv_limit"]] = min(r[A["heater_mv_limit"]], D.HEATER_DAC_PHYS_MAX)
         r[A["heater_sv2_max"]] = max(0, r[A["heater_ot2_limit"]] - 500)
         r[A["heater_sv"]] = min(r[A["heater_sv"]], r[A["heater_sv_limit"]])
@@ -202,6 +200,8 @@ class PlcSim(SimDevice):
         c[A["mv_interlock"]] = bool(c[A["mv"]] and not c[A["atm"]] and not self.itl_fault)
         c[A["ion_run"]] = c[A["ion_remote_on"]]
         c[A["ion_lamp"]] = c[A["ion_remote_on"]]
+        for k, v in self.forced_regs.items():          # 강제값은 마지막에(래더 출력보다 우선)
+            r[k] = v
 
     # ───────── Modbus 슬레이브 ─────────
     def respond(self, data: bytes, now: float):

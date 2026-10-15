@@ -42,7 +42,8 @@ class Recorder:
                  max_queue: int = MAX_QUEUE, commit_every_s: float = COMMIT_EVERY_S,
                  nas_dir: Optional[Path] = None, nas_period_s: float = 60.0, nas_today_period_s: float = 600.0,
                  copy_fn: Callable[[str, str], Any] = shutil.copy2,
-                 today_fn: Callable[[], _dt.date] = _dt.date.today) -> None:
+                 today_fn: Callable[[], _dt.date] = _dt.date.today,
+                 wall_fn: Callable[[], float] = time.time) -> None:
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.columns = list(columns)
@@ -56,6 +57,8 @@ class Recorder:
         self._last_today_copy: Optional[float] = None
         self.copy_fn = copy_fn
         self.today_fn = today_fn
+        self.wall_fn = wall_fn
+        self.blackbox_files: List[Path] = []
         self._q: "queue.Queue" = queue.Queue(maxsize=max_queue)
         self.dropped = 0
         self.written = 0
@@ -73,6 +76,13 @@ class Recorder:
     def put_row(self, row: Dict[str, Any]) -> None:
         try:
             self._q.put_nowait(("row", row))
+        except queue.Full:
+            self.dropped += 1
+
+    def put_blackbox(self, name: str, rows: List[Dict[str, Any]]) -> None:
+        """사고 때 원시 값 링버퍼를 blackbox/<name>_<YYYYmmdd_HHMMSS>.csv 로(쓰기 스레드에서)."""
+        try:
+            self._q.put_nowait(("blackbox", (name, self.wall_fn(), [dict(r) for r in rows])))
         except queue.Full:
             self.dropped += 1
 
@@ -156,6 +166,8 @@ class Recorder:
                     self._open_day(_day_of(item["ts"]))
                     self._db.execute(sql_row, [_cell(item.get(c)) for c in self.columns])
                     self.written += 1
+                elif kind == "blackbox":
+                    self._write_blackbox(*item)
                 elif kind == "event":
                     self._open_day(_day_of(item[0]))
                     self._db.execute("INSERT INTO events VALUES (?,?,?,?,?,?)", item)
@@ -173,6 +185,23 @@ class Recorder:
                 self._db.commit()
                 self._db.close()
                 self._db = None
+
+    def _write_blackbox(self, name: str, t_wall: float, rows: List[Dict[str, Any]]) -> None:
+        d = self.dir / "blackbox"
+        d.mkdir(exist_ok=True)
+        stamp = _dt.datetime.fromtimestamp(t_wall).strftime("%Y%m%d_%H%M%S")
+        out = d / f"{name}_{stamp}.csv"
+        cols: List[str] = []
+        for r in rows:
+            for k in r:
+                if k not in cols:
+                    cols.append(k)
+        with open(out, "w", encoding="utf-8-sig", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(cols)
+            for r in rows:
+                w.writerow(["" if r.get(c) is None else _cell(r.get(c)) for c in cols])
+        self.blackbox_files.append(out)
 
     # ───────── CSV·보관 ─────────
     def export_csv(self, day: str) -> Path:

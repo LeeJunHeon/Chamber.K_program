@@ -335,6 +335,27 @@ class Exchange:
     tx: bytes
     rx: bytes            # 빈 바이트면 무응답
     delay_s: float       # 보낸 뒤 rx 가 다 도착하기까지
+    t_s: float = 0.0     # 녹화 시작 뒤 보낸 시각
+
+
+def save_exchanges(path, exchanges: List[Exchange]) -> None:
+    """녹화를 JSON lines 로(보낸·받은 바이트 hex, 보낸 시각, 응답 지연). bench 에서 녹화해 재생 시험에 쓴다."""
+    import json
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        for e in exchanges:
+            f.write(json.dumps({"t_s": round(e.t_s, 6), "tx": e.tx.hex(), "rx": e.rx.hex(),
+                                "delay_s": round(e.delay_s, 6)}) + "\n")
+
+
+def load_exchanges(path) -> List[Exchange]:
+    import json
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                o = json.loads(line)
+                out.append(Exchange(bytes.fromhex(o["tx"]), bytes.fromhex(o["rx"]), o["delay_s"], o["t_s"]))
+    return out
 
 
 class ReplayMismatch(AssertionError):
@@ -348,6 +369,7 @@ class RecordingTransport(Transport):
         super().__init__(inner.clock)
         self.inner = inner
         self.exchanges: List[Exchange] = []
+        self._t0: Optional[float] = None
         self._tx: Optional[Tuple[float, bytes]] = None
         self._rx_acc = b""
 
@@ -362,18 +384,25 @@ class RecordingTransport(Transport):
         self._flush()
         self.inner.close()
 
+    def save(self, path) -> None:
+        self._flush()
+        save_exchanges(path, self.exchanges)
+
     def reset_input(self) -> None:
         self.inner.reset_input()
 
     def _flush(self) -> None:
         if self._tx is not None:
             t0, tx = self._tx
-            self.exchanges.append(Exchange(tx, self._rx_acc, self._last_rx_t - t0 if self._rx_acc else 0.0))
+            self.exchanges.append(Exchange(tx, self._rx_acc, self._last_rx_t - t0 if self._rx_acc else 0.0,
+                                           t0 - (self._t0 or t0)))
             self._tx, self._rx_acc = None, b""
 
     def write(self, data: bytes) -> None:
         self._flush()
         self.inner.write(data)
+        if self._t0 is None:
+            self._t0 = self.clock.monotonic()
         self._tx = (self.clock.monotonic(), data)
         self._last_rx_t = self.clock.monotonic()
 
