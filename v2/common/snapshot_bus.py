@@ -8,7 +8,7 @@
 품질(장비 단위 <블록>.q, 값마다 own_quality 필드는 <블록>.<필드>.q)
 - off        : 소스가 꺼짐(설정·worker 없음) — 값 빈 칸
 - ok         : 이번 tick 요청이 마감 안에 성공
-- suppressed : worker 가 억제 구간(예정된 무응답)이고 이번 tick 에 새 값 없음
+- suppressed : worker 가 억제 구간(예정된 무응답)이고 이번 tick 에 새 값 없음, 또는 안전 요청(STOP·OFF)이 이 tick 읽기를 취소함
 - fail       : 이번 tick 요청이 실패(무응답·형식 오류·링크 끊김)
 - late       : 이번 행에 쓰는 값이 앞 tick 요청의 '마감 뒤 도착'한 값(그 값이 처음 쓰이는 행)
 - stale      : 새 값 없음 — 마지막 값과 나이
@@ -115,7 +115,7 @@ class SnapshotBus:
                         st.newest_late_unused = not on_time
                 if on_time:
                     st.result = res
-                elif res.status != Status.OK:
+                elif res.status not in (Status.OK, Status.CANCELLED):
                     st.late_fail = True
                 self.clock.cond.notify_all()
         return cb
@@ -154,8 +154,8 @@ class SnapshotBus:
                 q = Quality.OFF
             elif st.result is not None and st.result.status == Status.OK:
                 q = Quality.OK
-            elif s.worker.suppressed(now):
-                q = Quality.SUPPRESSED
+            elif s.worker.suppressed(now) or (st.result is not None and st.result.status == Status.CANCELLED):
+                q = Quality.SUPPRESSED            # 예정된 무응답, 또는 안전 요청이 앞질러 취소한 읽기(장비 실패 아님)
             elif (st.result is not None or st.late_fail
                   or (not s.worker.connected and not st.sent_this_tick)):
                 q = Quality.FAIL

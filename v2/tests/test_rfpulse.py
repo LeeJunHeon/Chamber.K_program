@@ -190,3 +190,15 @@ def test_cmd33_skipped_while_rf_on_in_local():
     assert sim.out and sim.control == 6 and sim.set_commands_seen() == []   # 제어 모드를 바꾸지 않음(RF 를 끄지 않음)
     assert [e.reason for e in events if e.kind == "auto_off"] == ["STATE_NOT_ALLOWED"]
     w.stop()
+
+
+def test_short_request_deadline_does_not_switch_plan():
+    """요청 마감이 먼저 끝나 생긴 시간 초과(앞 작업에 밀림)는 장비가 느린 것이 아니다 — 읽기 계획을 바꾸지 않는다."""
+    from v2.common.worker import Request
+    r = Rig()
+    box = []
+    r.w.submit(Request("read", lambda s: r.d.source_read(s, 0), deadline=r.c.monotonic() + 0.05,
+                       on_done=lambda x: (box.append(x), r.c.notify())))
+    r.c.wait_until(None, lambda: bool(box))
+    assert box[0].status == "timeout" and not r.d.alternate and not r.ev("read_plan")
+    r.done()

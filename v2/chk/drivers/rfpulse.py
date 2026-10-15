@@ -135,7 +135,9 @@ class RfPulseDriver:
             try:
                 data = self._x(session, q)
             except ReadTimeout:
-                if self.cfg["RFPULSE_READ_PLAN"] == "auto" and not self.alternate:
+                # 질의 자체가 제한을 다 쓴 경우만(요청 마감이 먼저 끝난 경우 — 앞 작업에 밀림 — 는 장비가 느린 게 아니다)
+                slow = self.clock.monotonic() - t0 >= self.q_timeout_s - 1e-6
+                if self.cfg["RFPULSE_READ_PLAN"] == "auto" and not self.alternate and slow:
                     self.alternate = True
                     self._emit("read_plan", f"질의 {q} 가 {self.q_timeout_s * 1000:.0f} ms 를 넘음 — 166 매초, 165·162 번갈아로")
                 raise

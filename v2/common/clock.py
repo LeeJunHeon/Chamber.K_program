@@ -273,14 +273,16 @@ class TickScheduler:
     def __init__(self, clock, period: float = 1.0) -> None:
         self.clock = clock
         self.period = float(period)
-        w = clock.wall()
-        self.anchor = math.floor(w / self.period + 1e-9) * self.period + self.period   # 다음 정각
+        self.anchor: Optional[float] = None    # 첫 next_tick 때 정한다(만든 시각이 아니라 — 그 사이 준비 시간이 있어도 첫 tick 이 늦지 않게)
         self._n = -1
 
     def _offset(self) -> float:
         return self.clock.wall() - self.clock.monotonic()
 
     def next_tick(self) -> Tick:
+        if self.anchor is None:
+            w = self.clock.wall()
+            self.anchor = math.floor(w / self.period + 1e-9) * self.period + self.period   # 다음 정각
         n = self._n + 1
         target_wall = self.anchor + n * self.period
         self.clock.sleep_until(target_wall - self._offset())

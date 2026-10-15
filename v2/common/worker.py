@@ -191,6 +191,7 @@ class Worker:
         self._stop = False
         self._thread = None
         self._seqs: List[Sequence] = []
+        self.initializing = False      # 연결 직후 초기화(on_connect) 중
 
     # ───────── 생명주기 ─────────
     def start(self) -> None:
@@ -218,6 +219,11 @@ class Worker:
     def busy(self) -> bool:
         return self.inflight is not None
 
+    @property
+    def ready(self) -> bool:
+        """연결됐고 연결 직후 초기화가 끝났다."""
+        return self.connected and not self.initializing
+
     # ───────── 요청 ─────────
     def submit(self, req: Request) -> None:
         if req.kind not in _KIND_PRIO:
@@ -235,8 +241,9 @@ class Worker:
                     s.finished = True
                 self._seqs = []
             self.queue.put(int(_KIND_PRIO[req.kind]), req, req.not_before)
+        now = self.clock.monotonic()
         for r in dropped:
-            self._finish(Result(r, Status.CANCELLED, reason="CANCELLED"))
+            self._finish(Result(r, Status.CANCELLED, reason="CANCELLED", started=now, finished=now))
 
     def submit_sequence(self, seq: Sequence) -> None:
         if not self.writes_allowed:
@@ -315,6 +322,7 @@ class Worker:
             cancel = CancelToken(self.clock)
             with self.clock.cond:
                 self._cancel = cancel          # stop()·safety 가 초기화도 끊을 수 있게
+                self.initializing = True
             sess = Session(self.transport, self.clock.monotonic() + self.connect_init_timeout_s, cancel)
             try:
                 self.on_connect(sess)
@@ -327,6 +335,8 @@ class Worker:
             finally:
                 with self.clock.cond:
                     self._cancel = None
+                    self.initializing = False
+                    self.clock.cond.notify_all()
 
     def _disconnect(self, why: str) -> None:
         self.transport.close()

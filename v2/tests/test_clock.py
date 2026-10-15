@@ -97,3 +97,12 @@ def test_real_clock_ticks_short_period():
     ts = list(s.ticks(10))
     assert [t.seq for t in ts] == list(range(10))
     assert max(t.jitter_ms for t in ts) < 30.0
+
+
+def test_anchor_fixed_at_first_tick_not_construction():
+    c = VirtualClock(start_wall=100.0)
+    c.register()
+    s = TickScheduler(c)
+    c.advance(2.7)                                  # 만든 뒤 준비 시간
+    t = s.next_tick()
+    assert t.t_wall == 103.0 and t.jitter_ms == 0 and t.skipped == 0 and t.seq == 0
