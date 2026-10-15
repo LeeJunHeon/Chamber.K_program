@@ -1,0 +1,250 @@
+"""설정 저장소 (장비 공통) — 웹이 값의 원본, 장비는 마지막으로 받은 값을 로컬에 보관한다.
+
+파일(설정 폴더 안)
+- config_active.json : {"version", "schemaHash", "savedAt", "values"(비밀값 제외), "contentHash"}
+- config_prev.json   : 직전 버전(같은 형식)
+- local_override.json: {"values": {...}} — 노트북 비상용 덮어쓰기. scope 가 install·secret 인 키만.
+                       비밀값(웹 주소·토큰)은 여기에만 둔다.
+
+읽기(load)
+- active 를 검사(파일 해시·ParamDef 타입·범위·키 사이 규칙). 실패하면 prev. 둘 다 실패면 ConfigError — 시작 거부.
+  기본값으로 조용히 돌지 않는다. 단, 두 파일이 모두 없으면(새 설치) 기본값 버전 0 — RUN_MODE 기본값이 sim 이다.
+- 코드의 파라미터 정의가 바뀌어 schemaHash 가 다르면: 새 키는 기본값으로 채우고 없어진 키는 버리며 notes 에 남긴다.
+- 덮어쓰기 파일이 깨졌거나 허용되지 않는 키가 있으면 ConfigError.
+
+적용(apply) — CONFIG_APPLY
+- 스키마 해시·버전·비밀값 포함 여부 → 전체 검사 → 하나라도 실패면 버전 전체 거부(부분 적용 없음).
+- 공정·히터 운전 중(busy)이면 H 등급 변경이 하나라도 있으면 거부(CONFIG_H_IN_PROCESS, 안전 규칙 S48).
+- 통과하면 파일에 원자적으로 저장(임시 파일 → fsync → 바꿔치기, 이전 active 는 prev 로).
+- 적용 시점: live 는 즉시, idle 은 busy 면 대기(on_idle 에서 적용), restart 는 재시작까지 대기.
+  즉시 적용분만 반영한 실행 값이 키 사이 규칙을 어기면 그 live 키도 idle 대기로 미룬다.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import hashlib
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
+
+from v2.common.paramdef import Apply, CrossRule, ParamDef, Safety, Scope, check_config, check_value, defaults
+
+ACTIVE = "config_active.json"
+PREV = "config_prev.json"
+OVERRIDE = "local_override.json"
+
+
+class ConfigError(RuntimeError):
+    """설정을 쓸 수 없음 — 시작 거부."""
+
+
+@dataclass
+class ApplyResult:
+    status: str                      # applied / pending_idle / pending_restart / rejected
+    reason: Optional[str] = None     # 사유 코드(rejected 일 때)
+    errors: list = field(default_factory=list)
+    applied_keys: list = field(default_factory=list)
+    pending_keys: list = field(default_factory=list)
+    overridden_keys: list = field(default_factory=list)   # 노트북 덮어쓰기에 가려진 키
+
+
+def _content_hash(version: int, schema_hash: str, values: Mapping[str, Any]) -> str:
+    raw = json.dumps({"version": version, "schemaHash": schema_hash, "values": values},
+                     ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class ConfigStore:
+    def __init__(self, directory: Path, defs: Sequence[ParamDef], rules: Sequence[CrossRule],
+                 schema_hash: str) -> None:
+        self.dir = Path(directory)
+        self.defs = tuple(defs)
+        self.rules = tuple(rules)
+        self.schema_hash = schema_hash
+        self.by_key = {p.key: p for p in self.defs}
+        self.secret_keys = {p.key for p in self.defs if p.scope is Scope.SECRET}
+        self.version = 0                     # 저장된(웹에서 받은) 최신 버전
+        self.persisted: dict = {}            # 저장된 값(비밀값 제외)
+        self.override: dict = {}
+        self.values: dict = {}               # 지금 실행에 쓰는 값(대기 중 키는 이전 값)
+        self.pending_idle: dict = {}
+        self.pending_restart: dict = {}
+        self.source = ""
+        self.notes: list = []
+
+    # ───────── 파일 ─────────
+    @property
+    def active_path(self) -> Path:
+        return self.dir / ACTIVE
+
+    @property
+    def prev_path(self) -> Path:
+        return self.dir / PREV
+
+    @property
+    def override_path(self) -> Path:
+        return self.dir / OVERRIDE
+
+    def _read_override(self) -> dict:
+        if not self.override_path.exists():
+            return {}
+        try:
+            obj = json.loads(self.override_path.read_text(encoding="utf-8"))
+            vals = obj["values"]
+            if not isinstance(vals, dict):
+                raise ValueError("values 가 객체가 아님")
+        except Exception as e:
+            raise ConfigError(f"{OVERRIDE} 를 읽을 수 없음: {e!r}") from e
+        errs = []
+        for k, v in vals.items():
+            p = self.by_key.get(k)
+            if p is None:
+                errs.append(f"{k}: 정의되지 않은 키")
+            elif p.scope not in (Scope.INSTALL, Scope.SECRET):
+                errs.append(f"{k}: 덮어쓰기는 install·secret 키만")
+            else:
+                e = check_value(p, v)
+                if e:
+                    errs.append(e)
+        if errs:
+            raise ConfigError(f"{OVERRIDE} 오류: {errs}")
+        return dict(vals)
+
+    def _effective(self, persisted: Mapping[str, Any]) -> dict:
+        base = defaults(self.defs)
+        eff = {k: base[k] for k in self.secret_keys}
+        eff.update({k: v for k, v in persisted.items() if k not in self.secret_keys})
+        eff.update(self.override)
+        return eff
+
+    def _read_file(self, path: Path) -> tuple:
+        """(version, persisted 값, notes). 실패하면 예외."""
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        version, sh, vals, ch = obj["version"], obj["schemaHash"], obj["values"], obj["contentHash"]
+        if not isinstance(version, int) or not isinstance(vals, dict):
+            raise ValueError("형식 오류")
+        if _content_hash(version, sh, vals) != ch:
+            raise ValueError("파일 해시 불일치(손상)")
+        notes = []
+        if sh != self.schema_hash:
+            base = defaults(self.defs)
+            known = {p.key for p in self.defs if p.scope is not Scope.SECRET}
+            added = sorted(known - set(vals))
+            dropped = sorted(set(vals) - known)
+            vals = {k: (vals[k] if k in vals else base[k]) for k in known}
+            notes.append(f"{path.name}: 파라미터 정의가 바뀜 — 새 키 기본값 {added}, 없어진 키 버림 {dropped}")
+        errs = check_config(self.defs, self.rules, self._effective(vals))
+        if errs:
+            raise ValueError(f"검사 실패: {errs[:5]}")
+        return version, dict(vals), notes
+
+    # ───────── 읽기 ─────────
+    def load(self) -> dict:
+        self.override = self._read_override()
+        self.notes = []
+        tried = []
+        for name, path in (("active", self.active_path), ("prev", self.prev_path)):
+            if not path.exists():
+                tried.append(f"{path.name} 없음")
+                continue
+            try:
+                version, vals, notes = self._read_file(path)
+            except Exception as e:
+                tried.append(f"{path.name} 사용 불가: {e}")
+                continue
+            self.version, self.persisted, self.source = version, vals, name
+            self.notes = tried + notes
+            break
+        else:
+            if self.active_path.exists() or self.prev_path.exists():
+                raise ConfigError("설정 파일을 쓸 수 없음 — 시작 거부: " + "; ".join(tried))
+            base = defaults(self.defs)
+            self.version, self.persisted, self.source = 0, {k: v for k, v in base.items() if k not in self.secret_keys}, "defaults"
+            self.notes = ["설정 파일 없음 — 기본값(버전 0)"]
+        eff = self._effective(self.persisted)
+        errs = check_config(self.defs, self.rules, eff)
+        if errs:   # 덮어쓰기 때문에 깨진 경우
+            raise ConfigError(f"덮어쓰기 적용 뒤 검사 실패 — 시작 거부: {errs[:5]}")
+        self.values = eff
+        self.pending_idle, self.pending_restart = {}, {}
+        return dict(self.values)
+
+    # ───────── 적용 ─────────
+    def apply(self, version: int, values: Mapping[str, Any], schema_hash: str, busy: bool) -> ApplyResult:
+        if schema_hash != self.schema_hash:
+            return ApplyResult("rejected", "CONFIG_HASH_MISMATCH", ["스키마 해시 불일치"])
+        if not isinstance(version, int) or isinstance(version, bool) or version <= self.version:
+            return ApplyResult("rejected", "CONFIG_VERSION_STALE", [f"버전 {version} ≤ 저장된 {self.version}"])
+        secrets = sorted(set(values) & self.secret_keys)
+        if secrets:
+            return ApplyResult("rejected", "CONFIG_SECRET_FROM_WEB", [f"비밀값 포함: {secrets}"])
+        cand = self._effective(values)
+        errs = check_config(self.defs, self.rules, cand)
+        if errs:
+            return ApplyResult("rejected", "CONFIG_INVALID", errs)
+        changed = sorted(k for k in cand if cand[k] != self.values.get(k))
+        if busy:
+            hs = [k for k in changed if self.by_key[k].safety is Safety.H]
+            if hs:
+                return ApplyResult("rejected", "CONFIG_H_IN_PROCESS", [f"공정 중 H 등급 변경: {hs}"])
+
+        atomic_write_json_pair(self.active_path, self.prev_path, {
+            "version": version, "schemaHash": schema_hash,
+            "savedAt": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "values": dict(values), "contentHash": _content_hash(version, schema_hash, dict(values)),
+        })
+        self.version, self.persisted = version, dict(values)
+
+        overridden = sorted(k for k in values if k in self.override and values[k] != self.override[k])
+        now_keys, idle_keys, restart_keys = [], [], []
+        for k in changed:
+            a = self.by_key[k].apply
+            if a is Apply.RESTART:
+                restart_keys.append(k)
+            elif a is Apply.IDLE and busy:
+                idle_keys.append(k)
+            else:
+                now_keys.append(k)
+        trial = dict(self.values)
+        trial.update({k: cand[k] for k in now_keys})
+        if check_config(self.defs, self.rules, trial):     # 일부만 바꾼 값이 규칙을 어기면 모두 대기로
+            idle_keys += now_keys
+            now_keys = []
+            trial = dict(self.values)
+        self.values = trial
+        self.pending_idle = {k: cand[k] for k in idle_keys}
+        self.pending_restart = {k: cand[k] for k in restart_keys}
+        status = "pending_restart" if restart_keys else ("pending_idle" if idle_keys else "applied")
+        return ApplyResult(status, None, [], now_keys, sorted(idle_keys + restart_keys), overridden)
+
+    def on_idle(self) -> list:
+        """공정·히터가 멈췄을 때 대기 중 idle 키 적용. 적용한 키 목록."""
+        if not self.pending_idle:
+            return []
+        trial = dict(self.values)
+        trial.update(self.pending_idle)
+        if check_config(self.defs, self.rules, trial):
+            return []      # restart 대기 키와 함께여야 규칙을 만족 — 재시작까지 둔다
+        keys = sorted(self.pending_idle)
+        self.values = trial
+        self.pending_idle = {}
+        return keys
+
+    def pending_summary(self) -> dict:
+        return {"idle": sorted(self.pending_idle), "restart": sorted(self.pending_restart)}
+
+
+def atomic_write_json_pair(active: Path, prev: Path, obj: Any) -> None:
+    """새 active 를 임시 파일에 쓴 뒤, 지금 active 를 prev 로, 임시 파일을 active 로 바꾼다.
+    중간에 멈추면 active 가 없고 prev 가 남는다 — load 는 prev 를 쓴다."""
+    tmp = active.with_name(active.name + ".tmp")
+    data = json.dumps(obj, ensure_ascii=False, sort_keys=True, indent=1)
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    if active.exists():
+        os.replace(active, prev)
+    os.replace(tmp, active)
