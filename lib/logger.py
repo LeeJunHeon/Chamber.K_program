@@ -389,8 +389,9 @@ def _warn_legacy_chk_header_once(path: Path) -> None:
     try:
         log_message_to_monitor(
             "경고",
-            "ChK_log.csv 헤더가 구버전입니다 — tools/migrate_chk_csv.py 를 "
-            "실행하면 RF Pulse·Base Pressure 컬럼이 기록됩니다")
+            "ChK_log.csv 헤더가 구버전입니다(현재 열 순서와 다름) — 그 전까지는 파일 헤더에 있는 열만 "
+            "이름 기준으로 기록합니다. tools/migrate_chk_csv.py 를 실행하면 현재 순서(Base Pressure 가 "
+            "Process Name 다음)로 옮겨지고 RF Pulse·Base Pressure·Main Shutter 가 모두 기록됩니다")
     except Exception:
         pass
 
@@ -417,7 +418,8 @@ def append_chk_csv_row(row: dict) -> bool:
 
         first = not use_path.exists()
 
-        # ★ 이미 있는 파일의 헤더가 CHK_CSV_COLUMNS 와 다를 수 있다.
+        # ★ 이미 있는 파일의 헤더가 CHK_CSV_COLUMNS 와 다를 수 있다(열 수뿐 아니라 순서도 —
+        #   2026-10-15 Base Pressure 를 맨 끝에서 Process Name 다음으로 옮겼다). 순서까지 같아야 '최신'이다.
         #   컬럼을 늘렸는데 NAS 파일에는 옛 헤더가 박혀 있으면, 새 행만 필드가
         #   많아져 헤더와 어긋난다(pandas 가 "Expected 16 fields, saw 18" 로 터진다).
         #   그래서 어긋난 행을 절대 만들지 않는다 — 파일의 실제 헤더를 따르고,

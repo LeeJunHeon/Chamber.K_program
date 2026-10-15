@@ -838,7 +838,14 @@ from lib.paths import CHK_CSV_PATH  # noqa: E402
 CHK_CSV_COLUMNS = [
     "Timestamp",
     "Process Name",
-    "Main Shutter",
+    # ↓ 베이스 압력 대기(이온 게이지)에서 판정에 쓴 마지막 이온 압력(Torr, "%.2E"). 대기를 생략했거나
+    #   이온 게이지를 끈 공정은 빈 칸.
+    #   ★ 2026-10-15 결정: 처음엔 맨 끝(21번째)에 붙였으나, 공정 이름 바로 옆에서 보이도록 여기로 옮겼다.
+    #   지금까지의 규칙(새 열은 맨 끝에만)과 달리 '중간 위치 이동'이므로 옛 파일은 반드시
+    #   tools/migrate_chk_csv.py 로 옮긴다(헤더 이름 기준으로 옮긴다). 옮기기 전 파일에는
+    #   lib/logger.py 가 파일의 실제 헤더를 따라 이름 기준으로 쓰므로 어긋난 행은 생기지 않는다.
+    "Base Pressure",
+    "Main Shutter",          # 이번 공정에서 Main Shutter 를 실제로 열었으면 "T", 아니면 "F"(옛 행은 빈칸)
     "Shutter Delay",
     "G1 Target",
     "G2 Target",
@@ -852,15 +859,11 @@ CHK_CSV_COLUMNS = [
     "DC: V",
     "DC: I",
     "DC: P",
-    # ↓ RF Pulse 전용 컬럼. 반드시 맨 끝에 붙일 것 — 중간에 끼우면 기존
-    #   ChK_log.csv 의 열 순서와 어긋난다(옛 파일은 tools/migrate_chk_csv.py 로 옮긴다).
-    #   위 "RF: For.P"/"RF: Ref. P" 는 PLC DAC RF power 전용이다. 두 장비를 나란히
-    #   비교할 수 있게 펄스는 자기 컬럼을 따로 갖는다.
+    # ↓ RF Pulse 전용 컬럼. 위 "RF: For.P"/"RF: Ref. P" 는 PLC DAC RF power 전용이다. 두 장비를
+    #   나란히 비교할 수 있게 펄스는 자기 컬럼을 따로 갖는다.
+    #   열을 더 늘리거나 옮길 때는 tools/migrate_chk_csv.py 에 그 형식(헤더 이름 목록)을 함께 추가한다.
     "RF Pulse: Freq[kHz]",   # 설정값(평균 아님). 빈 칸이면 장비 리드백값
     "RF Pulse: Duty[%]",     # 설정값(평균 아님). 빈 칸이면 장비 리드백값
     "RF Pulse: For.P",       # 계측 평균
     "RF Pulse: Ref. P",      # 계측 평균
-    # ↓ 베이스 압력 대기(이온 게이지)에서 판정에 쓴 마지막 이온 압력(Torr, "%.2E"). 대기를 생략했거나
-    #   이온 게이지를 끈 공정은 빈 칸. 이것도 맨 끝에만 붙인다(옛 파일은 tools/migrate_chk_csv.py).
-    "Base Pressure",
 ]

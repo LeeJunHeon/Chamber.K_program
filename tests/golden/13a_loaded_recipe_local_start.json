@@ -1340,6 +1340,8 @@
     {
      "Timestamp": "<TS>",
      "Process Name": "CSV 1/1 - R1",
+     "Base Pressure": "",
+     "Main Shutter": "T",
      "Shutter Delay": "1.000",
      "G1 Target": "CeO2",
      "G2 Target": "",
@@ -1356,8 +1358,7 @@
      "RF Pulse: Freq[kHz]": "",
      "RF Pulse: Duty[%]": "",
      "RF Pulse: For.P": "",
-     "RF Pulse: Ref. P": "",
-     "Base Pressure": ""
+     "RF Pulse: Ref. P": ""
     }
    ]
   ],

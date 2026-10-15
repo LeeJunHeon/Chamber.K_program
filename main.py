@@ -944,6 +944,8 @@ class MainDialog(QDialog):
         self.process_controller.status_message.connect(self.on_status_message)
         # 베이스 압력 대기 통과 값 → ChK_log 'Base Pressure'(이온 게이지·히터 설정과 무관하게 잇는다)
         self.process_controller.ig_base_reached.connect(self._on_ig_base_reached)
+        # Main Shutter Open 스텝 실행 → ChK_log 'Main Shutter' T(같은 신호가 PLC 로도 간다)
+        self.process_controller.update_plc_port.connect(self._on_proc_plc_cmd)
         
         self.ui.select_csv_button.clicked.connect(self._on_select_csv_clicked)
 
@@ -1385,6 +1387,12 @@ class MainDialog(QDialog):
     def _on_ig_base_reached(self, torr: float):
         """공정의 베이스 압력 대기 통과 — 판정에 쓴 마지막 이온 압력을 ChK_log 'Base Pressure' 용으로 보관."""
         self._chk_base_pressure = float(torr)
+
+    @Slot(str, bool)
+    def _on_proc_plc_cmd(self, name: str, state: bool):
+        """공정 컨트롤러가 PLC 버튼 명령을 냈다 — Main Shutter 를 연 공정인지만 ChK_log 용으로 기억한다."""
+        if str(name) == "MS_button" and bool(state):
+            self._chk_ms_opened = True
 
     def _heater_wd_age(self):
         """히터 CSV 'WD age[s]' — PLC 컨트롤러의 마지막 워치독 하트비트 성공 뒤 경과 초(float 읽기만)."""
@@ -3969,10 +3977,9 @@ class MainDialog(QDialog):
         shutter_delay = _fmt_float(params.get("shutter_delay"))
         process_time  = _fmt_float(params.get("process_time"))
 
-        # --- Main Shutter : 레시피/입력 기준 T/F ---
-        # ms_bool = bool(params.get("main_shutter"))
-        # main_shutter = "T" if ms_bool else "F"
-        # 챔버K는 별도로 main shutter를 지정하지 않음
+        # --- Main Shutter : 이번 공정에서 'Main Shutter Open' 스텝(MS_button True)이 실제로 실행됐으면 T ---
+        #  챔버K는 레시피에 main shutter 칸이 없다 — Process time > 0 이면 컨트롤러가 연다.
+        main_shutter = "T" if getattr(self, "_chk_ms_opened", False) else "F"
 
         # --- G1/G2 타겟 이름 (포맷 없이 그대로) ---
         g1_target = (params.get("g1_target_name") or "").strip()
@@ -4016,6 +4023,9 @@ class MainDialog(QDialog):
         row = {
             "Timestamp":        now,
             "Process Name":     process_name,
+            "Base Pressure":    ("" if getattr(self, "_chk_base_pressure", None) is None
+                                 else "%.2E" % float(self._chk_base_pressure)),
+            "Main Shutter":     main_shutter,      # ← 실제로 연 공정만 T
             "Shutter Delay":    shutter_delay,     # ← 입력 분 값
             "G1 Target":        g1_target,         # ← 입력/CSV 문자열 그대로
             "G2 Target":        g2_target,         # ← 입력/CSV 문자열 그대로
@@ -4036,8 +4046,6 @@ class MainDialog(QDialog):
             "RF Pulse: Duty[%]":   rfp_duty,
             "RF Pulse: For.P":     rfp_for_p,
             "RF Pulse: Ref. P":    rfp_ref_p,
-            "Base Pressure":       ("" if getattr(self, "_chk_base_pressure", None) is None
-                                    else "%.2E" % float(self._chk_base_pressure)),
         }
 
         return row
@@ -4045,6 +4053,7 @@ class MainDialog(QDialog):
     def _reset_chk_stats(self):
         """ChK CSV 평균 계산용 누적값 + 샘플링 상태 초기화."""
         self._chk_base_pressure = None  # 베이스 압력 대기에서 판정에 쓴 마지막 이온 압력(Torr). 대기 생략이면 None
+        self._chk_ms_opened = False     # 이번 공정에서 Main Shutter Open 스텝이 실행됐는가 → ChK_log 'Main Shutter'
         self._chk_heater_sum = 0.0      # ★
         self._chk_heater_cnt = 0        # ★
 

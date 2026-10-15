@@ -1460,6 +1460,8 @@
     {
      "Timestamp": "<TS>",
      "Process Name": "CSV 1/2 - W1",
+     "Base Pressure": "",
+     "Main Shutter": "T",
      "Shutter Delay": "1.000",
      "G1 Target": "CeO2",
      "G2 Target": "",
@@ -1476,8 +1478,7 @@
      "RF Pulse: Freq[kHz]": "",
      "RF Pulse: Duty[%]": "",
      "RF Pulse: For.P": "",
-     "RF Pulse: Ref. P": "",
-     "Base Pressure": ""
+     "RF Pulse: Ref. P": ""
     }
    ]
   ],
@@ -2303,6 +2304,8 @@
     {
      "Timestamp": "<TS>",
      "Process Name": "CSV 2/2 - W2",
+     "Base Pressure": "",
+     "Main Shutter": "T",
      "Shutter Delay": "1.000",
      "G1 Target": "CeO2",
      "G2 Target": "",
@@ -2319,8 +2322,7 @@
      "RF Pulse: Freq[kHz]": "",
      "RF Pulse: Duty[%]": "",
      "RF Pulse: For.P": "",
-     "RF Pulse: Ref. P": "",
-     "Base Pressure": ""
+     "RF Pulse: Ref. P": ""
     }
    ]
   ],

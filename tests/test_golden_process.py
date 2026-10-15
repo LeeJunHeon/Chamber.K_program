@@ -275,6 +275,10 @@ class Harness:
                 w.dcpower_controller.update_dc_status_display.emit(100.2, 351.0, 0.285)
                 pc.shutter_delay_tick.emit(0)
             elif st[i]["timer_purpose"] == "process":
+                # 'Main Shutter Open' 스텝(PLC_CMD MS_button True) — 컨트롤러의 update_plc_port 가 main 에 주는 것과 같다
+                #  (실제 신호를 내면 PLC 컨트롤러도 받아 '포트가 열려 있지 않습니다' 로그가 섞인다)
+                if any(s["action"] == "PLC_CMD" and s["params"] == ["MS_button", True] for s in st[:i]):
+                    w._on_proc_plc_cmd("MS_button", True)
                 pc.process_time_tick.emit(st[i]["duration_sec"])
                 w.mfc_controller.update_flow.emit("Ar", 19.8)
                 w.mfc_controller.update_pressure.emit("4.9")
