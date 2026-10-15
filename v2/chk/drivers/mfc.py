@@ -228,6 +228,52 @@ class MfcDriver:
     def all_flow_off(self, on_done=None) -> None:
         self.set_onoff("0000", on_done)
 
+    def set_channel(self, ch: int, on: bool, on_done=None) -> None:
+        """v1 FLOW_ON/FLOW_OFF(_apply_flow_onoff_with_L0): R69 로 지금 마스크를 읽고 그 채널만 바꿔 L0 로 쓴 뒤 R69 되읽기."""
+        if ch not in (1, 2, 3, 4):
+            raise ValueError(ch)
+        tries = self.cfg["MFC_VERIFY_TRIES"]
+        box: Dict[str, str] = {}
+        seen: List[str] = []
+
+        def read(s):
+            bits = parse_r69(self._query(s, "R69"))
+            if bits is None:
+                raise MfcError("R69 형식 다름")
+            b = list(bits)
+            b[ch - 1] = "1" if on else "0"
+            box["bits"] = "".join(b)
+
+        def write(s):
+            self._send(s, f"L0{box['bits']}")
+
+        def verify(k):
+            def fn(s):
+                try:
+                    ans = self._query(s, "R69")
+                except Cancelled:
+                    raise
+                except Exception as e:
+                    ans = f"무응답({type(e).__name__})"
+                seen.append(ans)
+                if parse_r69(ans) == box["bits"]:
+                    self._emit("verify_ok", f"ch{ch} {'ON' if on else 'OFF'}: L0{box['bits']} → R69={ans}")
+                    return SEQ_DONE
+                if k >= tries:
+                    raise MfcVerifyError(f"ch{ch}: L0{box['bits']} 뒤 R69 = " + "/".join(seen))
+            return fn
+
+        def done(n, reason, results):
+            if reason and reason != "BENCH_READ_ONLY":
+                self._emit("verify_mismatch", f"ch{ch} on/off 실패 " + "/".join(seen), "VERIFY_MISMATCH")
+            if on_done:
+                on_done(n, "VERIFY_MISMATCH" if reason and reason != "BENCH_READ_ONLY" else reason, results)
+
+        steps = [("R69 읽기", read), ("L0 쓰기", write)] + [(f"R69 {k}", verify(k)) for k in range(1, tries + 1)]
+        self.worker.submit_sequence(Sequence(f"mfc:ch{ch}_{'on' if on else 'off'}", steps, gap_s=self.gap_s,
+                                             step_timeout_s=self.q_timeout_s + self.gap_s + 0.2, on_done=done,
+                                             confirms_link=False))
+
     def set_sp(self, n: int, mtorr: float, on_done=None) -> None:
         hw = round(self.mtorr_to_pct(mtorr), 2)
         tol = self.cfg["MFC_SP1_VERIFY_TOL"]

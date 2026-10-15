@@ -23,7 +23,8 @@ from v2.chk.drivers.ig import IgDriver
 from v2.chk.drivers.mfc import CH_AR, MfcDriver
 from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
-from v2.chk.safety import ChkSafety, SimpleProcess
+from v2.chk.heater_engine import HeaterEngine
+from v2.chk.safety import ChkSafety, SimpleProcess, View
 from v2.chk.sim.cesar_sim import CesarSim
 from v2.chk.sim.chamber import Chamber
 from v2.chk.sim.dc_sim import DcSim
@@ -64,10 +65,27 @@ class ChkRig:
         self.recorder = Recorder(out_dir, self.bus.columns, retention_days=c["SNAPSHOT_RETENTION_DAYS"])
         self.fast = PlcFastPoller(clock, self.plc, c["PLC_FAST_POLL_MS"])
         self.process = SimpleProcess()
-        self.safety = ChkSafety(clock, c, self.process, self.plc, self.mfc, self.dc, self.rfp, self.ig, on_event=self._sev)
+        self.heater = HeaterEngine(clock, c, self.plc, self.mfc, on_event=self._hev,
+                                   process_active=lambda: self.process.active,
+                                   on_gas_failed=lambda why: self.safety.event("heater_gas_failed"))
+        self.safety = ChkSafety(clock, c, self.process, self.plc, self.mfc, self.dc, self.rfp, self.ig, on_event=self._sev,
+                                heater=self.heater)
         self.plc.fast_listeners.append(self.safety.on_poll)
-        self.loop = TickLoop(clock, self.bus, [self.recorder.put_row, self.safety.on_row], tick_hooks=[self._tick])
+        self.plc.fast_listeners.append(self.heater.on_poll)
+        self.loop = TickLoop(clock, self.bus, [self.recorder.put_row, self.safety.on_row, self._on_row],
+                             tick_hooks=[self._tick], extra_fn=self._extra)
         self.scenario = scenario
+
+    def _on_row(self, row) -> None:
+        self.heater.on_tick(View.from_row(row))
+
+    def _extra(self, t) -> dict:
+        return {"heater.hold": self.heater.hold_label}
+
+    def _hev(self, e) -> None:
+        self.events.append(e)
+        if self.recorder is not None and e.kind != "message":
+            self.recorder.put_event(iso_local(self.clock.wall()), e.level, (e.code or e.kind).upper(), "heater", e.detail)
 
     def _sev(self, e) -> None:
         self.events.append(e)

@@ -356,8 +356,9 @@ class ChkSafety:
     """엔진 + 조치 처리기 + 정지 순서 + 연결 고리."""
 
     def __init__(self, clock, cfg: Dict[str, Any], process, plc, mfc, dc, rfp, ig,
-                 on_event: Optional[Callable[[SafetyEvent], None]] = None) -> None:
+                 on_event: Optional[Callable[[SafetyEvent], None]] = None, heater=None) -> None:
         self.clock, self.cfg, self.process = clock, cfg, process
+        self.heater = heater                      # HeaterEngine(있으면 히터 레시피 중단·가스 유지를 여기로)
         self.plc, self.mfc, self.dc, self.rfp, self.ig = plc, mfc, dc, rfp, ig
         self.engine = SafetyEngine(clock, build_rules(cfg), cfg, self._handlers(), process, on_event)
         self.engine.stop_steps = self.stop_steps
@@ -514,8 +515,9 @@ class ChkSafety:
             "NOTIFY": notify,
             "HEATER_FORCE_OFF": heater_off,
             "HEATER_RESIDUAL_CLEAR": residual,
-            "HEATER_RECIPE_ABORT": lambda a, done: (p.heater_recipe_abort(a.get("reason", "")), done(None)),
-            "HEATER_GAS_HOLD": lambda a, done: (p.heater_gas_hold(), done(None)),
+            "HEATER_RECIPE_ABORT": lambda a, done: ((self.heater.recipe_abort if self.heater else p.heater_recipe_abort)(
+                a.get("reason", "")), done(None)),
+            "HEATER_GAS_HOLD": lambda a, done: ((self.heater.gas_hold if self.heater else p.heater_gas_hold)(), done(None)),
             "DC_SAFE_OFF": lambda a, done: dc.output_off_confirmed(on_done=_seq(done)),
             "RFP_SAFE_OFF": lambda a, done: rfp.rf_off_confirmed(on_done=_req(done)),
             "RF_SAFE_OFF": lambda a, done: plc.rf_off(on_done=_req(done)),

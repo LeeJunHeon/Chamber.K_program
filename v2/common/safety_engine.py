@@ -289,6 +289,8 @@ class SafetyEngine:
                 self.process.on_stop_done(name)
             except Exception as e:
                 self._emit(SafetyEvent("error", name, "", f"on_stop_done 예외 {e!r}", "error", self.clock.wall()))
+            finally:
+                self.clock.notify()           # 순서가 끝났음을 기다리는 쪽을 깨운다
         self._threads.append(self.clock.start_thread(run, f"safety-{name}"))
 
     def new_run(self) -> None:

@@ -57,8 +57,9 @@ class H:
         return [e for e in self.e.events if e.kind == kind and (rule is None or e.rule == rule)]
 
     def settle(self):
+        self.c.wait_until(None, lambda: not self.e.busy and len(self.e.seq_results) >= len(self.e._threads))
         for th in self.e._threads:
-            self.c.wait_until(None, lambda th=th: not th.is_alive())
+            th.join(5)
 
 
 # (규칙, where, 공정 설정, 참 값, 거짓 값, 성립까지 초, 표본 간격, 상태 밖)

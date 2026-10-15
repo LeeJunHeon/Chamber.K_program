@@ -30,7 +30,8 @@ COILS_B = (160, 161)     # FC1 160..320
 REGS = (0, 61)           # FC3 D0..D60
 
 _ADDR = {a.name: a for a in D.PLC_ADDRS}
-_TEMP_REGS = {"heater_pv", "heater_pv2", "heater_sv", "heater_cur_sv", "heater_sv_ramp", "heater_sv2"}
+_TEMP_REGS = {"heater_pv", "heater_pv2", "heater_sv", "heater_cur_sv", "heater_sv_ramp", "heater_sv2",
+              "heater_sv_limit", "heater_ot2_limit", "heater_sv2_max"}
 CORE_FIELDS = {"heater.hold"}            # 드라이버가 아니라 core(유지 모드 엔진)가 채운다
 
 # 히터 한계값(S13) — (ParamDef 키, D 주소 이름, 변환)

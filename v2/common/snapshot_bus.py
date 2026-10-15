@@ -174,8 +174,8 @@ class SnapshotBus:
                                                   and isinstance(st.result.value, dict)) else set()
             for f in b.fields:
                 col = f"{b.name}.{f.name}"
-                if q is Quality.OFF:
-                    continue
+                if q is Quality.OFF or col in extra:
+                    continue                  # core 가 채운 열(예: heater.hold)은 장비 값으로 덮지 않는다
                 val = st.fields.get(col)
                 row[col] = None if val is None else val[0]
                 if f.own_quality:
