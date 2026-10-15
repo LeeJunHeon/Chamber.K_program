@@ -133,7 +133,7 @@
         },
         {
          "label": "Base P",
-         "setpoint": "1.0E-05",
+         "setpoint": "",
          "unit": "Torr"
         },
         {
@@ -444,7 +444,7 @@
         },
         {
          "label": "Base P",
-         "setpoint": "1.0E-05",
+         "setpoint": "",
          "unit": "Torr"
         },
         {
@@ -674,7 +674,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
-     "base_pressure": 1e-05,
+     "base_pressure": 0.0,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "shutter_delay": 1.0,
@@ -732,7 +732,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
-     "base_pressure": 1e-05,
+     "base_pressure": 0.0,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 0.0,
@@ -766,7 +766,7 @@
      "o2_flow": 0.0,
      "selected_gas": "Ar",
      "mfc_flow": 20.0,
-     "base_pressure": 1e-05,
+     "base_pressure": 0.0,
      "sp1_set": 5.0,
      "dc_power": 100.0,
      "rf_power": 0.0,
@@ -1206,7 +1206,7 @@
         },
         {
          "label": "Base P",
-         "setpoint": "1.0E-05",
+         "setpoint": "",
          "unit": "Torr"
         },
         {
@@ -1530,7 +1530,7 @@
         },
         {
          "label": "Base P",
-         "setpoint": "1.0E-05",
+         "setpoint": "",
          "unit": "Torr"
         },
         {
@@ -1947,7 +1947,7 @@
         },
         {
          "label": "Base P",
-         "setpoint": "1.0E-05",
+         "setpoint": "",
          "unit": "Torr"
         },
         {

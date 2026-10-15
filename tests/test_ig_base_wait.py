@@ -95,9 +95,10 @@ def test_steps_with_heater_follow_heater_wait(pc):
     assert st[i + 3][1] == "Ch1 ZEROING"
 
 
-def test_missing_base_pressure_uses_default(pc):
-    st = _steps(pc)                                          # 열 없는 예전 레시피
-    assert "베이스 압력 대기 (목표 1.0E-05 Torr)" in [m for _, m in st]
+def test_missing_base_pressure_means_no_wait(pc):
+    st = _steps(pc)                                          # 열 없는 예전 레시피 — 기본값으로 채우지 않는다
+    assert not any(a.name.startswith("IG_") for a, _ in st)
+    assert ("정보", "베이스 압력 대기 안 함 — base_pressure 비어 있음(이온 게이지 사용 안 함)") in pc.rec["msg"]
 
 
 def test_no_steps_when_ig_off_or_zero(pc):
@@ -105,8 +106,10 @@ def test_no_steps_when_ig_off_or_zero(pc):
     assert not any(a.name.startswith("IG_") for a, _ in _steps(pc, base_pressure=1e-5))
     assert ("경고", "베이스 압력 대기 생략 — 이온 게이지 꺼짐(IG_ENABLED=false 또는 IG_PORT 없음)") in pc.rec["msg"]
     pc.set_ig_snapshot_provider(lambda: None)
+    pc.rec["msg"].clear()
     assert not any(a.name.startswith("IG_") for a, _ in _steps(pc, base_pressure=0))
-    assert ("경고", "베이스 압력 대기 생략 — base_pressure 0") in pc.rec["msg"]
+    assert ("정보", "베이스 압력 대기 안 함 — base_pressure 비어 있음(이온 게이지 사용 안 함)") in pc.rec["msg"]
+    assert not any(lv == "경고" and "베이스 압력" in m for lv, m in pc.rec["msg"])
 
 
 # ───────────── 필라멘트 ON / OFF 스텝 ─────────────

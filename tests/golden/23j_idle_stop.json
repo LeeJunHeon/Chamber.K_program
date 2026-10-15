@@ -120,7 +120,7 @@
         },
         {
          "label": "Base P",
-         "setpoint": "1.0E-05",
+         "setpoint": "",
          "unit": "Torr"
         },
         {
@@ -346,7 +346,7 @@
         },
         {
          "label": "Base P",
-         "setpoint": "1.0E-05",
+         "setpoint": "",
          "unit": "Torr"
         },
         {

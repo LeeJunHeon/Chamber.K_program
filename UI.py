@@ -343,7 +343,10 @@ class Ui_Dialog(object):
         self.basePressure_edit = QPlainTextEdit(Dialog)
         self.basePressure_edit.setObjectName(u"basePressure_edit")
         self.basePressure_edit.setGeometry(QRect(735, 210, 131, 31))
-        self.basePressure_edit.setPlainText("1.0E-05")
+        self.basePressure_edit.setPlainText("")
+        self.basePressure_edit.setPlaceholderText("비우면 대기 안 함")
+        self.basePressure_edit.setToolTip("베이스 압력[Torr] — 값이 있으면 가스 도입 전 이온 게이지로 이 값 이하가 될 때까지 "
+                                          "기다림(1E-9 ~ 1E-3). 비우거나 0 이면 대기 안 함")
         self.working_pressure_label = QLabel(Dialog)
         self.working_pressure_label.setObjectName(u"working_pressure_label")
         self.working_pressure_label.setGeometry(QRect(875, 190, 146, 20))

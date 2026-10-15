@@ -18,7 +18,7 @@ from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
                         DC_RAMP_STEP_A,
                         IG_FILAMENT_ON_TIMEOUT_SEC, IG_SETTLE_SEC, IG_BASE_STABLE_COUNT,
-                        IG_BASE_WAIT_TIMEOUT_SEC, PROCESS_DEFAULT_BASE_PRESSURE, IG_BASE_LOG_INTERVAL_SEC)
+                        IG_BASE_WAIT_TIMEOUT_SEC, IG_BASE_LOG_INTERVAL_SEC)
 from lib.heater_profile import ramp_minutes
 from controller.heater_hold import ENGAGE_TIMEOUT_SEC
 
@@ -1018,9 +1018,10 @@ class SputterProcessController(QObject):
 
     @staticmethod
     def base_pressure_of(p: Dict[str, Any]) -> float:
+        """params 의 base_pressure(Torr). 없거나 빈칸이면 0.0 = 대기 안 함(기본값으로 채우지 않는다)."""
         v = p.get('base_pressure', None)
-        if v is None or v == "":
-            v = PROCESS_DEFAULT_BASE_PRESSURE
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return 0.0
         try:
             return float(v)
         except (TypeError, ValueError):
@@ -1028,11 +1029,11 @@ class SputterProcessController(QObject):
 
     def _ig_base_steps(self, p: Dict[str, Any]) -> List[ProcessStep]:
         bp = self.base_pressure_of(p)
+        if bp <= 0:                                  # 값이 명시된 공정만 대기 — 필라멘트도 건드리지 않는다
+            self.status_message.emit("정보", "베이스 압력 대기 안 함 — base_pressure 비어 있음(이온 게이지 사용 안 함)")
+            return []
         if self._ig_state is None:
             self.status_message.emit("경고", "베이스 압력 대기 생략 — 이온 게이지 꺼짐(IG_ENABLED=false 또는 IG_PORT 없음)")
-            return []
-        if bp <= 0:
-            self.status_message.emit("경고", "베이스 압력 대기 생략 — base_pressure 0")
             return []
         return [
             ProcessStep(ActionType.IG_FILAMENT_ON, "이온 게이지 필라멘트 ON"),

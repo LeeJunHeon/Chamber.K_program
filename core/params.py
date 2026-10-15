@@ -14,17 +14,18 @@ from typing import Callable, Optional
 
 from lib.config import (HEATER_ENABLED, HEATER_MAX_TEMP, HEATER_RAMP_RATE_C_PER_MIN,
                         RFPULSE_MAX_POWER, RFPULSE_PULSE_FREQ_MAX_HZ, RFPULSE_PULSE_FREQ_MIN_HZ,
-                        RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX, rfpulse_pulse_edge_violation,
-                        PROCESS_DEFAULT_BASE_PRESSURE)
+                        RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX, rfpulse_pulse_edge_violation)
 
-# 베이스 압력(Torr) — 0 은 대기 생략, 그 밖에는 이 범위 안이어야 한다(이온 게이지 측정 범위 안쪽).
+# 베이스 압력(Torr) — 값이 명시된 공정만 베이스 대기(이온 게이지)를 한다. 비었거나 0 이면 대기 안 함(내부 0.0),
+#  값이 있으면 이 범위 안이어야 한다(이온 게이지 측정 범위 안쪽). 잘못된 값은 시작 전에 막는다(조용히 0 으로 바꾸지 않음).
 BASE_PRESSURE_MIN = 1e-9
 BASE_PRESSURE_MAX = 1e-3
 
 
 @dataclass(frozen=True)
 class ManualInputs:
-    """수동 입력칸 원시값 — toPlainText()/isChecked() 결과 그대로(strip 도 하지 않는다)."""
+    """수동 입력칸 원시값 — toPlainText()/isChecked() 결과 그대로(strip 도 하지 않는다).
+    base_pressure_text 가 비었거나 공백뿐이면(ERP 원격에 basePressure 가 없을 때 포함) 베이스 대기 안 함."""
     use_ar: bool
     ar_flow_text: str
     use_o2: bool
@@ -47,32 +48,32 @@ class ManualInputs:
     use_g2: bool
     g2_name_text: str
     use_dc_delay: bool
-    base_pressure_text: str = ""      # 빈칸이면 PROCESS_DEFAULT_BASE_PRESSURE
+    base_pressure_text: str = ""      # 빈칸(공백만 포함)이면 0.0 = 베이스 대기 안 함
 
 
 def fmt_base_pressure(v) -> str:
-    """화면 표시: 1e-5 → '1.0E-05', 0 → '0'."""
+    """화면 표시: 1e-5 → '1.0E-05', 0(대기 안 함) → ''(빈칸)."""
     v = float(v)
-    return "0" if v == 0 else f"{v:.1E}"
+    return "" if v == 0 else f"{v:.1E}"
 
 
 def check_base_pressure(v: float, where: str = "") -> float:
-    """0(대기 생략) 또는 BASE_PRESSURE_MIN ≤ v ≤ BASE_PRESSURE_MAX. 그 밖이면 ValueError."""
+    """0(대기 안 함) 또는 BASE_PRESSURE_MIN ≤ v ≤ BASE_PRESSURE_MAX. 그 밖이면 ValueError."""
     v = float(v)
     if v == 0:
         return 0.0
     if not (BASE_PRESSURE_MIN <= v <= BASE_PRESSURE_MAX):
         pre = f"[{where}] " if where else ""
         raise ValueError(f"{pre}base_pressure {v:.1E} Torr 는 범위 밖입니다 "
-                         f"(0 = 대기 생략, {BASE_PRESSURE_MIN:.0E} ~ {BASE_PRESSURE_MAX:.0E} Torr).")
+                         f"(비우거나 0 = 대기 안 함, {BASE_PRESSURE_MIN:.0E} ~ {BASE_PRESSURE_MAX:.0E} Torr).")
     return v
 
 
 def parse_base_pressure_text(text: str) -> float:
-    """수동 입력칸 → Torr. '1e-5', '1.0E-05' 모두 받는다. 빈칸이면 기본값."""
+    """수동 입력칸 → Torr. '1e-5', '1.0E-05' 모두 받는다. 빈칸(공백만 포함)이면 0.0 = 대기 안 함."""
     s = (text or "").strip()
     if s == "":
-        return float(PROCESS_DEFAULT_BASE_PRESSURE)
+        return 0.0
     try:
         v = float(s)
     except ValueError:
@@ -197,7 +198,7 @@ def build_manual_params(inp: ManualInputs) -> dict:
         "mfc_flow": float(mfc_flow),
 
         # ▼ 나머지 기존 파라미터들 그대로 유지
-        "base_pressure": parse_base_pressure_text(inp.base_pressure_text),   # Torr, 0 = 베이스 대기 생략
+        "base_pressure": parse_base_pressure_text(inp.base_pressure_text),   # Torr, 0 = 베이스 대기 안 함
         "sp1_set": float(inp.working_pressure_text.strip()),
         "dc_power": float(inp.dc_power_text.strip() or 0) if inp.use_dc else 0,
         "rf_power": float(inp.rf_power_text.strip() or 0) if inp.use_rf else 0,
@@ -306,8 +307,9 @@ def build_csv_params(row: dict, offset_text: str, param_text: str,
         if o2_flow is None or o2_flow <= 0:
             raise ValueError(f"[{process_name or 'STEP'}] O2=ON 인데 O2_flow가 비어있거나 0 이하입니다.")
 
-    # ---- 베이스 압력(선택, Torr) — 열이 없는 예전 레시피는 기본값. '1e-5'·'1.0E-05'·숫자 셀 모두 받는다 ----
-    base_p = _f("base_pressure", required=False, default=float(PROCESS_DEFAULT_BASE_PRESSURE))
+    # ---- 베이스 압력(선택, Torr) — 열이 없거나 칸이 비면(공백 포함) 0.0 = 대기 안 함.
+    #      '1e-5'·'1.0E-05'·숫자 셀 모두 받는다. 숫자가 아니거나 범위 밖이면 시작 전에 막는다 ----
+    base_p = _f("base_pressure", required=False, default=0.0)
     base_p = check_base_pressure(base_p, process_name or "STEP")
 
     # ---- 압력/시간(필수) ----

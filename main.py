@@ -68,8 +68,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
                         heater_est_current,
                         IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME, IG_CSV_ENABLED,
-                        MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts,
-                        PROCESS_DEFAULT_BASE_PRESSURE)
+                        MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from controller.heater_hold import HeaterHold
@@ -4101,8 +4100,8 @@ class MainDialog(QDialog):
         self.ui.Ar_flow_edit.setPlainText("5")
         self.ui.O2_flow_edit.setPlainText("")
 
-        # --- Base pressure (기본값 PROCESS_DEFAULT_BASE_PRESSURE) / Working pressure (UI.py 기본값: 2) ---
-        self.ui.basePressure_edit.setPlainText(fmt_base_pressure(PROCESS_DEFAULT_BASE_PRESSURE))
+        # --- Base pressure (빈칸 = 베이스 대기 안 함) / Working pressure (UI.py 기본값: 2) ---
+        self.ui.basePressure_edit.setPlainText("")
         self.ui.working_pressure_edit.setPlainText("2")
 
         # --- Power setpoint + 체크박스 (UI.py 기본값) ---
@@ -4639,7 +4638,7 @@ class MainDialog(QDialog):
         if o2_flow is not None:
             self.ui.O2_flow_edit.setPlainText(f"{float(o2_flow):.2f}")
 
-        # 베이스 압력(Torr) — "1.0E-05", 0 이면 "0"(대기 생략)
+        # 베이스 압력(Torr) — "1.0E-05", 0 이면 빈칸(대기 안 함)
         base_p = params.get("base_pressure")
         if base_p is not None:
             self.ui.basePressure_edit.setPlainText(fmt_base_pressure(base_p))

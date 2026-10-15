@@ -764,8 +764,8 @@ IG_BASE_WAIT_TIMEOUT_SEC = get('IG_BASE_WAIT_TIMEOUT_SEC', 1800)
 # 베이스 대기 중 이온 압력을 모니터·공정 로그에 남기는 간격(초). 10/14 시험은 20초 만에 끝나 30초 진행 줄이 한 번도
 #  안 나왔다 — 압력이 내려가는 과정을 보려고 5초. 베이스 대기 밖에서는 주기 기록을 하지 않는다.
 IG_BASE_LOG_INTERVAL_SEC = get('IG_BASE_LOG_INTERVAL_SEC', 5)
-# 레시피·화면에 base_pressure 가 없을 때 쓰는 목표 베이스 압력(Torr). 0 이면 대기 생략.
-PROCESS_DEFAULT_BASE_PRESSURE = get('PROCESS_DEFAULT_BASE_PRESSURE', 1e-5)
+# (PROCESS_DEFAULT_BASE_PRESSURE 는 2026-10-15 에 없앴다 — 베이스 대기는 base_pressure 값이 명시된 공정에서만 한다.
+#  옛 config_user.json 에 이 키가 남아 있어도 config_loader 는 모르는 키를 읽기만 하고 쓰지 않으므로 무해하다.)
 
 
 

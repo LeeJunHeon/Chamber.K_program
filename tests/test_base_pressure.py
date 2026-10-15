@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""베이스 압력(base_pressure, Torr) — 레시피 열·수동 입력칸·ERP 원격·상태 보고."""
+"""베이스 압력(base_pressure, Torr) — 레시피 열·수동 입력칸·ERP 원격·상태 보고.
+2026-10-15: 값이 명시된 공정만 베이스 대기. 열 없음·빈칸·공백·0 → 0.0(대기 안 함), 잘못된 값은 시작 거부."""
 import csv
 import os
 
@@ -25,35 +26,38 @@ MANUAL = dict(use_ar=True, ar_flow_text="20", use_o2=False, o2_flow_text="", wor
 
 
 # ───────── 검사·형식 ─────────
-@pytest.mark.parametrize("text,want", [("", 1e-5), ("1e-5", 1e-5), ("1.0E-05", 1e-5), (" 2.5e-7 ", 2.5e-7),
-                                       ("0", 0.0), ("1e-9", 1e-9), ("1e-3", 1e-3)])
+@pytest.mark.parametrize("text,want", [("", 0.0), ("   ", 0.0), (" \n", 0.0), ("1e-5", 1e-5), ("1.0E-05", 1e-5),
+                                       (" 2.5e-7 ", 2.5e-7), ("0", 0.0), ("1e-9", 1e-9), ("1e-3", 1e-3)])
 def test_manual_text_accepted(text, want):
     assert parse_base_pressure_text(text) == pytest.approx(want)
 
 
-@pytest.mark.parametrize("text", ["1e-2", "5e-10", "-1e-5", "abc"])
+@pytest.mark.parametrize("text", ["1e-2", "5e-10", "-1e-5", "abc", "1e-55", "5e-3"])
 def test_manual_text_rejected(text):
     with pytest.raises(ValueError):
         parse_base_pressure_text(text)
 
 
 def test_range_message_and_format():
-    with pytest.raises(ValueError, match=r"\[S1\] base_pressure 5\.0E-03 Torr 는 범위 밖입니다 \(0 = 대기 생략, 1E-09 ~ 1E-03 Torr\)"):
+    with pytest.raises(ValueError, match=r"\[S1\] base_pressure 5\.0E-03 Torr 는 범위 밖입니다 \(비우거나 0 = 대기 안 함, 1E-09 ~ 1E-03 Torr\)"):
         check_base_pressure(5e-3, "S1")
-    assert fmt_base_pressure(1e-5) == "1.0E-05" and fmt_base_pressure(0) == "0"
+    assert fmt_base_pressure(1e-5) == "1.0E-05" and fmt_base_pressure(0) == "" and fmt_base_pressure(0.0) == ""
 
 
 # ───────── 레시피(CSV·xlsx) ─────────
-def test_csv_column_missing_uses_default():
-    assert build_csv_params(dict(ROW), "6.79", "1.0395")["base_pressure"] == pytest.approx(1e-5)
+def test_csv_column_missing_means_no_wait():
+    assert build_csv_params(dict(ROW), "6.79", "1.0395")["base_pressure"] == 0.0
 
 
-@pytest.mark.parametrize("v,want", [("1.0E-05", 1e-5), ("1e-5", 1e-5), (3e-6, 3e-6), ("0", 0.0), ("", 1e-5)])
+@pytest.mark.parametrize("v,want", [("1.0E-05", 1e-5), ("1e-5", 1e-5), (3e-6, 3e-6), (1e-5, 1e-5),
+                                    ("0", 0.0), (0, 0.0), ("", 0.0), ("   ", 0.0), (None, 0.0)])
 def test_csv_column_values(v, want):
     assert build_csv_params(dict(ROW, base_pressure=v), "6.79", "1.0395")["base_pressure"] == pytest.approx(want)
 
 
-@pytest.mark.parametrize("v,match", [("5e-3", "범위 밖"), ("x", "CSV 'base_pressure' 값이 숫자가 아닙니다")])
+@pytest.mark.parametrize("v,match", [("5e-3", "범위 밖"), ("-1e-5", "범위 밖"), ("1e-55", "범위 밖"),
+                                     ("x", "CSV 'base_pressure' 값이 숫자가 아닙니다"),
+                                     ("abc", "CSV 'base_pressure' 값이 숫자가 아닙니다")])
 def test_csv_column_rejected(v, match):
     with pytest.raises(ValueError, match=match):
         build_csv_params(dict(ROW, base_pressure=v), "6.79", "1.0395")
@@ -86,7 +90,9 @@ def test_sample_recipe_has_column_before_working_pressure():
 def test_erp_manual_args_base_pressure():
     a = {"useAr": True, "arFlow": "20", "workingPressure": "5", "useDc": True, "dcPower": "100",
          "processTime": "1", "shutterDelay": "0"}
-    assert build_manual_params(manual_inputs_from_args(a, "", ""))["base_pressure"] == pytest.approx(1e-5)
+    assert build_manual_params(manual_inputs_from_args(a, "", ""))["base_pressure"] == 0.0          # 없음 → 대기 안 함
+    assert build_manual_params(manual_inputs_from_args(dict(a, basePressure=""), "", ""))["base_pressure"] == 0.0
+    assert build_manual_params(manual_inputs_from_args(dict(a, basePressure=None), "", ""))["base_pressure"] == 0.0
     assert build_manual_params(manual_inputs_from_args(dict(a, basePressure="2.0E-06"), "", ""))["base_pressure"] == pytest.approx(2e-6)
     with pytest.raises(ValueError, match="범위 밖"):
         build_manual_params(manual_inputs_from_args(dict(a, basePressure="1e-2"), "", ""))
@@ -143,14 +149,119 @@ def test_ui_read_reset_apply(win):
     ui.basePressure_edit.setPlainText("2.0E-06")
     assert win._read_manual_inputs().base_pressure_text == "2.0E-06"
     ui.basePressure_edit.setPlainText("")
-    assert build_manual_params(ManualInputs(**MANUAL, base_pressure_text=win._read_manual_inputs().base_pressure_text))["base_pressure"] == pytest.approx(1e-5)
+    assert build_manual_params(ManualInputs(**MANUAL, base_pressure_text=win._read_manual_inputs().base_pressure_text))["base_pressure"] == 0.0
     win._apply_params_to_ui({"base_pressure": 3e-6, "sp1_set": 5.0})
     assert ui.basePressure_edit.toPlainText() == "3.0E-06"
+    win._apply_params_to_ui({"base_pressure": 0.0, "sp1_set": 5.0})                # 레시피 적재 0 → 빈칸
+    assert ui.basePressure_edit.toPlainText() == ""
+    ui.basePressure_edit.setPlainText("2.0E-06")
     win._reset_process_ui_fields()
-    assert ui.basePressure_edit.toPlainText() == "1.0E-05"
+    assert ui.basePressure_edit.toPlainText() == ""                                   # 초기화 뒤 빈칸
     assert ("base_pressure_text", "basePressure_edit") in MAIN.MainDialog._MANUAL_INPUT_WIDGETS
 
 
 def test_ui_out_of_range_blocks_start():
     with pytest.raises(ValueError, match="범위 밖"):
         build_manual_params(ManualInputs(**MANUAL, base_pressure_text="1e-2"))
+
+
+def test_state_base_p_blank_when_screen_blank():
+    st = build_state(FakeSrc(texts={"basePressure_edit": "", "working_pressure_edit": "5"}))
+    items = [g for g in st["groups"] if g["label"] == "압력 · 시간"][0]["items"]
+    assert [i for i in items if i["label"] == "Base P"][0]["setpoint"] == ""
+
+
+def test_ui_initial_blank_with_placeholder_and_tooltip(qapp):
+    from PyQt6.QtWidgets import QDialog
+    from UI import Ui_Dialog
+    d = QDialog()
+    ui = Ui_Dialog()
+    ui.setupUi(d)
+    e = ui.basePressure_edit
+    assert e.toPlainText() == "" and e.placeholderText() == "비우면 대기 안 함"
+    assert e.toolTip() == ("베이스 압력[Torr] — 값이 있으면 가스 도입 전 이온 게이지로 이 값 이하가 될 때까지 "
+                           "기다림(1E-9 ~ 1E-3). 비우거나 0 이면 대기 안 함")
+    d.deleteLater()
+
+
+def test_no_default_base_pressure_setting():
+    import json
+    import lib.config as CFG
+    import core.params as P
+    import controller.process_controller as PC
+    assert not any(hasattr(m, "PROCESS_DEFAULT_BASE_PRESSURE") for m in (CFG, P, PC, MAIN))
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, "config_user.json"), encoding="utf-8") as f:
+        assert "PROCESS_DEFAULT_BASE_PRESSURE" not in json.load(f)
+
+
+def test_config_loader_ignores_unknown_key(tmp_path, monkeypatch):
+    """옛 config_user.json 에 PROCESS_DEFAULT_BASE_PRESSURE 가 남아 있어도 무해 — 로더는 get(key) 로만 읽는다."""
+    import lib.config_loader as CL
+    p = tmp_path / "config_user.json"
+    p.write_text('{"PROCESS_DEFAULT_BASE_PRESSURE": 1e-5, "IG_BASE_WAIT_TIMEOUT_SEC": 1800}', encoding="utf-8")
+    monkeypatch.setattr(CL, "_JSON_PATH", str(p))
+    assert CL.load_user_config()["IG_BASE_WAIT_TIMEOUT_SEC"] == 1800
+
+
+# ───────── 스텝: 값이 명시된 공정만 IG 스텝 ─────────
+STEP_BASE = dict(use_ar_gas=True, use_o2_gas=False, ar_flow=20.0, o2_flow=0.0, sp1_set=5.0,
+                 process_time=1.0, shutter_delay=0.0, dc_power=0.0, rf_power=0.0)
+IG3 = ["IG_FILAMENT_ON", "IG_BASE_WAIT", "IG_FILAMENT_OFF"]
+NO_WAIT = ("정보", "베이스 압력 대기 안 함 — base_pressure 비어 있음(이온 게이지 사용 안 함)")
+
+
+def _ig_steps(params, ig_on=True):
+    from unittest.mock import MagicMock
+    from controller.process_controller import SputterProcessController
+    c = SputterProcessController(MagicMock(), MagicMock(), MagicMock(), MagicMock(), MagicMock())
+    c.set_ig_snapshot_provider((lambda: None) if ig_on else None)
+    msgs = []
+    c.status_message.connect(lambda lv, m: msgs.append((lv, m)))
+    acts = [s.action.name for s in c._build_steps(dict(STEP_BASE, **params))]
+    c.deleteLater()
+    return [a for a in acts if a.startswith("IG_")], msgs
+
+
+@pytest.mark.parametrize("row_over", [{}, {"base_pressure": ""}, {"base_pressure": "   "}, {"base_pressure": "0"}])
+def test_recipe_blank_or_zero_has_no_ig_steps(row_over, qapp):
+    p = build_csv_params(dict(ROW, **row_over), "6.79", "1.0395")
+    assert p["base_pressure"] == 0.0
+    ig, msgs = _ig_steps({"base_pressure": p["base_pressure"]})
+    assert ig == [] and msgs.count(NO_WAIT) == 1 and not any(lv == "경고" for lv, _ in msgs)
+
+
+@pytest.mark.parametrize("v", ["1e-5", "1.0E-05", 1e-5])
+def test_recipe_value_waits(v, qapp):
+    p = build_csv_params(dict(ROW, base_pressure=v), "6.79", "1.0395")
+    ig, msgs = _ig_steps({"base_pressure": p["base_pressure"]})
+    assert ig == IG3 and NO_WAIT not in msgs
+
+
+def test_params_without_key_or_blank_string_no_wait(qapp):
+    for over in ({}, {"base_pressure": None}, {"base_pressure": ""}, {"base_pressure": "  "}):
+        ig, msgs = _ig_steps(over)
+        assert ig == [] and NO_WAIT in msgs
+
+
+def test_screen_blank_start_no_wait(qapp):
+    p = build_manual_params(ManualInputs(**MANUAL, base_pressure_text=""))
+    assert _ig_steps({"base_pressure": p["base_pressure"]})[0] == []
+
+
+def test_erp_value_waits_and_missing_does_not(qapp):
+    a = {"useAr": True, "arFlow": "20", "workingPressure": "5", "useDc": True, "dcPower": "100",
+         "processTime": "1", "shutterDelay": "0"}
+    for args, want in ((a, []), (dict(a, basePressure=""), []), (dict(a, basePressure="1e-5"), IG3)):
+        p = build_manual_params(manual_inputs_from_args(args, "", ""))
+        assert _ig_steps({"base_pressure": p["base_pressure"]})[0] == want
+
+
+def test_ig_disabled_with_value_warns_and_skips(qapp):
+    ig, msgs = _ig_steps({"base_pressure": 1e-5}, ig_on=False)
+    assert ig == [] and msgs == [("경고", "베이스 압력 대기 생략 — 이온 게이지 꺼짐(IG_ENABLED=false 또는 IG_PORT 없음)")]
+
+
+def test_ig_disabled_and_blank_is_info_only(qapp):
+    ig, msgs = _ig_steps({"base_pressure": 0.0}, ig_on=False)
+    assert ig == [] and msgs == [NO_WAIT]
