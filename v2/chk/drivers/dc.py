@@ -12,7 +12,7 @@ OFF 확인(S29): Sequence — OUTP OFF → 0.5 s → OUTP? 최대 DC_OFF_VERIFY_
   출력 켜기 시퀀스는 tick 을 주면 그 tick 의 측정 뒤에 시작한다.
 연결 때: *IDN? 로 형명 기록, SYST:ERR? 1회. 쓰기 허용(prod·sim)이면 FACT:LAST-STA 를 읽고 SAF 가 아닐 때만 쓰고 되읽기,
   DC_SET_PROTECTION 이면 VOLT:OVP·CURR:OCP 를 쓰고 되읽기(기본 끔 — bench 확인 뒤 켬).
-bench: 질의는 *IDN?·SYST:ERR?·MEAS:ALL?·OUTP? 만, 상태를 바꾸는 명령은 모두 보내지 않는다(worker 거부 + 드라이버 이중 보호).
+bench: 질의는 *IDN?·SYST:ERR?·MEAS:ALL?·OUTP?·FACT:LAST-STA? 만, 상태를 바꾸는 명령은 모두 보내지 않는다(worker 거부 + 드라이버 이중 보호).
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from typing import Any, Callable, Dict, Optional
 from v2.common.transport import Cancelled
 from v2.common.worker import SEQ_DONE, Request, Result, Sequence, Worker
 
-BENCH_QUERIES = frozenset({"*IDN?", "SYST:ERR?", "MEAS:ALL?", "OUTP?"})
+BENCH_QUERIES = frozenset({"*IDN?", "SYST:ERR?", "MEAS:ALL?", "OUTP?", "FACT:LAST-STA?"})   # 값만 읽음(5-2)
 CURR_WRITE_DELAY_S = 0.1     # tick 안에서 MEAS:ALL? 뒤 CURR 쓰기까지(사용자 결정 2026-10-15)
 OFF_STEP_TIMEOUT_S = 1.5     # OFF 확인 질의 하나의 한도(v1 OUTP? 1.5 s)
 
@@ -58,6 +58,7 @@ class DcDriver:
         self.on_event = on_event
         self.gap_s = cfg["DC_WRITE_QUERY_GAP_MS"] / 1000.0
         self.model: Optional[str] = None
+        self.last_state: Optional[str] = None     # FACT:LAST-STA? 값(연결 때)
         self.i_set: Optional[float] = None
         self.out: Optional[bool] = None
         self.set_w: Optional[float] = None
@@ -106,9 +107,11 @@ class DcDriver:
         self._emit("identity", self.model)
         err = self._query(session, "SYST:ERR?")
         self._emit("syst_err", err)
-        if not self.writes_allowed:
-            return
         cur = self._query(session, "FACT:LAST-STA?")
+        self.last_state = cur
+        if not self.writes_allowed:
+            self._emit("last_state", f"FACT:LAST-STA? = {cur} (bench — 읽기만)")
+            return
         if cur.upper() != "SAF":
             self._write(session, "FACT:LAST-STA SAF")
             back = self._query(session, "FACT:LAST-STA?")

@@ -103,10 +103,12 @@ def test_normal_run_reads_only_and_writes_summary(tmp_path):
     assert any(n.startswith("snap_") and n.endswith(".sqlite") for n in names)
     assert any(n.endswith(".csv") for n in names)
     s = (folder / "summary.txt").read_text(encoding="utf-8")
-    for want in ("놓친 tick 0", "MFC FS: Ar 100", "DC *IDN?: ODA", "CESAR 1310", "명령 33 현재",
+    for want in ("놓친 tick 0", "MFC FS: Ar 100", "DC *IDN?: ODA", "DC FACT:LAST-STA?: DIS", "[확인] DC LAST-STA 현재 값", "CESAR 1310", "명령 33 현재",
                  "IG F", "IG E:", "PLC 블록 읽기", "[확인] PLC 트랜잭션 왕복"):
         assert want in s, want
     assert "경고: MFC 풀스케일" not in s
+    import re
+    assert all(m == "0" for m in re.findall(r"무응답 (\d+)", s)), s      # 종료 때 끊긴 요청은 무응답에 안 셈
 
 
 def test_mfc_fs_not_100_is_loud(tmp_path):

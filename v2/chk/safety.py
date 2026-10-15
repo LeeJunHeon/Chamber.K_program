@@ -26,7 +26,9 @@ from v2.chk.safety_rules import Act
 
 FRESH = ("ok", "late")
 ACT = frozenset(PS.ACTIVE_STATES)
-SEQ_STEP_DEFAULT_S = 5.0          # 표에 한도 파라미터가 없는 정지 단계의 기다림(넘으면 다음 단계로)
+# plc250 조치 지연 목표(사용자 결정 5-2): 조건 발생 → 조치 쓰기 도착 ≤ PLC 폴링 주기(PLC_FAST_POLL_MS) + 35 ms.
+# 최악 = 조건이 폴링이 그 값을 읽은 직후에 생긴 경우: 폴링 주기 + 3블록 읽기(약 15 ms) + 쓰기 왕복(약 13 ms) ≈ 285 ms.
+PLC250_LATENCY_EXTRA_S = 0.035
 DEVICE_BLOCKS = ("plc", "heater", "rf", "mfc", "dc", "rfp", "ig")
 
 # 표의 규칙마다 어디서 실행되는지 — engine(여기 LiveRule) / 그 밖(이미 있는 코드) / next:(다음 단계) / on_hold
@@ -446,7 +448,7 @@ class ChkSafety:
 
     # ── 정지 순서 ──
     def _to(self, key: str) -> float:
-        return float(self.cfg[key]) if key else SEQ_STEP_DEFAULT_S
+        return float(self.cfg[key or "STOP_STEP_WAIT_DEFAULT_SEC"])
 
     def _steps(self, table, when: Dict[str, Callable[[], bool]], args: Dict[str, dict]) -> List[Step]:
         out = []

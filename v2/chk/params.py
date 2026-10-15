@@ -465,6 +465,8 @@ PARAMS: tuple = (
        src="controller/process_controller.py:31"),
     _p("STOP_EXHAUST_WAIT_SEC", "stop", "STOP MFC 밸브 열기(배기) 대기", "s", F, 8.0, 1.0, 60.0,
        src="controller/process_controller.py:1922"),
+    _p("STOP_STEP_WAIT_DEFAULT_SEC", "stop", "STOP·ALL STOP 단계 기본 기다림(표에 한도가 없는 단계)", "s", F, 5.0, 1.0, 60.0,
+       src=_V2, desc="정지 순서에서 한도 파라미터가 없는 단계의 완료를 기다리는 시간 — 넘으면 다음 단계로(5-1)"),
 
     # ───────────── 웹 연동(uplink) ─────────────
     _p("UPLINK_INTERVAL_MS", "uplink", "웹 전송 주기", "ms", I, 1000, 500, 10000, safety=L, apply=LIVE,

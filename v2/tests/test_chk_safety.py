@@ -9,6 +9,7 @@ import pytest
 
 from v2.common.clock import VirtualClock
 from v2.chk.sim.plc_sim import A
+from v2.chk.safety import PLC250_LATENCY_EXTRA_S
 from v2.chk.sim.rig import ChkRig
 
 PUMPS = ("rotary", "turbo", "rv", "fv")
@@ -65,8 +66,8 @@ def test_plc250_heater_fault_action_latency(tmp_path, offset):
     w = [x for x in coil_writes(plc, T) if x[1] == A["heater_run"] and x[3] is False]
     assert w, "RUN=0 쓰기 없음"
     lat = w[0][0] - T
-    # 최악 = 폴링 주기(조건이 막 읽힌 직후에 생김) + 폴링 읽기(블록 3개 약 15 ms) + 쓰기 왕복(약 13 ms)
-    assert lat <= rig.cfg["PLC_FAST_POLL_MS"] / 1000.0 + 0.035, lat
+    # 목표(safety.PLC250_LATENCY_EXTRA_S): 폴링 주기 + 35 ms — 최악은 조건이 막 읽힌 직후에 생긴 경우
+    assert lat <= rig.cfg["PLC_FAST_POLL_MS"] / 1000.0 + PLC250_LATENCY_EXTRA_S, lat
     fire = rig.safety.engine.last_fire_t["S16"]
     assert w[0][0] - fire <= 0.02             # 감지 → 쓰기 도착(tick 을 기다리지 않음)
 
@@ -81,7 +82,7 @@ def test_plc250_mv_closed_detect_latency(tmp_path, offset):
     at(c, T, lambda: plc.coils.__setitem__(A["mv"], False))
     run(rig, 6)
     fire = rig.safety.engine.last_fire_t["S2"]
-    assert 0 < fire - T <= rig.cfg["PLC_FAST_POLL_MS"] / 1000.0 + 0.02
+    assert 0 < fire - T <= rig.cfg["PLC_FAST_POLL_MS"] / 1000.0 + PLC250_LATENCY_EXTRA_S
     ms = [x for x in coil_writes(plc, T) if x[1] == A["ms"] and x[3] is False]   # STOP 2단계 Main 셔터 닫기
     assert ms and ms[0][0] - fire <= 0.05
     assert rig.safety.engine.run_reason == "MV_CLOSED"

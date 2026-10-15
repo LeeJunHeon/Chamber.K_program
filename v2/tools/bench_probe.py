@@ -92,6 +92,7 @@ class BenchProbe:
         self.loop: Optional[TickLoop] = None
         self.rows: List[Dict[str, Any]] = []
         self.started = False
+        self.stop_mono: Optional[float] = None      # 멈추기 시작한 시각 — 그 뒤에 끊긴 요청은 '종료 취소'로 센다
 
     def _ev(self, e) -> None:
         self.events.append(e)
@@ -186,6 +187,7 @@ class BenchProbe:
             fast.stop()
 
     def stop(self) -> None:
+        self.stop_mono = self.clock.monotonic()
         if self.started:
             for x in self.w.values():
                 x.stop()
@@ -202,6 +204,20 @@ class BenchProbe:
                 except Exception as e:
                     self.say(f"CSV 내보내기 실패 {day}: {e!r}")
 
+    def _cut_at_stop(self, k: str) -> int:
+        """응답이 없는 마지막 요청 중 멈추기 시작한 뒤에도 아직 응답 기다리는 중이던 것(종료 때 취소) 개수."""
+        rec = self.rec[k]
+        if self.stop_mono is None or rec._t0 is None:
+            return 0
+        limit = 2.0                                  # 질의 하나의 최대 기다림보다 넉넉히(IG 1.2 s)
+        stop_rel = self.stop_mono - rec._t0
+        n = 0
+        for e in reversed(rec.exchanges):
+            if e.rx or e.t_s < stop_rel - limit:
+                break
+            n += 1
+        return n
+
     # ───────── 요약 ─────────
     def summary(self, status: str) -> None:
         self.say("")
@@ -213,11 +229,12 @@ class BenchProbe:
             ex = self.rec[k].exchanges
             save_exchanges(self.out / f"rec_{k}.jsonl", ex)
             d = [e.delay_s * 1000 for e in ex if e.rx]
-            none = sum(1 for e in ex if not e.rx)
+            cut = self._cut_at_stop(k)
+            none = sum(1 for e in ex if not e.rx) - cut
             stats[k] = d
             if d:
                 self.say(f"응답 {k:8s}: {len(d)}회  p50 {_pct(d, 50):.1f} ms  p99 {_pct(d, 99):.1f} ms  "
-                         f"최대 {max(d):.1f} ms  무응답 {none}")
+                         f"최대 {max(d):.1f} ms  무응답 {none}" + (f"  (종료 때 끊김 {cut} — 무응답 아님)" if cut else ""))
             else:
                 self.say(f"응답 {k:8s}: 응답 없음(보낸 {len(ex)}회)")
         if self.loop is not None:
@@ -234,6 +251,7 @@ class BenchProbe:
             self.say("!!!!!!!! 경고: MFC 풀스케일이 100 이 아닙니다 — v1 레시피 유량이 %FS 였을 수 있습니다.")
             self.say("!!!!!!!! 실제 공정 전에 레시피 유량 단위를 확인하세요.")
         self.say(f"DC *IDN?: {self.dc.model}")
+        self.say(f"DC FACT:LAST-STA?: {self.dc.last_state}")
         for e in ev("DcEvent", "syst_err"):
             self.say(f"DC SYST:ERR?: {e.detail}")
         for e in ev("RfpEvent", "identity") + ev("RfpEvent", "auto_off_read"):
@@ -251,6 +269,7 @@ class BenchProbe:
             "MFC 명령 간격": (bool(stats["mfc"]), f"응답 p99 {_pct(stats['mfc'], 99):.0f} ms (간격 자체는 쓰기 없이 확인 불가)"),
             "DC 형명·정격": (self.dc.model is not None, f"{self.dc.model}"),
             "DC Delimiter": (bool(stats["dc"]), "LF 로 응답 받음" if stats["dc"] else "응답 없음"),
+            "DC LAST-STA 현재 값": (self.dc.last_state is not None, f"{self.dc.last_state}"),
             "CESAR 응답 지연": (bool(stats["rfpulse"]), f"p99 {_pct(stats['rfpulse'], 99):.0f} ms"),
             "PLC 트랜잭션 왕복": (bool(stats["plc"]), f"p50 {_pct(stats['plc'], 50):.0f} · p99 {_pct(stats['plc'], 99):.0f} ms"),
             "이온 게이지 E 응답 분포": (bool(stats["ig"]), f"p50 {_pct(stats['ig'], 50):.0f} · 최대 {max(stats['ig'], default=0):.0f} ms"),
