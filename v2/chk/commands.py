@@ -252,6 +252,7 @@ COMMANDS: tuple = (
     C("RFP_SAFE_OFF", "RF Pulse RF OFF(확인형)", (INT,), "system", (ANY_STATE,)),
     C("RF_RAMP_DOWN", "RF 램프다운", (INT,), "system", (ANY_STATE,)),
     C("HEATER_FORCE_OFF", "히터 RUN=0(링크 없으면 보류 뒤 적용)", (INT,), "system", (ANY_STATE,)),
+    C("HEATER_RECIPE_ABORT", "히터 레시피 중단", (INT,), "system", (ANY_STATE,), (), (_a("reason", "str"),)),
     C("HEATER_PUSH_CONFIG", "히터 한계값 쓰기·되읽기", (INT,), "system", (ANY_STATE,)),
     C("HEATER_CLAMP_MV", "히터 MV 상한 클램프", (INT,), "system", (ANY_STATE,), (), (_a("value", "int"),)),
     C("HEATER_GAS_HOLD", "냉각 보호 가스 유지", (INT,), "system", (ANY_STATE,)),
