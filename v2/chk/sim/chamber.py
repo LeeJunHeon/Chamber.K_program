@@ -14,6 +14,7 @@ DC 플라즈마 — 압력으로 전압이 정해지는 단순 V-I(정전류 전
   점화 조건(가스 있음·압력 IGNITE_MIN~IGNITE_MAX mTorr·¬점화 실패 주입) 아니면 → 무부하: V = 전압 설정, I 0
   점화 → 유지 전압 Vp = 350 + 150/√P(mTorr) (≤ 900), V = Vp + 50·I
          V 가 전압 설정보다 높으면 전압 한계(CV): V = 설정, I = (설정 − Vp)/50 (0 이하면 소멸)
+  점화 조건이 깨지면(가스 없음·압력 범위 밖·점화 실패 주입) 소멸 → 무부하.
   고장 주입: ignite_fail(점화 실패), low_current(전류 10 %), v_limit(유지 전압 +300 V → 전압 한계).
 """
 from __future__ import annotations
@@ -98,7 +99,7 @@ class Chamber:
             if not self.can_ignite() or v_set < self.sustain_voltage():
                 return float(v_set), 0.0                         # 무부하(점화 안 됨)
             self.dc_ignited = True
-        if not self.can_ignite() and self.total_sccm() <= 0.0:
+        if not self.can_ignite():                                # 가스가 없거나 압력이 범위를 벗어나면 소멸
             self.dc_ignited = False
             return float(v_set), 0.0
         vp = self.sustain_voltage()

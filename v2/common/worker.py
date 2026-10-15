@@ -154,10 +154,11 @@ class Sequence:
 
     def __init__(self, name: str, steps: List[tuple], gap_s: float = 0.0, step_timeout_s: float = 0.5,
                  on_done: Optional[Callable[[str, Optional[str], List[Result]], None]] = None,
-                 confirms_link: bool = True) -> None:
+                 confirms_link: bool = True, start_after: Optional[float] = None) -> None:
         self.name, self.steps, self.gap_s, self.step_timeout_s = name, list(steps), gap_s, step_timeout_s
         self.on_done = on_done
         self.confirms_link = confirms_link
+        self.start_after = start_after          # 첫 단계 not_before(예: 같은 tick 의 읽기 뒤)
         self.results: List[Result] = []
         self.finished = False
 
@@ -244,7 +245,7 @@ class Worker:
             return
         with self.clock.cond:
             self._seqs.append(seq)
-        self._queue_step(seq, 0, None)
+        self._queue_step(seq, 0, seq.start_after)
 
     def _queue_step(self, seq: Sequence, i: int, not_before: Optional[float]) -> None:
         name, fn = seq.steps[i]

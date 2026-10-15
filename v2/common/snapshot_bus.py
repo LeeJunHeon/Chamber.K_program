@@ -197,10 +197,12 @@ class TickLoop:
     """시계 → tick → 묶기 → 받는 곳(sink). 놓친 tick·jitter 를 모은다."""
 
     def __init__(self, clock, bus: SnapshotBus, sinks: Sequence[Callable[[Dict[str, Any]], None]] = (),
-                 extra_fn: Optional[Callable[[Tick], Dict[str, Any]]] = None, period: float = 1.0) -> None:
+                 extra_fn: Optional[Callable[[Tick], Dict[str, Any]]] = None, period: float = 1.0,
+                 tick_hooks: Sequence[Callable[[Tick], None]] = ()) -> None:
         self.clock = clock
         self.bus = bus
         self.sinks = list(sinks)
+        self.tick_hooks = list(tick_hooks)      # 읽기를 보낸 직후 tick 으로 부른다(하트비트·CURR 쓰기 예약 등)
         self.extra_fn = extra_fn
         self.scheduler = TickScheduler(clock, period)
         self.jitters: List[float] = []
@@ -219,6 +221,8 @@ class TickLoop:
             self.jitters.append(t.jitter_ms)
             self.missed += t.skipped
             self.bus.begin(t)
+            for h in self.tick_hooks:
+                h(t)
             row = self.bus.close(t, self.extra_fn(t) if self.extra_fn else None)
             self.close_lags.append((self.clock.monotonic() - t.t_mono) * 1000.0)
             for s in self.sinks:
