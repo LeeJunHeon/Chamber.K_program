@@ -189,6 +189,8 @@ class Worker:
     def stop(self, join_s: float = 5.0) -> None:
         with self.clock.cond:
             self._stop = True
+            if self._cancel is not None:      # 진행 중 요청을 끊어야 기다림 없이 끝난다(가상 시계에서도)
+                self._cancel.set()
             self.clock.cond.notify_all()
         if self._thread is not None:
             self._thread.join(join_s)
