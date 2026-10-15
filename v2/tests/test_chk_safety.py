@@ -18,7 +18,7 @@ PUMPS = ("rotary", "turbo", "rv", "fv")
 def make(tmp_path, **proc):
     c = VirtualClock(start_wall=1_760_000_000.0)
     c.register()
-    rig = ChkRig(c, tmp_path)
+    rig = ChkRig(c, tmp_path, simple_process=True)
     for k, v in proc.items():
         setattr(rig.process, k, v)
     return c, rig
@@ -135,7 +135,7 @@ def test_all_stop_keeps_pump_system(tmp_path):
 def test_all_stop_without_keep_pumps_clears_pumps(tmp_path):
     c = VirtualClock(start_wall=1_760_000_000.0)
     c.register()
-    rig = ChkRig(c, tmp_path, cfg={"ALL_STOP_KEEP_PUMPS": False})
+    rig = ChkRig(c, tmp_path, cfg={"ALL_STOP_KEEP_PUMPS": False}, simple_process=True)
     plc = rig.sims["plc"]
     for k in PUMPS:
         plc.coils[A[k]] = True

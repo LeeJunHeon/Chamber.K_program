@@ -159,6 +159,7 @@ class IgDriver:
         self.writes_allowed = writes_allowed
         self.on_event = on_event
         self.last: Optional[IgReading] = None
+        self.last_result: Optional[tuple] = None    # (on/off, 성공, 문구, 시각) — 마지막 필라멘트 결과
         self.emission_since: Optional[float] = None    # 방출이 처음 확인된 벽시계 시각(베이스 판정의 안정화 기준)
         self._e_block_until = -1.0
         self._last_b: Optional[float] = None
@@ -278,6 +279,7 @@ class IgDriver:
 
     def _finish(self, action: str, ok: bool, detail: str) -> None:
         self._expect, self._deadline, self._sent = None, None, False
+        self.last_result = (action, ok, detail, self.clock.monotonic())    # 공정 엔진이 결과를 본다
         self._emit("filament_result", f"{action}: {detail}", None if ok else "IG_FILAMENT_FAILED_CMD", ok)
 
     def on_tick(self, tick=None) -> None:

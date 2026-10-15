@@ -2,7 +2,9 @@
 
 sim 전용(SimTransport). RF power 는 PLC 드라이버 안(DAC·ADC). tick 훅: PLC 하트비트·링크, IG 필라멘트 기한.
 안전 규칙(ChkSafety): plc250 = PLC 폴링 직후(fast_listeners), tick = 행이 닫힌 뒤(sink), 드라이버 이벤트 → 이벤트 규칙.
-공정 쪽은 SimpleProcess(rig.process) — 시험이 상태·사용 장비를 정한다.
+공정 쪽은 ProcessEngine(rig.process), 히터는 HeaterEngine(rig.heater), 명령은 ChkCore(rig.core.command).
+simple_process=True 면 SimpleProcess(시험이 상태·사용 장비를 직접 정하는 안전 규칙 시험용).
+1초 행이 닫히면: 기록 → 안전 규칙(tick) → 히터(on_tick) → 공정(on_row) 순서.
 scenario "light": 가스 20 sccm·SP1 5 mTorr(MFC) → 필라멘트 켜기(IG) → DC 0.3 A → RF Pulse 100 W → 끄기 —
   쓰기가 1초 읽기와 섞여도 tick 이 밀리지 않는지 보려는 것(공정 엔진 아님).
 """
@@ -23,7 +25,9 @@ from v2.chk.drivers.ig import IgDriver
 from v2.chk.drivers.mfc import CH_AR, MfcDriver
 from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
+from v2.chk.core import ChkCore
 from v2.chk.heater_engine import HeaterEngine
+from v2.chk.process_engine import ProcessEngine
 from v2.chk.safety import ChkSafety, SimpleProcess, View
 from v2.chk.sim.cesar_sim import CesarSim
 from v2.chk.sim.chamber import Chamber
@@ -34,7 +38,8 @@ from v2.chk.sim.plc_sim import PlcSim
 
 
 class ChkRig:
-    def __init__(self, clock, out_dir: Path, cfg: Optional[Dict[str, Any]] = None, scenario: str = "none") -> None:
+    def __init__(self, clock, out_dir: Path, cfg: Optional[Dict[str, Any]] = None, scenario: str = "none",
+                 simple_process: bool = False) -> None:
         self.clock = clock
         self.cfg = dict(defaults(P.PARAMS), **(cfg or {}))
         c = self.cfg
@@ -64,12 +69,20 @@ class ChkRig:
         ], c["TICK_DEADLINE_MS"], SF.PROCESS_FIELDS)
         self.recorder = Recorder(out_dir, self.bus.columns, retention_days=c["SNAPSHOT_RETENTION_DAYS"])
         self.fast = PlcFastPoller(clock, self.plc, c["PLC_FAST_POLL_MS"])
-        self.process = SimpleProcess()
         self.heater = HeaterEngine(clock, c, self.plc, self.mfc, on_event=self._hev,
                                    process_active=lambda: self.process.active,
                                    on_gas_failed=lambda why: self.safety.event("heater_gas_failed"))
+        self.links = {k: (lambda x=x: x.ready) for k, x in self.workers.items()}
+        if simple_process:
+            self.process = SimpleProcess()
+        else:
+            self.process = ProcessEngine(clock, c, self.plc, self.mfc, self.dc, self.rfp, self.ig, self.heater, self.links,
+                                         on_event=self._pev)
         self.safety = ChkSafety(clock, c, self.process, self.plc, self.mfc, self.dc, self.rfp, self.ig, on_event=self._sev,
                                 heater=self.heater)
+        if not simple_process:
+            self.process.safety = self.safety
+        self.core = ChkCore(c, self.process, self.heater, self.safety, self.plc, self.ig, self.links)
         self.plc.fast_listeners.append(self.safety.on_poll)
         self.plc.fast_listeners.append(self.heater.on_poll)
         self.loop = TickLoop(clock, self.bus, [self.recorder.put_row, self.safety.on_row, self._on_row],
@@ -77,10 +90,22 @@ class ChkRig:
         self.scenario = scenario
 
     def _on_row(self, row) -> None:
-        self.heater.on_tick(View.from_row(row))
+        v = View.from_row(row)
+        self.heater.on_tick(v)
+        if hasattr(self.process, "on_row"):
+            self.process.on_row(v)
 
     def _extra(self, t) -> dict:
-        return {"heater.hold": self.heater.hold_label}
+        out = {"heater.hold": self.heater.hold_label}
+        if hasattr(self.process, "snapshot_fields"):
+            out.update(self.process.snapshot_fields())
+        return out
+
+    def _pev(self, e) -> None:
+        self.events.append(e)
+        if self.recorder is not None and e.kind in ("run_start", "run_end", "state", "warn"):
+            self.recorder.put_event(iso_local(self.clock.wall()), "warn" if e.code else "info", (e.code or e.kind).upper(),
+                                    "process", e.detail)
 
     def _hev(self, e) -> None:
         self.events.append(e)
@@ -107,6 +132,8 @@ class ChkRig:
     def _tick(self, t) -> None:
         self.plc.on_tick(t)
         self.ig.on_tick(t)
+        if hasattr(self.process, "on_tick_start"):
+            self.process.on_tick_start(t)
         if self.scenario != "light":
             return
         s = t.seq

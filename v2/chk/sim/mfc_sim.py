@@ -7,7 +7,7 @@
 설정(응답 없음): Q1~Q4 v, L0 bbbb, L1~L4 0|1, L5~L8 1(영점), S1~S5 v, D1~D5(설정점 선택 → 압력 제어), O·C·H(밸브), Z1.
 명령 간격: MIN_GAP_S 안에 들어온 명령은 놓친다(무응답) — 실제 최소 간격은 bench 에서 잰다.
 유량: 켜진 채널은 설정 %FS × FS sccm 쪽으로 1차 지연(τ 1 s) → 공용 챔버 gas_sccm(ch1 = ar, ch2 = o2).
-압력 제어(가정 모델): 설정점이 선택되면 제어 모드 — 목표 압력을 내는 밸브 열림을 계산해 그쪽으로 1차 지연(τ 2 s) →
+압력 제어(가정 모델): 설정점이 선택되면 제어 모드 — 목표 압력을 내는 밸브 열림을 계산해 그쪽으로 1차 지연(τ 2 s, O·C 는 τ 0.5 s) →
   공용 챔버 throttle. O = 완전 열림, C = 닫힘, H = 그 자리. 압력 %FS = 압력(Torr) / PRESSURE_FS_TORR × 100.
 """
 from __future__ import annotations
@@ -23,6 +23,7 @@ BAUD = 9600
 MIN_GAP_S = 0.05
 FLOW_TAU_S = 1.0
 VALVE_TAU_S = 2.0
+VALVE_OPEN_TAU_S = 0.5      # O·C(완전 열기·닫기)는 구동기가 끝까지 — 가정(v1 은 5 s 뒤 > 99 % 를 기대)
 PRESSURE_FS_TORR = 1.0
 
 
@@ -68,7 +69,8 @@ class MfcSim(SimDevice):
                 vt = min(1.0, max(0.0, vt))
             else:
                 vt = self.valve
-            self.valve += (vt - self.valve) * min(1.0, dt / VALVE_TAU_S)
+            tau = VALVE_OPEN_TAU_S if self.valve_mode in ("open", "closed") else VALVE_TAU_S
+            self.valve += (vt - self.valve) * min(1.0, dt / tau)
             self.chamber.throttle = self.valve
             self.chamber.advance_to(self.t + dt)
             self.t += dt

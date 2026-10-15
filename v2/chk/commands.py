@@ -202,21 +202,23 @@ STOPPABLE = ACTIVE_STATES + ("STOPPING",)
 COMMANDS: tuple = (
     # 정지 — 로컬 화면에서도. bench 모드에서는 worker 가 BENCH_READ_ONLY 로 거부하므로 로컬 화면은
     # "읽기 전용 — 조작은 장비 앞면으로" 를 표시해야 한다(로컬 화면 단계 할 일)
-    C("PROCESS_STOP", "공정 STOP", (WEB, HMI), "operator", STOPPABLE, v1="PROCESS_STOP"),
+    C("PROCESS_STOP", "공정 STOP", (WEB, HMI), "operator", (ANY_STATE,), desc="공정이 없으면 아무것도 하지 않고 성공(v1 과 같게)",
+      v1="PROCESS_STOP"),
     C("ALL_STOP", "ALL STOP", (WEB, HMI, INT), "operator", (ANY_STATE,), desc="공정 여부와 무관 — safety_rules.ALL_STOP_SEQUENCE",
       v1="ALL_STOP"),
     C("BUZZ_STOP", "부저 정지", (WEB, HMI), "operator", (ANY_STATE,), ("PLC_LINK_UP",), v1="BuzzStop 버튼"),
     C("HEATER_STOP", "히터 정지", (WEB, HMI), "operator", (ANY_STATE,), ("PLC_LINK_UP",),
       desc="히터 레시피 정지 + RUN=0. 공정이 히터를 쓰는 중이면 공정도 중단(HEATER_FAULT 아님 — USER_STOP)"),
     # 공정
-    C("PROCESS_START", "수동 공정 시작", (WEB,), "operator", ("IDLE",),
+    C("PROCESS_START", "수동 공정 시작", (WEB,), "operator", IDLE_STATES,
       ("NOT_RUNNING", "NO_RECIPE_LOADED", "PLC_FRESH", "MV_OPEN", "MV_ITL_ON", "NO_HEATER_GAS", "IG_FOR_BASE", "RECIPE_VALID"),
       (_a("row", "obj", desc="recipe.PROCESS_COLUMNS 한 행(히터 열은 무시 — 수동 공정은 히터를 쓰지 않음)"),),
       v1="PROCESS_START"),
     C("RECIPE_LOAD", "공정 레시피 적재", (WEB,), "operator", IDLE_STATES, ("RECIPE_VALID", "IG_FOR_BASE"),
       (_a("name", "str"), _a("rows", "rows", desc="recipe.PROCESS_COLUMNS 행 목록")), v1="RECIPE_PROCESS_RUN"),
-    C("RECIPE_CLEAR", "레시피 적재 해제", (WEB,), "operator", ("LOADED",), v1="RECIPE_CLEAR"),
-    C("RECIPE_START", "적재 레시피 시작", (WEB,), "operator", ("LOADED",),
+    C("RECIPE_CLEAR", "레시피 적재 해제", (WEB,), "operator", (ANY_STATE,),
+      desc="적재가 없으면 아무것도 하지 않고 성공, 공정 중이면 PROCESS_RUNNING(v1 B5)", v1="RECIPE_CLEAR"),
+    C("RECIPE_START", "적재 레시피 시작", (WEB,), "operator", IDLE_STATES,
       ("RECIPE_LOADED", "PLC_FRESH", "MV_OPEN", "MV_ITL_ON", "NO_HEATER_GAS", "HEATER_RECIPE_NO_CONFLICT"),
       v1="RECIPE_PROCESS_START"),
     # 히터

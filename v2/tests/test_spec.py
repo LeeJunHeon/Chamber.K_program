@@ -97,10 +97,10 @@ def test_plc_buttons_map_to_addrs():
     ("ALL_STOP", Source.HMI, "MAIN", {}, None),
     ("ALL_STOP", Source.HMI, "IDLE", {}, None),
     ("PROCESS_STOP", Source.HMI, "BASE_WAIT", {}, None),
-    ("PROCESS_STOP", Source.WEB, "IDLE", {}, "STATE_NOT_ALLOWED"),
+    ("PROCESS_STOP", Source.WEB, "IDLE", {}, None),                 # 공정 없으면 성공(아무것도 안 함, v1)
     ("PROCESS_START", Source.WEB, "MAIN", {}, "STATE_NOT_ALLOWED"),
     ("PROCESS_START", Source.HMI, "IDLE", {}, "SOURCE_NOT_ALLOWED"),
-    ("RECIPE_START", Source.WEB, "IDLE", {}, "STATE_NOT_ALLOWED"),
+    ("RECIPE_START", Source.WEB, "MAIN", {}, "STATE_NOT_ALLOWED"),  # IDLE 은 엔진이 RECIPE_NOT_LOADED
     ("DC_SAFE_OFF", Source.WEB, "IDLE", {}, "SOURCE_NOT_ALLOWED"),
     ("NOPE", Source.WEB, "IDLE", {}, "UNKNOWN_COMMAND"),
 ])

@@ -246,8 +246,24 @@ class SafetyEngine:
         if not first:
             self._emit(SafetyEvent("also", rule, reason, f"이미 정지 중({self.stopping}) 또는 공정 없음 — 이벤트만", "warn", t))
             return False
+        self._emit(SafetyEvent("abort", rule, reason, "공정 중단", "error", t))
+        if not getattr(self.process, "needs_stop_sequence", True):
+            # 켜진 장비가 없는 상태(딜레이 행 등) — 정지 순서 없이 공정 쪽이 바로 정리한다
+            with self._lock:
+                self.stopping = None
+            self.process.on_abort(reason)
+            return True
         self.process.on_abort(reason)
         self._start_seq("abort", self.stop_steps())
+        return True
+
+    def end_row(self) -> bool:
+        """레시피 행 정상 끝 — 같은 정지 순서(가스·전원 정리)를 '정상 끝'으로 실행(v1: 모든 스텝 완료 → stop_process)."""
+        with self._lock:
+            if not self.process.active or self.stopping is not None:
+                return False
+            self.stopping = "row_end"
+        self._start_seq("row_end", self.stop_steps())
         return True
 
     def stop(self) -> bool:

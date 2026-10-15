@@ -59,6 +59,7 @@ class DcDriver:
         self.gap_s = cfg["DC_WRITE_QUERY_GAP_MS"] / 1000.0
         self.model: Optional[str] = None
         self.last_state: Optional[str] = None     # FACT:LAST-STA? 값(연결 때)
+        self.meas_listeners: list = []            # (값, 읽기 시작 시각) — 정전류 제어
         self.i_set: Optional[float] = None
         self.out: Optional[bool] = None
         self.set_w: Optional[float] = None
@@ -92,13 +93,20 @@ class DcDriver:
 
     # ───────── 읽기 ─────────
     def source_read(self, session, seq: int) -> Dict[str, Any]:
+        t0 = self.clock.monotonic()
         raw = self._query(session, "MEAS:ALL?")
         try:
             v, i = (float(x) for x in raw.split(","))
         except ValueError:
             raise DcError(f"MEAS:ALL? 형식 다름: {raw!r}")
-        return {"dc.v": v, "dc.i": i, "dc.p": round(v * i, 3), "dc.i_set": self.i_set, "dc.out": self.out,
-                "dc.set_w": self.set_w}
+        out = {"dc.v": v, "dc.i": i, "dc.p": round(v * i, 3), "dc.i_set": self.i_set, "dc.out": self.out,
+               "dc.set_w": self.set_w}
+        for f in list(self.meas_listeners):        # 정전류 제어(공정 엔진) — 측정 직후 ΔI, CURR 는 t0 + CURR_WRITE_DELAY_S
+            try:
+                f(out, t0)
+            except Exception:
+                pass
+        return out
 
     # ───────── 연결 ─────────
     def _on_connect(self, session) -> None:
@@ -133,10 +141,11 @@ class DcDriver:
                 self._emit("protection", f"OVP {ovp} V·OCP {ocp} A 확인")
 
     # ───────── 쓰기 ─────────
-    def set_current(self, amps: float, tick=None, on_done: Optional[Callable[[Result], None]] = None) -> None:
-        """CURR 쓰기 — tick 이 주어지면 t0 + CURR_WRITE_DELAY_S 뒤(같은 tick 의 MEAS:ALL? 다음)."""
+    def set_current(self, amps: float, tick=None, on_done: Optional[Callable[[Result], None]] = None,
+                    not_before: Optional[float] = None) -> None:
+        """CURR 쓰기 — tick 이 주어지면 t0 + CURR_WRITE_DELAY_S 뒤(같은 tick 의 MEAS:ALL? 다음). not_before 로 직접 줄 수도."""
         a = max(0.0, min(float(amps), self.cfg["DC_MAX_CURRENT"]))
-        nb = (tick.t_mono + CURR_WRITE_DELAY_S) if tick is not None else None
+        nb = (tick.t_mono + CURR_WRITE_DELAY_S) if tick is not None else not_before
 
         def fn(s):
             self._write(s, f"CURR {a:.4f}")

@@ -347,6 +347,18 @@ class PlcDriver:
             self._rf_enabled, self._rf_set_w = False, 0.0
         self.submit_write("RF OFF", fn, kind="safety", on_done=on_done)
 
+    def rf_write_dac(self, counts: int, on_done=None) -> None:
+        """RF 제어 루프의 DAC 쓰기(write 우선순위) — 0 보다 크면 enable 을 먼저 켠다(v1 send_rfpower_command)."""
+        counts = max(0, min(D.RF_DAC_FULL_SCALE, int(counts)))
+
+        def fn(s):
+            c = self._client(s)
+            if counts > 0 and not self._rf_enabled:
+                c.write_coil(_ADDR["rf_dac_enable"].addr, True)
+                self._rf_enabled = True
+            c.write_reg(_ADDR["rf_dac"].addr, counts)
+        self.submit_write(f"RF DAC={counts}", fn, on_done=on_done)
+
     def rf_set_dac(self, counts: int, on_done=None) -> None:
         """RF DAC 원시값(램프다운 단계용, safety 우선순위). enable 은 건드리지 않는다."""
         counts = max(0, int(counts))
