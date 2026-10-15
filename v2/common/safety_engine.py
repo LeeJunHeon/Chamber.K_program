@@ -295,6 +295,8 @@ class SafetyEngine:
         return []
 
     def _start_seq(self, name: str, steps: List[Step]) -> None:
+        self._emit(SafetyEvent("seq_start", name, "", f"{len(steps)}단계", "info", self.clock.wall()))
+
         def run():
             res = self.runner.run(name, steps)
             self.seq_results[name] = res
