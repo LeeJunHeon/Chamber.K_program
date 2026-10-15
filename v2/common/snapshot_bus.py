@@ -1,8 +1,9 @@
 """스냅샷 묶기 (장비 공통) — tick 마다 모든 worker 에 읽기를 보내고 마감까지 모아 1행을 만든다.
 
 한 tick(정각 t)
-1) begin: 켜진 소스마다 read(t) 요청(마감 = t + 소스 마감 ms). 앞 tick 요청이 아직 진행 중이면 보내지 않는다(쌓지 않음).
+1) begin: 켜진 소스마다 read(t) 요청(마감 = 보낸 시각 + 소스 마감 ms). 앞 tick 요청이 아직 진행 중이면 보내지 않는다.
 2) close: t + TICK_DEADLINE 까지(또는 진행 중인 요청이 하나도 없으면 바로) 기다린 뒤 행을 닫는다. 행 시각은 t.
+   그때 마감이 지난 요청의 결과는 넣고(무응답이면 그 행은 fail), 마감이 남은 요청은 다음 행으로 넘긴다.
 
 품질(장비 단위 <블록>.q, 값마다 own_quality 필드는 <블록>.<필드>.q)
 - off        : 소스가 꺼짐(설정·worker 없음) — 값 빈 칸
@@ -38,6 +39,7 @@ class Source:
 @dataclass
 class _SrcState:
     inflight_seq: Optional[int] = None
+    inflight_deadline: Optional[float] = None
     sent_this_tick: bool = False
     result: Optional[Result] = None               # 이번 tick 요청 결과(마감 안 도착)
     fields: Dict[str, tuple] = field(default_factory=dict)   # 열 → (값, 요청 tick 시각, 늦게 도착 & 아직 안 쓰임)
@@ -50,6 +52,8 @@ def iso_local(t_wall: float) -> str:
 
 
 class SnapshotBus:
+    SETTLE_S = 0.05     # 행 닫힘 이전 마감인 요청의 결과를 기다리는 여유(실제 시계 스레드 지연용)
+
     def __init__(self, clock, blocks: Sequence[DeviceBlock], sources: Sequence[Source],
                  tick_deadline_ms: int = 900, extra_fields: Sequence[FieldDef] = ()) -> None:
         self.clock = clock
@@ -83,8 +87,12 @@ class SnapshotBus:
                 continue
             with self.clock.cond:
                 st.inflight_seq, st.sent_this_tick = tick.seq, True
+            # 소스 마감 = 보낸 시각 + 소스 마감 — tick 이 늦게 시작해도(jitter) 읽기 시간을 빼앗지 않는다.
+            dl = self.clock.monotonic() + s.deadline_ms / 1000.0
+            with self.clock.cond:
+                st.inflight_deadline = dl
             req = Request("read", (lambda sess, s=s, n=tick.seq: s.read(sess, n)),
-                          deadline=tick.t_mono + s.deadline_ms / 1000.0, tick_seq=tick.seq,
+                          deadline=dl, tick_seq=tick.seq,
                           on_done=self._done_cb(s.name, tick), name=f"read:{s.name}")
             s.worker.submit(req)
 
@@ -112,7 +120,12 @@ class SnapshotBus:
         return all(st.inflight_seq is None for st in self._st.values())
 
     def close(self, tick: Tick, extra_values: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        self.clock.wait_until(tick.t_mono + self.tick_deadline_ms / 1000.0, self._all_back)
+        close_t = tick.t_mono + self.tick_deadline_ms / 1000.0
+        if not self.clock.wait_until(close_t, self._all_back):
+            # 행 닫힘 이전이 마감인 요청은 결과가 반드시 온다 — 그 결과까지 넣고 닫는다(같은 순간 경쟁 없음).
+            # 마감이 더 늦은 요청은 기다리지 않는다 — 도착하면 다음 행에 late.
+            self.clock.wait_until(close_t + self.SETTLE_S, lambda: all(
+                st.inflight_seq is None or (st.inflight_deadline or 0) > close_t for st in self._st.values()))
         with self.clock.cond:
             row = self._build(tick, extra_values or {})
             self._open_tick = None
@@ -189,6 +202,7 @@ class TickLoop:
         self.extra_fn = extra_fn
         self.scheduler = TickScheduler(clock, period)
         self.jitters: List[float] = []
+        self.close_lags: List[float] = []     # 행을 닫은 시각 − tick 시각(ms)
         self.missed = 0
         self.rows = 0
         self._stop = False
@@ -204,6 +218,7 @@ class TickLoop:
             self.missed += t.skipped
             self.bus.begin(t)
             row = self.bus.close(t, self.extra_fn(t) if self.extra_fn else None)
+            self.close_lags.append((self.clock.monotonic() - t.t_mono) * 1000.0)
             for s in self.sinks:
                 s(row)
             self.rows += 1

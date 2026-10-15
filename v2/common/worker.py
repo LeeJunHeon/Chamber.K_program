@@ -318,6 +318,8 @@ class Worker:
         if req.deadline is not None and now > req.deadline:
             self._finish(Result(req, Status.EXPIRED, reason="EXPIRED", started=now, finished=now))
             return
+        if not self.connected and now >= self._next_attempt:
+            self._try_connect()            # 재연결 시각이 된 뒤 온 요청은 먼저 연결을 시도
         if not self.connected:
             self._finish(Result(req, Status.LINK_DOWN, reason="LINK_DOWN", started=now, finished=now))
             return
