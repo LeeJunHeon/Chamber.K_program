@@ -83,6 +83,7 @@ class MfcDriver:
         self.fs_source = "param"
         self.scale_mismatch: Optional[str] = None      # 연결 때 R33·R34·R74·R75·R37 대조 — 다르면 공정 시작 거부
         self.scale_raw: Dict[int, Optional[str]] = {}
+        self.onoff_at_connect: Optional[str] = None     # 연결 때 R69 'bbbb'
         self.alternate = cfg["MFC_READ_PLAN"] == "alternate"
         self.ar_set: Optional[float] = None
         self.o2_set: Optional[float] = None
@@ -145,6 +146,12 @@ class MfcDriver:
                 self.fs[ch] = self.cfg[key]
         self._emit("fs", f"FS Ar {self.fs[CH_AR]:g} sccm · O2 {self.fs[CH_O2]:g} sccm ({self.fs_source})")
         self._check_scale(session)
+        try:                                              # 연결 때 ON/OFF(S51 남은 가스 판단 — 읽기만)
+            self.onoff_at_connect = parse_r69(self._query(session, "R69"))
+        except Cancelled:
+            raise
+        except Exception:
+            self.onoff_at_connect = None
         odd = [f"ch{ch}={v:g}" for ch, v in self.fs.items() if abs(v - 100.0) > 1e-9]
         if odd:
             self._emit("fs_not_100", "MFC 풀스케일이 100 이 아님(" + ", ".join(odd) + ") — v1 레시피 유량이 %FS 였을 수 있다. "

@@ -272,7 +272,19 @@ RULES: tuple = (
       actions=(_rej("CONFIG_H_IN_PROCESS"),), v1="v2"),
     R("S49", "RF Pulse 인터록 열림", "trip", "tick", "RF Pulse 사용 공정에서 rfp.itl_open 참", ("rfp.itl_open",), states=ACT,
       actions=(_abort("RFP_FAULT"), Act("RFP_SAFE_OFF")), v1="v2 (CESAR 162 byte2 b7, p.114)"),
-    R("S50", "DC 하드 보호 설정", "maintain", "event:dc_connect", "연결 때 VOLT:OVP=DC_MAX_VOLTAGE, CURR:OCP=DC_MAX_CURRENT, FACT:LAST-STA SAF 설정·되읽기",
+    R("S51", "시작 때 남은 출력 정리", "recover", "event:first_read",
+      "v2 가 켜진 뒤 장비별 첫 정상 읽기(재연결 때는 아님)에서, 공정·히터 레시피가 진행 중이 아니면: "
+      "PLC rf.dac > 0 → RF 램프다운 → RF_SAFE_OFF + RF_RESIDUAL_OUTPUT(warn), D40 0·enable 만 → RF_SAFE_OFF + RF_ENABLE_RESIDUAL"
+      "(info, v1 정상 종료 흔적 — 챗 안 보냄) / DC 연결 때 OUTP? 1 → DC_SAFE_OFF + DC_RESIDUAL_OUTPUT / RF Pulse(켜져 있을 때) "
+      "출력 켜짐·Host → RFP_SAFE_OFF + RFP_RESIDUAL_OUTPUT, 앞면 모드면 끄지 않고 warn / MFC 채널 ON 이거나 유량 > 0.1 sccm → "
+      "GAS_RESIDUAL_FLOW(warn 만). 진행 중이면 끄지 않고 warn 만. 펌프·밸브·셔터는 건드리지 않는다(히터는 S15). "
+      "prod·sim 에서만 — bench 는 아무것도 쓰지 않는다(가드)",
+      ("rf.dac", "rf.dac_enable", "rf.fwd_w", "dc.out", "rfp.out_on", "mfc.ar_sccm", "mfc.o2_sccm"),
+      actions=(Act("RF_RAMP_DOWN"), Act("RF_SAFE_OFF"), Act("DC_SAFE_OFF"), Act("RFP_SAFE_OFF"),
+               _note("warn", "RF_RESIDUAL_OUTPUT"), _note("info", "RF_ENABLE_RESIDUAL"), _note("warn", "DC_RESIDUAL_OUTPUT"),
+               _note("warn", "RFP_RESIDUAL_OUTPUT"), _note("warn", "GAS_RESIDUAL_FLOW")),
+      v1="v1 은 RF enable 을 비상정지에서만 끔(PLC.send_rfpower_command) — 10/16 bench", pending_confirm=True),
+    R("S50", "DC 하드 보호 설정", "maintain", "event:dc_connect", "연결 때 VOLT:OVP=DC_MAX_VOLTAGE, CURR:OCP=DC_MAX_CURRENT, 설정·되읽기(DC_SET_PROTECTION). FACT:LAST-STA 는 읽기만(FULLY 면 경고)",
       params=("DC_MAX_VOLTAGE", "DC_MAX_CURRENT"), v1="v2 (devices.PC_DEAD_PLAN PD7)", pending_confirm=True,
       needs="bench 에서 명령 동작 확인"),
 )

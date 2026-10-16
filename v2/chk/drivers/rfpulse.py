@@ -76,6 +76,8 @@ class RfPulseDriver:
         self.alternate = cfg["RFPULSE_READ_PLAN"] == "alternate"
         self.model: Optional[str] = None
         self.set_w: Optional[float] = None
+        self.out_at_connect: Optional[bool] = None        # 연결 때 RF 출력(162)
+        self.control_at_connect: Optional[int] = None     # 연결 때 제어 모드(155, 2 = Host)
         self.freq_hz: Optional[int] = None
         self.duty_pct: Optional[int] = None
         self._last = -1e9
@@ -110,6 +112,14 @@ class RfPulseDriver:
         cap = aebus.u16(self._x(session, Q_CAPACITY))
         sw = self._x(session, Q_SW).decode("ascii", errors="replace")
         self._emit("identity", f"{self.model} · {cap} W · SW {sw}")
+        try:                                              # 연결 때 출력·제어 모드(S51 남은 출력 판단 — 읽기만)
+            self.out_at_connect = parse_status(self._x(session, Q_STATUS))["out_on"]
+            ctl = self._x(session, Q_CONTROL)
+            self.control_at_connect = ctl[0] if ctl else None
+        except Cancelled:
+            raise
+        except Exception:
+            self.out_at_connect = self.control_at_connect = None
         if not self.writes_allowed:
             try:                                          # bench: 명령 33 현재 값·제어 모드를 읽기만(보고용)
                 cur = self._x(session, Q_AUTO_OFF)

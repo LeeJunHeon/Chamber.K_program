@@ -54,6 +54,7 @@ IMPLEMENTED_IN: Dict[str, str] = {
     "S43": "transport.PortGuard·worker.Backoff", "S44": "SafetyEngine 발동·해제 1회씩(웹 서버가 챗으로)", "S45": "params.CROSS_RULES X22",
     "S46": "on_hold", "S47": "recipe.check_process_row", "S48": "config_store.apply",
     "S49": "engine", "S50": "drivers/dc.py 연결 초기화(DC_SET_PROTECTION)",
+    "S51": "ChkSafety.first_read(장비별 첫 정상 행 — 프로그램이 켜진 뒤 한 번)",
 }
 
 # 표와 평가 위치가 다른 규칙(이유)
@@ -367,6 +368,8 @@ class ChkSafety:
         self._prev_run: Optional[bool] = None
         self.notifications: List[dict] = []
         self.poll_eval_s: List[float] = []        # plc250 평가 시각(시험: 폴링 → 조치 지연)
+        self.first_done: set = set()              # S51 — 첫 정상 읽기를 본 장비(재연결 때는 다시 하지 않음)
+        self.residual: List[tuple] = []           # S51 조치 기록 (장비, 코드, 조치)
 
     # ── 연결 고리 ──
     def on_poll(self, poll) -> None:
@@ -380,6 +383,7 @@ class ChkSafety:
 
     def on_row(self, row: Dict[str, Any]) -> None:
         v = View.from_row(row)
+        self.first_read(v)
         self.engine.evaluate("tick", v.t, v, self.process)
         stale = self.cfg["HEATER_STALE_SEC"]
         self.locks = {b for b in DEVICE_BLOCKS
@@ -403,6 +407,54 @@ class ChkSafety:
             if r.where == name:
                 self.engine.reset_rule(r.id)
         return fired
+
+    # ── S51 시작 때 남은 출력 정리 ──
+    def _s51(self, level: str, code: str, detail: str, act: Optional[str] = None, dev: str = "") -> None:
+        self.notifications.append({"level": level, "code": code, "detail": detail})
+        self.engine._emit(SafetyEvent("fired", "S51", code, detail, level, self.clock.wall()))
+        if act:
+            self.residual.append((dev, code, act))
+            self.engine._do(Act(act), "S51", self.clock.wall())
+
+    def first_read(self, v: View) -> None:
+        """장비별 첫 정상 행(프로그램이 켜진 뒤 한 번 — 재연결 때는 아님). bench 에서는 아무것도 하지 않는다."""
+        if self.cfg.get("RUN_MODE") == "bench":
+            return
+        p = self.process
+        busy = bool(p.active or getattr(p, "heater_recipe_running", False) or self.engine.stopping)
+        tail = " — 공정·히터 레시피 진행 중이라 끄지 않음" if busy else ""
+        if "plc" not in self.first_done and v.q("plc") in FRESH:
+            self.first_done.add("plc")
+            dac, en, fwd = v.get("rf.dac") or 0, bool(v.get("rf.dac_enable")), v.get("rf.fwd_w")
+            if dac > 0:
+                self._s51("warn", "RF_RESIDUAL_OUTPUT", f"D40 {dac} · 순방향 {fwd} W{tail}")
+                if not busy:                                     # STOP 순서와 같은 램프다운(따로 스레드 — tick 을 막지 않음)
+                    self.residual.append(("plc", "RF_RESIDUAL_OUTPUT", "RF_RAMP_DOWN+RF_SAFE_OFF"))
+                    self.engine._start_seq("residual_rf", [
+                        Step(1, Act("RF_RAMP_DOWN"), float(self.cfg["STOP_RF_RAMPDOWN_TIMEOUT_SEC"]), True, desc="RF 램프다운"),
+                        Step(2, Act("RF_SAFE_OFF"), float(self.cfg["STOP_STEP_WAIT_DEFAULT_SEC"]), True, desc="D40 0 → enable OFF")])
+            elif en:
+                self._s51("info", "RF_ENABLE_RESIDUAL", f"M00200 켜짐 · D40 0 · 순방향 {fwd} W — v1 정상 종료 흔적{tail}",
+                          None if busy else "RF_SAFE_OFF", "plc")
+        if "dc" not in self.first_done and v.q("dc") in FRESH:
+            self.first_done.add("dc")
+            if getattr(self.dc, "out_at_connect", None):
+                self._s51("warn", "DC_RESIDUAL_OUTPUT", f"연결 때 OUTP? 1{tail}", None if busy else "DC_SAFE_OFF", "dc")
+        if self.cfg.get("RFPULSE_ENABLED", True) and "rfp" not in self.first_done and v.q("rfp") in FRESH:
+            self.first_done.add("rfp")
+            if getattr(self.rfp, "out_at_connect", None):
+                host = getattr(self.rfp, "control_at_connect", None) == 2
+                if host and not busy:
+                    self._s51("warn", "RFP_RESIDUAL_OUTPUT", "연결 때 RF Pulse 출력 켜짐(Host) — 끔", "RFP_SAFE_OFF", "rfp")
+                else:
+                    self._s51("warn", "RFP_RESIDUAL_OUTPUT",
+                              "연결 때 RF Pulse 출력 켜짐" + (tail or " — 앞면(Host 아님) 모드라 끄지 않음"))
+        if "mfc" not in self.first_done and v.q("mfc") in FRESH:
+            self.first_done.add("mfc")
+            bits = getattr(self.mfc, "onoff_at_connect", None) or ""
+            flow = max(v.get("mfc.ar_sccm") or 0.0, v.get("mfc.o2_sccm") or 0.0)
+            if "1" in bits[:2] or flow > 0.1:
+                self._s51("warn", "GAS_RESIDUAL_FLOW", f"R69 {bits or '?'} · 유량 {flow:g} sccm — 끄지 않음(확인)")
 
     # ── 사용자 명령 ──
     def stop(self) -> bool:
