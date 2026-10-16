@@ -2,7 +2,7 @@
 
 명령(devices.DC): *IDN? *RST *CLS, APPL[y] v,i, CURR x / CURR?, VOLT x / VOLT?, OUTP ON|OFF / OUTP?,
   MEAS:ALL?("V,I") MEAS:VOLT? MEAS:CURR?, SYST:ERR?, VOLT:OVP x / VOLT:OVP?, CURR:OCP x / CURR:OCP?,
-  FACT:LAST-STA DIS|SAF|FUL / FACT:LAST-STA?.
+  FACT:LAST-STA DIS|SAF|FUL / FACT:LAST-STA?(응답은 DISABLE·SAFETY·FULLY [DC p.94]).
 설정 명령에는 응답이 없다. v1 실측(2026-09-28): 직전 명령을 처리하는 동안 들어온 질의에는 답하지 않는다 —
   설정 명령 뒤 BUSY_S(0.5 s) 안의 질의는 무시(무응답). 모르는 명령은 오류 큐에 -113(Undefined header).
 출력: 공용 챔버의 플라즈마 V-I(dc_operating_point). OVP 를 넘으면 출력 차단 + 오류 큐.
@@ -94,7 +94,7 @@ class DcSim(SimDevice):
         if u == "CURR:OCP?":
             return f"{self.ocp:.4f}"
         if u == "FACT:LAST-STA?":
-            return self.last_sta
+            return {"DIS": "DISABLE", "SAF": "SAFETY", "FUL": "FULLY"}.get(self.last_sta, self.last_sta)
         if u == "SYST:ERR?":
             return self.errors.pop(0) if self.errors else '0,"No error"'
         return None

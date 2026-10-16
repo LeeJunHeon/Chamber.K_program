@@ -39,7 +39,7 @@ def _row_error_code(errs: List[str]) -> str:
     """레시피 행 검사 오류 → 사유 코드. 꺼진 장비를 쓰면 시작 거부(결정 5-2-4): 이온 게이지는 IG_DISABLED(S47), 히터는 DEVICE_DISABLED."""
     if any("IG_ENABLED" in e for e in errs):
         return "IG_DISABLED"
-    if any("HEATER_ENABLED" in e for e in errs):
+    if any("HEATER_ENABLED" in e or "RFPULSE_ENABLED" in e for e in errs):
         return "DEVICE_DISABLED"
     return "RECIPE_INVALID"
 
@@ -282,6 +282,8 @@ class ProcessEngine:
             return "DEVICE_DISABLED"
         if base_pressure_of(p) > 0 and not c["IG_ENABLED"]:
             return "DEVICE_DISABLED"
+        if p.get("use_rf_pulse") and float(p.get("rf_pulse_power") or 0) > 0 and not c["RFPULSE_ENABLED"]:
+            return "DEVICE_DISABLED"
         need = ["plc", "mfc"]
         if float(p.get("dc_power") or 0) > 0:
             need.append("dc")
@@ -388,7 +390,8 @@ class ProcessEngine:
         self.end_kind = self.end_code = None
         self.row_is_process, self.comm_aborted, self.filament_by_process = True, False, False
         self.power, self.base = {}, {}
-        steps = build_process_steps(params, self.cfg, ig_enabled=bool(self.cfg["IG_ENABLED"]))
+        steps = build_process_steps(params, self.cfg, ig_enabled=bool(self.cfg["IG_ENABLED"]),
+                                    rfpulse_present=bool(self.cfg["RFPULSE_ENABLED"]))
         h = {"DC_POWER_STOP": self._h_dc_stop, "RF_POWER_STOP": self._h_rf_stop, "RF_PULSE_STOP": self._h_rfp_stop,
              "HEATER_RAMP": self._h_heater_ramp, "HEATER_SET": self._h_heater_set, "HEATER_WAIT": self._h_heater_wait,
              "IG_FILAMENT_ON": self._h_ig_on, "IG_BASE_WAIT": self._h_ig_wait, "IG_FILAMENT_OFF": self._h_ig_off,

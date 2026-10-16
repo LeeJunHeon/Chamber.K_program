@@ -181,6 +181,8 @@ def check_process_row(row: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple:
     bp = r.get("base_pressure")
     if not _empty(bp) and bp != 0 and not cfg["IG_ENABLED"]:
         errs.append("base_pressure: 이온 게이지가 꺼져 있음(IG_ENABLED=false)")
+    if r.get("use_rf_pulse") is True and not cfg.get("RFPULSE_ENABLED", True):
+        errs.append("RF Pulse: RFPULSE_ENABLED=false")
     if r.get("use_rf_pulse") is True:
         f, du = r.get("rf_pulse_freq"), r.get("rf_pulse_duty")
         if not _empty(f) and not _empty(du):

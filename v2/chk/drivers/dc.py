@@ -117,18 +117,15 @@ class DcDriver:
         self._emit("syst_err", err)
         cur = self._query(session, "FACT:LAST-STA?")
         self.last_state = cur
-        if not self.writes_allowed:
-            self._emit("last_state", f"FACT:LAST-STA? = {cur} (bench — 읽기만)")
-            return
-        if cur.upper() != "SAF":
-            self._write(session, "FACT:LAST-STA SAF")
-            back = self._query(session, "FACT:LAST-STA?")
-            if back.upper() == "SAF":
-                self._emit("last_state", f"FACT:LAST-STA {cur} → SAF(영구 저장) 확인")
-            else:
-                self._emit("last_state", f"FACT:LAST-STA 쓰기 뒤 되읽기 {back!r}", "VERIFY_MISMATCH")
+        # 읽기만 한다(어떤 모드에서도 쓰지 않음 — 사용자 결정 2026-10-16). 응답은 DISABLE·SAFETY·FULLY [DC p.94, p.78].
+        # FULLY 만 전원 차단 전 출력까지 되살린다 → 경고(바꾸는 것은 사람이 앞면 FACTORY 메뉴에서)
+        if cur.strip().upper() == "FULLY":
+            self._emit("last_state", f"FACT:LAST-STA? = {cur} — 전원이 다시 들어오면 출력까지 되살아남(앞면에서 바꿀 것)",
+                       "DC_LAST_STATE_FULLY")
         else:
-            self._emit("last_state", "FACT:LAST-STA 이미 SAF — 쓰지 않음")
+            self._emit("last_state", f"FACT:LAST-STA? = {cur}")
+        if not self.writes_allowed:
+            return
         if self.cfg["DC_SET_PROTECTION"]:
             ovp, ocp = self.cfg["DC_MAX_VOLTAGE"], self.cfg["DC_MAX_CURRENT"]
             self._write(session, f"VOLT:OVP {ovp:.2f}")

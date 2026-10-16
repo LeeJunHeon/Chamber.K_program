@@ -336,7 +336,7 @@ class V2H:
     def __init__(self, tmp: Path, script: Callable[["V2H"], Any]) -> None:
         self.c = VirtualClock(start_wall=1_760_000_000.0)
         self.c.register()
-        self.rig = ChkRig(self.c, tmp)
+        self.rig = ChkRig(self.c, tmp, cfg={"RFPULSE_ENABLED": True})   # v1 기록은 RF Pulse 컨트롤러가 있던 상태
         rig = self.rig
         self.plc = rig.sims["plc"]
         for k in ("mv", "turbo", "rotary", "fv"):

@@ -27,6 +27,7 @@ from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
 from v2.chk.core import ChkCore
 from v2.chk.heater_engine import HeaterEngine
+from v2.chk.cmd_guard import GuardedTransport
 from v2.chk.process_engine import ProcessEngine
 from v2.chk.safety import ChkSafety, SimpleProcess, View
 from v2.chk.sim.cesar_sim import CesarSim
@@ -39,33 +40,40 @@ from v2.chk.sim.plc_sim import PlcSim
 
 class ChkRig:
     def __init__(self, clock, out_dir: Path, cfg: Optional[Dict[str, Any]] = None, scenario: str = "none",
-                 simple_process: bool = False) -> None:
+                 simple_process: bool = False, mode: str = "sim") -> None:
         self.clock = clock
         self.cfg = dict(defaults(P.PARAMS), **(cfg or {}))
+        self.mode = mode                         # sim(기본) / bench(읽기 전용 — 가드 bench 목록, 드라이버·worker 쓰기 거부)
         c = self.cfg
+        wr = mode != "bench"
+        self.enabled = {"plc": True, "mfc": True, "dc": True, "rfpulse": bool(c["RFPULSE_ENABLED"]),
+                        "ig": bool(c["IG_ENABLED"])}
         self.chamber = Chamber()
         self.sims = {"plc": PlcSim(chamber=self.chamber), "mfc": MfcSim(self.chamber), "dc": DcSim(self.chamber),
                      "rfpulse": CesarSim(self.chamber), "ig": IgSim(self.chamber)}
         streak = {"plc": "PLC_FAIL_STREAK", "mfc": "MFC_FAIL_STREAK", "dc": "DC_FAIL_STREAK",
                   "rfpulse": "RFPULSE_FAIL_STREAK", "ig": "IG_FAIL_STREAK"}
         self.events: List[Any] = []
-        self.workers = {k: Worker(k, SimTransport(clock, s), fail_streak=c[streak[k]],
+        # 가드는 포트(시뮬레이터 전송) 바로 위
+        self.guards = {k: GuardedTransport(SimTransport(clock, s), k, mode, c, on_event=self._ev) for k, s in self.sims.items()}
+        self.workers = {k: Worker(k, self.guards[k], writes_allowed=wr, fail_streak=c[streak[k]],
                                   connect_init_timeout_s=c["CONNECT_INIT_TIMEOUT_SEC"], on_event=self._ev)
-                        for k, s in self.sims.items()}
+                        for k in self.sims}
         self.recorder: Optional[Recorder] = None
         w = self.workers
-        self.plc = PlcDriver(clock, w["plc"], c, True, on_event=self._ev,
+        self.plc = PlcDriver(clock, w["plc"], c, wr, on_event=self._ev,
                              blackbox_sink=lambda name, rows: self.recorder.put_blackbox(name, rows))
-        self.mfc = MfcDriver(clock, w["mfc"], c, True, on_event=self._ev)
-        self.dc = DcDriver(clock, w["dc"], c, True, on_event=self._ev)
-        self.rfp = RfPulseDriver(clock, w["rfpulse"], c, True, on_event=self._ev)
-        self.ig = IgDriver(clock, w["ig"], c, True, on_event=self._ev)
+        self.mfc = MfcDriver(clock, w["mfc"], c, wr, on_event=self._ev)
+        self.dc = DcDriver(clock, w["dc"], c, wr, on_event=self._ev)
+        self.rfp = RfPulseDriver(clock, w["rfpulse"], c, wr, on_event=self._ev)
+        self.ig = IgDriver(clock, w["ig"], c, wr, on_event=self._ev)
         self.bus = SnapshotBus(clock, SF.BLOCKS, [
             Source("plc", w["plc"], self.plc.source_read, ("plc", "heater", "rf"), c["PLC_READ_DEADLINE_MS"]),
             Source("mfc", w["mfc"], self.mfc.source_read, ("mfc",), c["MFC_READ_DEADLINE_MS"]),
             Source("dc", w["dc"], self.dc.source_read, ("dc",), c["DC_READ_DEADLINE_MS"]),
-            Source("rfpulse", w["rfpulse"], self.rfp.source_read, ("rfp",), c["RFPULSE_READ_DEADLINE_MS"]),
-            Source("ig", w["ig"], self.ig.source_read, ("ig",), c["IG_RESPONSE_LIMIT_MS"]),
+            Source("rfpulse", w["rfpulse"], self.rfp.source_read, ("rfp",), c["RFPULSE_READ_DEADLINE_MS"],
+                   enabled=self.enabled["rfpulse"]),
+            Source("ig", w["ig"], self.ig.source_read, ("ig",), c["IG_RESPONSE_LIMIT_MS"], enabled=self.enabled["ig"]),
         ], c["TICK_DEADLINE_MS"], SF.PROCESS_FIELDS)
         self.recorder = Recorder(out_dir, self.bus.columns, retention_days=c["SNAPSHOT_RETENTION_DAYS"])
         self.fast = PlcFastPoller(clock, self.plc, c["PLC_FAST_POLL_MS"])
@@ -147,9 +155,11 @@ class ChkRig:
         elif s == 20:
             self.dc.start_output(600.0, 0.3, tick=t)
         elif s == 30:
-            self.rfp.start(100.0, freq_hz=10000, duty=50, tick=t)
+            if self.enabled["rfpulse"]:
+                self.rfp.start(100.0, freq_hz=10000, duty=50, tick=t)
         elif s == 45:
-            self.rfp.rf_off_confirmed()
+            if self.enabled["rfpulse"]:
+                self.rfp.rf_off_confirmed()
             self.dc.output_off_confirmed()
         elif s == 50:
             self.ig.filament_off()
@@ -160,14 +170,16 @@ class ChkRig:
         첫 tick 의 읽기가 연결 초기화 뒤에 줄 서서 실패로 남지 않게. 모두 준비되면 True."""
         self.recorder.start()
         with self.clock.hold():
-            for x in self.workers.values():
-                x.start()
+            for k, x in self.workers.items():
+                if self.enabled[k]:                  # 설정에서 꺼진 장비는 포트를 열지 않는다
+                    x.start()
             self.fast.start()
         return self.clock.wait_until(self.clock.monotonic() + ready_timeout_s,
-                                     lambda: all(x.ready for x in self.workers.values()))
+                                     lambda: all(x.ready for k, x in self.workers.items() if self.enabled[k]))
 
     def stop(self) -> None:
         self.fast.stop()
-        for x in self.workers.values():
-            x.stop()
+        for k, x in self.workers.items():
+            if self.enabled[k]:
+                x.stop()
         self.recorder.stop()

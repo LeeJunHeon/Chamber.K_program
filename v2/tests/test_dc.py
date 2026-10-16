@@ -49,16 +49,19 @@ class Rig:
         self.w.stop()
 
 
-def test_connect_identity_and_last_state_written_once():
+def test_connect_identity_and_last_state_read_only():
+    """FACT:LAST-STA 는 읽기만(어떤 모드에서도 쓰지 않음 — 2026-10-16). 응답은 DISABLE·SAFETY·FULLY [DC p.94]."""
     sim = DcSim(last_sta="DIS")
     r = Rig(sim=sim)
     assert r.d.model == "ODA,EX-600-1,SIM0001,1.00" and "identity" in r.kinds()
-    assert sim.last_sta == "SAF" and sim.writes_last_sta == 1
+    assert sim.last_sta == "DIS" and sim.writes_last_sta == 0 and r.d.last_state == "DISABLE"
     assert not any(c.startswith(("VOLT:OVP", "CURR:OCP")) for c in sim.commands_seen())   # 보호 설정 기본 끔
+    assert not [e for e in r.events if e.kind == "last_state"][0].reason
     r.done()
-    sim.busy_until = -1.0                                             # 새 가상 시계(시각 0)에서 다시 쓰므로
-    r2 = Rig(sim=sim)                                                 # 다시 연결 — 이미 SAF 면 쓰지 않음
-    assert sim.writes_last_sta == 1 and "이미 SAF" in [e for e in r2.events if e.kind == "last_state"][0].detail
+    sim2 = DcSim(last_sta="FUL")
+    r2 = Rig(sim=sim2)                                                # FULLY — 경고만, 바꾸지 않음
+    ev = [e for e in r2.events if e.kind == "last_state"][0]
+    assert ev.reason == "DC_LAST_STATE_FULLY" and sim2.writes_last_sta == 0
     r2.done()
 
 

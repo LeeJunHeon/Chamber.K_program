@@ -21,6 +21,11 @@ class TransportError(OSError):
     """포트·장치 수준 오류 — worker 가 연결을 끊고 재연결한다."""
 
 
+class CommandBlocked(Exception):
+    """통신층 가드가 보내기 전에 막은 명령(포트에 닿지 않음). 연결 이상이 아니다."""
+    reason = "COMMAND_BLOCKED"
+
+
 class ReadTimeout(Exception):
     def __init__(self, partial: bytes = b"") -> None:
         super().__init__(f"read timeout (partial {len(partial)} bytes)")

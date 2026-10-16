@@ -32,8 +32,9 @@ class Bench:
         self.ports[s.port] = SimSerial(self.sims[s.port], self.origin)
         return self.ports[s.port]
 
-    def run(self, tmp_path, seconds=2):
-        code = B.run(seconds, PORTS, tmp_path, serial_factory=self.factory, print_fn=self.out.append)
+    def run(self, tmp_path, seconds=2, cfg_over=None, skip=()):
+        code = B.run(seconds, PORTS, tmp_path, serial_factory=self.factory, print_fn=self.out.append,
+                     cfg_over=cfg_over, skip=skip)
         return code, "\n".join(self.out)
 
     def writes(self):
@@ -92,9 +93,9 @@ def test_rf_dac_enable_is_process_trace(tmp_path):
 
 def test_normal_run_reads_only_and_writes_summary(tmp_path):
     b = Bench()
-    code, out = b.run(tmp_path, seconds=3)
+    code, out = b.run(tmp_path, seconds=3, cfg_over={"RFPULSE_ENABLED": True})
     assert code == 0
-    assert "읽기 전용" in out and "안전 확인 통과" in out
+    assert "읽기 전용" in out and "안전 확인 통과" in out and "읽기 전용 가드 켜짐" in out
     assert b.writes() == [] and b.sims["COM9"].write_funcs_seen() == []
     assert b.sims["COM13"].set_commands_seen() == []
     folder = next(tmp_path.glob("v2_bench_*"))
@@ -103,12 +104,21 @@ def test_normal_run_reads_only_and_writes_summary(tmp_path):
     assert any(n.startswith("snap_") and n.endswith(".sqlite") for n in names)
     assert any(n.endswith(".csv") for n in names)
     s = (folder / "summary.txt").read_text(encoding="utf-8")
-    for want in ("놓친 tick 0", "MFC FS: Ar 100", "DC *IDN?: ODA", "DC FACT:LAST-STA?: DIS", "[확인] DC LAST-STA 현재 값", "CESAR 1310", "명령 33 현재",
+    for want in ("놓친 tick 0", "MFC FS: Ar 100", "DC *IDN?: ODA", "DC FACT:LAST-STA?: DISABLE", "[확인] DC LAST-STA 현재 값", "CESAR 1310", "명령 33 현재",
                  "IG F", "IG E:", "PLC 블록 읽기", "[확인] PLC 트랜잭션 왕복"):
         assert want in s, want
     assert "경고: MFC 풀스케일" not in s
     import re
     assert all(m == "0" for m in re.findall(r"무응답 (\d+)", s)), s      # 종료 때 끊긴 요청은 무응답에 안 셈
+
+
+def test_disabled_and_skipped_devices_are_not_opened(tmp_path):
+    """RF Pulse 는 기본 꺼짐(RFPULSE_ENABLED=false, 미연결) — 포트를 열지 않는다. --skip 으로도 뺀다."""
+    b = Bench()
+    code, out = b.run(tmp_path, skip=("ig",))
+    assert code == 0 and "COM13" not in b.ports and "COM12" not in b.ports
+    assert "rfpulse 제외(설정 꺼짐 — RFPULSE_ENABLED=false)" in out and "ig 제외(--skip)" in out
+    assert b.writes() == []
 
 
 def test_mfc_fs_not_100_is_loud(tmp_path):

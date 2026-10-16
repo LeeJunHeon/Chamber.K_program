@@ -11,7 +11,7 @@ from v2.chk.sim.rig import ChkRig
 def test_five_devices_light_scenario(tmp_path):
     c = VirtualClock(start_wall=1_760_000_000.0)
     c.register()
-    rig = ChkRig(c, tmp_path, scenario="light")
+    rig = ChkRig(c, tmp_path, scenario="light", cfg={"RFPULSE_ENABLED": True})
     rows = []
     rig.loop.sinks.append(rows.append)
     assert rig.start()                                                   # 모두 연결·초기화 뒤 tick 시작

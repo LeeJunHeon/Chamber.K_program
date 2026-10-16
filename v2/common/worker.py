@@ -18,7 +18,7 @@ from enum import IntEnum
 from typing import Any, Callable, List, Optional
 
 from v2.common.clock import ClockQueue
-from v2.common.transport import Cancelled, CancelToken, ReadTimeout, Transport, TransportError
+from v2.common.transport import Cancelled, CancelToken, CommandBlocked, ReadTimeout, Transport, TransportError
 
 
 class Priority(IntEnum):
@@ -383,8 +383,9 @@ class Worker:
         except TransportError as e:
             res.status, res.reason, res.error = Status.FAIL, "LINK_DOWN", str(e)
             self._disconnect(str(e))
-        except Exception as e:      # 드라이버 오류(응답 형식 등) — 연결은 유지
-            res.status, res.reason, res.error = Status.FAIL, "DEVICE_REJECTED", repr(e)
+        except Exception as e:      # 드라이버 오류(응답 형식 등)·가드가 막은 명령 — 연결은 유지
+            res.status, res.error = Status.FAIL, repr(e)
+            res.reason = "COMMAND_BLOCKED" if isinstance(e, CommandBlocked) else "DEVICE_REJECTED"
             self.transport.reset_input()
         finally:
             with self.clock.cond:

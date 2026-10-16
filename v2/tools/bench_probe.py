@@ -4,7 +4,8 @@
     (포트 바꾸기: --plc COM9 --mfc COM10 --dc COM11 --ig COM12 --rfpulse COM13, 기록 폴더: --out <폴더>)
 
 - RUN_MODE=bench 고정: 장비에 아무것도 쓰지 않는다(하트비트·연결 시 설정·필라멘트 포함). worker 가 쓰기를 거부하고
-  드라이버도 읽기 전용이다(이중 보호).
+  드라이버도 읽기 전용이며, 포트 바로 위의 통신층 가드(v2.chk.cmd_guard)가 매뉴얼 질의 목록 밖 바이트를 막는다(삼중 보호).
+- *_ENABLED 가 false 인 장비(기본: RF Pulse — 미연결)와 --skip <장비> 는 포트를 열지 않고 요약에 '제외'.
 - 시작 전 안전 확인 — 하나라도 걸리면 바로 끝낸다(장비에는 아무것도 쓰지 않음):
   · 포트를 열 수 없으면(v1 이 켜져 있을 가능성) 다시 시도하지 않고 종료
   · PLC 를 읽을 수 없거나, 첫 읽기에서 히터 RUN 이 켜져 있으면 종료 — bench 는 하트비트를 쓰지 않아 10 s 뒤 PLC 가 히터를 끈다
@@ -30,6 +31,7 @@ from v2.common.recorder import Recorder
 from v2.common.snapshot_bus import SnapshotBus, Source, TickLoop, iso_local
 from v2.common.transport import RecordingTransport, SerialSettings, SerialTransport, TransportError, save_exchanges
 from v2.common.worker import Request, Status, Worker
+from v2.chk import cmd_guard as G
 from v2.chk import devices as D
 from v2.chk import params as P
 from v2.chk import snapshot_fields as SF
@@ -40,6 +42,7 @@ from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
 
 DEVICES = ("plc", "mfc", "dc", "rfpulse", "ig")
+ENABLE_KEY = {"rfpulse": "RFPULSE_ENABLED", "ig": "IG_ENABLED"}
 BANNER = """
 ==================================================================
   챔버K v2 bench — 읽기 전용(RUN_MODE=bench)
@@ -66,9 +69,17 @@ def _pct(xs: List[float], p: float) -> float:
 
 class BenchProbe:
     def __init__(self, ports: Dict[str, str], out_root: Path, serial_factory: Optional[Callable] = None,
-                 print_fn: Callable[[str], None] = print) -> None:
+                 print_fn: Callable[[str], None] = print, cfg_over: Optional[Dict[str, Any]] = None,
+                 skip: tuple = ()) -> None:
         self.clock = RealClock()
-        self.cfg = dict(defaults(P.PARAMS), RUN_MODE="bench")
+        self.cfg = dict(defaults(P.PARAMS), **(cfg_over or {}), RUN_MODE="bench")
+        self.excluded: Dict[str, str] = {}
+        for k in DEVICES:
+            if k in ENABLE_KEY and not self.cfg[ENABLE_KEY[k]]:
+                self.excluded[k] = f"제외(설정 꺼짐 — {ENABLE_KEY[k]}=false)"
+            elif k in skip:
+                self.excluded[k] = "제외(--skip)"
+        self.active = [k for k in DEVICES if k not in self.excluded]
         self.ports = ports
         self.out = Path(out_root) / _dt.datetime.now().strftime("v2_bench_%Y%m%d_%H%M%S")
         self.out.mkdir(parents=True, exist_ok=True)
@@ -77,8 +88,11 @@ class BenchProbe:
         self.lines: List[str] = []
         c = self.cfg
         st = _settings(c, ports)
-        self.rec = {k: RecordingTransport(SerialTransport(self.clock, st[k], open_timeout_s=c["PORT_OPEN_TIMEOUT_SEC"],
-                                                          serial_factory=serial_factory)) for k in DEVICES}
+        # 녹화 → 가드 → 포트: 가드는 포트 바로 위(막힌 바이트는 포트에도 녹화에도 닿지 않는다 — 이벤트로 남음)
+        self.guards = {k: G.GuardedTransport(SerialTransport(self.clock, st[k], open_timeout_s=c["PORT_OPEN_TIMEOUT_SEC"],
+                                                             serial_factory=serial_factory), k, "bench", c, on_event=self._ev)
+                       for k in DEVICES}
+        self.rec = {k: RecordingTransport(self.guards[k]) for k in DEVICES}
         streak = {"plc": "PLC_FAIL_STREAK", "mfc": "MFC_FAIL_STREAK", "dc": "DC_FAIL_STREAK",
                   "rfpulse": "RFPULSE_FAIL_STREAK", "ig": "IG_FAIL_STREAK"}
         self.w = {k: Worker(k, self.rec[k], writes_allowed=False, fail_streak=c[streak[k]],
@@ -108,7 +122,7 @@ class BenchProbe:
     # ───────── 단계 ─────────
     def open_ports(self) -> bool:
         opened = []
-        for k in DEVICES:
+        for k in self.active:
             try:
                 self.rec[k].open()
                 opened.append(k)
@@ -118,17 +132,18 @@ class BenchProbe:
                 for o in opened:
                     self.rec[o].close()
                 return False
-        self.say("포트 열기: " + ", ".join(f"{k}={self.ports[k]}" for k in DEVICES))
+        self.say("포트 열기: " + ", ".join(f"{k}={self.ports[k]}" for k in self.active)
+                 + "".join(f" · {k} {why}" for k, why in self.excluded.items()))
         return True
 
     def start_workers(self) -> Dict[str, bool]:
         with self.clock.hold():
-            for x in self.w.values():
-                x.start()
+            for k in self.active:
+                self.w[k].start()
         self.started = True
         self.clock.wait_until(self.clock.monotonic() + self.cfg["CONNECT_INIT_TIMEOUT_SEC"] + 3.0,
-                              lambda: all(x.ready for x in self.w.values()))
-        return {k: x.ready for k, x in self.w.items()}
+                              lambda: all(self.w[k].ready for k in self.active))
+        return {k: (self.w[k].ready if k in self.active else False) for k in DEVICES}
 
     def _read_once(self, k: str, fn) -> Optional[Dict[str, Any]]:
         box = []
@@ -141,7 +156,7 @@ class BenchProbe:
 
     def safety_check(self, ready: Dict[str, bool]) -> Optional[str]:
         """멈춰야 하면 이유, 아니면 None. 읽기만 한다."""
-        plc = self._read_once("plc", lambda s: self.plc.source_read(s, 0)) if ready["plc"] else None
+        plc = self._read_once("plc", lambda s: self.plc.source_read(s, 0)) if ready.get("plc") else None
         if plc is None:
             return "PLC 를 읽을 수 없음 — 히터 RUN 상태를 확인할 수 없어 멈춥니다"
         if plc["heater.run"]:
@@ -149,15 +164,15 @@ class BenchProbe:
                     "히터를 끈 뒤 다시 실행하세요")
         if plc["rf.dac_enable"]:
             return "RF DAC enable(M00200)이 켜져 있음 — 공정 진행 중으로 보입니다"
-        if ready["dc"]:
+        if ready.get("dc"):
             outp = self._read_once("dc", lambda s: self.dc._query(s, "OUTP?"))
             if outp == "1":
                 return "DC 출력(OUTP?)이 켜져 있음 — 공정 진행 중으로 보입니다"
-        if ready["rfpulse"]:
+        if ready.get("rfpulse"):
             r = self._read_once("rfpulse", lambda s: self.rfp.source_read(s, 0))
             if r and r.get("rfp.out_on"):
                 return "RF Pulse 출력이 켜져 있음 — 공정 진행 중으로 보입니다"
-        if ready["mfc"]:
+        if ready.get("mfc"):
             m = self._read_once("mfc", lambda s: self.mfc.source_read(s, 0))
             if m and max(m.get("mfc.ar_sccm") or 0.0, m.get("mfc.o2_sccm") or 0.0) > 0.1:
                 return f"가스 유량이 있음(Ar {m.get('mfc.ar_sccm')} · O2 {m.get('mfc.o2_sccm')} sccm) — 공정 진행 중으로 보입니다"
@@ -169,8 +184,9 @@ class BenchProbe:
             Source("plc", self.w["plc"], self.plc.source_read, ("plc", "heater", "rf"), c["PLC_READ_DEADLINE_MS"]),
             Source("mfc", self.w["mfc"], self.mfc.source_read, ("mfc",), c["MFC_READ_DEADLINE_MS"]),
             Source("dc", self.w["dc"], self.dc.source_read, ("dc",), c["DC_READ_DEADLINE_MS"]),
-            Source("rfpulse", self.w["rfpulse"], self.rfp.source_read, ("rfp",), c["RFPULSE_READ_DEADLINE_MS"]),
-            Source("ig", self.w["ig"], self.ig.source_read, ("ig",), c["IG_RESPONSE_LIMIT_MS"]),
+            Source("rfpulse", self.w["rfpulse"], self.rfp.source_read, ("rfp",), c["RFPULSE_READ_DEADLINE_MS"],
+                   enabled="rfpulse" in self.active),
+            Source("ig", self.w["ig"], self.ig.source_read, ("ig",), c["IG_RESPONSE_LIMIT_MS"], enabled="ig" in self.active),
         ], c["TICK_DEADLINE_MS"], SF.PROCESS_FIELDS)
         self.recorder = Recorder(self.out, bus.columns, retention_days=c["SNAPSHOT_RETENTION_DAYS"])
         self.recorder.start()
@@ -189,9 +205,9 @@ class BenchProbe:
     def stop(self) -> None:
         self.stop_mono = self.clock.monotonic()
         if self.started:
-            for x in self.w.values():
-                x.stop()
-        for r in self.rec.values():
+            for k in self.active:
+                self.w[k].stop()
+        for r in [self.rec[k] for k in self.active]:
             try:
                 r.close()
             except Exception:
@@ -226,6 +242,10 @@ class BenchProbe:
         self.say(f"기록 폴더: {self.out}")
         stats = {}
         for k in DEVICES:
+            if k in self.excluded:
+                stats[k] = []
+                self.say(f"응답 {k:8s}: {self.excluded[k]}")
+                continue
             ex = self.rec[k].exchanges
             save_exchanges(self.out / f"rec_{k}.jsonl", ex)
             d = [e.delay_s * 1000 for e in ex if e.rx]
@@ -283,9 +303,12 @@ class BenchProbe:
         (self.out / "summary.txt").write_text("\n".join(self.lines) + "\n", encoding="utf-8")
 
 
-def run(seconds: int, ports: Dict[str, str], out_root: Path, serial_factory=None, print_fn=print) -> int:
+def run(seconds: int, ports: Dict[str, str], out_root: Path, serial_factory=None, print_fn=print,
+        cfg_over: Optional[Dict[str, Any]] = None, skip: tuple = ()) -> int:
     print_fn(BANNER)
-    b = BenchProbe(ports, out_root, serial_factory, print_fn)
+    b = BenchProbe(ports, out_root, serial_factory, print_fn, cfg_over, skip)
+    b.say("읽기 전용 가드 켜짐 — 장비별 허용 질의 수: " + " · ".join(
+        f"{k} {'FC1·FC3' if k == 'plc' else G.allowed_query_count(k)}" for k in DEVICES))
     code, status = 0, "정상 종료"
     try:
         if not b.open_ports():
@@ -318,10 +341,11 @@ def main(argv=None) -> int:
     for k, key in (("plc", "PLC_PORT"), ("mfc", "MFC_PORT"), ("dc", "DC_PORT"), ("ig", "IG_PORT"), ("rfpulse", "RFPULSE_PORT")):
         ap.add_argument(f"--{k}", default=cfg[key])
     ap.add_argument("--out", default=str(Path.home() / "Desktop"), help="기록 폴더를 만들 곳(기본: 바탕화면)")
+    ap.add_argument("--skip", action="append", default=[], choices=DEVICES, help="이 장비는 포트를 열지 않는다(여러 번 가능)")
     a = ap.parse_args(argv)
     seconds = a.seconds if a.seconds is not None else int(round(a.minutes * 60))
     ports = {"plc": a.plc, "mfc": a.mfc, "dc": a.dc, "ig": a.ig, "rfpulse": a.rfpulse}
-    return run(seconds, ports, Path(a.out))
+    return run(seconds, ports, Path(a.out), skip=tuple(a.skip))
 
 
 if __name__ == "__main__":

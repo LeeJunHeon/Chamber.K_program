@@ -64,6 +64,9 @@ PARAMS: tuple = (
     _inst("DC_PORT", "DC 전원 포트", S, "COM11", pattern=_COM),
     _inst("DC_BAUD", "DC 전원 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L,
           v1_key="DC_BAUDRATE"),
+    _inst("RFPULSE_ENABLED", "RF Pulse 사용", B, False, v1_default=True, src=_V2,
+          desc="false 면 포트를 열지 않고 rfp 블록 품질 off, RF Pulse 를 쓰는 레시피는 DEVICE_DISABLED 로 시작 거부"
+               "(지금 미연결 — 사용자 2026-10-16)"),
     _inst("RFPULSE_PORT", "RF Pulse 포트", S, "COM13", pattern=_COM),
     _inst("RFPULSE_BAUD", "RF Pulse 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L),
     _inst("RFPULSE_ADDR", "RF Pulse AE Bus 주소", I, 1, lo=0, hi=31,

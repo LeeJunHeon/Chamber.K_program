@@ -519,7 +519,8 @@ class ChkSafety:
                 a.get("reason", "")), done(None)),
             "HEATER_GAS_HOLD": lambda a, done: ((self.heater.gas_hold if self.heater else p.heater_gas_hold)(), done(None)),
             "DC_SAFE_OFF": lambda a, done: dc.output_off_confirmed(on_done=_seq(done)),
-            "RFP_SAFE_OFF": lambda a, done: rfp.rf_off_confirmed(on_done=_req(done)),
+            "RFP_SAFE_OFF": lambda a, done: (rfp.rf_off_confirmed(on_done=_req(done)) if self.cfg.get("RFPULSE_ENABLED", True)
+                                             else done(None)),          # 설정에서 꺼진 장비 — 보낼 곳 없음
             "RF_SAFE_OFF": lambda a, done: plc.rf_off(on_done=_req(done)),
             "RF_RAMP_DOWN": ramp_down,
             "GAS_FLOW_OFF": lambda a, done: mfc.all_flow_off(on_done=_seq(done)),
@@ -527,6 +528,7 @@ class ChkSafety:
             "GAS_VALVES_CLOSE": coils_off(lambda a: ["ar_valve", "o2_valve"]),
             "SHUTTERS_CLOSE": coils_off(lambda a: a.get("which", "ms").split(",")),
             "PLC_OUTPUTS_OFF": lambda a, done: plc.outputs_off(bool(a.get("keep_pumps", True)), on_done=_req(done)),
-            "IG_FILAMENT_OFF": lambda a, done: ig.filament_off(on_done=_req(done)),
+            "IG_FILAMENT_OFF": lambda a, done: (ig.filament_off(on_done=_req(done)) if self.cfg.get("IG_ENABLED", True)
+                                                else done(None)),
             "BLACKBOX_DUMP": lambda a, done: (plc.dump_blackbox(a.get("tag", "safety")), done(None)),
         }
