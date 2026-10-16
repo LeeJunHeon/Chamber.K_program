@@ -10,7 +10,8 @@ OFF 확인(S29): Sequence — OUTP OFF → 0.5 s → OUTP? 최대 DC_OFF_VERIFY_
   끝까지 확인 못 하면 DC_OFF_UNCONFIRMED. OFF 는 늦추지 않는다(안전이 먼저). OFF 를 쓴 뒤 질의 금지 시간의 측정은
   suppressed(실패·두절 판정에 넣지 않음).
   출력 켜기 시퀀스는 tick 을 주면 그 tick 의 측정 뒤에 시작한다.
-연결 때: *IDN? 로 형명 기록, SYST:ERR? 1회. 쓰기 허용(prod·sim)이면 FACT:LAST-STA 를 읽고 SAF 가 아닐 때만 쓰고 되읽기,
+연결 때(매뉴얼 순서): *IDN? → SYST:ERR? 를 +0 까지(최대 10, 전부 이벤트) → OUTP?(dc.out 초기값) → FACT:LAST-STA?(읽기만 —
+  FULLY 면 DC_LAST_STATE_FULLY) → VOLT:OVP:TRIP?·CURR:OCP:TRIP?(트립이면 DC_PROTECTION_TRIPPED). 쓰기 허용(prod·sim)이고
   DC_SET_PROTECTION 이면 VOLT:OVP·CURR:OCP 를 쓰고 되읽기(기본 끔 — bench 확인 뒤 켬).
 bench: 질의는 *IDN?·SYST:ERR?·MEAS:ALL?·OUTP?·FACT:LAST-STA? 만, 상태를 바꾸는 명령은 모두 보내지 않는다(worker 거부 + 드라이버 이중 보호).
 """
@@ -64,6 +65,7 @@ class DcDriver:
         self.model: Optional[str] = None
         self.last_state: Optional[str] = None     # FACT:LAST-STA? 값(연결 때)
         self.meas_listeners: list = []            # (값, 읽기 시작 시각) — 정전류 제어
+        self.out_at_connect: Optional[bool] = None   # 연결 때 OUTP? 값
         self.i_set: Optional[float] = None
         self.out: Optional[bool] = None
         self.set_w: Optional[float] = None
@@ -117,8 +119,14 @@ class DcDriver:
         self._last_write = -1e9
         self.model = self._query(session, "*IDN?")
         self._emit("identity", self.model)
-        err = self._query(session, "SYST:ERR?")
-        self._emit("syst_err", err)
+        # 오류 기록을 +0 까지 비운다(최근 것부터, 최대 10, 읽으면 지워짐 [DC p.54, p.96]) — 전부 이벤트로
+        for _ in range(10):
+            err = self._query(session, "SYST:ERR?")
+            self._emit("syst_err", err)
+            if err.startswith(("+0,", "0,")):
+                break
+        self.out = self._query(session, "OUTP?") == "1"            # dc.out 초기값(S51 남은 출력 판단)
+        self.out_at_connect = self.out
         cur = self._query(session, "FACT:LAST-STA?")
         self.last_state = cur
         # 읽기만 한다(어떤 모드에서도 쓰지 않음 — 사용자 결정 2026-10-16). 응답은 DISABLE·SAFETY·FULLY [DC p.94, p.78].
@@ -128,6 +136,9 @@ class DcDriver:
                        "DC_LAST_STATE_FULLY")
         else:
             self._emit("last_state", f"FACT:LAST-STA? = {cur}")
+        for q, name in (("VOLT:OVP:TRIP?", "OVP"), ("CURR:OCP:TRIP?", "OCP")):
+            if self._query(session, q) == "1":                         # 트립 중에는 출력이 나오지 않는다 [DC p.89-91]
+                self._emit("trip", f"{name} 트립 중 — 출력이 나오지 않음(해제는 사람이 앞면에서)", "DC_PROTECTION_TRIPPED")
         if not self.writes_allowed:
             return
         if self.cfg["DC_SET_PROTECTION"]:

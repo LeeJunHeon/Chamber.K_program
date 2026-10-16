@@ -77,6 +77,8 @@ class WorkerEvent:
     t: float
 
 
+CONNECT_RETRY_PAUSE_S = 0.3        # 연결 초기화 무응답 뒤 다시 하기 전 쉼
+
 class Session:
     """드라이버가 요청 하나 동안 쓰는 입출력. deadline·취소가 자동으로 걸린다."""
 
@@ -85,6 +87,7 @@ class Session:
         self.clock = transport.clock
         self.deadline = deadline
         self.cancel = cancel
+        self.rx_bytes = 0                  # 이 세션에서 받은 바이트 수(연결 초기화 재시도 판단)
 
     def write(self, data: bytes) -> None:
         if self.cancel.is_set():
@@ -94,7 +97,13 @@ class Session:
     def read_until(self, terminator: Optional[bytes] = None, size: Optional[int] = None,
                    deadline: Optional[float] = None) -> bytes:
         d = self.deadline if deadline is None else min(deadline, self.deadline)
-        return self.transport.read_until(d, terminator, size, self.cancel)
+        try:
+            out = self.transport.read_until(d, terminator, size, self.cancel)
+        except ReadTimeout as e:
+            self.rx_bytes += len(e.partial)
+            raise
+        self.rx_bytes += len(out)
+        return out
 
 
 class Backoff:
@@ -325,7 +334,19 @@ class Worker:
                 self.initializing = True
             sess = Session(self.transport, self.clock.monotonic() + self.connect_init_timeout_s, cancel)
             try:
-                self.on_connect(sess)
+                try:
+                    self.on_connect(sess)
+                except ReadTimeout as e:
+                    if sess.rx_bytes or cancel.is_set():
+                        raise
+                    # 초기화 중 받은 바이트가 하나도 없이 시간 초과 — 연결 직후 첫 질의를 장비가 놓친 경우(10/16 bench DC).
+                    # 포트를 닫지 않고 0.3 s 뒤 입력을 비우고 초기화를 1회 다시. 그래도 안 되면 끊고 백오프
+                    self._emit("connect_retry", "초기화 첫 질의 무응답 — 0.3 s 뒤 1회 다시"
+                               + (f" (받다 만 바이트 {e.partial.hex(' ')})" if e.partial else ""))
+                    self.clock.wait_until(self.clock.monotonic() + CONNECT_RETRY_PAUSE_S, lambda: cancel.is_set())
+                    self.transport.reset_input()
+                    sess = Session(self.transport, self.clock.monotonic() + self.connect_init_timeout_s, cancel)
+                    self.on_connect(sess)
             except Cancelled:
                 self.transport.reset_input()
             except (TransportError, ReadTimeout) as e:

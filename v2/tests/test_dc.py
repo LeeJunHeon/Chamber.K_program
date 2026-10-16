@@ -55,7 +55,7 @@ def test_connect_identity_and_last_state_read_only():
     r = Rig(sim=sim)
     assert r.d.model == "ODA Technologies,EX-Series,2.1-1.0-1.6" and "identity" in r.kinds()
     assert sim.last_sta == "DIS" and sim.writes_last_sta == 0 and r.d.last_state == "DISABLE"
-    assert not any(c.startswith(("VOLT:OVP", "CURR:OCP")) for c in sim.commands_seen())   # 보호 설정 기본 끔
+    assert not any(c.startswith(("VOLT:OVP", "CURR:OCP")) for c in sim.set_commands_seen())   # 보호 설정 기본 끔
     assert not [e for e in r.events if e.kind == "last_state"][0].reason
     r.done()
     sim2 = DcSim(last_sta="FUL")
@@ -206,3 +206,53 @@ def test_off_tick_measurement_suppressed():
     assert r.w._streak == 0 and r.w.connected                           # 연속 실패에 들어가지 않음
     assert "off_confirmed" in r.kinds()
     r.done()
+
+
+def test_connect_order_drains_error_log_and_warns_trip():
+    """*IDN? → SYST:ERR? +0 까지(최근 것부터, 전부 이벤트) → OUTP? → FACT:LAST-STA? → 트립 질의 [DC p.54, p.89-96]."""
+    sim = DcSim(errors=['-124,"Undefined header"', '-222,"Out of data"'])
+    sim.info["CURR:OCP:TRIP?"] = "1"
+    sim.out = True
+    r = Rig(sim=sim)
+    q = [c for c in sim.commands_seen() if c.endswith("?")]
+    assert q[:8] == ["*IDN?", "SYST:ERR?", "SYST:ERR?", "SYST:ERR?", "OUTP?", "FACT:LAST-STA?", "VOLT:OVP:TRIP?",
+                     "CURR:OCP:TRIP?"]
+    errs = [e.detail for e in r.events if e.kind == "syst_err"]
+    assert errs == ['-124,"Undefined header"', '-222,"Out of data"', '+0,"No error"']
+    assert r.d.out_at_connect is True and r.d.out is True
+    trip = [e for e in r.events if e.kind == "trip"]
+    assert len(trip) == 1 and trip[0].reason == "DC_PROTECTION_TRIPPED" and "OCP" in trip[0].detail
+    r.done()
+
+
+def _worker_events(sim, wait_s):
+    from v2.common.clock import VirtualClock
+    from v2.common.transport import SimTransport
+    from v2.common.worker import Worker
+    c = VirtualClock(start_wall=1_760_000_000.0)
+    c.register()
+    ev = []
+    w = Worker("dc", SimTransport(c, sim), fail_streak=CFG["DC_FAIL_STREAK"],
+               connect_init_timeout_s=CFG["CONNECT_INIT_TIMEOUT_SEC"], on_event=ev.append)
+    d = DcDriver(c, w, CFG, True)
+    w.start()
+    c.wait_until(wait_s)
+    out = ([e.kind for e in ev], w.connected, w.ready, d.model)
+    w.stop()
+    return out, ev
+
+
+def test_connect_init_first_query_missed_is_retried_once():
+    """연결 직후 첫 *IDN? 무응답(10/16 bench DC) — 포트를 닫지 않고 0.3 s 뒤 초기화를 1회 다시."""
+    sim = DcSim()
+    sim.add_fault("no_response", 0.0, 1.0)                      # 첫 질의만 놓침
+    (kinds, conn, ready, model), ev = _worker_events(sim, 15.0)
+    assert kinds[:2] == ["connected", "connect_retry"] and "disconnected" not in kinds
+    assert conn and ready and model.startswith("ODA")
+
+
+def test_connect_init_still_silent_disconnects_with_backoff():
+    sim = DcSim()
+    sim.add_fault("no_response", 0.0, 1e9)
+    (kinds, conn, ready, model), ev = _worker_events(sim, 15.0)
+    assert kinds[:3] == ["connected", "connect_retry", "disconnected"] and not ready

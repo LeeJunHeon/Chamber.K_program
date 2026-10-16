@@ -193,6 +193,7 @@ class PlcDriver:
                     self.submit_write("재기동 뒤 히터 한계값·마커", self._init_writes, kind="write")
         if self._first_poll:
             self._first_poll = False
+            self._rf_enabled = bool(poll.values.get("rf.dac_enable"))     # 내부 상태를 실제 M00200 으로(v1 종료 흔적 포함)
             if poll.values["heater.run"]:
                 self._emit("heater_residual_run", "첫 폴링에서 히터 RUN 이 켜져 있음(이전 세션)", "HEATER_RESIDUAL_RUN",
                            pv=poll.values["heater.pv"])

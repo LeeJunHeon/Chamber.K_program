@@ -26,11 +26,10 @@ MISSING_DOCS: tuple = (
     ("PLC", "XBF-AD04A·XBF-DV04A 아날로그 모듈 설명서 — 레인지, CPU STOP·통신 이상 때 DAC 출력 상태"),
     ("PLC", "XBO-TC02A 열전대 모듈 설명서"),
     ("PLC", "실제 XG5000 프로젝트(.xgwx) — CPU 형명, 래더(히터 워치독·인터록), 사용 중 D 주소"),
-    ("DC", "EX 사양표 원본(PDF p.101~103 이미지) — 정격 V/I/P, 응답 시간"),
     ("DC", "아날로그 리모트 옵션(TER1) 장착 여부와 RS-232 제어와 동시 사용 가능 여부 — ODA 문의"),
     ("RF", "YSR 매뉴얼 p.16 원본(한글 깨짐) — 핀 2·3 할당 (반사파 스케일은 사용자 확인으로 v1 값 유지, 2026-10-15)"),
     ("RF", "현재 15핀 배선도 — 4·9(RF ON), 12·15(EXT LOOP) 연결 상태"),
-    ("MFC", "장비 실제 설정 — R70/R71 유량 FS, 압력 레인지 코드(E), Delimiter"),
+    ("MFC", "장비 실제 설정 — bench 설정 읽기(R33·R34·R70·R71·R74·R75·R37)로 확인. Delimiter 는 명령으로 읽을 수 없음"),
     ("CESAR", "부품번호(15핀/25핀 User Port 변형) — 시리얼 태그 확인"),
 )
 
@@ -70,6 +69,37 @@ class Device:
     interlock: str               # 외부 인터록·인히빗 입력
     diffs: tuple = ()
     bench: tuple = ()            # bench 에서 실측할 것
+
+
+# 시리얼 선(DTR/RTS)은 바꾸지 않는다 — 세 장비 모두 핸드셰이크 선이 없다:
+#   DC RJ45 3 RX · 7 TX · 5 GND [DC p.41], MFC DB9 2·3·5 [MFC p.25 표 9], IG DB9 2·3·7 [IG p.35]
+SERIAL_LINES_NOTE = "DTR/RTS 손대지 않음 — DC RJ45 3·7·5 [DC p.41], MFC 2·3·5 [MFC p.25], IG 2·3·7 [IG p.35] 핸드셰이크 선 없음"
+
+# MFC(GPC3000) 읽기 명령 표 11 전체 [MFC p.80-88] — (R, 응답 머리, 뜻, 지원). 채널 3·4 는 이 장비에 없음(2채널).
+MFC_READ_TABLE: tuple = (
+    (0, "S0", "아날로그 셋포인트 %FS", True), (1, "S1", "셋포인트 1 %FS", True), (2, "S2", "셋포인트 2 %FS", True),
+    (3, "S3", "셋포인트 3 %FS", True), (4, "S4", "셋포인트 4 %FS", True), (5, "P", "시스템 압력 %FS", True),
+    (6, "V", "밸브 열림 %(0 닫힘·100 열림)", True), (7, "M", "Alternate status MXYZ", True),
+    (10, "S5", "셋포인트 5 %FS", True), (11, "P1", "공정 한계 1 하한", True), (12, "P2", "공정 한계 1 상한", True),
+    (13, "P3", "공정 한계 2 하한", True), (14, "P4", "공정 한계 2 상한", True), (23, "J", "밸브 종류", True),
+    (24, "A", "아날로그 셋포인트 범위 — 현재 지원 안 함", False), (25, "T0", "아날로그 셋포인트 종류", True),
+    (26, "T1", "SP1 종류", True), (27, "T2", "SP2 종류", True), (28, "T3", "SP3 종류", True), (29, "T4", "SP4 종류", True),
+    (30, "T5", "SP5 종류", True), (31, "B", "밸브 위치 출력 범위 — 현재 지원 안 함", False), (32, "N", "제어 방향", True),
+    (33, "E", "압력 센서 레인지 코드 [p.83 표]", True), (34, "F", "압력 단위 코드", True),
+    (35, "G", "센서 전압 범위 — 현재 지원 안 함", False), (36, "U", "센서 종류 — 현재 지원 안 함", False),
+    (37, "M", "시스템 상태 MXYZ(X 0 Local·1 Remote)", True), (38, "H3", "소프트웨어 버전", True),
+    (41, "X1", "SP1 P.Lead", True), (42, "X2", "SP2 P.Lead", True), (43, "X3", "SP3 P.Lead", True), (44, "X4", "SP4 P.Lead", True),
+    (45, "X5", "SP5 P.Lead", True), (46, "M1", "SP1 Gain", True), (47, "M2", "SP2 Gain", True), (48, "M3", "SP3 Gain", True),
+    (49, "M4", "SP4 Gain", True), (50, "M5", "SP5 Gain", True), (51, "V", "자동 압력 제어 종류", True),
+    (60, "Q0", "전 채널 유량 %FS", True), (61, "Q1", "ch1 유량", True), (62, "Q2", "ch2 유량", True),
+    (63, "Q3", "ch3 유량 — 이 장비에 없음", False), (64, "Q4", "ch4 유량 — 이 장비에 없음", False),
+    (65, "Q5", "ch1 설정", True), (66, "Q6", "ch2 설정", True), (67, "Q7", "ch3 설정 — 없음", False), (68, "Q8", "ch4 설정 — 없음", False),
+    (69, "L0", "ON/OFF 전체", True), (70, "W1", "ch1 FS", True), (71, "W2", "ch2 FS", True), (72, "W3", "ch3 FS — 없음", False),
+    (73, "W4", "ch4 FS — 없음", False), (74, "W5", "ch1 단위(1 SCCM, 2 SLM)", True), (75, "W6", "ch2 단위", True),
+    (76, "W7", "ch3 단위 — 없음", False), (77, "W8", "ch4 단위 — 없음", False),
+)
+# DC(ODA EX) 사양 — 사양표 [DC p.104-105] 는 PDF 에 그림으로만 있다. 사용자가 적은 한 줄만(2026-10-16). 정격은 VOLT:OVL?·CURR:OCL? 기본값으로 확인
+DC_SPEC: tuple = (("EX 600-1", 630.0, 1.1, "[DC p.105] — 사용자 제공"),)
 
 
 # ═════════════ 1. PLC — LS XGB(형명 미확인), 내장 Modbus RTU ═════════════
@@ -114,7 +144,7 @@ MFC = Device(
     key="mfc", name="MFC 컨트롤러", model="ATOVAC GPC3000 (MFC 2채널 Ar/O2 + 압력 제어)", model_confirmed=True,
     manual="MFC",
     serial="RS-232 DB9 male: 2 TX, 3 RX, 5 GND [MFC p.25 표9]. 9600 기본(9600~115200 선택), 8N1 고정 [p.72, p.54]. "
-           "원격 제어는 [CTRL Mode]=Remote [p.54, p.71]",
+           "원격 제어는 [CTRL Mode]=Remote [p.54, p.71] — R37 X=1 로 읽어 확인. 핸드셰이크 선 없음(DTR/RTS 손대지 않음)",
     framing="ASCII 명령 + CR, R 명령 외에는 파라미터 필수 [p.72]. 값은 %FS",
     commands=(
         Cmd("R60", "모든 채널 유량", "Q0+100.0+100.0+100.0+100.0 (%FS, 채널당 6바이트)", "[MFC p.86]"),
@@ -125,6 +155,10 @@ MFC = Device(
         Cmd("R65~R68", "채널 설정 유량", "Q5..Q8 <값>", "[MFC p.87]"),
         Cmd("R69", "전체 ON/OFF", "L0 bbbb", "[MFC p.87]"),
         Cmd("R70~R77", "채널 FS·단위", "W1..W8", "[MFC p.87-88]", v1_uses=False),
+        Cmd("R33 / R34", "압력 레인지 코드 / 단위 코드(읽기)", "E Value / F Value", "[MFC p.83]", v1_uses=False),
+        Cmd("R37", "시스템 상태 MXYZ(X 1 = Remote)", "MXYZ", "[MFC p.84]", v1_uses=False),
+        Cmd("E v / F v", "!!! 설정 명령 — 압력 레인지·단위를 바꾼다(IG 의 E·F 질의와 다르다). 보내지 않음(가드 금지)", "—",
+            "[MFC p.74]", v1_uses=False),
         Cmd("Q1~Q4 v", "유량 설정(플래시 기록 없음)", "응답 규정 없음", "[MFC p.78]"),
         Cmd("L0 bbbb / L1~L4 v", "전체/채널 Flow ON·OFF", "응답 규정 없음", "[MFC p.79]"),
         Cmd("L5~L8 1", "채널 영점", "응답 규정 없음", "[MFC p.79]"),
@@ -157,10 +191,13 @@ DC_RATED_CURRENT_A = 1.0     # 위와 같음
 DC_RATED_POWER_W = 600.0     # EX 600 W 계열 최소 정격 [DC p.8/10]
 
 DC = Device(
-    key="dc", name="DC 전원", model="ODA EX 시리즈(600 W~10 kW, 형명 미확인 — *IDN?·*SN?)", model_confirmed=False,
+    key="dc", name="DC 전원", model="ODA EX 시리즈 — *IDN? 'ODA Technologies,EX-Series,2.1-1.0-1.6'(10/16 bench). "
+                                    "형명·정격은 VOLT:OVL?·CURR:OCL? 기본값(설정 가능한 최대 [p.15, p.98])과 사양표로", model_confirmed=False,
     manual="DC",
     serial="RS-232C/RS-485/TCP(옵션), 9600 기본(9600~230400), 8N1 고정 [DC p.13/15, p.36-37/38-39]. "
-           "Delimiter LF/CR/CRLF 선택 [p.47/49], 'Response' 메뉴 Yes/No [p.47/49 — 의미 확인 필요]",
+           "Delimiter LF/CR/CRLF 선택 [p.47/49], 'Response' 메뉴 Yes/No(공장 No) [p.49] — 명령에 응답을 돌려줄지 정하는 앞면 설정"
+           "(명령으로 읽을 수 없음, v1 에서 설정 명령 무응답 → No 로 보임). RS-232 RJ45 3 RX · 7 TX · 5 GND [p.41], "
+           "핸드셰이크 선 없음(DTR/RTS 손대지 않음)",
     framing="SCPI 텍스트 + Delimiter, 명령 최대 40바이트 [p.84/86]",
     commands=(
         Cmd("MEAS:ALL?", "출력 전압·전류 측정", "\"10.0000,1.0000\" (V,A)", "[DC p.90/92]"),
@@ -170,14 +207,17 @@ DC = Device(
         Cmd("OUTP ON|OFF / OUTP?", "출력 ON/OFF / 확인", "\"0\"/\"1\"", "[DC p.51/53, p.94/96]"),
         Cmd("*RST", "출력 OFF·0 V·OVP/OCP 기본·트립 해제", "없음", "[DC p.96/98]"),
         Cmd("*CLS", "오류 큐 지움", "없음", "[DC p.96/98]"),
-        Cmd("SYST:ERR?", "오류 큐(10개)", "코드,문구", "[DC p.94/96]", v1_uses=False),
+        Cmd("SYST:ERR?", "오류 기록 — 최근 것부터, 최대 10개, 읽으면 지워짐, *CLS 로 전부 지움(*RST 로는 안 지워짐)",
+            "코드,\"문구\"(없으면 +0,\"No error\")", "[DC p.54, p.96]", v1_uses=False),
         Cmd("VOLT:OVP / CURR:OCP", "하드 보호 설정", "없음", "[DC p.87-88]", v1_uses=False),
-        Cmd("FACT:LAST-STA SAF", "정전 복귀 때 출력 OFF 로 시작", "없음", "[DC p.92/94, p.76/78]", v1_uses=False),
-        Cmd("FLOW?", "CV/CC 모드", "CV|CC", "[DC p.89/91]", v1_uses=False),
+        Cmd("FACT:LAST-STA?", "전원 복귀 상태 — 읽기만(쓰지 않음, 2026-10-16). FULLY 면 경고", "DISABLE|SAFETY|FULLY",
+            "[DC p.94, p.78]", v1_uses=False),
+        Cmd("VOLT:OVP:TRIP? / CURR:OCP:TRIP?", "트립 상태 — 트립 중에는 출력이 나오지 않는다", "0|1", "[DC p.89-91]", v1_uses=False),
+        Cmd("FLOW? / POL?", "바이폴라 전용 — 이 장비는 응답하지 않아 보내지 않는다", "—", "[DC p.86, p.91]", v1_uses=False),
     ),
     timing_manual="매뉴얼에 없음(사양표는 이미지). v1 실측: 쓰기 직후 질의 무응답(2026-09-28 OUTP OFF 직후 OUTP? 13/13 무응답) → 500 ms 간격",
-    errors="SYST:ERR? 코드: 0, −10, −20~−34(원격 교정), −74~−77, −80~−89(메모리), −120~−124(문법), "
-           "−200~−202, −220~−223(실행) [DC p.97-100/99-102]",
+    errors="SYST:ERR? 코드: 0, −10, −20~−34(원격 교정), −74~−77, −80~−89(메모리), −120~−124(문법 — −124 정의되지 않은 명령 "
+           "[p.102]), −200~−202, −220~−223(실행) [DC p.97-100/99-102]. 기록은 최근 것부터·최대 10·읽으면 지워짐 [p.54, p.96]",
     safe_off="OUTP OFF → OUTP? 로 0 확인(3회). *RST 도 출력 OFF",
     comm_loss="통신 워치독 매뉴얼에 없음 — PC 가 죽으면 마지막 설정으로 계속 출력",
     interlock="아날로그 리모트 옵션(TER1) [p.56-63/58-65]: SW1-6 Direct = TER1 7–10 접점 닫힘 ON/개방 OFF, "
@@ -192,6 +232,8 @@ DC = Device(
         Diff("종단 주석", "_write_line 주석 '\\r\\n'", "실제 송신 LF, 장비 Delimiter 설정을 따라야 함",
              "Delimiter 실제 값 확인", "v1 DCpower.py _write_line"),
         Diff("통신 정상 판정", "쓰기 성공만으로 _comm_last_ok 갱신", "—", "응답을 받았을 때만 정상", "v1 DCpower.py:833"),
+        Diff("LAST-STA", "쓰지 않음", "응답은 DISABLE·SAFETY·FULLY(약어 아님)",
+             "v2 가 'SAF' 와 비교하고 연결마다 쓰던 버그를 고침 — 읽기만, FULLY 면 경고", "[DC p.94]"),
     ),
     bench=("쓰기→질의 최소 간격 분포", "MEAS:ALL? 지연", "FACT:ADC? 측정 갱신 주기", "Response 설정에 따른 여분 줄",
            "*IDN?·*SN? 형명·정격", "TER1 옵션 유무"),
@@ -285,7 +327,11 @@ IG = Device(
         Cmd("E", "상태 26항목: 2 필라멘트, 3 방출, 5 에러 코드, 24 이온, 25·26 게이지 A/B", "26줄", "[IG p.53-54 표 3.4]"),
         Cmd("A / B", "필라멘트 ON / OFF", "응답 없음(실측)", "[IG p.53]"),
         Cmd("C / D", "디개스 ON / OFF", "—", "[IG p.53]", v1_uses=False),
-        Cmd("F / G / H", "이온 / A / B 압력 한 줄", "한 줄", "[IG p.53]"),
+        Cmd("F / G / H", "이온 / 게이지 A / 게이지 B 압력 한 줄(xy z = xy×10^z, 꺼짐 0, 게이지 없음 −900, 영점 안 됨 −999)",
+            "한 줄", "[IG p.54]"),
+        Cmd("E 15~23", "15 셋포인트 보호 해제 · 16 자동 필라멘트 · 17 자동 필라멘트 셋포인트 · 18·19 이온 SP1·SP2 · "
+            "20 가스 계수(50~150 → 0.50~1.50) · 21 감도(50~150 → 5.0~15.0, 563 정상 10.0 [p.41]) · 22·23 게이지 A·B 셋포인트 "
+            "— 셋포인트는 xy z = xy×10^(z−2) Torr", "E 의 일부", "[IG p.53-54]"),
     ),
     timing_manual="응답 시간 없음. 문자 사이 50 ms 이상 [p.36, p.52], 초당 약 2문자 이하·응답 받은 뒤 송신 [p.53]. "
                   "필라멘트 끈 뒤 4 s 재점등 금지, 전원 뒤 10 s 금지 [p.42]. A/B 뒤 무응답(실측 5.9/4.9 s)은 매뉴얼에 없음",
@@ -464,8 +510,9 @@ PC_DEAD_PLAN: tuple = (
     PcDeadMeasure("PD6", "DC", "EX 아날로그 옵션 TER1 Direct(SW1-6, 7–10 접점) 또는 TTL Positive(SW1-7, 8–10)에 PLC 릴레이 — "
                   "개방 = 출력 OFF. 옵션 장착·RS-232 동시 사용 가능 여부를 ODA 확인", True, True, True, 3,
                   "[DC p.56-63/58-65, p.44/46]", "hold", _HOLD),
-    PcDeadMeasure("PD7", "DC 보조", "시작 때 VOLT:OVP·CURR:OCP 설정, FACT:LAST-STA SAF(정전 복귀 출력 OFF)", False, False, False, 2,
-                  "[DC p.87-88, p.92/94]", "planned", "연결할 때 prod 에서만 쓰고 되읽어 확인"),
+    PcDeadMeasure("PD7", "DC 보조", "시작 때 VOLT:OVP·CURR:OCP 설정(DC_SET_PROTECTION 일 때만). FACT:LAST-STA 는 읽기만 — "
+                  "FULLY 면 경고(바꾸는 것은 사람이 앞면 FACTORY 메뉴에서)", False, False, False, 2,
+                  "[DC p.87-88, p.78, p.94]", "planned", "OVP·OCP 는 prod 에서만 쓰고 되읽어 확인. LAST-STA 는 어떤 모드에서도 쓰지 않음"),
     PcDeadMeasure("PD8", "RF Pulse 보조", "명령 33 반사 전력 자동 차단(1~255 s) 설정 — 통신과 무관한 장비 자체 보호", False, False, False, 2,
                   "[CESAR p.107 / 4-73]", "planned", "연결할 때 prod 에서만 쓰고 되읽어 확인"),
     PcDeadMeasure("PD9", "PLC 자체", "PLC 가 STOP/전원 OFF 일 때 DAC·출력 상태 확인(모듈 매뉴얼 필요). 출력 소거가 아니면 PD4~PD6 하드 배선이 유일한 길",
@@ -490,7 +537,7 @@ ASSUMPTIONS: tuple = (
     Assumption("DC 쓰기→질의 간격", "500 ms (v1 실측)", "dc", "쓰기→질의"),
     Assumption("DC 아날로그 옵션(TER1)", "없음으로 가정", "dc", "TER1"),
     Assumption("DC Delimiter", "LF(v1 송신과 같게)", "dc", "Response 설정"),
-    Assumption("DC LAST-STA 현재 값", "모름 — 연결 때 읽고 SAF 가 아니면 씀(prod)", "dc", "*IDN?"),
+    Assumption("DC LAST-STA 현재 값", "모름 — 연결 때 읽기만(FULLY 면 경고, 쓰지 않음)", "dc", "*IDN?"),
     Assumption("CESAR User Port 커넥터 형식", "모름(15핀/25핀) — 인터록 배선 보류라 당장 영향 없음", "rfpulse", "15핀/25핀"),
     Assumption("CESAR 응답 지연", "150 ms 이하(1초에 3질의)", "rfpulse", "지연"),
     Assumption("PLC 트랜잭션 왕복", "10~25 ms", "plc", "왕복 시간"),

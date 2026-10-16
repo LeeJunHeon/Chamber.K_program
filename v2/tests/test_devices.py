@@ -86,3 +86,12 @@ def test_assumptions_in_bench_lists():
     by = {d.key: d for d in D.DEVICES}
     for a in D.ASSUMPTIONS:
         assert any(a.bench_item in b for b in by[a.device].bench), (a.item, a.bench_item)
+
+
+def test_mfc_read_table_matches_guard_bench_list():
+    from v2.chk import cmd_guard as G
+    supported = tuple(n for n, _, _, ok in D.MFC_READ_TABLE if ok)
+    assert supported == G.MFC_BENCH_R and len(supported) == 46
+    assert {n for n, _, _, ok in D.MFC_READ_TABLE if not ok} == {24, 31, 35, 36, 63, 64, 67, 68, 72, 73, 76, 77}
+    assert "EX 사양표" not in str(D.MISSING_DOCS) and "SAF 가 아니면 씀" not in str(D.ASSUMPTIONS)
+    assert "FACT:LAST-STA SAF" not in str(D.DC.commands) and "읽기만" in D.PC_DEAD_PLAN[6].method

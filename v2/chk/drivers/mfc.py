@@ -81,6 +81,8 @@ class MfcDriver:
         self.q_timeout_s = cfg["MFC_QUERY_TIMEOUT_MS"] / 1000.0
         self.fs = {CH_AR: cfg["MFC_AR_FS_SCCM"], CH_O2: cfg["MFC_O2_FS_SCCM"]}
         self.fs_source = "param"
+        self.scale_mismatch: Optional[str] = None      # 연결 때 R33·R34·R74·R75·R37 대조 — 다르면 공정 시작 거부
+        self.scale_raw: Dict[int, Optional[str]] = {}
         self.alternate = cfg["MFC_READ_PLAN"] == "alternate"
         self.ar_set: Optional[float] = None
         self.o2_set: Optional[float] = None
@@ -142,10 +144,49 @@ class MfcDriver:
             else:
                 self.fs[ch] = self.cfg[key]
         self._emit("fs", f"FS Ar {self.fs[CH_AR]:g} sccm · O2 {self.fs[CH_O2]:g} sccm ({self.fs_source})")
+        self._check_scale(session)
         odd = [f"ch{ch}={v:g}" for ch, v in self.fs.items() if abs(v - 100.0) > 1e-9]
         if odd:
             self._emit("fs_not_100", "MFC 풀스케일이 100 이 아님(" + ", ".join(odd) + ") — v1 레시피 유량이 %FS 였을 수 있다. "
                        "실제 공정 전에 사용자 확인 필요", "MFC_FS_NOT_100")
+
+    def _check_scale(self, session) -> None:
+        """R33·R34(압력 레인지·단위 → FS)·R74·R75(유량 단위)·R37(Remote) 를 읽어 설정과 대조.
+        확실히 다르면 MFC_SCALE_MISMATCH(공정 시작 거부), 못 읽으면 경고만(설정값 사용). 값은 자동으로 바꾸지 않는다."""
+        from v2.chk import inventory as INV
+        raw = {}
+        for n in (33, 34, 74, 75, 37):
+            try:
+                raw[n] = self._query(session, f"R{n}")
+            except Cancelled:
+                raise
+            except Exception:
+                raw[n] = None
+        bad, unknown = [], []
+        sc = INV.mfc_scale(raw[33], raw[34])
+        if sc is None:
+            unknown.append(f"압력 레인지·단위(R33 {raw[33]!r}, R34 {raw[34]!r})")
+        elif abs(sc[2] - float(self.cfg["MFC_PRESSURE_FS_TORR"])) > 1e-9:
+            bad.append(f"압력 FS {sc[2]:g} Torr(레인지 {sc[0]:02d}·단위 {sc[1]}) ≠ MFC_PRESSURE_FS_TORR {self.cfg['MFC_PRESSURE_FS_TORR']}")
+        for ch, n in ((1, 74), (2, 75)):
+            u = INV.mfc_int(raw[n], f"W{ch + 4}")
+            if u is None:
+                unknown.append(f"ch{ch} 단위(R{n} {raw[n]!r})")
+            elif u != 1:
+                bad.append(f"ch{ch} 단위 {INV.MFC_FLOW_UNIT.get(u, u)} ≠ SCCM")
+        st = (raw[37] or "").strip()
+        if not (len(st) == 4 and st[0] == "M" and st[1:].isdigit()):
+            unknown.append(f"Remote(R37 {raw[37]!r})")
+        elif st[1] != "1":
+            bad.append("Local(R37 X=0) — 원격 제어가 되지 않는다")
+        self.scale_raw = raw
+        self.scale_mismatch = "; ".join(bad) or None
+        if bad:
+            self._emit("scale", "MFC 설정이 v2 설정과 다름 — 공정 시작 거부: " + "; ".join(bad), "MFC_SCALE_MISMATCH")
+        if unknown:
+            self._emit("scale", "MFC 설정을 못 읽음(설정값 사용): " + "; ".join(unknown), "MFC_SCALE_UNREAD")
+        if not bad and not unknown:
+            self._emit("scale", f"MFC 압력 FS {sc[2]:g} Torr · 단위 SCCM · Remote 확인")
 
     # ───────── 읽기 ─────────
     def source_read(self, session, seq: int) -> Dict[str, Any]:

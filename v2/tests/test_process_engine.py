@@ -192,3 +192,12 @@ def test_start_rejections_and_load_rules(tmp_path):
     got = [x.reason for x in r.results if x is not None]
     assert got == [e for _, _, e in seq] + ["MV_NOT_OPEN", "LINK_DOWN"], got
     assert not r.ev("run_start")
+
+
+def test_mfc_scale_mismatch_rejects_start(tmp_path):
+    """연결 때 MFC 압력 FS 가 설정과 다르면(R33 E06 = 10 Torr) 공정 시작 거부 MFC_SCALE_MISMATCH(값은 바꾸지 않음)."""
+    r = R(tmp_path, FAST)
+    r.rig.sims["mfc"].info[33] = "E06"
+    r.on(3, r.cmd("PROCESS_START", {"row": SHORT}))
+    r.run(5)
+    assert [x.reason for x in r.results] == ["MFC_SCALE_MISMATCH"] and not r.ev("run_start")

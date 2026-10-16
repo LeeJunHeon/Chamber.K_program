@@ -289,3 +289,17 @@ def test_recorder_writes_blackbox(tmp_path):
     with open(f, encoding="utf-8-sig", newline="") as fh:
         rows = list(csv.reader(fh))
     assert rows[0] == ["t_wall", "elapsed_ms", "heater.pv"] and rows[2] == ["1.25", "250", ""]
+
+
+def test_rf_enable_state_follows_first_poll():
+    """v1 정상 종료 흔적(M00200 켜짐)이 있으면 드라이버 내부 상태도 켜짐으로 — 첫 RF 쓰기에서 enable 을 다시 쓰지 않는다."""
+    sim = PlcSim()
+    sim.coils[A["rf_dac_enable"]] = True
+    r = Rig(sim=sim)
+    r.read()
+    assert r.d._rf_enabled is True
+    r.done()
+    r = Rig()
+    r.read()
+    assert r.d._rf_enabled is False
+    r.done()

@@ -147,3 +147,24 @@ def test_bench_no_writes():
     assert box == ["BENCH_READ_ONLY"] * 5 and r.sim.set_commands_seen() == []
     assert all(x["mfc.q"] == "ok" for x in rows)
     r.done()
+
+
+def test_connect_scale_check_matches_and_mismatches():
+    """연결 때 R33·R34·R74·R75·R37 대조 [MFC p.83-88] — 다르면 MFC_SCALE_MISMATCH, 못 읽으면 경고만. 값은 바꾸지 않는다."""
+    r = Rig()
+    ev = [e for e in r.events if e.kind == "scale"]
+    assert r.d.scale_mismatch is None and ev and ev[0].reason is None and "1 Torr" in ev[0].detail
+    r.done()
+    sim = MfcSim()
+    sim.info[33], sim.info[37] = "E06", "M000"                   # 10 Torr 레인지, Local
+    r = Rig(sim=sim)
+    assert "10 Torr" in r.d.scale_mismatch and "Local" in r.d.scale_mismatch
+    assert [e.reason for e in r.events if e.kind == "scale"] == ["MFC_SCALE_MISMATCH"]
+    assert r.cfg["MFC_PRESSURE_FS_TORR"] == 1.0                    # 설정값은 그대로
+    r.done()
+    sim = MfcSim()
+    del sim.info[34]                                               # 단위를 못 읽음
+    r = Rig(sim=sim)
+    assert r.d.scale_mismatch is None
+    assert [e.reason for e in r.events if e.kind == "scale"] == ["MFC_SCALE_UNREAD"]
+    r.done()

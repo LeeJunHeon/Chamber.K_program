@@ -324,7 +324,7 @@ def test_port_guard_open_timeout_and_late_close():
 
 
 def test_connect_init_timeout():
-    """연결 직후 초기화가 제한 시간 안에 응답이 없으면 끊고 백오프."""
+    """연결 직후 초기화가 제한 시간 안에 응답이 없으면 0.3 s 뒤 1회 다시(받은 바이트 0), 그래도 없으면 끊고 백오프."""
     dev = LineDevice("d", {"a": 1}, latency_s=0.05)
     dev.add_fault("no_response", 0.0, 100.0)
     c = VirtualClock()
@@ -333,9 +333,9 @@ def test_connect_init_timeout():
     w = Worker("dev", SimTransport(c, dev), on_event=ev.cb, connect_init_timeout_s=2.0,
                on_connect=lambda s: line_read_many(s, "d", ["a"]))
     w.start()
-    c.wait_until(3.5)
+    c.wait_until(5.8)
     kinds = [(e.kind, round(e.t, 3)) for e in ev.items]
-    assert ("connected", 0.0) in kinds and ("disconnected", 2.0) in kinds and ("connected", 3.0) in kinds
+    assert kinds[:4] == [("connected", 0.0), ("connect_retry", 2.0), ("disconnected", 4.3), ("connected", 5.3)], kinds
     w.stop()
 
 

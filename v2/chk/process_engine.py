@@ -284,6 +284,8 @@ class ProcessEngine:
             return "DEVICE_DISABLED"
         if p.get("use_rf_pulse") and float(p.get("rf_pulse_power") or 0) > 0 and not c["RFPULSE_ENABLED"]:
             return "DEVICE_DISABLED"
+        if getattr(self.mfc, "scale_mismatch", None):
+            return "MFC_SCALE_MISMATCH"                          # 연결 때 R33·R34·R74·R75·R37 대조(값은 자동으로 바꾸지 않음)
         need = ["plc", "mfc"]
         if float(p.get("dc_power") or 0) > 0:
             need.append("dc")

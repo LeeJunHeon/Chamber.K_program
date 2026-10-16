@@ -149,7 +149,8 @@ def test_inventory_mismatches_are_warned_not_changed(tmp_path):
     assert code == 0 and b.writes() == []
     for want in ("!!! MFC 압력 레인지 06(10) · 단위 0(Torr) → FS 10 Torr ≠ MFC_PRESSURE_FS_TORR",
                  "!!! MFC Local(R37 X=0)", "!!! DC LAST-STA = FULLY", "!!! DC OVP 트립 중", "'fast'", "형식 다름",
-                 "SYST:ERR? 1", "SYST:ERR? 2", "[미확인] MFC 압력 레인지·작업 압력 상한"):
+                 "SYST:ERR? 1", 'DC SYST:ERR?(연결 때): -124,"Undefined header"', 'DC SYST:ERR?(연결 때): -222,"Out of data"',
+                 "[미확인] MFC 압력 레인지·작업 압력 상한"):
         assert want in out, want
     inv = __import__("json").loads((next(tmp_path.glob("v2_bench_*")) / "inventory.json").read_text(encoding="utf-8"))
     assert any(i["query"] == "R33" and i["raw"] == "E06" for i in inv["items"])
