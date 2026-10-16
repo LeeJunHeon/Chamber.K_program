@@ -21,8 +21,8 @@ BAUD = 9600
 
 
 class DcSim(SimDevice):
-    def __init__(self, chamber: Optional[Chamber] = None, idn: str = "ODA,EX-600-1,SIM0001,1.00",
-                 last_sta: str = "DIS") -> None:
+    def __init__(self, chamber: Optional[Chamber] = None, idn: str = "ODA Technologies,EX-Series,2.1-1.0-1.6",
+                 last_sta: str = "DIS", errors: Optional[List[str]] = None) -> None:
         super().__init__("dc", latency_s=0.0)
         self.chamber = chamber or Chamber()
         self.idn = idn
@@ -31,7 +31,12 @@ class DcSim(SimDevice):
         self.ovp, self.ocp = 660.0, 1.1
         self.last_sta = last_sta
         self.writes_last_sta = 0
-        self.errors: List[str] = []
+        self.errors: List[str] = list(errors or [])     # 오류 기록(최근 것부터 나온다 [DC p.54])
+        # 매뉴얼 질의 응답값(가정 — 실제 값은 bench 로 읽는다). OVL·OCL 기본값 = 설정 가능한 최대 [p.15], EX 600-1 630 V·1.1 A
+        self.info = {"*SN?": "oda-01-0923-00185", "SYST:VERS?": "2008.3", "KEYL?": "0", "VOLT:STEP?": "0.1000",
+                     "CURR:STEP?": "0.0100", "VOLT:OVP:TRIP?": "0", "CURR:OCP:TRIP?": "0", "VOLT:UVL?": "0.0000",
+                     "VOLT:OVL?": "630.0000", "CURR:UCL?": "0.0000", "CURR:OCL?": "1.1000", "FACT:AUTO-CUR?": "0",
+                     "FACT:AUTO-LOC?": "0", "FACT:OVP?": "1", "FACT:OCP?": "1", "FACT:ADC?": "20Hz"}
         self.busy_until = -1.0
         self.received: List[tuple] = []
         self.ignored_queries = 0
@@ -96,7 +101,11 @@ class DcSim(SimDevice):
         if u == "FACT:LAST-STA?":
             return {"DIS": "DISABLE", "SAF": "SAFETY", "FUL": "FULLY"}.get(self.last_sta, self.last_sta)
         if u == "SYST:ERR?":
-            return self.errors.pop(0) if self.errors else '0,"No error"'
+            return self.errors.pop(0) if self.errors else '+0,"No error"'     # [DC p.96]
+        if u == "APPL?":
+            return f"{self.v_set:.4f},{self.i_set:.4f}"
+        if u in self.info:
+            return self.info[u]
         return None
 
     def _set(self, u: str) -> bool:

@@ -33,6 +33,12 @@ class MfcSim(SimDevice):
         self.chamber = chamber or Chamber()
         self.fs = list(fs_sccm)
         self.set_pct = [0.0] * 4
+        # 매뉴얼 표 11 [MFC p.80-88] 의 나머지 질의 응답(가정 — 실제 값은 bench 로 읽는다). R33 E03 = 1, R34 F0 = Torr → FS 1 Torr
+        self.info = {0: "S0+0.00", 10: "S5+0.00", 11: "P1+0.00", 12: "P2+100.00", 13: "P3+0.00", 14: "P4+100.00",
+                     23: "J1", 25: "T01", 26: "T11", 27: "T21", 28: "T31", 29: "T41", 30: "T51", 32: "N0", 33: "E03",
+                     34: "F0", 37: "M100", 38: "H3 1.00", 51: "V1"}
+        self.info.update({40 + i: f"X{i}+0.0" for i in range(1, 6)})
+        self.info.update({45 + i: f"M{i}+100" for i in range(1, 6)})
         self.on = [False] * 4
         self.flow_pct = [0.0] * 4
         self.sp = [0.0] * 5                     # 설정점 %FS
@@ -133,7 +139,7 @@ class MfcSim(SimDevice):
             return f"W{n - 69}{self.fs[n - 70]:+.1f}"
         if 74 <= n <= 77:
             return f"W{n - 69}+1"
-        return None
+        return self.info.get(n)
 
     def _set(self, cmd: str) -> None:
         m = re.fullmatch(r"Q([1-4])\s+([+\-]?\d+(?:\.\d+)?)", cmd)

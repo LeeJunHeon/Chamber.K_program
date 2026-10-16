@@ -22,7 +22,11 @@ from typing import Any, Callable, Dict, Optional
 from v2.common.transport import Cancelled
 from v2.common.worker import SEQ_DONE, Request, Result, Sequence, Worker
 
-BENCH_QUERIES = frozenset({"*IDN?", "SYST:ERR?", "MEAS:ALL?", "OUTP?", "FACT:LAST-STA?"})   # 값만 읽음(5-2)
+BENCH_QUERIES = frozenset({"*IDN?", "*SN?", "SYST:VERS?", "OUTP?", "KEYL?", "APPL?", "VOLT?", "CURR?", "VOLT:STEP?",
+                           "CURR:STEP?", "VOLT:OVP?", "CURR:OCP?", "VOLT:OVP:TRIP?", "CURR:OCP:TRIP?", "VOLT:UVL?",
+                           "VOLT:OVL?", "CURR:UCL?", "CURR:OCL?", "FACT:LAST-STA?", "FACT:AUTO-CUR?", "FACT:AUTO-LOC?",
+                           "FACT:OVP?", "FACT:OCP?", "FACT:ADC?", "MEAS:ALL?", "MEAS:VOLT?", "MEAS:CURR?", "SYST:ERR?"})
+# 매뉴얼 질의 28개 [DC p.86-98] — 통신층 가드(cmd_guard.DC_BENCH)와 같은 목록(시험이 확인)
 CURR_WRITE_DELAY_S = 0.1     # tick 안에서 MEAS:ALL? 뒤 CURR 쓰기까지(사용자 결정 2026-10-15)
 OFF_STEP_TIMEOUT_S = 1.5     # OFF 확인 질의 하나의 한도(v1 OUTP? 1.5 s)
 

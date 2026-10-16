@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from v2.common.worker import Request, Result, Worker
 
-QUERY_COMMANDS = frozenset({"E", "F"})
+QUERY_COMMANDS = frozenset({"E", "F", "G", "H"})       # 질의 [IG p.53-54] — G·H 는 게이지 A·B(bench 설정 읽기)
 FILAMENT_COMMANDS = frozenset({"A", "B"})
 E_ITEM_COUNT = 26
 E_BLOCK_S = 1.0          # A·B 뒤 E 를 보내지 않는 시간(v1 e_block_sec)

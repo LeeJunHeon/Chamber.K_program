@@ -139,6 +139,10 @@ class IgSim(SimDevice):
         if cmd == "F":
             ion = self.ion_value(now)
             return ((fmt_pair(ion) if ion else "0") + "\n\r").encode()
+        if cmd in ("G", "H"):                                       # 게이지 A·B [IG p.54]
+            if cmd == "G" and self.gauge_a_offline:
+                return b"-900\n\r"
+            return (self._conv() + "\n\r").encode()
         if cmd == "A":
             if self.last_b is not None and now - self.last_b < RELIGHT_S:
                 return None                                         # 재점등 금지(경고음만)

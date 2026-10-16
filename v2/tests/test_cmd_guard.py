@@ -183,3 +183,10 @@ def test_forbidden_commands_blocked_before_port(tmp_path):
     assert b"C" not in log["ig"]
     blocked = [e for e in rig.events if getattr(e, "kind", "") == "COMMAND_BLOCKED"]
     assert len(blocked) == 7 and all(w.connected for k, w in rig.workers.items())        # 연결은 유지
+
+
+def test_driver_bench_lists_match_guard():
+    from v2.chk.drivers import dc as DCD, ig as IGD, rfpulse as RFD
+    assert DCD.BENCH_QUERIES == set(G.DC_BENCH)
+    assert set(IGD.QUERY_COMMANDS) == set(G.IG_BENCH)
+    assert set(RFD.BENCH_QUERIES) == set(G.RFP_BENCH)

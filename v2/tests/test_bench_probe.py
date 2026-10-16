@@ -49,7 +49,7 @@ class Bench:
                 elif port == "COM11":
                     ok = w.rstrip(b"\n").endswith(b"?")                    # SCPI 질의만
                 elif port == "COM12":
-                    ok = w in (b"E", b"F")                                 # 필라멘트 A·B·degas 없음
+                    ok = w in (b"E", b"F", b"G", b"H")                     # 필라멘트 A·B·디개스 C·D 없음
                 else:
                     ok = len(w) >= 2 and w[1] >= 128 or w in (b"\x06", b"\x15")   # AE Bus 질의(128~) 또는 ACK/NAK
                 if not ok:
@@ -84,11 +84,20 @@ def test_process_trace_stops_with_zero_writes(tmp_path):
     assert b.sims["COM11"].out is True                                # 끄지도 않는다(쓰기 0)
 
 
-def test_rf_dac_enable_is_process_trace(tmp_path):
+def test_rf_enable_only_continues_with_note(tmp_path):
+    """enable(M00200)만 켜지고 D40 0·순방향 0 — v1 정상 종료 흔적: [참고] 를 남기고 계속(10/16 bench 에서 멈췄던 경우)."""
     b = Bench()
     b.sims["COM9"].coils[A["rf_dac_enable"]] = True
     code, out = b.run(tmp_path)
-    assert code == 2 and "RF DAC enable" in out and b.writes() == []
+    assert code == 0 and "[참고] M00200 켜짐 · D40 0" in out and "RF(PLC 아날로그): D40 0" in out and b.writes() == []
+
+
+def test_rf_actual_output_stops(tmp_path):
+    b = Bench()
+    b.sims["COM9"].coils[A["rf_dac_enable"]] = True
+    b.sims["COM9"].regs[A["rf_dac"]] = 300                       # D40 > 0 — 실제 출력
+    code, out = b.run(tmp_path)
+    assert code == 2 and "RF 출력이 있음(D40 300" in out and "수집 시작" not in out and b.writes() == []
 
 
 def test_normal_run_reads_only_and_writes_summary(tmp_path):
@@ -104,6 +113,13 @@ def test_normal_run_reads_only_and_writes_summary(tmp_path):
     assert any(n.startswith("snap_") and n.endswith(".sqlite") for n in names)
     assert any(n.endswith(".csv") for n in names)
     s = (folder / "summary.txt").read_text(encoding="utf-8")
+    assert "events.jsonl" in names and "inventory.json" in names
+    for want in ("[dc] 28개", "[mfc] 46개", "[ig] 29개", "[확인] MFC 압력 레인지 03(1) · 단위 0(Torr) → FS 1 Torr",
+                 "[확인] MFC Remote(R37 X=1)", "[확인] DC LAST-STA = DISABLE", "정격 후보 EX 600-1", "[확인] IG 가스 계수 1.00 · 감도 10.0",
+                 "명령으로 확인할 수 없는 것", "대기 중 값 범위", "연결 기록", "D00040(U02.03)",
+                 "[확인] DC 형명·정격", "[확인] MFC 압력 레인지·작업 압력 상한"):
+        assert want in s, want
+    assert "형식 다름" not in s
     for want in ("놓친 tick 0", "MFC FS: Ar 100", "DC *IDN?: ODA", "DC FACT:LAST-STA?: DISABLE", "[확인] DC LAST-STA 현재 값", "CESAR 1310", "명령 33 현재",
                  "IG F", "IG E:", "PLC 블록 읽기", "[확인] PLC 트랜잭션 왕복"):
         assert want in s, want
@@ -119,6 +135,31 @@ def test_disabled_and_skipped_devices_are_not_opened(tmp_path):
     assert code == 0 and "COM13" not in b.ports and "COM12" not in b.ports
     assert "rfpulse 제외(설정 꺼짐 — RFPULSE_ENABLED=false)" in out and "ig 제외(--skip)" in out
     assert b.writes() == []
+
+
+def test_inventory_mismatches_are_warned_not_changed(tmp_path):
+    b = Bench()
+    b.sims["COM10"].info[33] = "E06"                              # 10 Torr 레인지
+    b.sims["COM10"].info[37] = "M000"                             # Local
+    b.sims["COM11"].last_sta = "FUL"
+    b.sims["COM11"].info["FACT:ADC?"] = "fast"                    # 매뉴얼에 없는 형식
+    b.sims["COM11"].info["VOLT:OVP:TRIP?"] = "1"
+    b.sims["COM11"].errors = ['-124,"Undefined header"', '-222,"Out of data"']
+    code, out = b.run(tmp_path)
+    assert code == 0 and b.writes() == []
+    for want in ("!!! MFC 압력 레인지 06(10) · 단위 0(Torr) → FS 10 Torr ≠ MFC_PRESSURE_FS_TORR",
+                 "!!! MFC Local(R37 X=0)", "!!! DC LAST-STA = FULLY", "!!! DC OVP 트립 중", "'fast'", "형식 다름",
+                 "SYST:ERR? 1", "SYST:ERR? 2", "[미확인] MFC 압력 레인지·작업 압력 상한"):
+        assert want in out, want
+    inv = __import__("json").loads((next(tmp_path.glob("v2_bench_*")) / "inventory.json").read_text(encoding="utf-8"))
+    assert any(i["query"] == "R33" and i["raw"] == "E06" for i in inv["items"])
+
+
+def test_no_reply_device_shows_recording(tmp_path):
+    b = Bench()
+    b.sims["COM12"].add_fault("no_response", 0.0, 1e9)            # IG 가 아무것도 답하지 않음
+    code, out = b.run(tmp_path)
+    assert "녹화 앞부분 ig" in out and "'F'  →  ''" in out and b.writes() == []
 
 
 def test_mfc_fs_not_100_is_loud(tmp_path):

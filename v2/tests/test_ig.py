@@ -141,13 +141,14 @@ def test_filament_on_failure_reported():
 
 def test_forbidden_commands_never_reach_port():
     r = Rig()
-    for ch in ("C", "D", "A", "B", "G", "x"):
+    for ch in ("C", "D", "A", "B", "Z", "x"):
         with pytest.raises(IgCommandNotAllowed):
             r.d.send_command(ch)                                        # A·B 도 이 경로로는 안 됨
     r.d.send_command("F")
+    r.d.send_command("G")                                               # G·H 는 질의(게이지 A·B 압력) [IG p.54]
     r.c.wait_until(r.c.monotonic() + 1.0)
     r.run(3, at={0: r.d.filament_on})
-    assert set(r.sim.commands_seen()) <= {"E", "F", "A", "B"}            # A/B 경로 밖의 쓰기 0
+    assert set(r.sim.commands_seen()) <= {"E", "F", "G", "A", "B"}       # A/B 경로 밖의 쓰기 0
     assert "C" not in r.sim.commands_seen() and "D" not in r.sim.commands_seen()
     r.done()
 
