@@ -105,7 +105,7 @@ def test_start_sequence_normal_and_plasma_reflection():
     assert r.sim.set_commands_seen() == [14, 33]                             # 연결: Local → Host(출력 꺼짐) → 명령 33
     assert r.start(300.0, freq_hz=20000, duty=50) is None
     assert r.sim.out and r.sim.setpoint == 300 and r.sim.freq == 20000 and r.sim.duty == 50 and r.sim.pulsing == 1
-    assert r.sim.set_commands_seen()[2:] == [14, 1, 3, 8, 27, 93, 96, 2]       # Host 뒤 사전 RF OFF
+    assert r.sim.set_commands_seen()[2:] == [14, 1, 3, 8, 93, 96, 27, 2]       # v1 순서: Host → 사전 RF OFF → … → 펄싱 → RF ON
     assert r.ev("config_readback")[-1].reason is None
     rows = r.run(3)
     assert rows[-1]["rfp.fwd_w"] == pytest.approx(300.0, abs=1) and rows[-1]["rfp.out_on"] is True

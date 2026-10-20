@@ -78,7 +78,7 @@ CASES = [
     ("S31B", "tick", dict(state="MAIN", uses_dc=True, dc_holding=True), {"dc.i": 0.01}, {"dc.i": 0.3}, 10.0, 1.0, "IDLE"),
     ("S31C", "tick", dict(state="MAIN", uses_dc=True, dc_set_w=100.0), {"dc.p": 80.0}, {"dc.p": 100.0}, 5.0, 1.0,
      "POWER_WAIT"),
-    ("S32", "tick", dict(state="MAIN", uses_rf=True), {"rf.ref_w": 5.0}, {"rf.ref_w": 1.0}, 60.0, 1.0, "IDLE"),
+    ("S32", "tick", dict(state="MAIN", uses_rf=True, rf_on=True), {"rf.ref_w": 5.0}, {"rf.ref_w": 1.0}, 60.0, 1.0, "IDLE"),
     ("S33A", "tick", dict(state="POWER_WAIT", uses_rf=True), {"rf.dac": 500, "rf.fwd_w": 0.0},
      {"rf.dac": 500, "rf.fwd_w": 50.0}, 10.0, 1.0, "MAIN"),
     ("S33B", "tick", dict(state="MAIN", uses_rf=True, rf_holding=True, rf_set_w=100.0), {"rf.fwd_w": 80.0},
@@ -136,8 +136,8 @@ def test_stale_samples_do_not_reset_or_confirm(rid, where, proc, true_v, false_v
 
 AGE_CASES = [("S6", "plc", "PLC_COMM_LOSS_ABORT_SEC", dict(state="MAIN"), "IDLE"),
              ("S7", "plc", "PLC_DISCONNECT_NOTIFY_SEC", dict(), None),
-             ("S30", "dc", "DC_COMM_LOSS_ABORT_SEC", dict(state="MAIN", uses_dc=True), "IDLE"),
-             ("S34C", "rfp", "RFPULSE_COMM_LOSS_ABORT_SEC", dict(state="MAIN", uses_rfp=True), "IDLE"),
+             ("S30", "dc", "DC_COMM_LOSS_ABORT_SEC", dict(state="MAIN", uses_dc=True, dc_on=True), "IDLE"),
+             ("S34C", "rfp", "RFPULSE_COMM_LOSS_ABORT_SEC", dict(state="MAIN", uses_rfp=True, rfp_on=True), "IDLE"),
              ("S39B", "ig", "IG_COMM_LOSS_ABORT_SEC", dict(state="BASE_WAIT"), "MAIN")]
 
 
@@ -256,7 +256,7 @@ def test_priority_abort_before_notify():
 
 
 def test_same_eval_aborts_first_reason_others_events():
-    h = H(state="MAIN", uses_rfp=True, uses_dc=True)
+    h = H(state="MAIN", uses_rfp=True, uses_dc=True, dc_on=True)
     out = h.feed("tick", 0, {"rfp.itl_open": True}, q={"dc": "fail"}, ages={"dc": 20.0})
     assert out == ["S30", "S49"]                               # 같은 등급은 표 순서
     assert h.e.run_reason == "DC_COMM_LOST"

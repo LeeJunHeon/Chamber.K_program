@@ -11,6 +11,10 @@ OFF 확인(S29): Sequence — OUTP OFF → 0.5 s → OUTP? 최대 DC_OFF_VERIFY_
   (v1 _mark_off_unconfirmed, DCpower.py:356-359). OFF 는 늦추지 않는다(안전이 먼저). OFF 를 쓴 뒤 질의 금지 시간의 측정은
   suppressed(실패·두절 판정에 넣지 않음).
   출력 켜기 시퀀스는 tick 을 주면 그 tick 의 측정 뒤에 시작한다.
+  OFF 미확인(켠 적 있음)이면 DC_OFF_RETRY_START_SEC 뒤 다시, 실패마다 2배·최대 COMM_OUTAGE_LOG_SEC(v1 DCpower.py:269-270·
+  366-379). 그 사이 DC 를 다시 켰으면(공정이 출력 주인) 하지 않는다.
+출력 켜기(v1 _initialize_power_supply, DCpower.py:678-687·829-833): *RST → *CLS → APPLy → OUTP ON 을 120 ms 간격으로 보내고
+  확인 없이 제어 루프 시작(on_on). 그 뒤 OUTP? 는 기록만(재시도 포함, 실패해도 시작은 성공) — 출력이 정말 안 나오면 S31A 가 중단.
 연결 때(매뉴얼 순서): *IDN? → SYST:ERR? 를 +0 까지(최대 10, 전부 이벤트) → OUTP?(dc.out 초기값) → FACT:LAST-STA?(읽기만 —
   FULLY 면 DC_LAST_STATE_FULLY) → VOLT:OVP:TRIP?·CURR:OCP:TRIP?(트립이면 DC_PROTECTION_TRIPPED). 쓰기 허용(prod·sim)이고
   DC_SET_PROTECTION 이면 VOLT:OVP·CURR:OCP 를 쓰고 되읽기(기본 끔 — bench 확인 뒤 켬).
@@ -30,6 +34,7 @@ BENCH_QUERIES = frozenset({"*IDN?", "*SN?", "SYST:VERS?", "OUTP?", "KEYL?", "APP
                            "FACT:OVP?", "FACT:OCP?", "FACT:ADC?", "MEAS:ALL?", "MEAS:VOLT?", "MEAS:CURR?", "SYST:ERR?"})
 # 매뉴얼 질의 28개 [DC p.86-98] — 통신층 가드(cmd_guard.DC_BENCH)와 같은 목록(시험이 확인)
 CURR_WRITE_DELAY_S = 0.1     # tick 안에서 MEAS:ALL? 뒤 CURR 쓰기까지(사용자 결정 2026-10-15)
+START_GAP_S = 0.12           # v1 _send 의 msleep(120) — 시작 명령 사이(DCpower.py:829-833)
 OFF_STEP_TIMEOUT_S = 1.5     # OFF 확인 질의 하나의 한도(v1 OUTP? 1.5 s)
 
 
@@ -68,6 +73,10 @@ class DcDriver:
         self.meas_listeners: list = []            # (값, 읽기 시작 시각) — 정전류 제어
         self.out_at_connect: Optional[bool] = None   # 연결 때 OUTP? 값
         self.maybe_on = False                        # 출력이 켜졌을 수 있다(v1 _output_maybe_on) — OFF 확인되면 거짓
+        self.running = False                         # 출력을 켰다(start_output) — OFF 요청까지(v1 _is_running)
+        self.off_retry_s: Optional[float] = None     # OFF 미확인 에피소드의 다음 재시도 간격(없으면 None)
+        self._off_retry_queued = False
+        self._off_unconfirmed_since: Optional[float] = None
         self.i_set: Optional[float] = None
         self.out: Optional[bool] = None
         self.set_w: Optional[float] = None
@@ -164,14 +173,16 @@ class DcDriver:
         nb = (tick.t_mono + CURR_WRITE_DELAY_S) if tick is not None else not_before
 
         def fn(s):
-            self._write(s, f"CURR {a:.4f}")
+            self._write(s, dc_curr_cmd(a))
             self.i_set = a
         self.worker.submit(Request("write", fn, deadline=(nb or self.clock.monotonic()) + 0.8, on_done=on_done,
                                    name="dc:CURR", not_before=nb, confirms_link=False))
 
     def start_output(self, v_limit: float, i_initial: float,
-                     on_done: Optional[Callable[[str, Optional[str], list], None]] = None, tick=None) -> None:
-        """*RST → *CLS → APPL v,i → OUTP ON → OUTP? 확인(v1 _initialize_power_supply).
+                     on_done: Optional[Callable[[str, Optional[str], list], None]] = None, tick=None,
+                     on_on: Optional[Callable[[], None]] = None) -> None:
+        """*RST → *CLS → APPLy v,i → OUTP ON(120 ms 간격, v1 _initialize_power_supply) → on_on(제어 루프 시작) →
+        OUTP? 기록만(재시도 DC_OFF_VERIFY_TRIES — 실패해도 시작은 성공).
         tick 이 주어지면 그 tick 의 MEAS:ALL? 뒤(t0 + CURR_WRITE_DELAY_S)에 시작 — 쓰기가 측정을 막지 않게."""
         v = max(0.0, min(float(v_limit), self.cfg["DC_MAX_VOLTAGE"]))
         i = max(0.0, min(float(i_initial), self.cfg["DC_MAX_CURRENT"]))
@@ -183,24 +194,56 @@ class DcDriver:
             self.maybe_on = True                       # 부분 전송도 켜졌을 수 있다 — 보내기 전에(v1 DCpower.py:684)
             self._write(s, "OUTP ON")
             self.out, self.i_set = True, i
+            if on_on:
+                on_on()                                # v1: 확인 없이 제어 루프 시작(438-440)
 
-        def verify(s):
-            if self._query(s, "OUTP?") != "1":
-                raise DcError("OUTP ON 뒤 OUTP? 가 1 이 아님")
-            return SEQ_DONE
+        tries = int(self.cfg["DC_OFF_VERIFY_TRIES"])
+
+        def check(k):
+            def fn(s):
+                try:
+                    a = self._query(s, "OUTP?")
+                except Cancelled:
+                    raise
+                except Exception as e:
+                    a = f"무응답({type(e).__name__})"
+                if a == "1" or k >= tries:
+                    self._emit("out_check", f"OUTP ON 뒤 OUTP? = {a} ({k}회째) — 기록만")
+                    return SEQ_DONE
+            return fn
+        self.running = True
         self.worker.submit_sequence(Sequence("dc:start", [("*RST", w("*RST")), ("*CLS", w("*CLS")),
-                                                          ("APPL", w(f"APPL {v:.2f},{i:.4f}")), ("ON", on),
-                                                          ("verify", verify)],
-                                             gap_s=0.05, step_timeout_s=OFF_STEP_TIMEOUT_S, on_done=on_done,
+                                                          ("APPLy", w(dc_appl_cmd(v, i))), ("ON", on)]
+                                             + [(f"OUTP? {k}", check(k)) for k in range(1, tries + 1)],
+                                             gap_s=START_GAP_S, step_timeout_s=OFF_STEP_TIMEOUT_S, on_done=on_done,
                                              confirms_link=False,
                                              start_after=(tick.t_mono + CURR_WRITE_DELAY_S) if tick else None))
+
+    def _schedule_off_retry(self) -> None:
+        """OFF 미확인 재시도 — 첫 간격 DC_OFF_RETRY_START_SEC, 실패마다 2배, 최대 COMM_OUTAGE_LOG_SEC(v1 DCpower.py:366-379)."""
+        if self._off_retry_queued:
+            return
+        cap = float(self.cfg["COMM_OUTAGE_LOG_SEC"])
+        start = float(self.cfg["DC_OFF_RETRY_START_SEC"])
+        self.off_retry_s = start if self.off_retry_s is None else min(cap, self.off_retry_s * 2.0)
+        self._off_retry_queued = True
+
+        def fire(_res) -> None:
+            self._off_retry_queued = False
+            if self.running or not self.maybe_on:
+                return                                     # 다시 켰거나(공정이 주인) 이미 꺼짐 확인 — 하지 않는다
+            self.output_off_confirmed(where="OFF 재시도")
+        self.worker.submit(Request("write", lambda s: None, name="dc:OFF 재시도 대기", on_done=fire,
+                                   not_before=self.clock.monotonic() + self.off_retry_s, confirms_link=False))
 
     def _suppress_after_off(self) -> None:
         """OFF 를 쓴 뒤 질의 금지 시간 동안의 측정은 실패가 아니라 suppressed — 연속 실패·두절 판정에 넣지 않는다."""
         self.worker.suppress(self._last_write + self.gap_s + 0.1, "DC OFF 확인 중")
 
-    def output_off_confirmed(self, on_done: Optional[Callable[[str, Optional[str], list], None]] = None) -> None:
+    def output_off_confirmed(self, on_done: Optional[Callable[[str, Optional[str], list], None]] = None,
+                             where: str = "OFF") -> None:
         tries = self.cfg["DC_OFF_VERIFY_TRIES"]
+        self.running = False
         answers = []
 
         def off(s):
@@ -219,7 +262,9 @@ class DcDriver:
                 answers.append(a)
                 if a == "0":
                     self.maybe_on = False
-                    self._emit("off_confirmed", f"OUTP?=0 ({k}회째)")
+                    since, self._off_unconfirmed_since, self.off_retry_s = self._off_unconfirmed_since, None, None
+                    self._emit("off_confirmed", f"OUTP?=0 ({k}회째, {where})"
+                               + (f" — 미확인 {self.clock.monotonic() - since:.0f} s 뒤" if since is not None else ""))
                     return SEQ_DONE
                 if k >= tries:
                     raise DcOffUnconfirmed("OUTP? 응답 " + "/".join(answers))
@@ -233,11 +278,25 @@ class DcDriver:
                     self._emit("off_unverified", "DC OFF 생략/미확인(" + "/".join(answers) + ") — 이번 실행에서 출력을 켠 적 없음")
                     reason = None
                 else:
-                    self._emit("off_unconfirmed", "DC 출력 OFF 확인 못 함: " + "/".join(answers), "DC_OFF_UNCONFIRMED")
+                    first = self._off_unconfirmed_since is None
+                    if first:
+                        self._off_unconfirmed_since = self.clock.monotonic()
+                        self._emit("off_unconfirmed", f"DC 출력 OFF 확인 못 함({where}): " + "/".join(answers)
+                                   + " — 장비 전면 확인, 통신되면 자동 재시도", "DC_OFF_UNCONFIRMED")
                     reason = "DC_OFF_UNCONFIRMED"
+                    self._schedule_off_retry()
             if on_done:
                 on_done(name, reason, results)
 
         steps = [("OUTP OFF", off)] + [(f"OUTP? {k}", verify(k)) for k in range(1, tries + 1)]
         self.worker.submit_sequence(Sequence("dc:off", steps, gap_s=self.gap_s, step_timeout_s=OFF_STEP_TIMEOUT_S,
                                              on_done=done, confirms_link=False))
+
+
+# ───────── 쓰기 명령 글자(v1 device/DCpower.py 와 같게) ─────────
+def dc_appl_cmd(v: float, i: float) -> str:
+    return f"APPL {v:.2f},{i:.4f}"
+
+
+def dc_curr_cmd(i: float) -> str:
+    return f"CURR {i:.4f}"

@@ -50,12 +50,17 @@ class DcControl:
             self.stall_since, self.reached, self.started_ok = None, False, None
             self.state = self.RAMPING_UP
         self.dc.set_w = self.target
-        self.dc.start_output(float(c["DC_MAX_VOLTAGE"]), self.current, on_done=self._started, tick=tick)
+        self.dc.start_output(float(c["DC_MAX_VOLTAGE"]), self.current, on_done=self._started, tick=tick,
+                             on_on=self._output_on)
         self._emit("info", f"DC 프로세스 시작 (목표 {self.target:.1f} W)")
 
+    def _output_on(self) -> None:
+        self.started_ok = True                          # v1: OUTP ON 을 보내면 확인 없이 제어 루프 시작(DCpower.py:438-440)
+
     def _started(self, name, reason, results) -> None:
-        self.started_ok = reason is None
         if reason:
+            if self.started_ok is not True:
+                self.started_ok = False
             self._emit("error", f"DC 시작 실패: {reason}")
 
     def stop(self) -> None:

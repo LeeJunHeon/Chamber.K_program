@@ -90,6 +90,7 @@ class ProcessEngine:
         self.filament_by_process = False
         self.dc_on = self.rf_on = self.rfp_on = False     # 이번 행에서 출력 명령을 냈다(v1 is_dc_on·is_rf_on·is_rfpulse_on)
         self.comm_aborted = False
+        self.dc_comm_aborted = self.rfp_comm_aborted = False   # 두절로 중단 — 링크 복구 때 OFF 다시(S30·S34C 해제)
         self._next_tick_mono = 0.0
         self._settle_pending = False
         self.power: Dict[str, Any] = {}

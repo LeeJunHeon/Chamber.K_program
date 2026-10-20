@@ -101,6 +101,8 @@ CHK_REASONS: tuple = (
     Reason("RFP_RESIDUAL_OUTPUT", "시작 때 RF Pulse 출력이 켜져 있음", "info"),
     Reason("GAS_RESIDUAL_FLOW", "시작 때 가스가 흐르고 있음 — 끄지 않음(확인)", "info"),
     Reason("PLC_RECONNECTED", "PLC 끊김 알림 뒤 링크 복구", "info"),
+    Reason("DC_RECOVERED_SAFE", "DC 통신 복구 뒤 출력 OFF 다시(공정 없을 때)", "info"),
+    Reason("RFP_RECOVERED_SAFE", "RF Pulse 통신 복구 뒤 RF OFF 다시(공정 없을 때)", "info"),
     Reason("MV_INTERLOCK_BLIP", "MV 인터록이 지속 시간 안에 다시 참(기록만)", "info"),
     Reason("COMM_LONG_OUTAGE", "장비 장기 두절", "info"),
     Reason("LINK_STALE", "장비 값이 오래됨 — 화면 잠금", "info"),

@@ -45,8 +45,8 @@ IMPLEMENTED_IN: Dict[str, str] = {
     "S23": "next:ProcessEngine(state:HEATER_HOLD_WAIT)", "S24": "next:HeaterEngine(포화 — 앞창·폴백)",
     "S25": "next:HeaterEngine(감속 접근)", "S26": "engine(event heater_run_falling)",
     "S27": "engine(event heater_gas_failed)", "S28": "locks", "S29": "drivers/dc.py output_off_confirmed",
-    "S30": "engine", "S31A": "engine", "S31B": "engine", "S31C": "engine", "S32": "engine", "S33A": "engine",
-    "S33B": "engine", "S34A": "engine", "S34B": "engine", "S34C": "engine", "S34D": "engine(event rfp_start_failed)",
+    "S30": "engine + ChkSafety.recover_after_comm_loss(복구 때 DC_SAFE_OFF)", "S31A": "engine", "S31B": "engine", "S31C": "engine", "S32": "engine", "S33A": "engine",
+    "S33B": "engine", "S34A": "engine", "S34B": "engine", "S34C": "engine + ChkSafety.recover_after_comm_loss(복구 때 RFP_SAFE_OFF)", "S34D": "engine(event rfp_start_failed)",
     "S35": "recipe.check_process_row + drivers/rfpulse.py 되읽기", "S36": "next:ProcessEngine(state:POWER_WAIT)",
     "S37": "next:ProcessEngine(state:PRESSURE_SP1)", "S38A": "engine", "S38B": "engine",
     "S39A": "next:ProcessEngine(state:BASE_WAIT)", "S39B": "engine", "S39C": "next:ProcessEngine(state:BASE_WAIT)",
@@ -118,6 +118,8 @@ class SimpleProcess:
     sp1_mtorr: Optional[float] = None
     filament_by_process: bool = False
     comm_aborted: bool = False
+    dc_comm_aborted: bool = False
+    rfp_comm_aborted: bool = False
     heater_gas_state: str = "IDLE"
     log: List[tuple] = field(default_factory=list)
 
@@ -225,6 +227,23 @@ def _s10_acts(v, ctx):
     return [Act("RF_SAFE_OFF"), Act("HEATER_FORCE_OFF"), Act("GAS_VALVES_CLOSE"), _note("warn", "PLC_RECOVERED_SAFE")]
 
 
+def _s30_acts(v, ctx):
+    ctx.dc_comm_aborted = True                     # 링크가 돌아오면 공정이 없을 때 DC_SAFE_OFF 다시(v1 main.py:1491-1497)
+    return [Act("DC_SAFE_OFF"), _abort("DC_COMM_LOST")]
+
+
+def _s34c_acts(v, ctx):
+    ctx.rfp_comm_aborted = True                    # v1 main.py:1511-1517
+    return [Act("RFP_SAFE_OFF"), _abort("RFP_COMM_LOST")]
+
+
+def _dev_ge(set_v, actual, ratio):
+    """RF Pulse 순방향 이탈 — v1 RFpulse.py:1245 diff >= tol(경계 포함)."""
+    if set_v is None or actual is None:
+        return None
+    return abs(actual - set_v) >= set_v * ratio
+
+
 def _s6_acts(v, ctx):
     ctx.comm_aborted = True
     return [_abort("PLC_COMM_LOST"), Act("BLACKBOX_DUMP", {"tag": "plc_comm_lost"})]
@@ -275,8 +294,9 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
           lambda v, c: None if v.q("heater") not in FRESH else bool(v.get("heater.tc_err") or v.get("heater.pv") is None),
           _fixed(Act("HEATER_RECIPE_ABORT", {"reason": "HEATER_TC_BAD"})), _p("HEATER_TC_BAD_LIMIT_SEC"),
           applies=lambda c: c.heater_recipe_running, block="heater"),
-        L("S30", "abort", "tick", _age_ge(C, "dc", "DC_COMM_LOSS_ABORT_SEC"),
-          _fixed(Act("DC_SAFE_OFF"), _abort("DC_COMM_LOST")), states=ACT, applies=lambda c: c.uses_dc),
+        # 판정 구간(v1 DCpower.py:242-243·454-458): DC 를 켠 뒤(POWER_WAIT 에서 출력 명령을 낸 뒤)만
+        L("S30", "abort", "tick", _age_ge(C, "dc", "DC_COMM_LOSS_ABORT_SEC"), _s30_acts, states=ACT,
+          applies=lambda c: c.uses_dc and bool(getattr(c, "dc_on", False))),
         L("S31A", "abort", "tick",
           lambda v, c: None if _all(v.get("dc.i_set"), v.get("dc.p")) is None else
           (v.get("dc.i_set") >= C["DC_FAIL_ISET_A"] and v.get("dc.p") <= C["DC_FAIL_POWER_W"]),
@@ -291,23 +311,26 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
                             C["DC_TOLERANCE_W"], C["DC_POWER_ERROR_RATIO"]),
           _fixed(_abort("DC_POWER_DEVIATION")), _p("DC_POWER_ERROR_SEC"), states=frozenset({"SHUTTER_DELAY", "MAIN"}),
           applies=lambda c: c.uses_dc, block="dc"),
+        # RF(아날로그) 이상 중단은 v1 처럼 정지 순서의 램프다운(8 카운트/0.5 s) 뒤 OFF — 즉시 0 은 ALL STOP 만
+        # (v1 RFpower.py:100-102·124-131·158-167·210-214). 반사파는 RF 를 켠 뒤만(RFpower.py:79-81),
+        # 반사파 대기 중에는 무출력·이탈 판정을 멈춘다(RFpower.py:91-104).
         L("S32", "abort", "tick",
           lambda v, c: None if v.get("rf.ref_w") is None else v.get("rf.ref_w") >= C["RF_REFP_ABORT_THRESHOLD"],
-          _fixed(Act("RF_SAFE_OFF"), _abort("RF_REFLECTED_HIGH")), _p("RF_REFP_WAIT_SEC"), states=ACT,
-          applies=lambda c: c.uses_rf, block="rf"),
+          _fixed(_abort("RF_REFLECTED_HIGH")), _p("RF_REFP_WAIT_SEC"), states=ACT,
+          applies=lambda c: c.uses_rf and bool(getattr(c, "rf_on", False)), block="rf"),
         L("S33A", "abort", "tick",
           lambda v, c: None if _all(v.get("rf.dac"), v.get("rf.fwd_w")) is None else
           (v.get("rf.dac") >= C["RF_FAIL_DAC_COUNTS"] and v.get("rf.fwd_w") <= C["RF_FAIL_FWD_W"]),
-          _fixed(Act("RF_SAFE_OFF"), _abort("RF_NO_OUTPUT")), _p("RF_FAIL_SEC"), states=frozenset({"POWER_WAIT"}),
-          applies=lambda c: c.uses_rf, block="rf"),
+          _fixed(_abort("RF_NO_OUTPUT")), _p("RF_FAIL_SEC"), states=frozenset({"POWER_WAIT"}),
+          applies=lambda c: c.uses_rf and not getattr(c, "rf_ref_waiting", False), block="rf"),
         L("S33B", "abort", "tick",
           lambda v, c: _dev(c.rf_set_w if c.rf_set_w is not None else v.get("rf.set_w"), v.get("rf.fwd_w"),
                             C["RF_TOLERANCE_W"], C["RF_POWER_ERROR_RATIO"]),
-          _fixed(Act("RF_SAFE_OFF"), _abort("RF_POWER_DEVIATION")), _p("RF_POWER_ERROR_SEC"), states=ACT,
-          applies=lambda c: c.uses_rf and c.rf_holding, block="rf"),
+          _fixed(_abort("RF_POWER_DEVIATION")), _p("RF_POWER_ERROR_SEC"), states=ACT,
+          applies=lambda c: c.uses_rf and c.rf_holding and not getattr(c, "rf_ref_waiting", False), block="rf"),
         L("S34A", "abort", "tick",
-          lambda v, c: None if v.get("rfp.out_on") is None else (bool(v.get("rfp.out_on")) and _dev(
-              c.rfp_set_w if c.rfp_set_w is not None else v.get("rfp.set_w"), v.get("rfp.fwd_w"), 0.0,
+          lambda v, c: None if v.get("rfp.out_on") is None else (bool(v.get("rfp.out_on")) and _dev_ge(
+              c.rfp_set_w if c.rfp_set_w is not None else v.get("rfp.set_w"), v.get("rfp.fwd_w"),
               C["RFPULSE_FORP_TOLERANCE_PERCENT"] / 100.0) is True),
           _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_FORWARD_DEVIATION")), _p("RFPULSE_FORP_SEC"), states=ACT,
           applies=lambda c: c.uses_rfp, block="rfp"),
@@ -315,8 +338,9 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
           lambda v, c: None if v.get("rfp.ref_w") is None else v.get("rfp.ref_w") >= C["RFPULSE_REFP_LIMIT_WATTS"],
           _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_REFLECTED_HIGH")), _p("RFPULSE_REFP_SEC"), states=ACT,
           applies=lambda c: c.uses_rfp, block="rfp"),
-        L("S34C", "abort", "tick", _age_ge(C, "rfp", "RFPULSE_COMM_LOSS_ABORT_SEC"),
-          _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_COMM_LOST")), states=ACT, applies=lambda c: c.uses_rfp),
+        # 판정 구간(v1 RFpulse.py:984·1150-1161): RF Pulse START 를 낸 뒤만
+        L("S34C", "abort", "tick", _age_ge(C, "rfp", "RFPULSE_COMM_LOSS_ABORT_SEC"), _s34c_acts, states=ACT,
+          applies=lambda c: c.uses_rfp and bool(getattr(c, "rfp_on", False))),
         L("S38A", "notify", "tick", lambda v, c: _flow_dev(C, v, c), _fixed(_note("warn", "FLOW_DEVIATION")), _p("FLOW_ERROR_SEC"),
           states=frozenset({"MAIN"}), block="mfc"),
         L("S38B", "notify", "tick", lambda v, c: _pressure_dev(C, v, c), _fixed(_note("warn", "PRESSURE_DEVIATION")), _p("MFC_PRESSURE_WARN_SEC"),
@@ -389,6 +413,7 @@ class ChkSafety:
         v = View.from_row(row)
         self.first_read(v)
         self.engine.evaluate("tick", v.t, v, self.process)
+        self.recover_after_comm_loss(v)
         stale = self.cfg["HEATER_STALE_SEC"]
         self.locks = {b for b in DEVICE_BLOCKS
                       if v.q(b) not in ("ok", "late", "suppressed", "off") and (v.age(b) is None or v.age(b) >= stale)}
@@ -411,6 +436,24 @@ class ChkSafety:
             if r.where == name:
                 self.engine.reset_rule(r.id)
         return fired
+
+    # ── S30·S34C 해제 동작 — 두절로 중단한 장비의 링크가 돌아오면 ──
+    def recover_after_comm_loss(self, v: View) -> None:
+        """DC·RF Pulse 통신 두절로 공정을 중단한 뒤 링크가 돌아오면: 공정이 없으면 OFF(확인형)를 한 번 더, 공정 중이면 생략
+        (v1 main.py:1488-1517 _on_dc_recovered·_on_rfpulse_recovered)."""
+        p = self.process
+        for blk, flag, act, code in (("dc", "dc_comm_aborted", "DC_SAFE_OFF", "DC_RECOVERED_SAFE"),
+                                     ("rfp", "rfp_comm_aborted", "RFP_SAFE_OFF", "RFP_RECOVERED_SAFE")):
+            if not getattr(p, flag, False) or v.q(blk) not in FRESH:
+                continue
+            setattr(p, flag, False)
+            rule = "S30" if blk == "dc" else "S34C"
+            if p.active or p.state == "STOPPING":
+                self.notifications.append({"level": "info", "code": code, "detail": "공정 진행 중이라 안전 상태 재적용 생략"})
+                continue
+            self.notifications.append({"level": "info", "code": code, "detail": f"통신 복구 → {act}"})
+            self.engine._emit(SafetyEvent("released", rule, code, f"통신 복구 → {act}", "info", self.clock.wall()))
+            self.engine._do(Act(act), rule, self.clock.wall())
 
     # ── S51 시작 때 남은 출력 정리 ──
     def _s51(self, level: str, code: str, detail: str, act: Optional[str] = None, dev: str = "") -> None:
