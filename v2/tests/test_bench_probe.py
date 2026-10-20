@@ -117,8 +117,8 @@ def test_normal_run_reads_only_and_writes_summary(tmp_path):
     assert any(n.endswith(".csv") for n in names)
     s = (folder / "summary.txt").read_text(encoding="utf-8")
     assert "events.jsonl" in names and "inventory.json" in names
-    for want in ("[dc] 28개", "[mfc] 46개", "[ig] 29개", "[확인] MFC 압력 레인지 03(1) · 단위 0(Torr) → FS 1 Torr",
-                 "[확인] MFC Remote(R37 X=1)", "[확인] DC LAST-STA = DISABLE", "정격 후보 EX 600-1", "[확인] IG 가스 계수 1.00 · 감도 10.0",
+    for want in ("[dc] 28개", "[mfc] 46개", "[ig] 29개", "[확인] MFC 압력 레인지 11(1000) · 단위 1(mTorr) → FS 1 Torr",
+                 "[참고] MFC R37 'M006' X=0", "[확인] DC LAST-STA = DISABLE", "정격 후보 EX 600-2", "[확인] IG 가스 계수 1.00 · 감도 10.0",
                  "명령으로 확인할 수 없는 것", "대기 중 값 범위", "연결 기록", "D00040(U02.03)",
                  "[확인] DC 형명·정격", "[확인] MFC 압력 레인지·작업 압력 상한"):
         assert want in s, want
@@ -145,7 +145,8 @@ def test_disabled_and_skipped_devices_are_not_opened(tmp_path):
 def test_inventory_mismatches_are_warned_not_changed(tmp_path):
     b = Bench()
     b.sims["COM10"].info[33] = "E06"                              # 10 Torr 레인지
-    b.sims["COM10"].info[37] = "M000"                             # Local
+    b.sims["COM10"].info[34] = "F00"                              # Torr 단위(시뮬레이터 기본은 10/20 bench 의 F01 mTorr)
+    b.sims["COM10"].info[37] = "M000"                             # X=0 — 정보로만(10/20 bench M006)
     b.sims["COM11"].last_sta = "FUL"
     b.sims["COM11"].info["FACT:ADC?"] = "fast"                    # 매뉴얼에 없는 형식
     b.sims["COM11"].info["VOLT:OVP:TRIP?"] = "1"
@@ -153,7 +154,7 @@ def test_inventory_mismatches_are_warned_not_changed(tmp_path):
     code, out = b.run(tmp_path)
     assert code == 0 and b.writes() == []
     for want in ("!!! MFC 압력 레인지 06(10) · 단위 0(Torr) → FS 10 Torr ≠ MFC_PRESSURE_FS_TORR",
-                 "!!! MFC Local(R37 X=0)", "!!! DC LAST-STA = FULLY", "!!! DC OVP 트립 중", "'fast'", "형식 다름",
+                 "[참고] MFC R37 'M000' X=0", "!!! DC LAST-STA = FULLY", "!!! DC OVP 트립 중", "'fast'", "형식 다름",
                  "SYST:ERR? 1", 'DC SYST:ERR?(연결 때): -124,"Undefined header"', 'DC SYST:ERR?(연결 때): -222,"Out of data"',
                  "[미확인] MFC 압력 레인지·작업 압력 상한"):
         assert want in out, want

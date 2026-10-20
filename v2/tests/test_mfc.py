@@ -150,15 +150,17 @@ def test_bench_no_writes():
 
 
 def test_connect_scale_check_matches_and_mismatches():
-    """연결 때 R33·R34·R74·R75·R37 대조 [MFC p.83-88] — 다르면 MFC_SCALE_MISMATCH, 못 읽으면 경고만. 값은 바꾸지 않는다."""
+    """연결 때 R33·R34·R70·R71·R74·R75 대조 [MFC p.83-88] — 다르면 MFC_SCALE_MISMATCH, 못 읽으면 경고만. 값은 바꾸지 않는다.
+    R37 은 정보로만(10/20 bench 'M006' — X=0 인데 v1 은 원격 제어가 됐다)."""
     r = Rig()
     ev = [e for e in r.events if e.kind == "scale"]
     assert r.d.scale_mismatch is None and ev and ev[0].reason is None and "1 Torr" in ev[0].detail
     r.done()
     sim = MfcSim()
-    sim.info[33], sim.info[37] = "E06", "M000"                   # 10 Torr 레인지, Local
+    sim.info[33], sim.info[34], sim.info[37] = "E06", "F00", "M000"     # 10 Torr 레인지(Torr 단위), R37 X=0
     r = Rig(sim=sim)
-    assert "10 Torr" in r.d.scale_mismatch and "Local" in r.d.scale_mismatch
+    assert "10 Torr" in r.d.scale_mismatch and "Local" not in r.d.scale_mismatch
+    assert [e for e in r.events if e.kind == "remote_state"]       # R37 은 정보 이벤트만
     assert [e.reason for e in r.events if e.kind == "scale"] == ["MFC_SCALE_MISMATCH"]
     assert r.cfg["MFC_PRESSURE_FS_TORR"] == 1.0                    # 설정값은 그대로
     r.done()

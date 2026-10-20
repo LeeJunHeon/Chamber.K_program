@@ -171,8 +171,9 @@ class MfcDriver:
                        "실제 공정 전에 사용자 확인 필요", "MFC_FS_NOT_100")
 
     def _check_scale(self, session) -> None:
-        """R33·R34(압력 레인지·단위 → FS)·R74·R75(유량 단위)·R37(Remote) 를 읽어 설정과 대조.
-        확실히 다르면 MFC_SCALE_MISMATCH(공정 시작 거부), 못 읽으면 경고만(설정값 사용). 값은 자동으로 바꾸지 않는다."""
+        """R33·R34(압력 레인지·단위 → FS)·R70·R71(유량 FS)·R74·R75(유량 단위)를 설정과 대조 — 확실히 다르면
+        MFC_SCALE_MISMATCH(공정 시작 거부), 못 읽으면 경고만(설정값 사용). 값은 자동으로 바꾸지 않는다.
+        R37(MXYZ, X=Remote)은 정보로만: 10/20 bench 에서 'M006'(X=0, 매뉴얼상 Local)인데 v1 은 실제로 원격 제어가 됐다."""
         from v2.chk import inventory as INV
         raw = {}
         for n in (33, 34, 74, 75, 37):
@@ -194,11 +195,13 @@ class MfcDriver:
                 unknown.append(f"ch{ch} 단위(R{n} {raw[n]!r})")
             elif u != 1:
                 bad.append(f"ch{ch} 단위 {INV.MFC_FLOW_UNIT.get(u, u)} ≠ SCCM")
+        if self.fs_source == "R70/R71":
+            for ch, v in self.fs.items():
+                if abs(v - 100.0) > 1e-9:
+                    bad.append(f"ch{ch} 유량 FS {v:g} ≠ 100(v1 레시피 유량 = %FS)")
         st = (raw[37] or "").strip()
-        if not (len(st) == 4 and st[0] == "M" and st[1:].isdigit()):
-            unknown.append(f"Remote(R37 {raw[37]!r})")
-        elif st[1] != "1":
-            bad.append("Local(R37 X=0) — 원격 제어가 되지 않는다")
+        self._emit("remote_state", f"R37 {st!r}" + (" — X=0(매뉴얼상 Local)이지만 v1 은 원격 제어가 됨(10/20 bench) — 정보만"
+                                                    if len(st) == 4 and st[:2] == "M0" else " — 정보만"))
         self.scale_raw = raw
         self.scale_mismatch = "; ".join(bad) or None
         if bad:
@@ -206,7 +209,7 @@ class MfcDriver:
         if unknown:
             self._emit("scale", "MFC 설정을 못 읽음(설정값 사용): " + "; ".join(unknown), "MFC_SCALE_UNREAD")
         if not bad and not unknown:
-            self._emit("scale", f"MFC 압력 FS {sc[2]:g} Torr · 단위 SCCM · Remote 확인")
+            self._emit("scale", f"MFC 압력 FS {sc[2]:g} Torr · 유량 FS 100·단위 SCCM 확인")
 
     # ───────── 읽기 ─────────
     def source_read(self, session, seq: int) -> Dict[str, Any]:
@@ -433,14 +436,20 @@ class MfcDriver:
         self._op(cmd, gen(), on_done)
 
 
-# ───────── 쓰기 명령 글자 ─────────
+# ───────── 쓰기 명령 글자(v1 lib/config.py:811-834 MFC_COMMANDS 와 같은 바이트) ─────────
 def flow_cmd(ch: int, sccm: float, fs: float) -> tuple:
-    """Q{ch} 값 — (명령, 되읽기 비교 %FS)."""
-    pct = round(float(sccm) / float(fs) * 100.0, 1)
-    return f"Q{ch} {pct:.1f}", pct
+    """Q{ch} 값 — (명령, 되읽기 비교 %FS). v1 은 설정값을 반올림 없이 그대로 보낸다(f"Q{channel} {value}", value 는 float,
+    device/MFC.py:609-614) — 장비는 소수 둘째 자리까지 저장(10/20 bench R65 'Q5+014.00'). FS 가 100 이면 %FS = sccm 이라
+    v1 과 같은 글자, FS 가 100 이 아니면 공정 시작이 거부되므로(MFC_SCALE_MISMATCH) 환산값은 소수 둘째 자리로만."""
+    if abs(float(fs) - 100.0) < 1e-9:
+        v = float(sccm)
+    else:
+        v = round(float(sccm) / float(fs) * 100.0, 2)
+    return f"Q{ch} {v}", v
 
 
 def sp_cmd(n: int, mtorr: float, fs_torr: float) -> tuple:
-    """S{n} 값 — (명령, 되읽기 비교 %FS)."""
-    hw = round(float(mtorr) / 1000.0 / float(fs_torr) * 100.0, 2)
+    """S{n} 값 — (명령, 되읽기 비교 %FS). v1: hw = UI × MFC_PRESSURE_SCALE(0.1), f"S{n} {hw:.2f}"(device/MFC.py:551·644·663·686).
+    FS 1 Torr 면 100 / (1 × 1000) = 0.1 — 같은 곱셈이라 같은 바이트."""
+    hw = float(mtorr) * (100.0 / (float(fs_torr) * 1000.0))
     return f"S{n} {hw:.2f}", hw

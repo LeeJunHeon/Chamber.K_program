@@ -51,7 +51,7 @@ DC_FORMAT = {
     "*IDN?": (r"[^,]+,[^,]+,[^,]+", "제조사,모델,버전(시스템-앞면-SCPI) [p.97]"),
     "*SN?": (r"\S+", "일련번호 [p.97]"), "SYST:VERS?": (r"\d{4}\.\d+", "SCPI 버전 [p.96]"),
     "OUTP?": (r"[01]", "출력 0 OFF / 1 ON [p.53]"), "KEYL?": (r"\s*[01]\s*", "앞면 잠금 0/1 [p.97]"),
-    "APPL?": (rf"{NUM},{NUM}", "전압,전류 설정 [p.88]"),
+    "APPL?": (rf'"?{NUM},{NUM}"?', "전압,전류 설정 [p.88] — 10/20 bench 응답은 따옴표가 붙음('\"600.0000,0.1230\"')"),
     "VOLT?": (NUM, "전압 설정 V [p.88]"), "CURR?": (NUM, "전류 설정 A [p.90]"),
     "VOLT:STEP?": (NUM, "전압 STEP V [p.88]"), "CURR:STEP?": (NUM, "전류 STEP A [p.90]"),
     "VOLT:OVP?": (NUM, "OVP 레벨 V [p.89]"), "CURR:OCP?": (NUM, "OCP 레벨 A [p.90]"),
@@ -66,7 +66,7 @@ DC_FORMAT = {
     "MEAS:CURR?": (NUM, "측정 A [p.92]"), "SYST:ERR?": (r"[+\-]?\d+,\".*\"", "오류 기록(최근 것부터, 읽으면 지워짐) [p.54, p.96]"),
 }
 # 사양표 [DC p.104-105] 는 PDF 에 그림으로만 있어 텍스트로 대조하지 못한다 — 사용자가 적은 한 줄만(2026-10-16).
-DC_SPEC = {"EX 600-1": (630.0, 1.1)}
+DC_SPEC = {"EX 600-1": (630.0, 1.1), "EX 600-2": (630.0, 2.1)}   # 10/20 bench OVL 630 V·OCL 2.1 A → EX 600-2
 
 
 def dc_interpret(inv: Inventory) -> None:
@@ -189,7 +189,7 @@ def mfc_interpret(inv: Inventory, cfg: Dict[str, Any]) -> None:
     elif st.strip()[1] == "1":
         c.append("[확인] MFC Remote(R37 X=1) — 원격 제어 가능 [p.84, p.54]")
     else:
-        c.append("!!! MFC Local(R37 X=0) — 원격 제어가 되지 않는다 [p.84, p.54]")
+        c.append(f"[참고] MFC R37 {st!r} X=0(매뉴얼상 Local [p.84, p.54]) — 10/20 bench 에서도 M006 인데 v1 은 원격 제어가 됨. 정보로만")
 
 
 # ───────────── IG(934) ─────────────

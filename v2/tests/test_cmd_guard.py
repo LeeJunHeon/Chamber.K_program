@@ -31,7 +31,7 @@ def mfc(s, mode="prod"):
 def test_dc_lists():
     assert len(G.DC_BENCH) == 28 and all(dc(q, "bench") is None for q in G.DC_BENCH)
     assert dc("OUTP OFF", "bench") and dc("FLOW?", "bench") and dc("POL?", "bench")      # 바이폴라 전용 — 보내지 않음
-    for ok in ("OUTP ON", "OUTP OFF", "*RST", "*CLS", "APPL 600.00,0.0100", "CURR 0.3000", "MEAS:ALL?", "FACT:LAST-STA?"):
+    for ok in ("OUTP ON", "OUTP OFF", "*RST", "*CLS", "APPLy 600.00,0.0100", "CURR 0.3000", "MEAS:ALL?", "FACT:LAST-STA?"):
         assert dc(ok) is None, ok
     for bad, word in (("FACT:LAST-STA SAF", "FACT"), ("FACT:LOAD-DEF", "LOAD-DEF"), ("*SAV 1", "*SAV"), ("*RCL 2", "*RCL"),
                       ("CAL:VOLT MIN", "CAL"), ("KEYL ON", "KEYL"), ("SYST:BEEP", "BEEP"), ("VOLT:STEP 1", "STEP"),

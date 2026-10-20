@@ -31,7 +31,7 @@ DC_PROD_QUERIES = frozenset({"*IDN?", "SYST:ERR?", "MEAS:ALL?", "OUTP?", "FACT:L
                              "CURR:OCP:TRIP?", "VOLT:OVP?", "CURR:OCP?"})
 _NUM = r"\d+(?:\.\d+)?"
 DC_PROD_WRITES = (re.compile(r"OUTP (ON|OFF)"), re.compile(r"\*RST"), re.compile(r"\*CLS"),
-                  re.compile(rf"APPL {_NUM},{_NUM}"), re.compile(rf"CURR {_NUM}"))
+                  re.compile(rf"APPLy {_NUM},{_NUM}"), re.compile(rf"CURR {_NUM}"))   # v1 과 같은 글자(APPLy, DCpower.py:682)
 DC_PROTECTION_WRITES = (re.compile(rf"VOLT:OVP {_NUM}"), re.compile(rf"CURR:OCP {_NUM}"))   # DC_SET_PROTECTION 일 때만
 DC_FORBIDDEN = (   # (정규식, 사유) — 장비 설정 변경·메모리 저장
     (re.compile(r"FACT:[A-Z-]+ "), "FACT:* 쓰기(공장·영구 설정) [p.93-95]"),

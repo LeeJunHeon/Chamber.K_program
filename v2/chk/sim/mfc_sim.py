@@ -34,9 +34,10 @@ class MfcSim(SimDevice):
         self.fs = list(fs_sccm)
         self.set_pct = [0.0] * 4
         # 매뉴얼 표 11 [MFC p.80-88] 의 나머지 질의 응답(가정 — 실제 값은 bench 로 읽는다). R33 E03 = 1, R34 F0 = Torr → FS 1 Torr
+        # 10/20 bench 실측 형식: R33 'E11'(1000)·R34 'F01'(mTorr) → FS 1 Torr, R37 'M006'(R38 은 매뉴얼 형식 그대로 — 실물 'H1.00' 은 inventory 가 "형식 다름"으로 남긴다)
         self.info = {0: "S0+0.00", 10: "S5+0.00", 11: "P1+0.00", 12: "P2+100.00", 13: "P3+0.00", 14: "P4+100.00",
-                     23: "J1", 25: "T01", 26: "T11", 27: "T21", 28: "T31", 29: "T41", 30: "T51", 32: "N0", 33: "E03",
-                     34: "F0", 37: "M100", 38: "H3 1.00", 51: "V1"}
+                     23: "J1", 25: "T01", 26: "T11", 27: "T21", 28: "T31", 29: "T41", 30: "T51", 32: "N0", 33: "E11",
+                     34: "F01", 37: "M006", 38: "H3 1.00", 51: "V1"}
         self.info.update({40 + i: f"X{i}+0.0" for i in range(1, 6)})
         self.info.update({45 + i: f"M{i}+100" for i in range(1, 6)})
         self.on = [False] * 4
@@ -123,13 +124,13 @@ class MfcSim(SimDevice):
         if 61 <= n <= 64:
             return f"Q{n - 60}{self.flow_pct[n - 61]:+.1f}"
         if 65 <= n <= 68:
-            return f"Q{n - 60}{self.set_pct[n - 65]:+.1f}"
+            return f"Q{n - 60}{self.set_pct[n - 65]:+07.2f}"              # bench 'Q5+014.00'(소수 둘째 자리 저장)
         if n == 69:
             return "L0 " + "".join("1" if x else "0" for x in self.on)
         if n == 5:
             return f"P{self.pressure_pct():+.2f}"
         if 1 <= n <= 4:
-            return f"S{n}{self.sp[n - 1]:+.2f}"
+            return f"S{n}{self.sp[n - 1]:+07.2f}"                         # bench 'S2+000.50'
         if n == 6:
             return f"V{self.valve * 100:+.1f}"
         if n == 7:
@@ -138,13 +139,13 @@ class MfcSim(SimDevice):
         if 70 <= n <= 73:
             return f"W{n - 69}{self.fs[n - 70]:+.1f}"
         if 74 <= n <= 77:
-            return f"W{n - 69}+1"
+            return f"W{n - 69}1"                                          # bench 'W51'·'W61'(SCCM)
         return self.info.get(n)
 
     def _set(self, cmd: str) -> None:
         m = re.fullmatch(r"Q([1-4])\s+([+\-]?\d+(?:\.\d+)?)", cmd)
         if m:
-            self.set_pct[int(m.group(1)) - 1] = float(m.group(2))
+            self.set_pct[int(m.group(1)) - 1] = round(float(m.group(2)), 2)   # 장비는 소수 둘째 자리까지
             return
         m = re.fullmatch(r"L0\s*([01]{4})", cmd)
         if m:

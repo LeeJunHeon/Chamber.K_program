@@ -99,7 +99,8 @@ MFC_READ_TABLE: tuple = (
     (76, "W7", "ch3 단위 — 없음", False), (77, "W8", "ch4 단위 — 없음", False),
 )
 # DC(ODA EX) 사양 — 사양표 [DC p.104-105] 는 PDF 에 그림으로만 있다. 사용자가 적은 한 줄만(2026-10-16). 정격은 VOLT:OVL?·CURR:OCL? 기본값으로 확인
-DC_SPEC: tuple = (("EX 600-1", 630.0, 1.1, "[DC p.105] — 사용자 제공"),)
+DC_SPEC: tuple = (("EX 600-1", 630.0, 1.1, "[DC p.105] — 사용자 제공"),
+                  ("EX 600-2", 630.0, 2.1, "[DC p.105] — 10/20 bench OVL 630 V·OCL 2.1 A(기본값 = 설정 가능한 최대)와 일치"))
 
 
 # ═════════════ 1. PLC — LS XGB(형명 미확인), 내장 Modbus RTU ═════════════
@@ -118,7 +119,10 @@ PLC = Device(
         Cmd("FC5/FC6", "코일·레지스터 1개 쓰기", "에코", "minimalmodbus"),
         Cmd("FC15", "코일 여러 개 쓰기(비상 OFF)", "에코", "device/PLC.py:1416"),
     ),
-    timing_manual="매뉴얼에 없음(Cnet 은 보통 스캔 END 에서 처리 — 일반 지식). 115200 bps 1문자 87 µs",
+    timing_manual="매뉴얼에 없음(Cnet 은 보통 스캔 END 에서 처리 — 일반 지식). 115200 bps 1문자 87 µs. "
+                  "10/20 bench 응답 p50 22·p99 35 ms(600 tick 모두 ok, 놓친 tick 0). 히터 한계값 8개 = v2 기본값. "
+                  "D00016(cur_sv)은 래더가 운전 중에만 갱신(정지 중 825.1 이 남아 있었음) — 화면 단계에서 v1 처럼 정지 중에는 "
+                  "D00012 를 보인다(v1 main.py:2809-2826)",
     errors="Modbus 예외 코드 자료 없음. ADC/DAC 모듈 RDY·ERR 비트(U01.00.F/0, U02.00.x) — PLC 주소 맵.txt",
     safe_off="FC15 로 출력 코일 OFF, M00200(DAC enable)=0, D00040=0, 히터 M00040(RUN)=0",
     comm_loss="Modbus 통신 타임아웃 출력 차단 기능은 XG5000 Help 에 없음. 래더 히터 워치독만 있음: "
@@ -174,7 +178,11 @@ MFC = Device(
         Cmd("O / C / H", "밸브 열기 / 닫기 / 정지", "응답 규정 없음", "[MFC p.74]"),
         Cmd("Z1", "압력센서 영점", "응답 규정 없음", "[MFC p.75]"),
     ),
-    timing_manual="매뉴얼에 없음(응답 시간·최소 명령 간격·쓰기 ACK 모두). Interface 입력은 250 ms 이상 유지 [p.23-24]",
+    timing_manual="매뉴얼에 없음(응답 시간·최소 명령 간격·쓰기 ACK 모두). Interface 입력은 250 ms 이상 유지 [p.23-24]. "
+                  "10/20 bench 응답 p50 34·p99 62 ms. 설정값은 소수 둘째 자리까지 저장(R65 'Q5+014.00', R2 'S2+000.50'). "
+                  "R37 'M006'(X=0, 매뉴얼상 Local)인데 v1 원격 제어가 됨 — R37 은 정보로만. R38 'H1.00'(형식 다름). "
+                  "압력 레인지 E11(1000)·단위 F01(mTorr) → FS 1000 mTorr = 1 Torr, 유량 FS 100·단위 SCCM(R74·R75 'W51'·'W61'), "
+                  "SP2·SP3·SP4 = 0.50·1.50·3.00 %FS(v1 이 5·15 mTorr 를 ×0.1 로 넣은 값 — 압력 배율 이중 확인)",
     errors="오류 코드 체계 없음. 상태는 R7(MXYZ)·R69·Interface 2 밸브 상태 핀",
     safe_off="L0 0000(전체 Flow OFF) → Q1 0/Q2 0, 밸브 O(배기) — 가스를 확실히 끊는 것은 PLC Ar/O2 차단밸브(M00007/M00008)",
     comm_loss="매뉴얼에 없음 — 마지막 유량·압력 제어를 계속한다고 본다",
@@ -194,13 +202,15 @@ MFC = Device(
 )
 
 # ═════════════ 3. DC 전원 — ODA EX 시리즈 ═════════════
-DC_RATED_VOLTAGE_V = 600.0   # 형명 미확인 — v1 상한(DC_MAX_VOLTAGE)을 정격 대용. *IDN? 으로 확정
-DC_RATED_CURRENT_A = 1.0     # 위와 같음
-DC_RATED_POWER_W = 600.0     # EX 600 W 계열 최소 정격 [DC p.8/10]
+# 10/20 bench: VOLT:OVL? 630·CURR:OCL? 2.1(기본값 = 설정 가능한 최대 [p.15, p.98]) → 사양표 [DC p.105] EX 600-2(1.2 kW급).
+# v1 소프트웨어 상한 DC_MAX_*(600 V·1 A·600 W)는 그대로. 그 밖에: OVP 660 V·OCP 2.2 A(사용 1), LAST-STA DISABLE, FACT:ADC 20Hz
+DC_RATED_VOLTAGE_V = 630.0
+DC_RATED_CURRENT_A = 2.1
+DC_RATED_POWER_W = 1200.0
 
 DC = Device(
-    key="dc", name="DC 전원", model="ODA EX 시리즈 — *IDN? 'ODA Technologies,EX-Series,2.1-1.0-1.6'(10/16 bench). "
-                                    "형명·정격은 VOLT:OVL?·CURR:OCL? 기본값(설정 가능한 최대 [p.15, p.98])과 사양표로", model_confirmed=False,
+    key="dc", name="DC 전원", model="ODA EX 600-2(630 V·2.1 A, 1.2 kW급) — *IDN? 'ODA Technologies,EX-Series,2.1-1.0-1.6'"
+                                    "(10/16 bench), OVL 630·OCL 2.1(10/20 bench)과 사양표 [p.105]", model_confirmed=True,
     manual="DC",
     serial="RS-232C/RS-485/TCP(옵션), 9600 기본(9600~230400), 8N1 고정 [DC p.13/15, p.36-37/38-39]. "
            "Delimiter LF/CR/CRLF 선택 [p.47/49], 'Response' 메뉴 Yes/No(공장 No) [p.49] — 명령에 응답을 돌려줄지 정하는 앞면 설정"
@@ -210,7 +220,8 @@ DC = Device(
     commands=(
         Cmd("MEAS:ALL?", "출력 전압·전류 측정", "\"10.0000,1.0000\" (V,A)", "[DC p.90/92]"),
         Cmd("MEAS:VOLT? / MEAS:CURR?", "개별 측정", "\"11.0000\"", "[DC p.90/92]"),
-        Cmd("APPL V,I", "전압·전류 설정", "없음(APPL? → \"30.0000,5.0000\")", "[DC p.86/88]"),
+        Cmd("APPLy V,I", "전압·전류 설정 — v1 과 같은 글자 'APPLy'(DCpower.py:682, 매뉴얼상 APPL 과 같은 명령)",
+            "없음(APPL? → \"600.0000,0.1230\" 따옴표 포함, 10/20 bench)", "[DC p.86/88]"),
         Cmd("CURR A / CURR?", "전류 설정 / 확인", "\"4.5000\"", "[DC p.86-88]"),
         Cmd("OUTP ON|OFF / OUTP?", "출력 ON/OFF / 확인", "\"0\"/\"1\"", "[DC p.51/53, p.94/96]"),
         Cmd("*RST", "출력 OFF·0 V·OVP/OCP 기본·트립 해제", "없음", "[DC p.96/98]"),
@@ -223,7 +234,8 @@ DC = Device(
         Cmd("VOLT:OVP:TRIP? / CURR:OCP:TRIP?", "트립 상태 — 트립 중에는 출력이 나오지 않는다", "0|1", "[DC p.89-91]", v1_uses=False),
         Cmd("FLOW? / POL?", "바이폴라 전용 — 이 장비는 응답하지 않아 보내지 않는다", "—", "[DC p.86, p.91]", v1_uses=False),
     ),
-    timing_manual="매뉴얼에 없음(사양표는 이미지). v1 실측: 쓰기 직후 질의 무응답(2026-09-28 OUTP OFF 직후 OUTP? 13/13 무응답) → 500 ms 간격",
+    timing_manual="매뉴얼에 없음(사양표는 이미지). v1 실측: 쓰기 직후 질의 무응답(2026-09-28 OUTP OFF 직후 OUTP? 13/13 무응답) → 500 ms 간격. "
+                  "10/20 bench 응답 p50 37·p99 45 ms",
     errors="SYST:ERR? 코드: 0, −10, −20~−34(원격 교정), −74~−77, −80~−89(메모리), −120~−124(문법 — −124 정의되지 않은 명령 "
            "[p.102]), −200~−202, −220~−223(실행) [DC p.97-100/99-102]. 기록은 최근 것부터·최대 10·읽으면 지워짐 [p.54, p.96]",
     safe_off="OUTP OFF → OUTP? 로 0 확인(3회). *RST 도 출력 OFF",
@@ -259,7 +271,8 @@ RF = Device(
         Cmd("M00200(FC5)", "DAC Ch0 출력 enable", "—", "v1 lib/config.py:214"),
         Cmd("D00000/D00001(FC3)", "ADC Ch0/Ch1 = 순방향/반사(핀 2·3)", "0~4000", "v1 lib/config.py:208"),
     ),
-    timing_manual="출력 응답 10 µs 이내 [RF p.3], 매처 튜닝 2 s 미만 [RF p.7]",
+    timing_manual="출력 응답 10 µs 이내 [RF p.3], 매처 튜닝 2 s 미만 [RF p.7]. 10/20 bench 대기 중 순방향 0.3~0.6 W·반사 0.05~0.15 W"
+                  "(ADC 잡음 2~4 카운트)",
     errors="전면 LED: EXT Loop, P.P VOLT, Interlock, OVER HEATING, LOCAL/REMOTE ON [RF p.8-9]. 보호: 최대 전력·과전류·Vpp·과열 [p.6]",
     safe_off="DAC 0(핀 5 = 0 V) → enable OFF. 하드로는 핀 4 = 0 V 또는 12–15 루프 개방",
     comm_loss="해당 없음 — PLC DAC 가 마지막 값을 유지하면 RF 도 계속 켜짐(DAC 의 CPU STOP 동작은 모듈 매뉴얼 없음)",
@@ -348,7 +361,8 @@ IG = Device(
             "20 가스 계수(50~150 → 0.50~1.50) · 21 감도(50~150 → 5.0~15.0, 563 정상 10.0 [p.41]) · 22·23 게이지 A·B 셋포인트 "
             "— 셋포인트는 xy z = xy×10^(z−2) Torr", "E 의 일부", "[IG p.53-54]"),
     ),
-    timing_manual="응답 시간 없음. 문자 사이 50 ms 이상 [p.36, p.52], 초당 약 2문자 이하·응답 받은 뒤 송신 [p.53]. "
+    timing_manual="10/20 bench: E 응답 p50 234·p99 337·최대 390 ms(필라멘트 꺼짐), 가스 계수 1.00·감도 10.0, 자동 필라멘트 꺼짐. "
+                  "응답 시간 없음. 문자 사이 50 ms 이상 [p.36, p.52], 초당 약 2문자 이하·응답 받은 뒤 송신 [p.53]. "
                   "필라멘트 끈 뒤 4 s 재점등 금지, 전원 뒤 10 s 금지 [p.42]. A/B 뒤 무응답(실측 5.9/4.9 s)은 매뉴얼에 없음",
     errors="필라멘트 에러 표 3.2: 3 방출 상실, 4 시간 안에 안 켜짐, 5 자동 시동 실패, 6 HV 없음, 7 필라멘트 전류 없음, "
            "8 과전류, 9 최대 압력 초과, 12/14/15 9.9E-3 초과 차단, 16/17 자동 모드 OFF [IG p.44]",
@@ -545,17 +559,23 @@ class Assumption:
 
 
 ASSUMPTIONS: tuple = (
-    Assumption("MFC 유량 풀스케일", "R60 %FS = sccm(FS 100) — v1 과 같게", "mfc", "R70/R71"),
-    Assumption("MFC 압력 레인지·작업 압력 상한", "FS 1 Torr(E=03) → 1000 mTorr, MFC_PRESSURE_SCALE 0.1", "mfc", "작업 압력 상한"),
-    Assumption("MFC 명령 간격", "100~200 ms", "mfc", "최소 간격"),
-    Assumption("DC 형명·정격", "600 V / 1 A / 600 W (v1 상한)", "dc", "*IDN?"),
+    Assumption("MFC 유량 풀스케일", "확인(10/20 bench): FS 100·단위 SCCM(R74·R75 'W51'·'W61') — R60 %FS = sccm, v1 과 같음",
+               "mfc", "R70/R71"),
+    Assumption("MFC 압력 레인지·작업 압력 상한", "확인(10/20 bench): 레인지 E11(1000)·단위 F01(mTorr) → FS 1 Torr = 1000 mTorr. "
+               "SP2·SP3·SP4 0.50·1.50·3.00 %FS = v1 이 5·15 mTorr 를 ×0.1 로 넣은 값(배율 이중 확인)", "mfc", "작업 압력 상한"),
+    Assumption("MFC 명령 간격", "100~200 ms(10/20 bench 응답 p50 34·p99 62 ms)", "mfc", "최소 간격"),
+    Assumption("MFC Remote 표시(R37)", "10/20 bench 'M006'(X=0, 매뉴얼상 Local)인데 v1 은 원격 제어가 됨 — 정보로만, 거부하지 않음",
+               "mfc", "R70/R71"),
+    Assumption("DC 형명·정격", "확인(10/20 bench): OVL 630 V·OCL 2.1 A → EX 600-2(630 V·2.1 A, 1.2 kW급). OVP 660·OCP 2.2(사용 1), "
+               "ADC 20Hz, APPL? 응답에 따옴표. v1 소프트웨어 상한 600 V·1 A·600 W 는 그대로", "dc", "*IDN?"),
     Assumption("DC 쓰기→질의 간격", "500 ms (v1 실측)", "dc", "쓰기→질의"),
     Assumption("DC 아날로그 옵션(TER1)", "없음으로 가정", "dc", "TER1"),
     Assumption("DC Delimiter", "LF(v1 송신과 같게)", "dc", "Response 설정"),
-    Assumption("DC LAST-STA 현재 값", "모름 — 연결 때 읽기만(FULLY 면 경고, 쓰지 않음)", "dc", "*IDN?"),
+    Assumption("DC LAST-STA 현재 값", "확인(10/20 bench): DISABLE — 연결 때 읽기만(FULLY 면 경고, 쓰지 않음)", "dc", "*IDN?"),
     Assumption("CESAR User Port 커넥터 형식", "모름(15핀/25핀) — 인터록 배선 보류라 당장 영향 없음", "rfpulse", "15핀/25핀"),
     Assumption("CESAR 응답 지연", "150 ms 이하(1초에 3질의)", "rfpulse", "지연"),
-    Assumption("PLC 트랜잭션 왕복", "10~25 ms", "plc", "왕복 시간"),
+    Assumption("PLC 트랜잭션 왕복", "확인(10/20 bench): 응답 p50 22·p99 35 ms, 600 tick 모두 ok", "plc", "왕복 시간"),
     Assumption("PLC STOP 때 DAC 출력", "모름 — PD9 보류", "rf", "PLC CPU STOP"),
-    Assumption("이온 게이지 E 응답 분포", "250~300 ms, 최대 860 ms(v1 실측)", "ig", "E 바이트 수"),
+    Assumption("이온 게이지 E 응답 분포", "10/20 bench(필라멘트 꺼짐) p50 234·p99 337·최대 390 ms, v1 실측 최대 860 ms(레인지 찾기)",
+               "ig", "E 바이트 수"),
 )

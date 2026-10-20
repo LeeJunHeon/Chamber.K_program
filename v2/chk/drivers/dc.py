@@ -295,8 +295,10 @@ class DcDriver:
 
 # ───────── 쓰기 명령 글자(v1 device/DCpower.py 와 같게) ─────────
 def dc_appl_cmd(v: float, i: float) -> str:
-    return f"APPL {v:.2f},{i:.4f}"
+    """v1 device/DCpower.py:682 f"APPLy {voltage:.2f},{current:.4f}" — 매뉴얼상 APPL 과 같은 명령[DC p.86]이지만 v1 과 같은 글자."""
+    return f"APPLy {v:.2f},{i:.4f}"
 
 
 def dc_curr_cmd(i: float) -> str:
+    """v1 device/DCpower.py:590 f"CURR {self.current_current:.4f}"."""
     return f"CURR {i:.4f}"

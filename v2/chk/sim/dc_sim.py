@@ -28,14 +28,14 @@ class DcSim(SimDevice):
         self.idn = idn
         self.out = False
         self.v_set, self.i_set = 0.0, 0.0
-        self.ovp, self.ocp = 660.0, 1.1
+        self.ovp, self.ocp = 660.0, 2.2                 # 10/20 bench OVP 660 V·OCP 2.2 A
         self.last_sta = last_sta
         self.writes_last_sta = 0
         self.errors: List[str] = list(errors or [])     # 오류 기록(최근 것부터 나온다 [DC p.54])
-        # 매뉴얼 질의 응답값(가정 — 실제 값은 bench 로 읽는다). OVL·OCL 기본값 = 설정 가능한 최대 [p.15], EX 600-1 630 V·1.1 A
+        # 매뉴얼 질의 응답값(가정 — 실제 값은 bench 로 읽는다). OVL·OCL 기본값 = 설정 가능한 최대 [p.15], 10/20 bench EX 600-2 630 V·2.1 A
         self.info = {"*SN?": "oda-01-0923-00185", "SYST:VERS?": "2008.3", "KEYL?": "0", "VOLT:STEP?": "0.1000",
                      "CURR:STEP?": "0.0100", "VOLT:OVP:TRIP?": "0", "CURR:OCP:TRIP?": "0", "VOLT:UVL?": "0.0000",
-                     "VOLT:OVL?": "630.0000", "CURR:UCL?": "0.0000", "CURR:OCL?": "1.1000", "FACT:AUTO-CUR?": "0",
+                     "VOLT:OVL?": "630.0000", "CURR:UCL?": "0.0000", "CURR:OCL?": "2.1000", "FACT:AUTO-CUR?": "0",
                      "FACT:AUTO-LOC?": "0", "FACT:OVP?": "1", "FACT:OCP?": "1", "FACT:ADC?": "20Hz"}
         self.busy_until = -1.0
         self.received: List[tuple] = []
@@ -103,7 +103,7 @@ class DcSim(SimDevice):
         if u == "SYST:ERR?":
             return self.errors.pop(0) if self.errors else '+0,"No error"'     # [DC p.96]
         if u == "APPL?":
-            return f"{self.v_set:.4f},{self.i_set:.4f}"
+            return f'"{self.v_set:.4f},{self.i_set:.4f}"'        # 10/20 bench: 따옴표가 붙는다
         if u in self.info:
             return self.info[u]
         return None
