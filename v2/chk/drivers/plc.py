@@ -103,8 +103,13 @@ class PlcDriver:
         self.blackbox: "collections.deque[PlcPoll]" = collections.deque(maxlen=n)
         self._marker: Optional[int] = None
         self._marker_mismatch = 0
-        self._first_poll = True
+        self._first_poll = True                    # 연결 뒤 첫 폴링(M00200 실제 값으로 맞춤)
+        self._residual_checked = False             # S15 남은 RUN 정리는 프로그램 실행당 한 번(v1 PLC.py:220·1019·1079)
         self._pending_heater_off = False
+        self._pending_inflight = False
+        self._wd_last_ok: Optional[float] = None   # 마지막 하트비트 성공(monotonic)
+        self._wd_delay_warned = False
+        self._wd_delay_max = 0.0
         self._wd = 0
         self._rf_set_w: Optional[float] = None
         self._rf_enabled = False
@@ -194,9 +199,15 @@ class PlcDriver:
         if self._first_poll:
             self._first_poll = False
             self._rf_enabled = bool(poll.values.get("rf.dac_enable"))     # 내부 상태를 실제 M00200 으로(v1 종료 흔적 포함)
+        if not self._residual_checked:              # 재연결 때는 다시 하지 않는다 — 가열 중 1~2 s 끊김에 히터가 꺼지지 않게
+            self._residual_checked = True
             if poll.values["heater.run"]:
                 self._emit("heater_residual_run", "첫 폴링에서 히터 RUN 이 켜져 있음(이전 세션)", "HEATER_RESIDUAL_RUN",
                            pv=poll.values["heater.pv"])
+        if self._pending_heater_off and self.writes_allowed and not self._pending_inflight:
+            self._pending_inflight = True            # 통신이 되면 보류된 RUN=0 을 다시(v1 PLC.py:391-394·1018-1021)
+            self._emit("heater_off_retry", "보류된 히터 OFF 다시 쓰기")
+            self.heater_run(False, on_done=lambda r: setattr(self, "_pending_inflight", False))
         for f in self.fast_listeners:
             f(poll)
 
@@ -263,7 +274,7 @@ class PlcDriver:
         if up:
             self._outage_since, self._outage_dumped = None, False
             if self.writes_allowed:
-                self.submit_write("하트비트", self._heartbeat)
+                self.submit_write("하트비트", self._heartbeat, on_done=self._wd_done)
         else:
             if self._outage_since is None:
                 self._outage_since = now
@@ -271,6 +282,27 @@ class PlcDriver:
                     and now - self._outage_since >= self.cfg["PLC_COMM_LOSS_ABORT_SEC"]):
                 self._outage_dumped = True
                 self.dump_blackbox("comm_loss")
+        self.check_wd_delay()
+
+    def _wd_done(self, res: Result) -> None:
+        if res.status == "ok":
+            self._wd_last_ok = self.clock.monotonic()
+
+    def check_wd_delay(self) -> None:
+        """하트비트 지연 — 마지막 성공 뒤 HEATER_WD_DELAY_WARN_SEC 를 넘으면 지연 한 번에 경고 1회, 회복 때 정보 1회
+        (v1 _check_heater_wd_delay, device/PLC.py:1130-1159). 주기는 v2 방식(매 tick)."""
+        if not (self.cfg["HEATER_ENABLED"] and self.writes_allowed and self._wd_last_ok is not None):
+            return
+        age = self.clock.monotonic() - self._wd_last_ok
+        if age > float(self.cfg["HEATER_WD_DELAY_WARN_SEC"]):
+            self._wd_delay_max = max(self._wd_delay_max, age)
+            if not self._wd_delay_warned:
+                self._wd_delay_warned = True
+                self._emit("heater_wd_delay", f"히터 워치독 하트비트 지연 {age:.1f} s (래더 10 s 에 트립)", "HEATER_WD_DELAY")
+        elif self._wd_delay_warned:
+            self._wd_delay_warned = False
+            self._emit("heater_wd_recovered", f"히터 워치독 하트비트 회복(지연 최대 {self._wd_delay_max:.1f} s)")
+            self._wd_delay_max = 0.0
 
     def _heartbeat(self, session) -> None:
         self._wd = (self._wd + 1) & 0x7FFF
@@ -309,12 +341,26 @@ class PlcDriver:
         self.submit_write(f"SV={temp_c}", lambda s: self._client(s).write_reg(_ADDR["heater_sv"].addr, raw), on_done=on_done)
 
     def heater_run(self, on: bool, on_done=None) -> None:
+        """RUN 쓰기. OFF 는 링크가 없거나 쓰기가 실패하면 보류했다가 다음 통신 성공 때 다시 쓰고, 성공하면 보류 해제
+        (v1 set_heater_run, device/PLC.py:1275-1295). ON 은 보관하지 않는다."""
         if not on and not self.link_up:
             self._pending_heater_off = True
             self._emit("heater_off_pending", "링크 없음 — 히터 OFF 보류(복구 때 적용)")
         kind = "write" if on else "safety"
+
+        def done(res: Result) -> None:
+            if not on and res.status != "rejected":
+                if res.status == "ok":
+                    if self._pending_heater_off:
+                        self._emit("heater_off_applied", "보류된 히터 OFF 적용")
+                    self._pending_heater_off = False
+                elif not self._pending_heater_off:
+                    self._pending_heater_off = True
+                    self._emit("heater_off_pending", f"히터 OFF 쓰기 실패({res.reason or res.status}) — 보류(통신 성공 때 다시)")
+            if on_done:
+                on_done(res)
         self.submit_write(f"RUN={int(on)}", lambda s: self._client(s).write_coil(_ADDR["heater_run"].addr, on),
-                          kind=kind, on_done=on_done)
+                          kind=kind, on_done=done)
 
     def heater_reset(self, on_done=None) -> None:
         self.submit_write("RST", lambda s: self._client(s).write_coil(_ADDR["heater_rst"].addr, True), on_done=on_done)

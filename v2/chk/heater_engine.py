@@ -811,6 +811,8 @@ class RecipeRunner:
         self.held_target = None
         self.stopped_by_user = False
         self.finished: Optional[tuple] = None        # (ok, 사유 코드, 문구)
+        self.start_fail: Optional[str] = None        # start() 가 거부한 사유
+        self.on_finished: Callable[[bool, str], None] = lambda ok, code: None
 
     def _zr(self):
         return float(self.cfg["HEATER_APPROACH_ZONE_C"]), float(self.cfg["HEATER_APPROACH_MIN_RATE_C_PER_MIN"])
@@ -843,6 +845,15 @@ class RecipeRunner:
         if self.is_running() or not self.steps:
             return False
         st = self._status() or {}
+        if not st.get("itl"):                                    # v1 heater_recipe.py:805-813 — 인터록·이상 확인
+            self._msg("error", "히터 인터락이 미충족 상태 — 레시피를 시작할 수 없음")
+            self.start_fail = "HEATER_ITL_OFF"
+            return False
+        if st.get("fault"):
+            self._msg("error", "히터 이상 상태 — 리셋 후 다시")
+            self.start_fail = "HEATER_FAULT_ACTIVE"
+            return False
+        self.start_fail = None
         self.idx, self.state, self.stopped_by_user, self.finished = -1, self.IDLE, False, None
         self._clear_hold()
         self.paused_total, self.held_at = 0.0, None
@@ -871,6 +882,7 @@ class RecipeRunner:
 
     def _finish(self, ok: bool, code: str, text: str) -> None:
         self.finished = (ok, code, text)
+        self.on_finished(ok, code)
         self._emit(HeaterEvent("recipe_finished", "info" if ok else "warn", text, None if ok else code,
                                {"ok": ok, "name": self.name}))
 
@@ -1099,7 +1111,8 @@ class Atmosphere:
 class HeaterEngine:
     def __init__(self, clock, cfg: Dict[str, Any], plc, mfc, on_event: Optional[Callable[[HeaterEvent], None]] = None,
                  process_active: Callable[[], bool] = lambda: False,
-                 on_gas_failed: Callable[[str], None] = lambda why: None) -> None:
+                 on_gas_failed: Callable[[str], None] = lambda why: None,
+                 on_recipe_failed: Callable[[str], None] = lambda code: None) -> None:
         self.clock, self.cfg, self.plc, self.mfc = clock, cfg, plc, mfc
         self.on_event = on_event
         self.process_active = process_active
@@ -1113,6 +1126,9 @@ class HeaterEngine:
         self.recipe = RecipeRunner(cfg, self.port, self.ramp, lambda: self.st, self._msg, self._emit, mono)
         self.atm = Atmosphere(cfg, clock, mfc, plc, self._msg, self._gas_failed)
         self._on_gas_failed = on_gas_failed
+        self._on_recipe_failed = on_recipe_failed
+        self._after: List[Callable[[], None]] = []      # 잠금 밖에서 부를 것(공정 중단 — 잠금 순서 꼬임 방지)
+        self.recipe.on_finished = self._recipe_finished
         self.owner: Optional[str] = None           # None / manual / recipe / process
         self.pending: Optional[tuple] = None        # 가스 준비 뒤 할 일 ("manual_on", v) / ("recipe",)
         self.atm_hold = False                       # 냉각 보호 가스 유지 중
@@ -1131,6 +1147,18 @@ class HeaterEngine:
 
     def _msg(self, level: str, text: str) -> None:
         self._emit(HeaterEvent("message", level, text))
+
+    def _recipe_finished(self, ok: bool, code: str) -> None:
+        if not ok and code != "USER_STOP":              # v1: 사용자 정지(stop)가 아닌 비정상 끝 → 같이 돌던 공정도 중단
+            self._after.append(lambda: self._on_recipe_failed(code))
+
+    def _flush(self) -> None:
+        while self._after:
+            fn = self._after.pop(0)
+            try:
+                fn()
+            except Exception as e:
+                self._msg("error", f"후처리 예외 {e!r}")
 
     def _gas_failed(self, why: str) -> None:
         self.pending = None
@@ -1184,6 +1212,7 @@ class HeaterEngine:
             self.hold.tick(st, self.final_target(st))
             self.recipe.on_status(st)
             self._gas_hold_tick(st, edge)
+        self._flush()
 
     def _gas_hold_tick(self, st: dict, edge) -> None:
         """v1 main._heater_gas_hold_tick — RUN 하강에서 뜨거우면 가스 유지, PV ≤ HEATER_GAS_HOLD_RELEASE_C 면 해제."""
@@ -1227,8 +1256,15 @@ class HeaterEngine:
                 what, self.pending = self.pending, None
                 if what[0] == "manual_on":
                     self._manual_go(what[1])
-                elif what[0] == "recipe":
-                    self.recipe.start()
+                elif what[0] == "recipe" and not self.recipe.start():
+                    # 가스 준비 뒤 미뤄진 시작 — 인터록·이상이면 가스를 풀고 실패로 끝낸다(v1 main.py:3226-3230)
+                    code = self.recipe.start_fail or "HEATER_ITL_OFF"
+                    self.atm.release("레시피 시작 실패")
+                    self.recipe.state = RecipeRunner.ABORTED
+                    self.recipe._finish(False, code, "레시피 시작 실패(가스 준비 뒤 인터록·이상 확인)")
+                    if self.owner == "recipe":
+                        self.owner = None
+        self._flush()
 
     # ── 수동 ──
     def manual_on(self, value: float, gas: Optional[dict] = None) -> Optional[str]:
@@ -1236,6 +1272,8 @@ class HeaterEngine:
         with self._lock:
             if self.recipe.is_running():
                 return "HEATER_RECIPE_RUNNING"
+            if self.st.get("run") or self.pending is not None:
+                return "HEATER_ALREADY"                    # 이미 켜짐·가스 준비 중(v1 main.py:1865-1867)
             if gas and (gas.get("use_ar") or gas.get("use_o2")) and self.atm.state != Atmosphere.READY:
                 if self.process_active():
                     return "PROCESS_RUNNING"
@@ -1295,10 +1333,13 @@ class HeaterEngine:
                     return "BAD_ARGS"
                 self.pending = ("recipe",)
                 return None
-            self.recipe.start()
+            if not self.recipe.start():
+                self.owner = None
+                return self.recipe.start_fail or "HEATER_ITL_OFF"
             return None
 
     def recipe_stop(self, reason: str = "중단") -> None:
+        """레시피가 없어도 v1 처럼 안전 종료(RUN=0·램프 속도 복구·SV=PV)(v1 main.py:1953, heater_recipe.py:839-855)."""
         with self._lock:
             if self.pending and self.pending[0] == "recipe":
                 self.pending = None
@@ -1306,6 +1347,18 @@ class HeaterEngine:
             self.recipe.stop(reason)
             if self.owner == "recipe":
                 self.owner = None
+        self._flush()
+
+    def recipe_hold(self, on: bool) -> bool:
+        """HOLD(on)·RESUME(off) — 잠금 안에서(PLC 폴링 스레드의 on_status 와 겹치지 않게)."""
+        with self._lock:
+            return self.recipe.hold() if on else self.recipe.resume()
+
+    def recipe_skip(self) -> bool:
+        with self._lock:
+            ok = self.recipe.skip()
+        self._flush()
+        return ok
 
     def recipe_abort(self, code: str) -> None:
         """HEATER_RECIPE_ABORT(SafetyEngine S16·S18A~C, ALL STOP)."""
@@ -1316,6 +1369,7 @@ class HeaterEngine:
                 self.recipe.abort(code)
             if self.owner == "recipe" and not self.recipe.is_running():
                 self.owner = None
+        self._flush()
 
     # ── 공정 요청(ProcessEngine) ──
     def process_ramp(self, rate_c: float) -> None:

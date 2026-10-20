@@ -113,6 +113,8 @@ class ChkCore:
             return None
         if kind in ("HEATER_ON", "HEATER_RECIPE_RUN", "HEATER_SV", "HEATER_OFF") and owned:
             return "HEATER_OWNED_BY_PROCESS"
+        if kind == "HEATER_RECIPE_RUN" and (p.active or p.state == "STOPPING") and getattr(p, "list_uses_heater", False):
+            return "HEATER_OWNED_BY_PROCESS"           # 진행 중(딜레이·행 사이 포함) 리스트의 어느 행이 히터를 쓰면(v1 main.py:2618-2620)
         if kind in ("HEATER_ON", "HEATER_SV", "HEATER_OFF") and h.recipe_running:
             return "HEATER_RECIPE_RUNNING"
         if kind in ("HEATER_ON", "HEATER_RECIPE_RUN"):
@@ -124,6 +126,10 @@ class ChkCore:
             gas = {k: a.get(k) for k in ("use_ar", "ar_flow", "use_o2", "o2_flow", "wp_mtorr")}
             if (gas["use_ar"] or gas["use_o2"]) and (p.active or p.state == "STOPPING"):
                 return "PROCESS_RUNNING"
+            if (gas["use_ar"] or gas["use_o2"]) and h.atm.state != "READY":
+                why = self.safety.check_mv(self.safety.plc_view())       # 히터 가스도 MV 열림·인터록(v1 main.py:3158·1692)
+                if why:
+                    return why
             return h.manual_on(float(a["value"]), gas if (gas["use_ar"] or gas["use_o2"]) else None)
         if kind == "HEATER_OFF":
             h.manual_off()
@@ -150,17 +156,25 @@ class ChkCore:
                 return "RECIPE_INVALID"
             if gas and (gas.get("use_ar") or gas.get("use_o2")) and (p.active or p.state == "STOPPING"):
                 return "PROCESS_RUNNING"
+            if gas and (gas.get("use_ar") or gas.get("use_o2")) and h.atm.state != "READY":
+                why = self.safety.check_mv(self.safety.plc_view())       # v1 main.py:2665 _heater_gas_start_guard
+                if why:
+                    return why
             try:
                 steps = parse_recipe_steps(a["steps"], c)
             except ValueError:
                 return "RECIPE_INVALID"
             return h.recipe_run(str(a.get("name") or ""), steps, gas)
+        if kind == "HEATER_RECIPE_STOP":
+            # 레시피가 없어도 v1 처럼 안전 종료(RUN=0·램프 복구·SV=PV). 공정이 히터를 쓰는 중이어도 v1 은 그대로 끄고
+            # 공정은 중단하지 않는다(main.py:1952-1953 — 소유 검사 없음)
+            h.recipe_stop("사용자 정지")
+            return None
         if not h.recipe_running:
             return "HEATER_RECIPE_NOT_RUNNING"
-        if kind == "HEATER_RECIPE_STOP":
-            h.recipe_stop("사용자 정지")
-        elif kind == "HEATER_RECIPE_HOLD":
-            (h.recipe.hold if a.get("on") else h.recipe.resume)()
+        if kind == "HEATER_RECIPE_HOLD":
+            if not h.recipe_hold(bool(a.get("on"))):
+                return "HEATER_RECIPE_NOT_RUNNING" if a.get("on") else "HEATER_ALREADY"     # v1: 일시정지 상태가 아님
         elif kind == "HEATER_RECIPE_SKIP":
-            h.recipe.skip()
+            h.recipe_skip()
         return None

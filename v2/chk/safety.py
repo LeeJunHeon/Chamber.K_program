@@ -39,7 +39,7 @@ IMPLEMENTED_IN: Dict[str, str] = {
     "S10": "engine(event plc_link_up)", "S11": "locks", "S12": "drivers/plc.py heater_run(보류)",
     "S13": "drivers/plc.py _init_writes", "S14": "drivers/plc.py on_tick 하트비트", "S15": "engine(event plc_first_poll)",
     "S16": "engine", "S17": "engine", "S18A": "engine", "S18B": "engine", "S18C": "engine",
-    "S18D": "next:HeaterEngine(레시피 스텝)", "S18E": "next:ProcessEngine(state:HEATER_RAMP 한도)",
+    "S18D": "HeaterEngine(레시피 스텝) — 비정상 끝은 ChkSafety.heater_recipe_failed 로 공정도 중단", "S18E": "next:ProcessEngine(state:HEATER_RAMP 한도)",
     "S19": "check_start·check_heater_start", "S20": "commands.check_command(Pre HEATER_RUN_OFF)",
     "S21": "commands.check_command(param_max HEATER_MAX_TEMP)", "S22": "next:HeaterEngine(유지 모드)",
     "S23": "next:ProcessEngine(state:HEATER_HOLD_WAIT)", "S24": "next:HeaterEngine(포화 — 앞창·폴백)",
@@ -184,8 +184,9 @@ def _all(*vals):
 class _Dead:
     """히터 출력 죽음(S17·S18A) — RUN 참·fault 거짓·MV < 최소, RUN 상승 뒤 유예 지난 뒤부터."""
 
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg, grace: bool = True) -> None:
         self.cfg = cfg
+        self.grace = grace                          # S18A(레시피)는 유예 없이(v1 PLC.py:1013-1015, heater_recipe.py:1161-1165)
         self.run_since: Optional[float] = None
 
     def __call__(self, v: View, ctx) -> Optional[bool]:
@@ -200,7 +201,7 @@ class _Dead:
             self.run_since = t
         if fault or mv is None:
             return False if fault else None
-        if t - self.run_since < self.cfg["HEATER_OUT_DEAD_GRACE_SEC"]:
+        if self.grace and t - self.run_since < self.cfg["HEATER_OUT_DEAD_GRACE_SEC"]:
             return False
         return mv < self.cfg["HEATER_MV_MIN"]
 
@@ -214,7 +215,7 @@ def _dev(set_v, actual, tol_abs, ratio):
 def _heater_fault_acts(v: View, ctx) -> List[Act]:
     cause = "OT" if v.get("heater.ot") else "TC" if v.get("heater.tc_err") else "WD" if v.get("heater.wd_err") else "?"
     acts = [Act("HEATER_FORCE_OFF")]
-    if ctx.active and ctx.uses_heater:
+    if ctx.active and (ctx.uses_heater or ctx.heater_recipe_running):     # v1 main.py:3620-3622
         acts.append(_abort("HEATER_FAULT"))
     if ctx.heater_recipe_running:
         acts.append(Act("HEATER_RECIPE_ABORT", {"reason": "HEATER_FAULT"}))
@@ -286,7 +287,7 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
         L("S7", "notify", "tick", _age_ge(C, "plc", "PLC_DISCONNECT_NOTIFY_SEC"),
           _fixed(_note("error", "PLC_DISCONNECTED"), Act("BLACKBOX_DUMP", {"tag": "plc_disconnected"})),
           on_release=_fixed(_note("info", "PLC_RECONNECTED"))),
-        L("S18A", "off", "tick", _Dead(C), _fixed(Act("HEATER_RECIPE_ABORT", {"reason": "HEATER_OUTPUT_DEAD"})),
+        L("S18A", "off", "tick", _Dead(C, grace=False), _fixed(Act("HEATER_RECIPE_ABORT", {"reason": "HEATER_OUTPUT_DEAD"})),
           _p("HEATER_OUT_DEAD_LIMIT_SEC"), applies=lambda c: c.heater_recipe_running, block="heater"),
         L("S18B", "off", "tick", neg("heater.run"), _fixed(Act("HEATER_RECIPE_ABORT", {"reason": "HEATER_RUN_OFF_EXTERNAL"})),
           _p("HEATER_RUN_OFF_LIMIT_SEC"), applies=lambda c: c.heater_recipe_running, block="heater"),
@@ -515,15 +516,35 @@ class ChkSafety:
         """공정 시작 guard(S1·S5·S19) — 사유 코드 또는 None. 레시피 검사(S35·S47)는 recipe.check_process_row."""
         if self.process.heater_gas_state != "IDLE":
             return "HEATER_GAS_ACTIVE"                                   # S5
+        why = self.check_mv(view)
+        if why:
+            return why
+        if recipe_uses_heater:
+            return self._heater_guard(view)                              # S19
+        return None
+
+    def check_mv(self, view: View) -> Optional[str]:
+        """S1 메인 밸브 — MV·MV_INTERLOCK 이 모두 켜져 있고 PLC 값이 신선해야(v1 main.py:3675 _check_main_valve_open)."""
         if view.q("plc") not in FRESH or (view.age("plc") or 0.0) >= self.cfg["HEATER_STALE_SEC"]:
-            return "MV_STATE_UNKNOWN"                                    # S1(읽기 실패도 거부)
+            return "MV_STATE_UNKNOWN"                                    # 읽기 실패도 거부
         if not view.get("plc.mv"):
             return "MV_NOT_OPEN"
         if not view.get("plc.mv_interlock"):
             return "MV_INTERLOCK_OFF"
-        if recipe_uses_heater:
-            return self._heater_guard(view)                              # S19
         return None
+
+    def plc_view(self) -> View:
+        last = self.plc.last
+        if last is None:
+            return View({}, self.clock.wall(), {}, {})
+        v = View.from_poll(last)
+        v.ages = {b: max(0.0, self.clock.wall() - last.t_wall) for b in ("plc", "heater", "rf")}
+        return v
+
+    def heater_recipe_failed(self, code: str) -> None:
+        """히터 레시피가 비정상으로 끝남(사용자 정지 아님) — 같이 돌던 공정도 중단(v1 main.py:3380·3443)."""
+        if code and code not in ("USER_STOP",) and self.process.active:
+            self.engine.abort(code, rule="heater_recipe")
 
     def check_heater_start(self, view: View) -> Optional[str]:
         if self.process.active:

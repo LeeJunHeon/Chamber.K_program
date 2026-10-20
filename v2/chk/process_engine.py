@@ -282,12 +282,12 @@ class ProcessEngine:
     def _plc_guard(self) -> Optional[str]:
         if self.safety is None:
             return None
-        from v2.chk.safety import View
-        last = self.plc.last
-        v = View.from_poll(last) if last is not None else View({}, self.clock.wall(), {}, {})
-        if last is not None:
-            v.ages = {b: max(0.0, self.clock.wall() - last.t_wall) for b in ("plc", "heater", "rf")}
-        return self.safety.check_start(v, False)
+        return self.safety.check_start(self.safety.plc_view(), False)
+
+    @property
+    def list_uses_heater(self) -> bool:
+        """적재된 행 중 하나라도 히터를 쓰는가(v1 _csv_list_uses_heater)."""
+        return any(r.get("use_heater") is True and float(r.get("heater_temp") or 0) > 0 for r in self.rows)
 
     def _device_guard(self, p: Dict[str, Any]) -> Optional[str]:
         """결정 5-2-4 — 꺼진 장비 DEVICE_DISABLED, 연결 안 된 장비 LINK_DOWN."""

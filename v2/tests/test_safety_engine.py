@@ -69,7 +69,7 @@ CASES = [
     ("S3", "plc250", dict(state="MAIN"), {"plc.mv_interlock": False}, {"plc.mv_interlock": True}, 1.0, 0.25, "IDLE"),
     ("S16", "plc250", dict(), {"heater.fault": True}, {"heater.fault": False}, 0.0, 0.25, None),
     ("S17", "plc250", dict(), DEAD, dict(DEAD, **{"heater.mv": 900}), 5.6, 0.25, None),     # 유예 5 s + 0.6 s
-    ("S18A", "tick", dict(heater_recipe_running=True), DEAD, dict(DEAD, **{"heater.mv": 900}), 15.0, 1.0, "recipe"),
+    ("S18A", "tick", dict(heater_recipe_running=True), DEAD, dict(DEAD, **{"heater.mv": 900}), 10.0, 1.0, "recipe"),   # 유예 없음(v1)
     ("S18B", "tick", dict(heater_recipe_running=True), {"heater.run": False}, {"heater.run": True}, 5.0, 1.0, "recipe"),
     ("S18C", "tick", dict(heater_recipe_running=True), {"heater.tc_err": True, "heater.pv": 25.0},
      {"heater.tc_err": False, "heater.pv": 25.0}, 60.0, 1.0, "recipe"),

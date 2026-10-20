@@ -79,7 +79,8 @@ class ChkRig:
         self.fast = PlcFastPoller(clock, self.plc, c["PLC_FAST_POLL_MS"])
         self.heater = HeaterEngine(clock, c, self.plc, self.mfc, on_event=self._hev,
                                    process_active=lambda: self.process.active,
-                                   on_gas_failed=lambda why: self.safety.event("heater_gas_failed"))
+                                   on_gas_failed=lambda why: self.safety.event("heater_gas_failed"),
+                                   on_recipe_failed=lambda code: self.safety.heater_recipe_failed(code))
         self.links = {k: (lambda x=x: x.ready) for k, x in self.workers.items()}
         if simple_process:
             self.process = SimpleProcess()

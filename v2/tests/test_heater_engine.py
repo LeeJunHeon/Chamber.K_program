@@ -150,7 +150,7 @@ def _runner(status):
 
 
 def test_recipe_phases_ramp_soak_cool_and_finish():
-    st = dict(run=True, pv=25.0, sv_ramp=25.0, fault=False)
+    st = dict(run=True, pv=25.0, sv_ramp=25.0, fault=False, itl=True)
     t, port, ev, r = _runner(st)
     steps = parse_recipe_steps([{"target_c": 100, "ramp_c_per_min": 30, "soak_min": 1}, {"target_c": 25, "soak_min": 2}], CFG)
     assert steps[-1].is_cooldown and steps[0].describe() == "100°C · RAMP 30°C/min · SOAK 1분"
@@ -168,7 +168,7 @@ def test_recipe_phases_ramp_soak_cool_and_finish():
 
 
 def test_recipe_hold_freezes_clock_and_skip():
-    st = dict(run=True, pv=50.0, sv_ramp=50.0, fault=False)
+    st = dict(run=True, pv=50.0, sv_ramp=50.0, fault=False, itl=True)
     t, port, ev, r = _runner(st)
     r.load("R", parse_recipe_steps([{"target_c": 50, "soak_min": 1}, {"target_c": 60, "soak_min": 1}], CFG))
     r.start()
@@ -188,7 +188,7 @@ def test_recipe_hold_freezes_clock_and_skip():
 def test_recipe_repeat_rejected_and_step_timeout():
     with pytest.raises(ValueError):
         parse_recipe_steps([{"target_c": 100, "repeat": 2}], CFG)    # HEATER_RECIPE_MAX_REPEAT=1(v1 과 같음)
-    st = dict(run=True, pv=25.0, sv_ramp=25.0, fault=False)
+    st = dict(run=True, pv=25.0, sv_ramp=25.0, fault=False, itl=True)
     t, port, ev, r = _runner(st)
     r.load("R", parse_recipe_steps([{"target_c": 100, "ramp_c_per_min": 30, "soak_min": 0}], CFG))
     r.start()
