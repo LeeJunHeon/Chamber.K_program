@@ -164,6 +164,12 @@ class ProcessEngine:
             except Exception:
                 pass
 
+    def note_plc_manual(self, target: str, on: bool, source: str) -> None:
+        """공정 중 PLC 버튼 실행 기록(PLC_MANUAL_IN_PROCESS, info) — 대상·켬/끔·출처·시각(사용자 결정 2026-10-20)."""
+        self._emit(ProcEvent("plc_manual", f"{target} {'ON' if on else 'OFF'} ({source})", "PLC_MANUAL_IN_PROCESS",
+                             {"target": target, "on": bool(on), "source": source, "t": self.clock.wall(),
+                              "run_id": self.run_id or None, "state": self.state, "level": "info"}))
+
     def _dev_msg(self, level: str, text: str) -> None:
         self._emit(ProcEvent("message", text, None, {"level": level}))
 

@@ -22,6 +22,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.judge import Persist
+from v2.chk.recipe import pulse_freq_hz
 
 PLC_SETTLE_S = 0.8                 # v1 QTimer.singleShot(800, _next_step)
 POWER_STOP_SETTLE_S = 0.1          # v1 DC/RF/RF Pulse STOP 뒤 100 ms
@@ -215,7 +216,7 @@ def row_to_params(row: Dict[str, Any], cfg: Dict[str, Any]) -> Dict[str, Any]:
         "shutter_delay": num("shutter_delay"), "process_time": num("process_time"),
         "rf_offset": float(cfg["RF_CAL_OFFSET"]), "rf_param": float(cfg["RF_CAL_GAIN"]),
         "use_rf_pulse": use_rfp, "rf_pulse_power": num("rf_pulse_power") if use_rfp else 0.0,
-        "rf_pulse_freq_hz": int(row["rf_pulse_freq"]) if use_rfp and row.get("rf_pulse_freq") not in (None, "") else None,
+        "rf_pulse_freq_hz": pulse_freq_hz(row.get("rf_pulse_freq")) if use_rfp else None,        # kHz → Hz(v1)
         "rf_pulse_duty": int(row["rf_pulse_duty"]) if use_rfp and row.get("rf_pulse_duty") not in (None, "") else None,
         "use_g1": row.get("gun1") is True, "use_g2": row.get("gun2") is True,
         "use_dc_delay": row.get("use_dc_delay") is True and use_dc,

@@ -50,8 +50,9 @@ PROCESS_COLUMNS: tuple = (
     Col("use_rf_pulse", "bool", "", "optional", v1_name="use_rf_pulse"),
     Col("rf_pulse_power", "float", "W", "if:use_rf_pulse", min=0.0, min_exclusive=True, param_max="RFPULSE_MAX_POWER",
         v1_name="rf_pulse_power"),
-    Col("rf_pulse_freq", "int", "Hz", "optional", param_min="RFPULSE_PULSE_FREQ_MIN_HZ",
-        param_max="RFPULSE_PULSE_FREQ_MAX_HZ", v1_name="rf_pulse_freq", desc="v1 은 kHz 열. v2 는 Hz 정수. 빈 값이면 장비값 유지"),
+    Col("rf_pulse_freq", "float", "kHz", "optional", min=0.0, min_exclusive=True, v1_name="rf_pulse_freq",
+        desc="v1 처럼 kHz(소수 허용). 장비에는 Hz = round(kHz × 1000)(v1 controller/process_controller.py:868-869). "
+             "범위는 Hz 로 RFPULSE_PULSE_FREQ_MIN_HZ~MAX_HZ(v1 core/params.py:92-99). 빈 값이면 장비값 유지"),
     Col("rf_pulse_duty", "int", "%", "optional", param_min="RFPULSE_DUTY_MIN", param_max="RFPULSE_DUTY_MAX",
         v1_name="rf_pulse_duty"),
     Col("use_heater", "bool", "", "optional", v1_name="use_heater"),
@@ -142,6 +143,11 @@ def _check_cols(cols: tuple, row: Mapping[str, Any], cfg: Mapping[str, Any]) -> 
     return errs
 
 
+def pulse_freq_hz(freq_khz: Any) -> Optional[int]:
+    """레시피 rf_pulse_freq(kHz) → 장비 Hz — v1 controller/process_controller.py:868-869 int(round(kHz × 1000))."""
+    return None if _empty(freq_khz) else int(round(float(freq_khz) * 1000.0))
+
+
 def pulse_edge_violation(freq_hz: float, duty_pct: float, min_edge_us: float) -> Optional[str]:
     """ON·OFF 시간 ≥ min_edge_us (CESAR 명령 96). v1 lib/config.py rfpulse_pulse_edge_violation."""
     if min_edge_us <= 0 or freq_hz <= 0:
@@ -185,8 +191,13 @@ def check_process_row(row: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple:
         errs.append("RF Pulse: RFPULSE_ENABLED=false")
     if r.get("use_rf_pulse") is True:
         f, du = r.get("rf_pulse_freq"), r.get("rf_pulse_duty")
+        if not _empty(f):
+            hz = float(f) * 1000.0                      # v1 check_rfpulse_range: kHz × 1000 을 Hz 범위와 비교
+            lo, hi = float(cfg["RFPULSE_PULSE_FREQ_MIN_HZ"]), float(cfg["RFPULSE_PULSE_FREQ_MAX_HZ"])
+            if not lo <= hz <= hi:
+                errs.append(f"RF Pulse: 주파수 {float(f):g} kHz 가 범위 {lo / 1000.0:g}~{hi / 1000.0:g} kHz 밖")
         if not _empty(f) and not _empty(du):
-            e = pulse_edge_violation(float(f), float(du), cfg["RFPULSE_PULSE_MIN_EDGE_US"])
+            e = pulse_edge_violation(float(pulse_freq_hz(f)), float(du), cfg["RFPULSE_PULSE_MIN_EDGE_US"])
             if e:
                 errs.append("RF Pulse: " + e)
     if r.get("use_heater") is True:

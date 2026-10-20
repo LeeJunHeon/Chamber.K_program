@@ -111,9 +111,9 @@ class ChkRig:
 
     def _pev(self, e) -> None:
         self.events.append(e)
-        if self.recorder is not None and e.kind in ("run_start", "run_end", "state", "warn"):
-            self.recorder.put_event(iso_local(self.clock.wall()), "warn" if e.code else "info", (e.code or e.kind).upper(),
-                                    "process", e.detail)
+        if self.recorder is not None and e.kind in ("run_start", "run_end", "state", "warn", "plc_manual"):
+            level = (e.data or {}).get("level") or ("warn" if e.code else "info")
+            self.recorder.put_event(iso_local(self.clock.wall()), level, (e.code or e.kind).upper(), "process", e.detail)
 
     def _hev(self, e) -> None:
         self.events.append(e)

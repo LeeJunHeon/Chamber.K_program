@@ -138,6 +138,7 @@ class IntendedDiff:
     why: str
     applies: Callable[[str], bool]
     fix: Callable[[str, List[tuple]], List[tuple]] = lambda name, units: units     # 기대값(v1)을 v2 결정대로
+    golden: bool = True             # False: 골든 시나리오가 다루지 않는 v1 과의 차이(근거 기록용 — 비교 단위를 바꾸지 않음)
 
 
 def _fix_count_to_time(name, units):
@@ -187,17 +188,6 @@ def _fix_no_modal(name, units):
     return out
 
 
-def _fix_remote_lock(name, units):
-    out = []
-    for u in units:
-        if u == ("plc_button", "rotary", True):
-            continue                                  # 공정 중 잠금 버튼 — 장비에 보내지 않는다
-        if u[0] == "cmd" and u[1] == 3:
-            u = ("cmd", 3, False, "REMOTE_LOCKED_IN_PROCESS")
-        out.append(u)
-    return out
-
-
 INTENDED_DIFFS: tuple = (
     IntendedDiff("COUNT_TO_TIME", "4-3 결정: 횟수 판정을 시간 판정으로",
                  "WAIT_PRESSURE 'stable_count 3회 연속' → 'stable_sec 6 s 동안'(v1 실제 소요 시간, PRESSURE_WAIT_STABLE_SEC)",
@@ -209,13 +199,6 @@ INTENDED_DIFFS: tuple = (
                  "v1 은 노트북에 확인창이 떠 있으면 원격 명령을 모두 거부 → v2 에는 확인창이 없어 그대로 처리(MV 켬 성공, "
                  "인자 없는 PROCESS_START 는 RECIPE_INVALID — v1 도 확인창이 없으면 입력 오류로 거부)",
                  lambda n: n == "24c_modal_open_rejects_all", _fix_no_modal),
-    IntendedDiff("REMOTE_PLC_LOCK", "S42 공정 중 원격 거부 버튼(pending_confirm 권장값): MV·Vent·Door·Turbo·Rotary",
-                 "v1 은 공정 중 원격 Rotary 버튼을 실행 → v2 는 REMOTE_LOCKED_IN_PROCESS",
-                 lambda n: n == "26i_plc_buttons_need_link", _fix_remote_lock),
-    IntendedDiff("ALL_STOP_KEEP_PUMPS", "ALL_STOP_KEEP_PUMPS=true(pending_confirm 권장값)",
-                 "v1 비상정지는 PLC 코일 전부 OFF → v2 는 펌프 계통(Rotary·Turbo·RV·FV) 유지. 단위 all_stop 은 같다",
-                 lambda n: n in ("03_manual_all_stop", "17a_csv_step_all_stop", "17b_csv_delay_all_stop", "23f_idle_all_stop",
-                                 "23g_manual_all_stop_with_heater_recipe", "24e_several_commands_in_order")),
     IntendedDiff("RF_CAL_FROM_CONFIG", "v2 설정: RF 보정값은 RF_CAL_OFFSET·RF_CAL_GAIN(설정)",
                  "v1 은 노트북 offset·param 입력칸이나 원격 인자로 덮어썼다 → v2 는 설정에서만(run_start 비교에서 rf_offset·rf_param 제외)",
                  lambda n: n == "26c_rf_calibration_keep_or_override"),
@@ -234,6 +217,21 @@ INTENDED_DIFFS: tuple = (
                  "창의 설비 이상 중단(히터 TC1 급락)은 안전 중단(정지 요청)으로 같은 사유 코드를 넣는다 — "
                  "v2 S38A 유량 이탈 자체는 경고만(공정 계속)",
                  lambda n: n[:3] in ("04a", "04b", "23a", "23b", "23c", "23d", "23e")),
+    # ── 골든 시나리오 밖 — v1 과 다르지만 v2 방식 유지(사용자 결정 2026-10-20, 근거 기록) ──
+    IntendedDiff("RF_ENABLE_OFF_WITH_RF", "사용자 결정 2026-10-20 ⑥: RF 를 끌 때 enable(M00200)도 같이 OFF",
+                 "v1 은 RF 를 끌 때 D00040 만 0 으로 쓰고 M00200 은 비상 정지에서만 껐다(device/PLC.py send_rfpower_command·"
+                 "on_emergency_stop) → v2 RF_SAFE_OFF 는 D00040=0 뒤 M00200=0(devices.RF diffs)",
+                 lambda n: False, golden=False),
+    IntendedDiff("RFP_INTERLOCK_ABORT", "사용자 결정 2026-10-20 ⑥: RF Pulse 인터록 열림 즉시 중단(S49)",
+                 "v1 에는 CESAR 162 인터록 비트 판정이 없다 → v2 는 RF Pulse 사용 공정에서 rfp.itl_open 이면 즉시 중단(devices.RFPULSE diffs)",
+                 lambda n: False, golden=False),
+    IntendedDiff("HEATER_RECIPE_RAMP_MAX", "사용자 결정 2026-10-20 ⑥: 히터 레시피 램프 상한 60 °C/min",
+                 "v1 히터 레시피(controller/heater_recipe.py)에는 램프 상한이 없다(공정 레시피만 core/params.py:364 60 °C/min) → "
+                 "v2 는 히터 레시피에도 HEATER_RECIPE_RAMP_MAX_C_PER_MIN(60)",
+                 lambda n: False, golden=False),
+    IntendedDiff("PLC_HEARTBEAT_EVERY_TICK", "사용자 결정 2026-10-20 ⑥: PLC 하트비트(D00014) 매 tick",
+                 "v1 은 HEATER_WD_PERIOD_MS(3 s)마다(device/PLC.py:1110-1163) → v2 는 1초 tick 마다(devices.PLC diffs)",
+                 lambda n: False, golden=False),
 )
 
 

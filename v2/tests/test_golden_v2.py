@@ -17,10 +17,16 @@ def test_every_v1_golden_in_set_has_a_v2_script():
 def test_intended_diffs_have_decisions_and_are_used():
     for d in G.INTENDED_DIFFS:
         assert d.decision and d.why, d.id
-        assert any(d.applies(n) for n in NAMES), d.id
+        if d.golden:
+            assert any(d.applies(n) for n in NAMES), d.id
+        else:                                   # 근거 기록용 — 어떤 시나리오의 기대값도 바꾸지 않는다
+            assert not any(d.applies(n) for n in NAMES), d.id
+    ids = {d.id for d in G.INTENDED_DIFFS}
+    assert not {"ALL_STOP_KEEP_PUMPS", "REMOTE_PLC_LOCK"} & ids                 # 사용자 결정 2026-10-20 — v1 과 같게
 
 
 @pytest.mark.parametrize("name", NAMES)
+@pytest.mark.slow
 def test_golden(name, tmp_path):
     r = G.run_scenario(name, tmp_path)
     assert r.status in ("pass", "intended"), "\n".join([f"{name}: {r.status} {r.intended}"] + r.diff)

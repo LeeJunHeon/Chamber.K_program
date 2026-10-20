@@ -88,11 +88,15 @@ def test_stop_sequence():
 def test_all_stop_sequence():
     kinds = [s.act.kind for s in SR.ALL_STOP_SEQUENCE]
     assert kinds.index("PROCESS_ABORT") < kinds.index("PLC_OUTPUTS_OFF")      # S4 이중 중단 방지
-    assert {"PLC_OUTPUTS_OFF", "HEATER_FORCE_OFF", "RF_SAFE_OFF", "DC_SAFE_OFF", "RFP_SAFE_OFF", "GAS_FLOW_OFF"} <= set(kinds)
+    # v1 순서(core/process_service.py:746-812): PLC 비상 정지 → DC 직접 OFF → 공정 정지 순서 → RF Pulse
+    assert kinds.index("PLC_OUTPUTS_OFF") < kinds.index("DC_SAFE_OFF") < kinds.index("GAS_FLOW_OFF") < kinds.index("RFP_SAFE_OFF")
+    assert {"PLC_OUTPUTS_OFF", "DC_SAFE_OFF", "RFP_SAFE_OFF", "GAS_FLOW_OFF", "IG_FILAMENT_OFF"} <= set(kinds)
+    assert "RF_RAMP_DOWN" not in kinds                                          # ALL STOP 은 RF 즉시 0
     for s in SR.ALL_STOP_SEQUENCE:
-        _check_act(s.act)
+        if s.act.kind != "AWAIT":
+            _check_act(s.act)
         assert not s.timeout_param or s.timeout_param in PARAM_KEYS
-    assert P.by_key()["ALL_STOP_KEEP_PUMPS"].pending_confirm
+    assert "ALL_STOP_KEEP_PUMPS" not in P.by_key()
 
 
 def test_start_guards_exist():
@@ -101,15 +105,11 @@ def test_start_guards_exist():
         assert ids[g].kind == "reject"
 
 
-def test_all_stop_keeps_pump_system():
-    from v2.chk import devices as D
-    names = {a.name for a in D.PLC_ADDRS}
-    assert set(SR.ALL_STOP_KEEP_COILS) == {"rotary", "turbo", "rv", "fv"} <= names
-    assert "mv" not in SR.ALL_STOP_KEEP_COILS                   # MV 는 닫는다
+def test_all_stop_turns_everything_off():
+    """사용자 결정 2026-10-20: ALL STOP = 말 그대로 전부(v1 과 같게) — 펌프 유지 목록·파라미터 없음."""
+    assert not hasattr(SR, "ALL_STOP_KEEP_COILS")
     step = [s for s in SR.ALL_STOP_SEQUENCE if s.act.kind == "PLC_OUTPUTS_OFF"][0]
-    assert "Rotary·Turbo·RV·FV" in step.desc and "ALL_STOP_KEEP_COILS" in step.desc
-    p = P.by_key()["ALL_STOP_KEEP_PUMPS"]
-    assert p.default is True and p.pending_confirm and "FV 를 닫지 않기" in p.desc
+    assert "펌프·밸브 포함" in step.desc and "D00040=0" in step.desc
 
 
 def test_s46_on_hold():

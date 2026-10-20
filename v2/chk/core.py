@@ -2,7 +2,8 @@
 
 결과는 (성공, 사유 코드). 다음 단계(로컬 HMI·웹 연동)가 이 함수 하나를 부른다. 골든 하니스도 이것으로 v1 원격 명령을 흉내 낸다.
 - PROCESS_STOP: 공정이 없으면 아무것도 하지 않고 성공(v1). RECIPE_CLEAR: 적재가 없으면 성공, 공정 중이면 PROCESS_RUNNING(v1 B5).
-- PLC_BUTTON: PLC 링크가 없으면 LINK_DOWN(v1 B6), 공정 중 잠금 버튼은 REMOTE_LOCKED_IN_PROCESS(v2, pending_confirm).
+- PLC_BUTTON: PLC 링크가 없으면 LINK_DOWN(v1 B6). 공정 중에도 모두 허용(v1, 사용자 결정 2026-10-20) — 공정 중 실행은
+  공정 기록에 PLC_MANUAL_IN_PROCESS(info: 대상·켬/끔·출처·시각).
 - ALL_STOP: 공정 여부와 무관 — SafetyEngine.all_stop.
 """
 from __future__ import annotations
@@ -43,7 +44,7 @@ class ChkCore:
     def _run(self, kind: str, a: dict, source: Source) -> Optional[str]:
         p, h = self.process, self.heater
         state = p.state
-        why = C.check_command(kind, source, state, a, in_process=p.active or state == "STOPPING")
+        why = C.check_command(kind, source, state, a)
         if why:
             return why
         if kind == "PROCESS_STOP":
@@ -56,6 +57,7 @@ class ChkCore:
             if not self._plc_up():
                 return "LINK_DOWN"
             self.plc.set_button("buzz_stop", True)
+            self._note_plc_manual("buzz_stop", True, source)
             return None
         if kind == "PROCESS_START":
             if not isinstance(a.get("row"), dict):
@@ -74,6 +76,7 @@ class ChkCore:
                 return "LINK_DOWN"
             btn = {b.target: b for b in C.PLC_BUTTONS}[a["target"]]
             self.plc.set_button(btn.addr, bool(a["on"]))
+            self._note_plc_manual(btn.target, bool(a["on"]), source)
             return None
         if kind in ("HEATER_ON", "HEATER_OFF", "HEATER_SV", "HEATER_RESET", "HEATER_STOP", "HEATER_GAS_RELEASE",
                     "HEATER_RECIPE_RUN", "HEATER_RECIPE_STOP", "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP"):
@@ -87,6 +90,12 @@ class ChkCore:
             (self.ig.filament_on if a.get("on") else self.ig.filament_off)()
             return None
         return "UNKNOWN_COMMAND"
+
+    def _note_plc_manual(self, target: str, on: bool, source: Source) -> None:
+        """공정 중(진행·정지 순서) 실행한 PLC 버튼 — 공정 기록에 이벤트(info)."""
+        p = self.process
+        if (p.active or p.state == "STOPPING") and hasattr(p, "note_plc_manual"):
+            p.note_plc_manual(target, on, getattr(source, "value", str(source)))
 
     def _heater(self, kind: str, a: dict) -> Optional[str]:
         h, p, c = self.heater, self.process, self.cfg

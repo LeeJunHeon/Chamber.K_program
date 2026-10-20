@@ -381,13 +381,13 @@ class PlcDriver:
                 c.write_coil(a, False)
         self.submit_write("OFF " + ",".join(names), fn, kind="safety", on_done=on_done)
 
-    def outputs_off(self, keep_pumps: bool, on_done=None) -> None:
-        """ALL STOP 의 PLC_OUTPUTS_OFF — 버튼 코일 OFF(펌프 계통은 keep_pumps 면 그대로).
-        매핑된 코일의 연속 구간만 FC15 로(매핑 안 된 래더 비트는 건드리지 않는다)."""
-        from v2.chk.safety_rules import ALL_STOP_KEEP_COILS
+    def outputs_off(self, on_done=None) -> None:
+        """ALL STOP 의 PLC_OUTPUTS_OFF — v1 비상 정지(device/PLC.py:1390-1447)와 같게: 버튼 코일 15개(v1 PLC_COIL_MAP,
+        펌프·밸브 포함) 전부 OFF → 히터 RUN=0(HEATER_ENABLED) → D00040=0(v2 추가) → M00200(DAC enable)=0.
+        매핑된 코일의 연속 구간만 FC15, 하나면 FC5(매핑 안 된 래더 비트는 건드리지 않는다). v1 처럼 한 쓰기가 실패해도
+        나머지를 계속 쓰고, 하나라도 실패하면 결과는 실패 — 히터 RUN=0 을 못 썼으면 보류(다음 통신 성공 때 다시)."""
         from v2.chk.commands import PLC_BUTTONS
-        keep = set(ALL_STOP_KEEP_COILS) if keep_pumps else set()
-        addrs = sorted(_ADDR[b.addr].addr for b in PLC_BUTTONS if b.addr not in keep)
+        addrs = sorted(_ADDR[b.addr].addr for b in PLC_BUTTONS)
         runs, start, prev = [], addrs[0], addrs[0]
         for a in addrs[1:]:
             if a == prev + 1:
@@ -396,15 +396,40 @@ class PlcDriver:
                 runs.append((start, prev))
                 start = prev = a
         runs.append((start, prev))
+        run_off = {"ok": False}
 
         def fn(s):
             c = self._client(s)
+            errs = []
+
+            def w(what, f, *a):
+                try:
+                    f(*a)
+                    return True
+                except Exception as e:          # v1: 구간마다 따로 감싸고 계속
+                    errs.append(f"{what}: {e!r}")
+                    return False
             for lo, hi in runs:
                 if lo == hi:
-                    c.write_coil(lo, False)
+                    w(f"코일 {lo}", c.write_coil, lo, False)
                 else:
-                    c.write_coils(lo, [False] * (hi - lo + 1))
-        self.submit_write("ALL STOP 출력 OFF", fn, kind="safety", purge=True, on_done=on_done)
+                    w(f"코일 {lo}..{hi}", c.write_coils, lo, [False] * (hi - lo + 1))
+            if self.cfg["HEATER_ENABLED"]:
+                if w("히터 RUN=0", c.write_coil, _ADDR["heater_run"].addr, False):
+                    run_off["ok"], self._pending_heater_off = True, False
+            w("D00040=0", c.write_reg, _ADDR["rf_dac"].addr, 0)
+            if w("M00200=0", c.write_coil, _ADDR["rf_dac_enable"].addr, False):
+                self._rf_enabled = False
+            self._rf_set_w = 0.0
+            if errs:
+                raise RuntimeError("ALL STOP 출력 OFF 일부 실패: " + "; ".join(errs))
+
+        def done(res: Result) -> None:
+            if not run_off["ok"] and self.cfg["HEATER_ENABLED"] and res.status != "rejected":
+                self._pending_heater_off = True          # RUN=0 을 못 썼으면(링크 없음 포함) 보류 — 다음 통신 성공 때 다시
+            if on_done:
+                on_done(res)
+        self.submit_write("ALL STOP 출력 OFF", fn, kind="safety", purge=True, on_done=done)
 
 
 class PlcFastPoller:

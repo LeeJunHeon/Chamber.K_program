@@ -15,6 +15,8 @@
 - PROCESS_ABORT 는 엔진이 처리: 공정 쪽 on_abort(reason) 를 부르고 정지 순서를 실행.
 - 정지 순서(StepRunner): 단계마다 결과를 이벤트로. 단계에서 예외·실패가 나면 must=False 단계는 건너뛰고,
   must=True 단계는 반드시 실행한다. 단계 한도(timeout)를 넘으면 기다리지 않고 다음 단계로.
+  nowait 단계는 보내기만 하고(결과 "sent") 바로 다음 단계로 — 결과는 뒤의 AWAIT 단계(Act("AWAIT", {"no": n}))가
+  그 단계 한도까지 기다려 받는다(v1 정지 순서: DC OFF·RF Pulse OFF 를 보내 놓고 RF 램프다운, 그 뒤 RF Pulse 완료 대기).
 """
 from __future__ import annotations
 
@@ -69,6 +71,7 @@ class Step:
     must: bool = True
     when: Callable[[], bool] = lambda: True
     desc: str = ""
+    nowait: bool = False                              # 보내기만 하고 다음 단계로 — 결과는 AWAIT 단계가 받는다
 
 
 class StepRunner:
@@ -77,10 +80,32 @@ class StepRunner:
     def __init__(self, clock, handlers: Dict[str, Callable], emit: Callable[[SafetyEvent], None]) -> None:
         self.clock, self.handlers, self.emit = clock, handlers, emit
 
+    def _status(self, box: List[Optional[str]], got: bool) -> str:
+        if not got:
+            return "timeout"
+        return "ok" if box[0] is None else f"error:{box[0]}"
+
     def run(self, name: str, steps: Sequence[Step]) -> List[tuple]:
         results: List[tuple] = []
         failed = False
+        sent: Dict[int, List[Optional[str]]] = {}         # nowait 단계 번호 → 결과 상자
         for s in steps:
+            if s.act.kind == "AWAIT":
+                no = int(s.act.args.get("no", -1))
+                box_ = sent.get(no)
+                if box_ is None:
+                    results.append((s.no, "AWAIT", "not_needed"))
+                    self.emit(SafetyEvent("step", name, "AWAIT", f"{s.no}. {no}단계를 보내지 않음 — 건너뜀", "info",
+                                          self.clock.wall()))
+                    continue
+                got = self.clock.wait_until(self.clock.monotonic() + s.timeout_s, lambda b=box_: bool(b))
+                status = self._status(box_, got)
+                if status != "ok":
+                    failed = True
+                results.append((s.no, "AWAIT", status))
+                self.emit(SafetyEvent("step", name, "AWAIT", f"{s.no}. {s.desc or f'{no}단계 결과'} → {status}",
+                                      "info" if status == "ok" else "error", self.clock.wall()))
+                continue
             if failed and not s.must:
                 results.append((s.no, s.act.kind, "skipped"))
                 self.emit(SafetyEvent("step", name, s.act.kind, f"{s.no}. 건너뜀(앞 단계 실패, 필수 아님)", "warn",
@@ -104,20 +129,19 @@ class StepRunner:
             try:
                 h = self.handlers[s.act.kind]
                 h(dict(s.act.args), done)
-                got = self.clock.wait_until(self.clock.monotonic() + s.timeout_s, lambda: bool(box))
-                if not got:
-                    status = "timeout"
-                elif box[0] is None:
-                    status = "ok"
+                if s.nowait:
+                    sent[s.no] = box
+                    status = "sent"
                 else:
-                    status = f"error:{box[0]}"
+                    got = self.clock.wait_until(self.clock.monotonic() + s.timeout_s, lambda: bool(box))
+                    status = self._status(box, got)
             except Exception as e:
                 status = f"error:{type(e).__name__}: {e}"
-            if status != "ok":
+            if status not in ("ok", "sent"):
                 failed = True
             results.append((s.no, s.act.kind, status))
             self.emit(SafetyEvent("step", name, s.act.kind, f"{s.no}. {s.desc or s.act.kind} → {status}",
-                                  "info" if status == "ok" else "error", self.clock.wall()))
+                                  "info" if status in ("ok", "sent") else "error", self.clock.wall()))
         self.emit(SafetyEvent("seq_done", name, "", ", ".join(f"{n}:{st}" for n, _, st in results),
                               "info" if not failed else "warn", self.clock.wall()))
         return results

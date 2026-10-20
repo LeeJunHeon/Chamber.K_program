@@ -10,7 +10,7 @@
 공정 쪽(process)은 state·active·on_abort(reason)·on_stop_done(kind)·uses_* 를 가진 객체 — 다음 단계 ProcessEngine 이
 같은 모양으로 대신한다. 지금은 SimpleProcess(시험·시험대용).
 
-pending_confirm 규칙은 지금 권장값으로 실행(S42 공정 중 잠금 버튼, ALL_STOP_KEEP_PUMPS=true). on_hold(S46)는 실행하지 않는다.
+ALL STOP 은 v1 처럼 전부 끈다(사용자 결정 2026-10-20 — 펌프 유지 옵션 없음). on_hold(S46)는 실행하지 않는다.
 """
 from __future__ import annotations
 
@@ -509,7 +509,8 @@ class ChkSafety:
             a = s.act
             if a.kind in args:
                 a = Act(a.kind, dict(a.args, **args[a.kind]))
-            out.append(Step(s.no, a, self._to(s.timeout_param), s.must, when.get(f"{s.no}", lambda: True), s.desc))
+            out.append(Step(s.no, a, self._to(s.timeout_param), s.must, when.get(f"{s.no}", lambda: True), s.desc,
+                            s.nowait))
         return out
 
     def stop_steps(self) -> List[Step]:
@@ -520,10 +521,11 @@ class ChkSafety:
 
     def all_stop_steps(self) -> List[Step]:
         p = self.process
+        was_active = bool(p.active)                     # ALL STOP 을 받은 때 공정이 돌고 있었나(v1 공정 정지 순서)
         fil = lambda: bool(self.ig.last and self.ig.last.filament) or p.filament_by_process
         return self._steps(SR.ALL_STOP_SEQUENCE,
-                           {"1": lambda: p.heater_recipe_running, "2": lambda: p.active, "9": fil},
-                           {"PLC_OUTPUTS_OFF": {"keep_pumps": bool(self.cfg["ALL_STOP_KEEP_PUMPS"])}})
+                           {"1": lambda: p.heater_recipe_running, "2": lambda: p.active, "6": lambda: was_active, "7": fil},
+                           {})
 
     # ── 처리기 ──
     def _handlers(self) -> Dict[str, Callable]:
@@ -579,7 +581,7 @@ class ChkSafety:
             "GAS_EXHAUST": lambda a, done: mfc.valve(True, on_done=_seq(done)),
             "GAS_VALVES_CLOSE": coils_off(lambda a: ["ar_valve", "o2_valve"]),
             "SHUTTERS_CLOSE": coils_off(lambda a: a.get("which", "ms").split(",")),
-            "PLC_OUTPUTS_OFF": lambda a, done: plc.outputs_off(bool(a.get("keep_pumps", True)), on_done=_req(done)),
+            "PLC_OUTPUTS_OFF": lambda a, done: plc.outputs_off(on_done=_req(done)),
             "IG_FILAMENT_OFF": lambda a, done: (ig.filament_off(on_done=_req(done)) if self.cfg.get("IG_ENABLED", True)
                                                 else done(None)),
             "BLACKBOX_DUMP": lambda a, done: (plc.dump_blackbox(a.get("tag", "safety")), done(None)),

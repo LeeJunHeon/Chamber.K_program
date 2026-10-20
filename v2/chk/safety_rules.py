@@ -250,9 +250,10 @@ RULES: tuple = (
       states=("*",), actions=(_rej("PROCESS_RUNNING"), _rej("HEATER_GAS_ACTIVE")), v1="main.py:4467 closeEvent"),
     R("S41", "종료 때 히터 RUN=0", "maintain", "event:shutdown", "프로그램이 끝날 때 RUN=0 시도(2 s 안)", ("heater.run",),
       actions=(Act("HEATER_FORCE_OFF"),), v1="device/PLC.py:331"),
-    R("S42", "원격 명령 가드", "reject", "command", "commands.check_command — 경로·상태·공정 중 잠금 버튼, PLC 링크 없으면 PLC 명령 거부",
-      actions=(_rej("REMOTE_LOCKED_IN_PROCESS"), _rej("LINK_DOWN"), _rej("STATE_NOT_ALLOWED")),
-      v1="integrations/erp_commands.py:207, 268 (v1 은 공정 중 PLC 버튼 허용 — v2 에서 잠금)", pending_confirm=True),
+    R("S42", "원격 명령 가드", "reject", "command", "commands.check_command — 경로·상태, PLC 링크 없으면 PLC 명령 거부(LINK_DOWN). "
+      "공정 중 PLC 버튼은 v1 처럼 모두 허용하고 공정 기록에 PLC_MANUAL_IN_PROCESS(info)로 남긴다(확인은 웹 단계)",
+      actions=(_rej("LINK_DOWN"), _rej("STATE_NOT_ALLOWED"), _note("info", "PLC_MANUAL_IN_PROCESS")),
+      v1="integrations/erp_commands.py:207, 268 (공정 중 PLC 버튼 허용 — 사용자 결정 2026-10-20 v1 과 같게)"),
     R("S43", "시리얼 열기·닫기 격리", "maintain", "worker", "포트 열기·닫기를 제한 시간 있는 별도 스레드에서. 재연결은 COMM_RECONNECT_* 백오프",
       params=("COMM_RECONNECT_START_MS", "COMM_RECONNECT_MAX_MS", "COMM_LONG_OUTAGE_SEC", "COMM_PROBE_MS"),
       v1="lib/serial_guard.py, lib/comm_policy.py (2026-09-16 사고)"),
@@ -271,7 +272,8 @@ RULES: tuple = (
     R("S48", "공정 중 H 등급 설정 금지", "reject", "config", "공정 진행 중 CONFIG_APPLY 에 H 등급 변경이 있으면 거부, idle 키는 대기",
       actions=(_rej("CONFIG_H_IN_PROCESS"),), v1="v2"),
     R("S49", "RF Pulse 인터록 열림", "trip", "tick", "RF Pulse 사용 공정에서 rfp.itl_open 참", ("rfp.itl_open",), states=ACT,
-      actions=(_abort("RFP_FAULT"), Act("RFP_SAFE_OFF")), v1="v2 (CESAR 162 byte2 b7, p.114)"),
+      actions=(_abort("RFP_FAULT"), Act("RFP_SAFE_OFF")),
+      v1="v2 (CESAR 162 byte2 b7, p.114) — v1 에 없음. 열림 즉시 중단은 v2 방식 유지(사용자 2026-10-20)"),
     R("S51", "시작 때 남은 출력 정리", "recover", "event:first_read",
       "v2 가 켜진 뒤 장비별 첫 정상 읽기(재연결 때는 아님)에서, 공정·히터 레시피가 진행 중이 아니면: "
       "PLC rf.dac > 0 → RF 램프다운 → RF_SAFE_OFF + RF_RESIDUAL_OUTPUT(warn), D40 0·enable 만 → RF_SAFE_OFF + RF_ENABLE_RESIDUAL"
@@ -283,7 +285,8 @@ RULES: tuple = (
       actions=(Act("RF_RAMP_DOWN"), Act("RF_SAFE_OFF"), Act("DC_SAFE_OFF"), Act("RFP_SAFE_OFF"),
                _note("warn", "RF_RESIDUAL_OUTPUT"), _note("info", "RF_ENABLE_RESIDUAL"), _note("warn", "DC_RESIDUAL_OUTPUT"),
                _note("warn", "RFP_RESIDUAL_OUTPUT"), _note("warn", "GAS_RESIDUAL_FLOW")),
-      v1="v1 은 RF enable 을 비상정지에서만 끔(PLC.send_rfpower_command) — 10/16 bench", pending_confirm=True),
+      v1="v1 은 RF enable 을 비상정지에서만 끔(PLC.send_rfpower_command) — 10/16 bench. 확정(사용자 2026-10-20): "
+         "전원 출력만 끄고 PLC 코일(펌프·밸브·가스 차단밸브 등)은 그대로"),
     R("S50", "DC 하드 보호 설정", "maintain", "event:dc_connect", "연결 때 VOLT:OVP=DC_MAX_VOLTAGE, CURR:OCP=DC_MAX_CURRENT, 설정·되읽기(DC_SET_PROTECTION). FACT:LAST-STA 는 읽기만(FULLY 면 경고)",
       params=("DC_MAX_VOLTAGE", "DC_MAX_CURRENT"), v1="v2 (devices.PC_DEAD_PLAN PD7)", pending_confirm=True,
       needs="bench 에서 명령 동작 확인"),
@@ -299,6 +302,7 @@ class SeqStep:
     must: bool = True            # 앞 단계에서 예외가 나도 반드시 실행
     when: str = ""               # 조건
     desc: str = ""
+    nowait: bool = False         # 보내기만 하고 다음 단계로(결과는 뒤의 AWAIT 단계가 받는다)
 
 
 STOP_SEQUENCE: tuple = (
@@ -317,22 +321,22 @@ STOP_SEQUENCE: tuple = (
     SeqStep(11, Act("GAS_VALVES_CLOSE"), "", True, "", "Ar·O2 차단밸브 닫기"),
 )
 
-# ALL STOP — 각 단계 독립(앞 단계 예외와 무관). 펌프 계통 유지 여부는 ALL_STOP_KEEP_PUMPS(pending_confirm).
-# 펌프 계통 = Rotary·Turbo·RV·FV — true 면 ALL STOP 이 이 코일을 건드리지 않는다(터보가 도는 동안 FV 를 닫지 않기 위함).
-ALL_STOP_KEEP_COILS: tuple = ("rotary", "turbo", "rv", "fv")
+# ALL STOP — 말 그대로 전부 끈다(사용자 결정 2026-10-20, v1 과 같게). 각 단계 독립(앞 단계 예외와 무관).
+# v1 순서(core/process_service.py:746-812): 히터 레시피 중단 → 중단 표시 → PLC 비상 정지(device/PLC.py:1390-1447 — 버튼 코일
+# 전부 OFF, 히터 RUN=0, DAC enable OFF) → DC 직접 OFF → 공정 정지 순서(유량 OFF·MFC 밸브 열기·필라멘트) → RF Pulse 정지.
+# v2 가 더한 것: PLC 비상 정지에 D00040=0. RF 는 램프다운 없이 즉시 0(이상 중단의 램프다운과 다름).
 ALL_STOP_SEQUENCE: tuple = (
     SeqStep(1, Act("HEATER_RECIPE_ABORT", {"reason": "ALL_STOP"}), "", True, "히터 레시피 실행 중", "히터 레시피 중단"),
     SeqStep(2, Act("PROCESS_ABORT", {"reason": "ALL_STOP"}), "", True, "공정 진행 중",
             "중단 표시를 PLC OFF 보다 먼저(S4 — MV 닫힘 이중 중단 방지). 공정은 STOPPING 으로"),
     SeqStep(3, Act("PLC_OUTPUTS_OFF"), "", True, "",
-            "전원·가스·셔터·MV·도어 코일 OFF. ALL_STOP_KEEP_PUMPS=true 면 펌프 계통(ALL_STOP_KEEP_COILS: "
-            "Rotary·Turbo·RV·FV)은 지금 상태 그대로, false 면 v1 처럼 전부 0"),
-    SeqStep(4, Act("HEATER_FORCE_OFF"), "", True, "", "히터 RUN=0"),
-    SeqStep(5, Act("RF_SAFE_OFF"), "", True, "", "RF DAC enable OFF + D00040=0(v1 은 D00040 을 0 으로 쓰지 않았다)"),
-    SeqStep(6, Act("DC_SAFE_OFF"), "", True, "", "DC OFF 직결 확인형 — 공정 여부와 무관"),
-    SeqStep(7, Act("RFP_SAFE_OFF"), "", True, "", "RF Pulse OFF 직결 — 공정 여부와 무관"),
-    SeqStep(8, Act("GAS_FLOW_OFF"), "STOP_FLOW_OFF_TIMEOUT_SEC", True, "", "MFC 유량 OFF(v1 은 공정 STOP 순서에만 맡겼다)"),
-    SeqStep(9, Act("IG_FILAMENT_OFF"), "", False, "필라멘트 켜져 있으면", "이온 게이지 필라멘트 OFF"),
+            "PLC 비상 정지: 버튼 코일 15개 전부 OFF(펌프·밸브 포함) → 히터 RUN=0 → D00040=0 → M00200=0(D00040=0 만 v2 추가)"),
+    SeqStep(4, Act("DC_SAFE_OFF"), "", True, "", "DC OFF 직결 확인형 — 보내고 다음 단계로(v1 dc_emergency_off)", nowait=True),
+    SeqStep(5, Act("GAS_FLOW_OFF"), "STOP_FLOW_OFF_TIMEOUT_SEC", True, "", "MFC 유량 OFF"),
+    SeqStep(6, Act("GAS_EXHAUST"), "STOP_EXHAUST_WAIT_SEC", True, "공정 진행 중이었으면", "MFC 밸브 열기(v1 공정 정지 순서)"),
+    SeqStep(7, Act("IG_FILAMENT_OFF"), "", False, "필라멘트 켜져 있으면", "이온 게이지 필라멘트 OFF"),
+    SeqStep(8, Act("RFP_SAFE_OFF"), "", True, "", "RF Pulse OFF 직결 — 공정 여부와 무관(v1 맨 끝 rfpulse_stop)"),
+    SeqStep(9, Act("AWAIT", {"no": 4}), "", True, "", "DC OFF 결과"),
 )
 
 # 공정 시작 전 확인 규칙(process_states 의 START 전이 guard)

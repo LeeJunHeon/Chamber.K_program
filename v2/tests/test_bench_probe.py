@@ -2,6 +2,7 @@
 
 장비에 나간 바이트를 장비별로 검사해 '쓰기 0'(질의만)을 확인한다.
 """
+import pytest
 import time
 
 from v2.chk.sim.cesar_sim import CesarSim
@@ -84,6 +85,7 @@ def test_process_trace_stops_with_zero_writes(tmp_path):
     assert b.sims["COM11"].out is True                                # 끄지도 않는다(쓰기 0)
 
 
+@pytest.mark.slow
 def test_rf_enable_only_continues_with_note(tmp_path):
     """enable(M00200)만 켜지고 D40 0·순방향 0 — v1 정상 종료 흔적: [참고] 를 남기고 계속(10/16 bench 에서 멈췄던 경우)."""
     b = Bench()
@@ -100,6 +102,7 @@ def test_rf_actual_output_stops(tmp_path):
     assert code == 2 and "RF 출력이 있음(D40 300" in out and "수집 시작" not in out and b.writes() == []
 
 
+@pytest.mark.slow
 def test_normal_run_reads_only_and_writes_summary(tmp_path):
     b = Bench()
     code, out = b.run(tmp_path, seconds=3, cfg_over={"RFPULSE_ENABLED": True})
@@ -128,6 +131,7 @@ def test_normal_run_reads_only_and_writes_summary(tmp_path):
     assert all(m == "0" for m in re.findall(r"무응답 (\d+)", s)), s      # 종료 때 끊긴 요청은 무응답에 안 셈
 
 
+@pytest.mark.slow
 def test_disabled_and_skipped_devices_are_not_opened(tmp_path):
     """RF Pulse 는 기본 꺼짐(RFPULSE_ENABLED=false, 미연결) — 포트를 열지 않는다. --skip 으로도 뺀다."""
     b = Bench()
@@ -137,6 +141,7 @@ def test_disabled_and_skipped_devices_are_not_opened(tmp_path):
     assert b.writes() == []
 
 
+@pytest.mark.slow
 def test_inventory_mismatches_are_warned_not_changed(tmp_path):
     b = Bench()
     b.sims["COM10"].info[33] = "E06"                              # 10 Torr 레인지
@@ -156,6 +161,7 @@ def test_inventory_mismatches_are_warned_not_changed(tmp_path):
     assert any(i["query"] == "R33" and i["raw"] == "E06" for i in inv["items"])
 
 
+@pytest.mark.slow
 def test_no_reply_device_shows_recording(tmp_path):
     b = Bench()
     b.sims["COM12"].add_fault("no_response", 0.0, 1e9)            # IG 가 아무것도 답하지 않음
@@ -163,6 +169,7 @@ def test_no_reply_device_shows_recording(tmp_path):
     assert "녹화 앞부분 ig" in out and "'F'  →  ''" in out and b.writes() == []
 
 
+@pytest.mark.slow
 def test_mfc_fs_not_100_is_loud(tmp_path):
     b = Bench()
     b.sims["COM10"].fs = [200.0, 100.0, 100.0, 100.0]

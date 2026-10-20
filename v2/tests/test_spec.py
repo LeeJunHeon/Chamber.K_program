@@ -81,15 +81,13 @@ def test_plc_buttons_map_to_addrs():
     names = {a.name for a in D.PLC_ADDRS if "W" in a.access}
     for b in C.PLC_BUTTONS:
         assert b.addr in names, b.target
-    locked = {b.target for b in C.PLC_BUTTONS if not b.remote_in_process}
-    assert locked == {"rotary", "mv", "vent", "turbo", "door_up", "door_down"}
-    assert all(b.pending_confirm for b in C.PLC_BUTTONS if not b.remote_in_process)
+    assert len(C.PLC_BUTTONS) == 15                    # v1 PLC_COIL_MAP 15개(lib/config.py:464-480)
 
 
 @pytest.mark.parametrize("kind,src,state,args,expect", [
-    ("PLC_BUTTON", Source.WEB, "MAIN", {"target": "mv", "on": False}, "REMOTE_LOCKED_IN_PROCESS"),
-    ("PLC_BUTTON", Source.WEB, "POWER_WAIT", {"target": "vent", "on": True}, "REMOTE_LOCKED_IN_PROCESS"),
-    ("PLC_BUTTON", Source.WEB, "STOPPING", {"target": "door_up", "on": True}, "REMOTE_LOCKED_IN_PROCESS"),
+    ("PLC_BUTTON", Source.WEB, "MAIN", {"target": "mv", "on": False}, None),          # 공정 중에도 허용(v1, 2026-10-20)
+    ("PLC_BUTTON", Source.WEB, "POWER_WAIT", {"target": "vent", "on": True}, None),
+    ("PLC_BUTTON", Source.WEB, "STOPPING", {"target": "door_up", "on": True}, None),
     ("PLC_BUTTON", Source.WEB, "IDLE", {"target": "mv", "on": True}, None),
     ("PLC_BUTTON", Source.WEB, "MAIN", {"target": "s1", "on": False}, None),
     ("PLC_BUTTON", Source.WEB, "IDLE", {"target": "nope", "on": True}, "BAD_ARGS"),
@@ -110,8 +108,9 @@ def test_check_command(kind, src, state, args, expect):
 
 def test_check_command_codes_registered():
     codes = C.reason_codes()
-    for x in ("UNKNOWN_COMMAND", "SOURCE_NOT_ALLOWED", "STATE_NOT_ALLOWED", "BAD_ARGS", "REMOTE_LOCKED_IN_PROCESS"):
+    for x in ("UNKNOWN_COMMAND", "SOURCE_NOT_ALLOWED", "STATE_NOT_ALLOWED", "BAD_ARGS", "PLC_MANUAL_IN_PROCESS"):
         assert x in codes
+    assert "REMOTE_LOCKED_IN_PROCESS" not in codes
 
 
 # ───────────── 공정 상태 기계 ─────────────
@@ -187,13 +186,29 @@ def test_delay_row():
     ({"heater_ramp": 61.0}, "heater_ramp"),
     ({"ar": "1"}, "ar"),
     ({"unknown": 1}, "모르는 열"),
-    ({"use_rf_pulse": True, "rf_pulse_power": 100.0, "rf_pulse_freq": 20000, "rf_pulse_duty": 80}, "RF Pulse"),
+    ({"use_rf_pulse": True, "rf_pulse_power": 100.0, "rf_pulse_freq": 20, "rf_pulse_duty": 80}, "RF Pulse"),   # 20 kHz·80 % → OFF 10 µs
 ])
 def test_bad_rows(patch, needle):
     row = dict(GOOD)
     row.update(patch)
     out, errs, _ = R.check_process_row(row, CFG)
     assert out is None and any(needle in e for e in errs), errs
+
+
+def test_rf_pulse_freq_is_khz_like_v1():
+    """레시피 rf_pulse_freq 는 v1 처럼 kHz(소수 허용) — 장비에는 Hz = round(kHz × 1000)(v1 process_controller.py:868-869)."""
+    from v2.chk.process_steps import row_to_params
+    row = dict(GOOD, use_rf_pulse=True, rf_pulse_power=100.0, rf_pulse_freq=2.5, rf_pulse_duty=50)
+    cfg = dict(CFG, RFPULSE_ENABLED=True)
+    out, errs, _ = R.check_process_row(row, cfg)
+    assert not errs, errs
+    assert row_to_params(out, cfg)["rf_pulse_freq_hz"] == 2500
+    assert R.pulse_freq_hz(0.0015) == 2 and R.pulse_freq_hz(30) == 30000 and R.pulse_freq_hz("") is None
+    out, errs, _ = R.check_process_row(dict(row, rf_pulse_freq=30.0), cfg)       # 30 kHz = 상한(포함)
+    assert not errs, errs
+    for khz in (31, 0.0005):                                                       # 31 kHz > 30 kHz, 0.5 Hz < 1 Hz
+        out, errs, _ = R.check_process_row(dict(row, rf_pulse_freq=khz, rf_pulse_duty=None), cfg)
+        assert out is None and any("범위" in e for e in errs), errs
 
 
 def test_base_pressure_needs_ig():

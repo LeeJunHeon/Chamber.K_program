@@ -192,7 +192,7 @@ def test_bench_sends_no_writes():
     r.d.heater_set_sv(200.0)
     r.d.set_button("vent", True)
     r.d.rf_set_power(100.0)
-    r.d.outputs_off(True)
+    r.d.outputs_off()
     r.d.heater_reset()
     r.second(2)
     assert r.sim.write_funcs_seen() == []                             # 하트비트·한계값·마커 포함
@@ -203,20 +203,21 @@ def test_bench_sends_no_writes():
 
 
 # ───────── ALL STOP 출력 ─────────
-@pytest.mark.parametrize("keep", [True, False])
-def test_outputs_off(keep):
+def test_outputs_off():
+    """ALL STOP 출력 OFF = v1 비상 정지(device/PLC.py:1390-1447) + D00040=0: 버튼 코일 15개 전부(펌프 포함),
+    히터 RUN=0, D00040=0, M00200=0. 매핑 안 된 래더 비트는 건드리지 않는다."""
     sim = PlcSim()
     r = Rig(sim=sim)
-    for n in ("rotary", "rv", "fv", "turbo", "mv", "vent", "door_up", "ar_valve", "o2_valve", "ms", "s1", "s2",
-              "door_down", "buzz_stop", "ion_remote_on"):
+    buttons = ("rotary", "rv", "fv", "turbo", "mv", "vent", "door_up", "ar_valve", "o2_valve", "ms", "s1", "s2",
+               "door_down", "buzz_stop", "ion_remote_on")
+    for n in buttons + ("heater_run", "rf_dac_enable"):
         sim.coils[A[n]] = True
+    sim.regs[A["rf_dac"]] = 700
     sim.coils[12] = sim.coils[13] = True                              # 매핑 안 된 래더 비트
-    r.d.outputs_off(keep_pumps=keep)
+    r.d.outputs_off()
     r.c.wait_until(r.c.monotonic() + 1.0)
-    pumps = [sim.coil(n) for n in SR.ALL_STOP_KEEP_COILS]
-    assert pumps == [keep] * 4
-    assert not any(sim.coil(n) for n in ("mv", "vent", "door_up", "door_down", "ar_valve", "o2_valve", "ms", "s1", "s2",
-                                          "ion_remote_on"))
+    assert not any(sim.coil(n) for n in buttons + ("heater_run", "rf_dac_enable"))
+    assert sim.regs[A["rf_dac"]] == 0
     assert sim.coils[12] and sim.coils[13]                            # 건드리지 않음
     assert 15 in sim.write_funcs_seen()
     r.done()

@@ -2,7 +2,7 @@
 
 - plc250 조치 지연: 조건이 생긴 시각 → 조치 쓰기가 PLC 에 도착한 시각
 - 공정 중 MV 닫힘 → 중단 → STOP 순서 끝까지(장비가 실제로 안전 상태)
-- ALL STOP 이 펌프 계통(Rotary·Turbo·RV·FV)을 건드리지 않음
+- ALL STOP 이 PLC 출력을 전부 끈다(펌프·밸브 포함, 히터 RUN·D00040·M00200 — v1 과 같게, 2026-10-20)
 - 정지 순서 단계에서 예외가 나도 필수 단계 실행
 """
 import pytest
@@ -113,36 +113,23 @@ def test_mv_closed_abort_runs_full_stop_sequence(tmp_path):
     assert not rig.safety.engine.busy
 
 
-def test_all_stop_keeps_pump_system(tmp_path):
+def test_all_stop_turns_off_every_plc_output(tmp_path):
+    """ALL STOP = 전부(v1 PLC.on_emergency_stop + D00040=0): 버튼 코일 15개(펌프·밸브 포함)·히터 RUN·D00040·M00200, DC OFF."""
     c, rig = make(tmp_path, state="MAIN", uses_dc=True)
-    plc = rig.sims["plc"]
-    for k in PUMPS + ("mv", "ms", "s1", "ar_valve", "o2_valve", "vent", "door_up"):
+    plc, dcs = rig.sims["plc"], rig.sims["dc"]
+    buttons = PUMPS + ("mv", "vent", "door_up", "door_down", "ar_valve", "o2_valve", "ms", "s1", "s2", "buzz_stop", "ion_remote_on")
+    for k in buttons + ("heater_run", "rf_dac_enable"):
         plc.coils[A[k]] = True
-    rig.loop.tick_hooks.append(lambda t: t.seq == 3 and rig.safety.all_stop())
+    plc.regs[A["rf_dac"]] = 500
+    rig.loop.tick_hooks.append(lambda t: t.seq == 1 and rig.dc.start_output(600.0, 0.3, tick=t))
+    rig.loop.tick_hooks.append(lambda t: t.seq == 4 and rig.safety.all_stop())
     run(rig, 15)
-    for k in PUMPS:
-        assert plc.coils[A[k]] is True, k                     # 펌프 계통은 그대로
-    for k in ("mv", "ms", "s1", "ar_valve", "o2_valve", "vent", "door_up"):
+    for k in buttons + ("heater_run", "rf_dac_enable"):
         assert plc.coils[A[k]] is False, k
-    pump_addrs = {A[k] for k in PUMPS}
-    for t, addr, n, _ in coil_writes(plc, 0.0):
-        assert not (pump_addrs & set(range(addr, addr + n))), (addr, n)     # 펌프 주소에 쓰기 자체가 없다
+    assert plc.regs[A["rf_dac"]] == 0 and dcs.out is False
     e = rig.safety.engine
     assert e.run_reason == "ALL_STOP" and rig.process.state == "ABORTED"
-    assert all(st in ("ok", "not_needed") for _, _, st in e.seq_results["all_stop"]), e.seq_results["all_stop"]
-
-
-def test_all_stop_without_keep_pumps_clears_pumps(tmp_path):
-    c = VirtualClock(start_wall=1_760_000_000.0)
-    c.register()
-    rig = ChkRig(c, tmp_path, cfg={"ALL_STOP_KEEP_PUMPS": False}, simple_process=True)
-    plc = rig.sims["plc"]
-    for k in PUMPS:
-        plc.coils[A[k]] = True
-    rig.loop.tick_hooks.append(lambda t: t.seq == 2 and rig.safety.all_stop())
-    run(rig, 6)
-    for k in PUMPS:
-        assert plc.coils[A[k]] is False, k
+    assert all(st in ("ok", "not_needed", "sent") for _, _, st in e.seq_results["all_stop"]), e.seq_results["all_stop"]
 
 
 def test_stop_sequence_exception_real_devices(tmp_path):

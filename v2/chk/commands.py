@@ -6,7 +6,8 @@
 - internal : 안전 엔진·공정 엔진 — 안전 조치(safety_rules 의 action)
 
 v1 근거: integrations/erp_commands.py(명령·거부 규칙), main.py:_erp_exec_heater_command, core/process_service.py.
-v1 은 공정 중에도 원격 PLC 버튼(MV·Vent·Door·Turbo …)을 실행했다 — v2 는 PLC_BUTTONS.remote_in_process 로 막는다.
+공정 중 원격 PLC 버튼(MV·Vent·Door·Turbo …)은 v1 처럼 모두 허용한다(사용자 결정 2026-10-20) — 실행한 것은 공정 기록에
+PLC_MANUAL_IN_PROCESS(info)로 남긴다. "정말 하시겠습니까?" 확인은 웹 단계에서.
 """
 from __future__ import annotations
 
@@ -45,7 +46,6 @@ CHK_REASONS: tuple = (
     Reason("IG_ATM_FILAMENT_ON", "대기압(PLC ATM 센서) — 이온 게이지 필라멘트 켜기 금지", "reject"),
     Reason("IG_FILAMENT_FAILED_CMD", "필라멘트 명령 결과 확인 실패", "fail"),
     Reason("COMMAND_NOT_ALLOWED", "장비에 보내지 않는 명령(예: 이온 게이지 디개스 C·D)", "reject"),
-    Reason("REMOTE_LOCKED_IN_PROCESS", "공정 중 원격 조작 금지 버튼", "reject"),
     Reason("DOOR_CONFLICT", "도어 올림·내림 동시 요청", "reject"),
     Reason("CONFIG_H_IN_PROCESS", "공정 중 H 등급 설정 변경 금지", "reject"),
     # 공정 중단(abort)
@@ -103,6 +103,7 @@ CHK_REASONS: tuple = (
     Reason("MV_INTERLOCK_BLIP", "MV 인터록이 지속 시간 안에 다시 참(기록만)", "info"),
     Reason("COMM_LONG_OUTAGE", "장비 장기 두절", "info"),
     Reason("LINK_STALE", "장비 값이 오래됨 — 화면 잠금", "info"),
+    Reason("PLC_MANUAL_IN_PROCESS", "공정 중 PLC 버튼 실행(기록 — 대상·켬/끔·출처·시각)", "info"),
 )
 
 ALL_REASONS: tuple = COMMON_REASONS + CHK_REASONS
@@ -156,26 +157,25 @@ class PlcButton:
     target: str            # 명령 인자 값
     addr: str              # devices.PLC_ADDRS 이름
     label: str
-    remote_in_process: bool   # 공정 중 원격 조작 허용
-    pending_confirm: bool = False
 
 
+# v1 lib/config.py:464-480 PLC_COIL_MAP 15개와 같다(ALL STOP 은 이 코일을 전부 끈다)
 PLC_BUTTONS: tuple = (
-    PlcButton("rotary", "rotary", "Rotary 펌프", False, True),
-    PlcButton("rv", "rv", "RV", True),
-    PlcButton("fv", "fv", "FV", True),
-    PlcButton("mv", "mv", "Main 밸브", False, True),
-    PlcButton("vent", "vent", "Vent", False, True),
-    PlcButton("turbo", "turbo", "Turbo 펌프", False, True),
-    PlcButton("door_up", "door_up", "도어 올림", False, True),
-    PlcButton("door_down", "door_down", "도어 내림", False, True),
-    PlcButton("ar_valve", "ar_valve", "Ar 차단밸브", True),
-    PlcButton("o2_valve", "o2_valve", "O2 차단밸브", True),
-    PlcButton("ms", "ms", "Main 셔터", True),
-    PlcButton("s1", "s1", "Gun 1 셔터", True),
-    PlcButton("s2", "s2", "Gun 2 셔터", True),
-    PlcButton("buzz_stop", "buzz_stop", "부저 정지", True),
-    PlcButton("ion", "ion_remote_on", "이오나이저", True),
+    PlcButton("rotary", "rotary", "Rotary 펌프"),
+    PlcButton("rv", "rv", "RV"),
+    PlcButton("fv", "fv", "FV"),
+    PlcButton("mv", "mv", "Main 밸브"),
+    PlcButton("vent", "vent", "Vent"),
+    PlcButton("turbo", "turbo", "Turbo 펌프"),
+    PlcButton("door_up", "door_up", "도어 올림"),
+    PlcButton("door_down", "door_down", "도어 내림"),
+    PlcButton("ar_valve", "ar_valve", "Ar 차단밸브"),
+    PlcButton("o2_valve", "o2_valve", "O2 차단밸브"),
+    PlcButton("ms", "ms", "Main 셔터"),
+    PlcButton("s1", "s1", "Gun 1 셔터"),
+    PlcButton("s2", "s2", "Gun 2 셔터"),
+    PlcButton("buzz_stop", "buzz_stop", "부저 정지"),
+    PlcButton("ion", "ion_remote_on", "이오나이저"),
 )
 
 
@@ -252,7 +252,7 @@ COMMANDS: tuple = (
     # PLC 조작 — admin
     C("PLC_BUTTON", "PLC 버튼", (WEB,), "admin", (ANY_STATE,), ("PLC_LINK_UP",),
       (_a("target", "enum", enum=tuple(b.target for b in PLC_BUTTONS)), _a("on", "bool")),
-      desc="공정 중에는 PLC_BUTTONS.remote_in_process=False 인 버튼 거부(REMOTE_LOCKED_IN_PROCESS)", v1="PLC 버튼 14종"),
+      desc="공정 중에도 모두 허용(v1 과 같게) — 공정 중 실행은 공정 기록에 PLC_MANUAL_IN_PROCESS(info)", v1="PLC 버튼 15종"),
     C("IG_FILAMENT", "이온 게이지 필라멘트", (WEB,), "operator", IDLE_STATES, ("IG_ON_NOT_ATM",), (_a("on", "bool"),),
       desc="유휴 상태에서만(공정 중에는 공정 엔진만 A/B). 켜기는 ATM 센서가 켜져 있으면 거부. "
            "무응답 유예 IG_FILAMENT_SWITCH_QUIET_SEC, B 뒤 IG_RELIGHT_LOCKOUT_SEC 안의 A 는 늦춤"),
@@ -278,7 +278,7 @@ COMMANDS: tuple = (
     C("GAS_VALVES_CLOSE", "Ar·O2 차단밸브 닫기", (INT,), "system", (ANY_STATE,)),
     C("SHUTTERS_CLOSE", "셔터 닫기(MS·S1·S2)", (INT,), "system", (ANY_STATE,), (), (_a("which", "str", False),)),
     C("MV_CLOSE", "메인 밸브 닫기", (INT,), "system", (ANY_STATE,)),
-    C("PLC_OUTPUTS_OFF", "PLC 출력 코일 OFF(펌프 유지 여부는 ALL_STOP_KEEP_PUMPS)", (INT,), "system", (ANY_STATE,)),
+    C("PLC_OUTPUTS_OFF", "PLC 비상 정지(버튼 코일 전부·히터 RUN·D00040·M00200 OFF)", (INT,), "system", (ANY_STATE,)),
     C("IG_FILAMENT_OFF", "이온 게이지 필라멘트 OFF", (INT,), "system", (ANY_STATE,)),
     C("BLACKBOX_DUMP", "PLC 블랙박스 파일로", (INT,), "system", (ANY_STATE,)),
     C("LOCK_CONTROLS", "조작 잠금(값 오래됨·링크 끊김)", (INT,), "system", (ANY_STATE,)),
@@ -291,9 +291,8 @@ def by_kind() -> dict:
     return {c.kind: c for c in COMMANDS}
 
 
-def check_command(kind: str, source: Source, state: str, args: Optional[dict] = None,
-                  in_process: Optional[bool] = None) -> Optional[str]:
-    """표만으로 판정할 수 있는 거부 사유(경로·상태·원격 버튼 인터록). 통과면 None.
+def check_command(kind: str, source: Source, state: str, args: Optional[dict] = None) -> Optional[str]:
+    """표만으로 판정할 수 있는 거부 사유(경로·상태·인자). 통과면 None.
     PRECONDITIONS(장비 값 필요)는 core 가 따로 평가한다."""
     c = by_kind().get(kind)
     if c is None:
@@ -307,9 +306,6 @@ def check_command(kind: str, source: Source, state: str, args: Optional[dict] = 
         btn = {b.target: b for b in PLC_BUTTONS}.get(args.get("target"))
         if btn is None or not isinstance(args.get("on"), bool):
             return "BAD_ARGS"
-        running = (state in STOPPABLE) if in_process is None else in_process
-        if running and not btn.remote_in_process:
-            return "REMOTE_LOCKED_IN_PROCESS"
     return None
 
 

@@ -322,9 +322,16 @@ def test_stop_and_all_stop_sequences_from_table():
     h.s.all_stop()
     h.settle()
     kinds = [k for k, _ in h.calls]
-    assert kinds == ["PLC_OUTPUTS_OFF", "HEATER_FORCE_OFF", "RF_SAFE_OFF", "DC_SAFE_OFF", "RFP_SAFE_OFF", "GAS_FLOW_OFF"]
-    assert h.calls[0][1] == {"keep_pumps": True}               # ALL_STOP_KEEP_PUMPS 권장값(pending_confirm)
+    # v1 순서: PLC 비상 정지 → DC 직접 OFF → 공정 정지 순서(유량 OFF·MFC 밸브 열기) → RF Pulse(사용자 결정 2026-10-20)
+    assert kinds == ["PLC_OUTPUTS_OFF", "DC_SAFE_OFF", "GAS_FLOW_OFF", "GAS_EXHAUST", "RFP_SAFE_OFF"]
+    assert h.calls[0][1] == {}                                  # 펌프 유지 옵션 없음 — 전부 끈다
     assert ("abort", "ALL_STOP") in h.p.log and h.p.state == "ABORTED"
+    res = dict((n, st) for n, _, st in h.e.seq_results["all_stop"])
+    assert res[4] == "sent" and res[9] == "ok"                  # DC 는 보내고 다음 단계로, 끝에서 결과 확인
+    h = H(state="IDLE")
+    h.s.all_stop()
+    h.settle()
+    assert [k for k, _ in h.calls] == ["PLC_OUTPUTS_OFF", "DC_SAFE_OFF", "GAS_FLOW_OFF", "RFP_SAFE_OFF"]   # 공정 없으면 배기 없음
 
 
 def test_stop_sequence_exception_still_runs_must_steps():
@@ -349,8 +356,8 @@ def test_all_stop_exception_skips_only_optional():
     h.s.all_stop()
     h.settle()
     kinds = [k for k, _ in h.calls]
-    assert kinds == ["HEATER_FORCE_OFF", "RF_SAFE_OFF", "DC_SAFE_OFF", "RFP_SAFE_OFF", "GAS_FLOW_OFF"]
-    assert dict((n, st) for n, _, st in h.e.seq_results["all_stop"])[9] == "skipped"     # 필라멘트(필수 아님)
+    assert kinds == ["DC_SAFE_OFF", "GAS_FLOW_OFF", "GAS_EXHAUST", "RFP_SAFE_OFF"]
+    assert dict((n, st) for n, _, st in h.e.seq_results["all_stop"])[7] == "skipped"     # 필라멘트(필수 아님)
 
 
 # ───────── 거부 검사·잠금 ─────────

@@ -111,7 +111,7 @@ def test_bench_rig_all_write_paths_send_zero_bytes_outside_bench_list(tmp_path):
         r.plc.rf_write_dac(100, on_done=cb)
         r.plc.rf_off(on_done=cb)
         r.plc.coils_off(["ms", "s1"], on_done=cb)
-        r.plc.outputs_off(True, on_done=cb)
+        r.plc.outputs_off(on_done=cb)
         r.plc.heater_set_sv(50.0, on_done=cb)
         r.plc.heater_reset(on_done=cb)
         r.ig.filament_on(on_done=cb)

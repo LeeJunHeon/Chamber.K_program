@@ -17,7 +17,7 @@ ProcessEngine 과 분리(결정 2): 공정은 request_target(목표·속도)·pr
 안전 규칙과 겹치지 않게: 히터 이상(S16)·외부 RUN OFF(S18B)·TC 이상(S18C)·출력 죽음(S18A)은 SafetyEngine 이 판정하고
 HEATER_RECIPE_ABORT 로 이 엔진을 부른다(v1 레시피 러너 안의 같은 판정은 옮기지 않음). 레시피 스텝 램프 시간 초과(S18D)·
 포화(S24)·유지 모드(S22)·감속 접근(S25)은 이 엔진이 한다.
-pending_confirm: HEATER_RECIPE_MAX_REPEAT=1(repeat > 1 거부), HEATER_RECIPE_HOLD_AT_END=false.
+히터 레시피: HEATER_RECIPE_MAX_REPEAT=1(repeat > 1 거부), HEATER_RECIPE_HOLD_AT_END=false — v1 과 같음(사용자 확정 2026-10-20).
 """
 from __future__ import annotations
 
@@ -776,7 +776,7 @@ class RecipeStep:
 
 
 def parse_recipe_steps(rows: List[dict], cfg) -> List[RecipeStep]:
-    """recipe.check_heater_recipe 를 통과한 행 → 스텝. repeat > HEATER_RECIPE_MAX_REPEAT(=1, pending) 는 ValueError.
+    """recipe.check_heater_recipe 를 통과한 행 → 스텝. repeat > HEATER_RECIPE_MAX_REPEAT(=1) 는 ValueError.
     마지막 스텝이 HEATER_COOLDOWN_TARGET_C 이하면 냉각 스텝(COOL — 램프 없이 soak 만큼 대기)."""
     out: List[RecipeStep] = []
     for i, r in enumerate(rows, 1):

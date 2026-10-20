@@ -161,9 +161,12 @@ def test_secrets_not_in_schema():
     assert len(schema_hash(P.PARAMS, P.CROSS_RULES)) == 64
 
 
-def test_pending_confirm_marked():
-    pend = {p.key for p in P.PARAMS if p.pending_confirm}
-    assert {"ALL_STOP_KEEP_PUMPS", "HEATER_RECIPE_HOLD_AT_END", "HEATER_RECIPE_MAX_REPEAT"} <= pend
+def test_user_decisions_2026_10_20_not_pending():
+    """사용자 결정(2026-10-20): ALL STOP 은 전부 끈다(펌프 유지 파라미터 없음), 히터 레시피 반복 없음·끝나면 끔(v1 과 같음)."""
+    p = P.by_key()
+    assert "ALL_STOP_KEEP_PUMPS" not in p
+    assert not p["HEATER_RECIPE_MAX_REPEAT"].pending_confirm and p["HEATER_RECIPE_MAX_REPEAT"].default == 1
+    assert not p["HEATER_RECIPE_HOLD_AT_END"].pending_confirm and p["HEATER_RECIPE_HOLD_AT_END"].default is False
 
 
 def test_comm_install_params():

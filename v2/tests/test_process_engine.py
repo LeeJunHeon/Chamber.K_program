@@ -65,6 +65,7 @@ class R:
         return [(e.data["to"], e.data["t"]) for e in self.ev("state")]
 
 
+@pytest.mark.slow
 def test_full_process_sim(tmp_path):
     r = R(tmp_path)
     r.on(3, r.cmd("RECIPE_LOAD", {"name": "full", "rows": [FULL_ROW]}))

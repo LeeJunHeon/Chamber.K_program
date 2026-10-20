@@ -187,7 +187,7 @@ def test_recipe_hold_freezes_clock_and_skip():
 
 def test_recipe_repeat_rejected_and_step_timeout():
     with pytest.raises(ValueError):
-        parse_recipe_steps([{"target_c": 100, "repeat": 2}], CFG)    # HEATER_RECIPE_MAX_REPEAT=1(pending)
+        parse_recipe_steps([{"target_c": 100, "repeat": 2}], CFG)    # HEATER_RECIPE_MAX_REPEAT=1(v1 과 같음)
     st = dict(run=True, pv=25.0, sv_ramp=25.0, fault=False)
     t, port, ev, r = _runner(st)
     r.load("R", parse_recipe_steps([{"target_c": 100, "ramp_c_per_min": 30, "soak_min": 0}], CFG))
@@ -206,6 +206,7 @@ def rig(tmp_path, **cfg):
     return c, r
 
 
+@pytest.mark.slow
 def test_rig_manual_ramp_approach_and_hold(tmp_path):
     c, r = rig(tmp_path, HEATER_HOLD_MODE="dac")
     rows = []
@@ -225,6 +226,7 @@ def test_rig_manual_ramp_approach_and_hold(tmp_path):
     assert rows[-1]["heater.hold"] == "holding_dac"
 
 
+@pytest.mark.slow
 def test_rig_process_target_and_hold_wait(tmp_path):
     c, r = rig(tmp_path)                                            # HEATER_HOLD_MODE 기본 tc2
     seen = []
@@ -248,6 +250,7 @@ def test_rig_process_target_and_hold_wait(tmp_path):
     assert r.plc_sim.coils[A["heater_pv_sel_eff"]] is True
 
 
+@pytest.mark.slow
 def test_rig_heater_gas_ready_hold_and_release(tmp_path):
     c, r = rig(tmp_path, HEATER_GAS_HOLD_RELEASE_C=50.0)
     plc = r.sims["plc"]

@@ -169,10 +169,6 @@ PARAMS: tuple = (
        src="main.py:3839", desc="공정 중 MV_INTERLOCK 이 이만큼 연속 OFF 면 중단(순간 끊김은 기록만)"),
     _p("BLACKBOX_SECONDS", "plc", "PLC 블랙박스 길이", "s", I, 60, 10, 600, safety=L,
        src="device/PLC.py:178 (deque 300 × 200 ms)"),
-    _p("ALL_STOP_KEEP_PUMPS", "plc", "ALL STOP 때 펌프 유지", "", B, True, safety=H, pending=True,
-       src=_V2, v1_default=False,
-       desc="true: 전원·가스·히터 차단, 셔터·MV·도어 닫기, 펌프 계통(Rotary·Turbo·RV·FV)은 지금 상태 그대로 "
-            "— 터보가 도는 동안 FV 를 닫지 않기 위함. false: v1 처럼 PLC 코일 전부 0"),
 
     # ───────────── MFC(경고·알림만, 공정은 계속) ─────────────
     _p("FLOW_ERROR_TOLERANCE", "mfc", "유량 이탈 허용 비율", "비율", F, 0.10, 0.01, 0.5, apply=LIVE,
@@ -321,7 +317,9 @@ PARAMS: tuple = (
 
     # ───────────── 히터 기본(heater) ─────────────
     _p("HEATER_WD_PERIOD_MS", "heater", "히터 워치독 하트비트 주기", "ms", I, 3000, 500, 3000, safety=H,
-       desc="래더는 D00014 가 TON 10 s 동안 안 바뀌면 히터를 끈다. TON 의 1/3 이하"),
+       desc="래더는 D00014 가 TON 10 s 동안 안 바뀌면 히터를 끈다. TON 의 1/3 이하. v1 은 이 주기(3 s)로 썼고 "
+            "v2 는 매 tick(1 s)마다 쓴다 — 이 값은 주기 상한(X06 검사)으로만(v2 방식 유지, 사용자 2026-10-20)",
+       note="v1 device/PLC.py:1110-1163 (3 s 주기)"),
     _p("HEATER_WD_DELAY_WARN_SEC", "heater", "하트비트 지연 경고", "s", F, 5.0, 1.0, 9.0, safety=L,
        src="device/PLC.py:119"),
     _p("HEATER_MAX_TEMP", "heater", "목표 온도 입력 상한", "°C", F, 700.0, 0.0, 1100.0, safety=H,
@@ -426,12 +424,13 @@ PARAMS: tuple = (
 
     # ───────────── 히터 레시피·히터 가스(heater_recipe / heater_gas) ─────────────
     _p("HEATER_RECIPE_MAX_STEPS", "heater_recipe", "히터 레시피 최대 스텝", "개", I, 20, 1, 100, safety=L),
-    _p("HEATER_RECIPE_MAX_REPEAT", "heater_recipe", "히터 레시피 반복 상한", "회", I, 1, 1, 100, src=_V2,
-       pending=True, note="v1 은 repeat 빈칸·1 만 허용(반복 미지원). 반복을 쓰려면 이 값을 올린다"),
-    _p("HEATER_RECIPE_HOLD_AT_END", "heater_recipe", "레시피 끝 온도 유지", "", B, False, pending=True,
-       desc="true 면 끝나도 마지막 목표 유지(무인 가열 주의)"),
+    _p("HEATER_RECIPE_MAX_REPEAT", "heater_recipe", "히터 레시피 반복 상한", "회", I, 1, 1, 100, src="controller/heater_recipe.py",
+       note="v1 과 같음(사용자 확정 2026-10-20): repeat 빈칸·1 만 허용(반복 없음)"),
+    _p("HEATER_RECIPE_HOLD_AT_END", "heater_recipe", "레시피 끝 온도 유지", "", B, False, src="controller/heater_recipe.py",
+       desc="false(v1 과 같음, 사용자 확정 2026-10-20): 끝나면 히터를 끈다. true 면 마지막 목표 유지(무인 가열 주의)"),
     _p("HEATER_RECIPE_RAMP_MAX_C_PER_MIN", "heater_recipe", "레시피 램프 상한", "°C/min", F, 60.0, 6.0, 600.0,
-       src="core/params.py (60 초과 오류)"),
+       src="core/params.py:364 (공정 레시피 heater_ramp 60 초과 오류)",
+       note="v1 히터 레시피에는 상한이 없다 — v2 는 공정 레시피와 같은 60 °C/min 을 히터 레시피에도(v2 방식 유지, 2026-10-20)"),
     _p("HEATER_GAS_SP1_TIMEOUT_SEC", "heater_gas", "히터 가스 SP1 도달 한도", "s", F, 300.0, 30.0, 1800.0,
        src="controller/heater_atmosphere.py:55"),
     _p("HEATER_GAS_MFC_TIMEOUT_SEC", "heater_gas", "히터 가스 MFC 명령 한도", "s", F, 60.0, 5.0, 600.0,
