@@ -55,6 +55,7 @@ CHK_REASONS: tuple = (
     Reason("PLC_RESTARTED", "PLC 재기동 감지", "abort"),
     Reason("MFC_COMM_LOST", "MFC 통신 두절", "abort"),
     Reason("MFC_CMD_FAILED", "MFC 명령 실패", "abort"),
+    Reason("FLOW_STABILIZE_TIMEOUT", "FLOW ON 뒤 유량 안정화 시간 초과", "abort"),
     Reason("DC_COMM_LOST", "DC 통신 두절", "abort"),
     Reason("DC_NO_OUTPUT", "DC 램프업 무출력", "abort"),
     Reason("DC_LOW_CURRENT", "DC 저전류 지속", "abort"),

@@ -180,8 +180,10 @@ PARAMS: tuple = (
        apply=LIVE),
     _p("MFC_PRESSURE_WARN_SEC", "mfc", "압력 이탈 지속 시간", "s", F, 10.0, 1.0, 600.0, safety=L, apply=LIVE,
        v1_key="MFC_PRESSURE_WARN_COUNT", v1_period=2.0, v1_default=5, desc="v1: 5회 × MFC 폴링 2 s"),
-    _p("MFC_VERIFY_TRIES", "mfc", "MFC 쓰기 되읽기 확인 횟수", "회", I, 3, 1, 10, safety=L, src="device/MFC.py:1057 (v1 5회)",
-       desc="설정 뒤 되읽기(Q→R65, L→R69, S1→R1, D→R7) 최대 횟수 — 통신 재시도라 횟수 그대로"),
+    _p("MFC_FLOW_STABLE_TIMEOUT_SEC", "mfc", "FLOW ON 유량 안정화 한도", "s", F, 30.0, 5.0, 300.0,
+       src="device/MFC.py:1236-1270 (30회 × MFC_STABILIZATION_INTERVAL_MS 1000)", v1_period=1.0, v1_default=30,
+       desc="FLOW ON(R69 확인) 뒤 |실제 − 설정| ≤ 설정 × FLOW_ERROR_TOLERANCE 가 되기를 기다리는 시간. 넘으면 공정 중단"
+            "(FLOW_STABILIZE_TIMEOUT, v1 '유량 안정화 시간 초과')"),
     _p("MFC_VALVE_SETTLE_SEC", "mfc", "MFC 밸브 이동 대기", "s", F, 5.0, 0.5, 60.0, safety=L,
        src="lib/config.py:799 (MFC_DELAY_MS_VALVE)", desc="O·C 뒤 R6 로 위치를 확인하기까지"),
     _p("MFC_SP1_VERIFY_TOL", "mfc", "SP1 설정 확인 허용 오차", "장비 단위", F, 0.1, 0.01, 1.0, safety=L,

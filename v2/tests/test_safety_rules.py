@@ -81,8 +81,15 @@ def test_stop_sequence():
     must = {s.act.kind for s in SR.STOP_SEQUENCE if s.must}
     assert {"HEATER_FORCE_OFF", "DC_SAFE_OFF", "RFP_SAFE_OFF", "RF_SAFE_OFF", "GAS_FLOW_OFF", "GAS_VALVES_CLOSE"} <= must
     for s in SR.STOP_SEQUENCE:
-        _check_act(s.act)
+        if s.act.kind != "AWAIT":
+            _check_act(s.act)
         assert not s.timeout_param or s.timeout_param in PARAM_KEYS
+    # v1: DC OFF·RF Pulse OFF 는 보내 놓고(기다리지 않음) RF 램프다운, 그 뒤 RF Pulse 완료 대기
+    by = {s.act.kind: s for s in SR.STOP_SEQUENCE if s.act.kind != "AWAIT"}
+    assert by["DC_SAFE_OFF"].nowait and by["RFP_SAFE_OFF"].nowait and by["IG_FILAMENT_OFF"].nowait
+    aw = [s for s in SR.STOP_SEQUENCE if s.act.kind == "AWAIT"]
+    assert [a.act.args["no"] for a in aw] == [by["RFP_SAFE_OFF"].no, by["DC_SAFE_OFF"].no]
+    assert by["RF_RAMP_DOWN"].no < aw[0].no < by["GAS_FLOW_OFF"].no
 
 
 def test_all_stop_sequence():

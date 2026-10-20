@@ -1064,7 +1064,7 @@ class Atmosphere:
         steps = (build_gas_pre_steps(self.channels, "") + build_gas_intro_steps(self.channels, flows, self.buttons, "")
                  + build_pressure_stage_steps(1, sp1, f"히터 분위기(SP1={sp1:.2f})", self.cfg,
                                               float(self.cfg["HEATER_GAS_SP1_TIMEOUT_SEC"]), fail_on_timeout=True))
-        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, name="heater_gas")
+        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, name="heater_gas", cfg=self.cfg)
         self.state = self.PREPARING
         self._msg("info", f"[가스] 도입 시작 · 목표 {sp1:.2f} mTorr ({len(steps)}단계)")
         return None
@@ -1319,8 +1319,11 @@ class HeaterEngine:
 
     # ── 공정 요청(ProcessEngine) ──
     def process_ramp(self, rate_c: float) -> None:
+        """HEATER_RAMP — 감속 접근 속도를 기억하고 래더 램프 속도 D00020 = max(1, round(rate/6))를 쓴다
+        (v1 process_controller.py:786, main.py:994-995 — 감속 접근을 못 쓸 때의 SV 직접 쓰기도 이 속도로)."""
         with self._lock:
             self.proc = {"rate": float(rate_c or 0.0)}
+            self.port.ramp(ramp_raw(float(rate_c or 0.0) or float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"])))
 
     def process_set(self, target: float) -> None:
         """HEATER_SET — 감속 접근으로 올리고 RUN(v1 _on_process_heater_target·_on_process_heater_run)."""
@@ -1329,6 +1332,7 @@ class HeaterEngine:
             rate = self.proc.get("rate") or float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"])
             self.ramp.stop(restore_rate=False)
             if not self.ramp.start(float(target), rate, "공정"):
+                self.port.ramp(ramp_raw(rate))                 # 감속 접근을 못 쓰면 이 행의 램프 속도로 SV 직접(v1)
                 self.port.target(float(target))
             self.port.run(True)
             self.proc.update(target=float(target), phase="RAMP", t0=None)

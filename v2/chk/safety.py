@@ -104,6 +104,10 @@ class SimpleProcess:
     uses_rf: bool = False
     uses_rfp: bool = False
     uses_heater: bool = False
+    dc_on: bool = False                 # 이번 행에서 출력 명령을 냈다(정지 순서·두절 판정 구간)
+    rf_on: bool = False
+    rfp_on: bool = False
+    rf_ref_waiting: bool = False
     heater_recipe_running: bool = False
     dc_holding: bool = False
     rf_holding: bool = False
@@ -517,14 +521,15 @@ class ChkSafety:
         p = self.process
         rf_on = lambda: p.uses_rf or bool(self.plc.last and (self.plc.last.values.get("rf.dac") or 0) > 0)
         return self._steps(SR.STOP_SEQUENCE, {"1": lambda: p.filament_by_process, "3": lambda: p.uses_heater,
-                                              "6": rf_on}, {})
+                                              "4": lambda: bool(getattr(p, "dc_on", False)),
+                                              "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})
 
     def all_stop_steps(self) -> List[Step]:
         p = self.process
         was_active = bool(p.active)                     # ALL STOP 을 받은 때 공정이 돌고 있었나(v1 공정 정지 순서)
         fil = lambda: bool(self.ig.last and self.ig.last.filament) or p.filament_by_process
         return self._steps(SR.ALL_STOP_SEQUENCE,
-                           {"1": lambda: p.heater_recipe_running, "2": lambda: p.active, "6": lambda: was_active, "7": fil},
+                           {"1": lambda: p.heater_recipe_running, "2": lambda: p.active or p.state == "STOPPING", "6": lambda: was_active, "7": fil},
                            {})
 
     # ── 처리기 ──
@@ -538,6 +543,8 @@ class ChkSafety:
         def abort_in_seq(a, done):                    # ALL STOP 2단계 — 공정 표시만(정지 순서는 ALL STOP 이 이미 실행 중)
             if p.active:
                 p.on_abort(a.get("reason", "ALL_STOP"))
+            elif hasattr(p, "late_stop"):              # 행 끝 정지 순서 중 — 리스트를 끝낸다(v1 csv_cancelled)
+                p.late_stop("error", a.get("reason", "ALL_STOP"))
             done(None)
 
         def heater_off(a, done):

@@ -111,7 +111,7 @@ def test_verify_mismatch_and_ok():
     assert r.seq(r.d.set_flow, CH_AR, 10.0) == "VERIFY_MISMATCH"
     ev = [e for e in r.events if e.kind == "verify_mismatch"]
     assert ev and ev[0].reason == "VERIFY_MISMATCH"
-    assert [c for c in sim.set_commands_seen()] .count("Q1 10.0") == 1
+    assert [c for c in sim.set_commands_seen()].count("Q1 10.0") == 5    # v1: 되읽기가 다르면 Q 를 다시, 5회(MFC.py:1072-1076)
     assert r.d.ar_set is None
     assert r.seq(r.d.set_flow, CH_O2, 5.0) is None and r.d.o2_set == 5.0
     r.done()

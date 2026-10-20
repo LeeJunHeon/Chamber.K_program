@@ -7,7 +7,8 @@
 정전류 제어: ΔI 계산은 공정 엔진이 tick 마다, 드라이버는 CURR 쓰기만. tick 안 순서 t0 MEAS:ALL? → t0 + CURR_WRITE_DELAY_S
   CURR(not_before) — 다음 MEAS 까지 약 900 ms 라 간격 규칙을 지킨다.
 OFF 확인(S29): Sequence — OUTP OFF → 0.5 s → OUTP? 최대 DC_OFF_VERIFY_TRIES 회("0" 이면 끝, "1"·무응답이면 OUTP OFF 다시).
-  끝까지 확인 못 하면 DC_OFF_UNCONFIRMED. OFF 는 늦추지 않는다(안전이 먼저). OFF 를 쓴 뒤 질의 금지 시간의 측정은
+  끝까지 확인 못 하면 DC_OFF_UNCONFIRMED — 단 이번 실행에서 출력을 켠 적이 없으면(maybe_on 거짓) 경고가 아니라 정보 한 줄
+  (v1 _mark_off_unconfirmed, DCpower.py:356-359). OFF 는 늦추지 않는다(안전이 먼저). OFF 를 쓴 뒤 질의 금지 시간의 측정은
   suppressed(실패·두절 판정에 넣지 않음).
   출력 켜기 시퀀스는 tick 을 주면 그 tick 의 측정 뒤에 시작한다.
 연결 때(매뉴얼 순서): *IDN? → SYST:ERR? 를 +0 까지(최대 10, 전부 이벤트) → OUTP?(dc.out 초기값) → FACT:LAST-STA?(읽기만 —
@@ -66,6 +67,7 @@ class DcDriver:
         self.last_state: Optional[str] = None     # FACT:LAST-STA? 값(연결 때)
         self.meas_listeners: list = []            # (값, 읽기 시작 시각) — 정전류 제어
         self.out_at_connect: Optional[bool] = None   # 연결 때 OUTP? 값
+        self.maybe_on = False                        # 출력이 켜졌을 수 있다(v1 _output_maybe_on) — OFF 확인되면 거짓
         self.i_set: Optional[float] = None
         self.out: Optional[bool] = None
         self.set_w: Optional[float] = None
@@ -127,6 +129,8 @@ class DcDriver:
                 break
         self.out = self._query(session, "OUTP?") == "1"            # dc.out 초기값(S51 남은 출력 판단)
         self.out_at_connect = self.out
+        if self.out:
+            self.maybe_on = True
         cur = self._query(session, "FACT:LAST-STA?")
         self.last_state = cur
         # 읽기만 한다(어떤 모드에서도 쓰지 않음 — 사용자 결정 2026-10-16). 응답은 DISABLE·SAFETY·FULLY [DC p.94, p.78].
@@ -176,6 +180,7 @@ class DcDriver:
             return lambda s: self._write(s, cmd)
 
         def on(s):
+            self.maybe_on = True                       # 부분 전송도 켜졌을 수 있다 — 보내기 전에(v1 DCpower.py:684)
             self._write(s, "OUTP ON")
             self.out, self.i_set = True, i
 
@@ -213,6 +218,7 @@ class DcDriver:
                     a = f"무응답({type(e).__name__})"
                 answers.append(a)
                 if a == "0":
+                    self.maybe_on = False
                     self._emit("off_confirmed", f"OUTP?=0 ({k}회째)")
                     return SEQ_DONE
                 if k >= tries:
@@ -223,9 +229,14 @@ class DcDriver:
 
         def done(name, reason, results):
             if reason and reason != "BENCH_READ_ONLY":
-                self._emit("off_unconfirmed", "DC 출력 OFF 확인 못 함: " + "/".join(answers), "DC_OFF_UNCONFIRMED")
+                if not self.maybe_on:                       # 켠 적 없음 — 에피소드가 아니라 정보 한 줄(v1 356-359)
+                    self._emit("off_unverified", "DC OFF 생략/미확인(" + "/".join(answers) + ") — 이번 실행에서 출력을 켠 적 없음")
+                    reason = None
+                else:
+                    self._emit("off_unconfirmed", "DC 출력 OFF 확인 못 함: " + "/".join(answers), "DC_OFF_UNCONFIRMED")
+                    reason = "DC_OFF_UNCONFIRMED"
             if on_done:
-                on_done(name, "DC_OFF_UNCONFIRMED" if reason and reason != "BENCH_READ_ONLY" else reason, results)
+                on_done(name, reason, results)
 
         steps = [("OUTP OFF", off)] + [(f"OUTP? {k}", verify(k)) for k in range(1, tries + 1)]
         self.worker.submit_sequence(Sequence("dc:off", steps, gap_s=self.gap_s, step_timeout_s=OFF_STEP_TIMEOUT_S,

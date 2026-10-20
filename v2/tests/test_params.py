@@ -187,7 +187,7 @@ def test_count_params_converted_to_seconds():
                 "PRESSURE_WAIT_STABLE_COUNT"):
         assert old not in keys
     conv = {p.key: (p.v1_default, p.v1_period_s, p.default) for p in P.PARAMS if p.v1_period_s}
-    assert len(conv) == 12
+    assert len(conv) == 13                       # + MFC_FLOW_STABLE_TIMEOUT_SEC(v1 30회 × 1 s)
     for k, (n, period, sec) in conv.items():
         assert k.endswith("_SEC") and sec == pytest.approx(n * period), k
     assert conv["RFPULSE_REFP_SEC"][2] == 15.0 and conv["FLOW_ERROR_SEC"][2] == 10.0

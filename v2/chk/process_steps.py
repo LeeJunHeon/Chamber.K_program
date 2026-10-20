@@ -8,6 +8,9 @@
 
 실행기(StepRunner): 매 tick 스냅샷 하나로 지금 스텝을 진행한다(중첩 이벤트 루프 없음, 대기는 실제 시각).
 - MFC_CMD: 드라이버 명령을 한 번 내고, 완료 콜백(되읽기 확인)이 오면 다음 tick 에 다음 스텝. 실패면 MFC_CMD_FAILED.
+  FLOW_ON 은 R69 확인 뒤 유량 안정화까지(v1 device/MFC.py:1128-1139·1236-1270): 매 tick 스냅샷 유량이
+  |실제 − 설정| ≤ 설정 × FLOW_ERROR_TOLERANCE 면 통과, MFC_FLOW_STABLE_TIMEOUT_SEC(30 s)를 넘으면 FLOW_STABILIZE_TIMEOUT.
+  설정은 드라이버가 FLOW_SET 되읽기로 확인한 값(v1 last_setpoints) — 0 이면 안정화 없이 통과(v1).
   WAIT_PRESSURE 는 명령이 아니라 스냅샷 판정: |P − 목표| ≤ 목표×tol 이 stable_sec 이어지면 통과(judge.Persist, ok·late 값만),
   timeout_sec 를 넘으면 fail_on_timeout 이면 실패(SP1_TIMEOUT), 아니면 경고하고 진행.
 - PLC_CMD: 버튼 쓰기 뒤 0.8 s(v1 릴레이·실린더 여유) 지나면 다음.
@@ -250,8 +253,9 @@ class StepRunner:
 
     def __init__(self, clock, steps: List[ProcessStep], mfc, plc, handlers: Optional[Dict[str, Callable]] = None,
                  on_event: Optional[Callable[[StepEvent], None]] = None, name: str = "process",
-                 continue_on_fail: bool = False) -> None:
+                 continue_on_fail: bool = False, cfg: Optional[Dict[str, Any]] = None) -> None:
         self.clock, self.steps, self.mfc, self.plc = clock, list(steps), mfc, plc
+        self.cfg = cfg                                  # FLOW_ON 유량 안정화 판정(없으면 R69 확인만)
         self.continue_on_fail = continue_on_fail       # 해제 시퀀스: 실패해도 남은 밸브를 마저 닫는다(v1 heater_atmosphere)
         self.handlers = dict(handlers or {})
         self.on_event = on_event
@@ -362,9 +366,30 @@ class StepRunner:
             else:
                 return ("fail", "MFC_CMD_FAILED")
         if cur.done:
-            return ("fail", "MFC_CMD_FAILED") if cur.err else "next"
+            if cur.err:
+                return ("fail", "MFC_CMD_FAILED")
+            if cmd == "FLOW_ON":
+                return self._flow_stable(int(a["channel"]), cur, view, now)
+            return "next"
         if now - cur.t0 > MFC_CMD_GUARD_S:
             return ("fail", "MFC_CMD_FAILED")
+        return "wait"
+
+    def _flow_stable(self, ch: int, cur: _Cur, view, now: float):
+        """FLOW ON 유량 안정화(v1 _check_flow_stabilization) — 한 번이라도 허용 범위 안이면 통과, 한도를 넘으면 실패."""
+        if self.cfg is None:
+            return "next"
+        target = getattr(self.mfc, "ar_set" if ch == 1 else "o2_set", None) if ch in (1, 2) else None
+        if not target or float(target) <= 0:
+            return "next"                                   # v1: 안정화 대상(설정) 없으면 FLOW_ON 바로 확인
+        t0 = cur.extra.setdefault("stab_t0", now)
+        x = view.get(f"mfc.{'ar' if ch == 1 else 'o2'}_sccm") if view is not None else None
+        if x is not None and abs(float(x) - float(target)) <= float(target) * float(self.cfg["FLOW_ERROR_TOLERANCE"]):
+            return "next"
+        if now - t0 >= float(self.cfg["MFC_FLOW_STABLE_TIMEOUT_SEC"]) - 1e-9:
+            self._emit(StepEvent("warn", f"Ch{ch} 유량 안정화 시간 초과(목표 {float(target):.2f}, 현재 {x})",
+                                 "FLOW_STABILIZE_TIMEOUT", self.idx))
+            return ("fail", "FLOW_STABILIZE_TIMEOUT")
         return "wait"
 
     def _wait_pressure(self, a: Dict[str, Any], cur: _Cur, view, now: float):

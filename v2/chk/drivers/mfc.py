@@ -6,8 +6,15 @@
 단위: 유량 %FS ↔ sccm = %FS/100 × FS(연결 때 R70·R71 로 읽음, 못 읽으면 MFC_AR/O2_FS_SCCM). 읽기·설정 모두 환산.
   FS 가 100 이 아니면 이벤트 fs_not_100(v1 레시피 유량이 %FS 였을 수 있음 — 공정 전에 사용자 확인).
   압력 %FS ↔ mTorr = %FS/100 × MFC_PRESSURE_FS_TORR × 1000 (FS 1 Torr 면 v1 의 ×0.1 과 같다).
-쓰기(응답 없음): 여러 tick 에 걸친 Sequence 로 쓰고 되읽어 확인 — Q→R65~, L0→R69, S1→R1, D→R7, O·C→R6(밸브 대기 뒤).
-  되읽기가 MFC_VERIFY_TRIES 안에 맞지 않으면 VERIFY_MISMATCH. 영점(L5~L8 1, Z1)은 되읽기 없음.
+쓰기(응답 없음): v1 device/MFC.py 와 같은 재시도로 쓰고 되읽어 확인(I/O 하나가 worker 요청 하나 — 그 사이 tick 읽기가 끼어든다).
+  - Q(유량): 되읽기 R65~ 가 다르면 Q 를 다시 보내고 1 s 뒤 다시 확인, 5회(v1 MFC.py:1058-1082, 비교 |값−목표| < 0.1)
+  - FLOW ON/OFF: R69 로 지금 마스크 → 그 채널만 바꿔 L0 → R69 확인, 다르면 L0 1회 다시(v1 1084-1170). R69 를 못 읽으면 실패
+    (v1 의 "0000" 대체값은 다른 채널을 끌 수 있어 옮기지 않음 — v1 1086)
+  - O·C(밸브): MFC_VALVE_SETTLE_SEC 뒤 R6 확인 5회, 2·4번째 뒤 다시 보내고 밸브 대기(v1 1172-1211, 닫힘 < 1·열림 > 99)
+  - S1: R1 확인 1 s 간격 5회(v1 953-981). D1~D4: R7 확인 1 s 간격 5회(v1 983-1021)
+  - S2·S3·S4: v1 은 되읽기 없이 확인(666-670·689-692) — v2 는 R2~R4 를 한 번 읽어 다르면 경고만(실패 아님)
+  - 질의 하나는 무응답이면 5회 다시(v1 enqueue retries_left=5, 354·448-454). 링크가 없으면(재연결 중) MFC_CMD_GUARD_S 안에서
+    기다렸다 다시(v1 365-366 — 포트가 닫혀 있으면 큐에서 기다림). 영점(L5~L8 1, Z1)은 되읽기 없음.
 bench: 질의(R…)만 — 설정 명령은 worker 거부 + 드라이버 이중 보호.
 """
 from __future__ import annotations
@@ -17,9 +24,15 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.transport import Cancelled
-from v2.common.worker import SEQ_DONE, Sequence, Worker
+from v2.common.worker import Request, Result, Status, Worker
+from v2.chk.process_steps import MFC_CMD_GUARD_S
 
 CH_AR, CH_O2 = 1, 2
+QUERY_RETRIES = 5          # v1 device/MFC.py:354 enqueue(retries_left=5) — 무응답 질의를 다시 보내는 횟수
+VERIFY_RETRY_S = 1.0       # v1 MFC_DELAY_MS(lib/config.py:798) — 되읽기 다시 하기 전 대기
+VERIFY_TRIES = 5           # v1 max_attempts=5 (FLOW_SET·SP1·SPn_ON·밸브)
+L0_TRIES = 2               # v1 _set_onoff_mask_and_verify max_attempts=2
+LINK_RETRY_S = 1.0         # 재연결을 기다리며 다시 내는 간격
 _NUM = r"([+\-]?\d+(?:\.\d+)?)"
 
 
@@ -218,138 +231,216 @@ class MfcDriver:
                     "mfc.sp_mtorr": self.sp_mtorr})
         return out
 
-    # ───────── 쓰기(Sequence: 쓰기 → 되읽기 × N) ─────────
-    def _write_verify(self, name: str, cmd: str, query: str, check: Callable[[str], bool],
-                      on_done=None, settle_s: Optional[float] = None, after_ok: Optional[Callable[[], None]] = None) -> None:
-        tries = self.cfg["MFC_VERIFY_TRIES"]
-        seen: List[str] = []
-
-        def write(s):
-            self._send(s, cmd)
-
-        def verify(k):
-            def fn(s):
-                try:
-                    ans = self._query(s, query)
-                except Cancelled:
-                    raise
-                except Exception as e:
-                    ans = f"무응답({type(e).__name__})"
-                seen.append(ans)
-                if check(ans):
-                    if after_ok:
-                        after_ok()
-                    self._emit("verify_ok", f"{name}: {cmd} → {query}={ans}")
-                    return SEQ_DONE
-                if k >= tries:
-                    raise MfcVerifyError(f"{name}: {cmd} 뒤 {query} = " + "/".join(seen))
-            return fn
-
-        def done(n, reason, results):
-            if reason and reason != "BENCH_READ_ONLY":
-                self._emit("verify_mismatch", f"{name}: {cmd} 되읽기 불일치 " + "/".join(seen), "VERIFY_MISMATCH")
+    # ───────── 쓰기(v1 재시도 — 한 I/O 씩 worker 요청) ─────────
+    def _op(self, name: str, gen, on_done=None) -> None:
+        """gen: 생성기 — yield ("w", 명령) / ("q", 질의) → 응답(재시도 뒤에도 무응답이면 None) / ("sleep", 초).
+        정상 끝나면 성공, MfcVerifyError 면 VERIFY_MISMATCH. 링크가 없으면 MFC_CMD_GUARD_S 안에서 기다렸다 같은 I/O 를 다시."""
+        if not self.writes_allowed:
             if on_done:
-                on_done(n, "VERIFY_MISMATCH" if reason and reason != "BENCH_READ_ONLY" else reason, results)
+                on_done(f"mfc:{name}", "BENCH_READ_ONLY", [])
+            return
+        t0 = self.clock.monotonic()
+        guard = MFC_CMD_GUARD_S - 2.0                 # 공정 스텝 한도(MFC_CMD_GUARD_S)보다 먼저 결과를 낸다
+        st: Dict[str, Any] = {"nb": None, "results": [], "done": False}
 
-        steps = [(cmd, write)] + [(f"{query} {k}", verify(k)) for k in range(1, tries + 1)]
-        self.worker.submit_sequence(Sequence(f"mfc:{name}", steps, gap_s=settle_s if settle_s else self.gap_s,
-                                             step_timeout_s=self.q_timeout_s + self.gap_s + 0.2, on_done=done,
-                                             confirms_link=False))
+        def finish(reason: Optional[str]) -> None:
+            if st["done"]:
+                return
+            st["done"] = True
+            if reason and reason not in ("BENCH_READ_ONLY", "CANCELLED"):
+                self._emit("verify_mismatch" if reason == "VERIFY_MISMATCH" else "write_failed",
+                           f"{name}: {st.get('why') or reason}", reason)
+            if on_done:
+                on_done(f"mfc:{name}", reason, st["results"])
+
+        def advance(value=None) -> None:
+            try:
+                item = gen.send(value)
+            except StopIteration:
+                finish(None)
+                return
+            except MfcVerifyError as e:
+                st["why"] = str(e)
+                finish("VERIFY_MISMATCH")
+                return
+            except Exception as e:                    # 생성기 오류(형식 등)
+                st["why"] = repr(e)
+                finish("DEVICE_REJECTED")
+                return
+            if item[0] == "sleep":
+                st["nb"] = self.clock.monotonic() + float(item[1])
+                advance(None)
+                return
+            issue(item, 0)
+
+        def issue(item, tries: int, not_before: Optional[float] = None) -> None:
+            kind, cmd = item
+            nb = not_before if not_before is not None else st["nb"]
+            st["nb"] = None
+            fn = (lambda s: self._send(s, cmd)) if kind == "w" else (lambda s: self._query(s, cmd))
+            self.worker.submit(Request("write", fn, on_done=lambda r: result(item, tries, r), name=f"mfc:{name}:{cmd}",
+                                       not_before=nb, exec_timeout_s=self.q_timeout_s + self.gap_s + 0.2,
+                                       confirms_link=(kind == "q")))
+
+        def result(item, tries: int, r: Result) -> None:
+            st["results"].append(r)
+            if st["done"]:
+                return
+            if r.status == Status.OK:
+                advance(r.value if item[0] == "q" else None)
+            elif r.status == Status.TIMEOUT and item[0] == "q":
+                if tries < QUERY_RETRIES:
+                    issue(item, tries + 1)            # v1: 무응답 질의는 다시(재연결 뒤)
+                else:
+                    advance(None)                     # v1: 재시도 소진 — 응답 없음(None)으로 판정
+            elif r.status in (Status.LINK_DOWN, Status.EXPIRED) or r.reason == "LINK_DOWN":
+                if self.clock.monotonic() - t0 < guard:
+                    issue(item, tries, self.clock.monotonic() + LINK_RETRY_S)     # 재연결 중 — 기다렸다 다시
+                else:
+                    st["why"] = f"{item[1]}: 링크 없음 {guard:.0f} s"
+                    finish("LINK_DOWN")
+            elif r.status == Status.CANCELLED:
+                finish("CANCELLED")                   # safety 요청이 큐를 비웠다
+            elif r.status == Status.REJECTED:
+                finish(r.reason or "BENCH_READ_ONLY")
+            else:
+                st["why"] = f"{item[1]}: {r.error or r.reason}"
+                finish(r.reason or "DEVICE_REJECTED")
+        advance(None)
+
+    def _verify_loop(self, name: str, query: str, check: Callable[[Optional[str]], bool], tries: int,
+                     resend: Optional[str] = None, resend_on=None, resend_wait: float = VERIFY_RETRY_S):
+        """되읽기 × tries — 맞으면 끝. resend 가 있으면 resend_on 회차(None = 매번) 뒤 다시 보내고 resend_wait 대기."""
+        seen: List[str] = []
+        for k in range(1, tries + 1):
+            ans = yield ("q", query)
+            seen.append(repr(ans))
+            if check(ans):
+                self._emit("verify_ok", f"{name}: {query}={ans} ({k}회째)")
+                return
+            if k < tries:
+                if resend and (resend_on is None or k in resend_on):
+                    yield ("w", resend)
+                    yield ("sleep", max(VERIFY_RETRY_S, resend_wait))
+                else:
+                    yield ("sleep", VERIFY_RETRY_S)
+        raise MfcVerifyError(f"{name}: {query} = " + "/".join(seen))
 
     def set_flow(self, ch: int, sccm: float, on_done=None) -> None:
-        pct = round(self.sccm_to_pct(ch, sccm), 1)
+        """FLOW_SET — v1 _verify_flow_set_async(MFC.py:1058-1082): Q → R6(4+ch) 확인, 다르면 Q 다시 + 1 s, 5회."""
+        cmd, pct = flow_cmd(ch, sccm, self.fs[ch])
 
-        def ok():
+        def gen():
+            yield ("w", cmd)
+            yield from self._verify_loop(
+                f"flow{ch}", f"R6{4 + ch}",
+                lambda a: (v := parse_prefixed(a or "", f"Q{4 + ch}")) is not None and abs(v - pct) < 0.1,
+                VERIFY_TRIES, resend=cmd)
             if ch == CH_AR:
                 self.ar_set = sccm
             elif ch == CH_O2:
                 self.o2_set = sccm
-        self._write_verify(f"flow{ch}", f"Q{ch} {pct:.1f}", f"R6{4 + ch}",
-                           lambda a: (v := parse_prefixed(a, f"Q{4 + ch}")) is not None and abs(v - pct) <= 0.1,
-                           on_done, after_ok=ok)
+        self._op(f"flow{ch}", gen(), on_done)
+
+    def _l0_gen(self, name: str, bits: str):
+        """L0 쓰기 → R69 확인, 다르면 L0 1회 다시(v1 _set_onoff_mask_and_verify, MFC.py:1131-1170)."""
+        cmd = f"L0{bits}"
+        yield ("w", cmd)
+        yield from self._verify_loop(name, "R69", lambda a: parse_r69(a or "") == bits, L0_TRIES, resend=cmd)
 
     def set_onoff(self, bits: str, on_done=None) -> None:
         if not re.fullmatch(r"[01]{4}", bits):
             raise ValueError(bits)
-        self._write_verify("onoff", f"L0{bits}", "R69", lambda a: parse_r69(a) == bits, on_done)
+        self._op("onoff", self._l0_gen("onoff", bits), on_done)
 
     def all_flow_off(self, on_done=None) -> None:
         self.set_onoff("0000", on_done)
 
     def set_channel(self, ch: int, on: bool, on_done=None) -> None:
-        """v1 FLOW_ON/FLOW_OFF(_apply_flow_onoff_with_L0): R69 로 지금 마스크를 읽고 그 채널만 바꿔 L0 로 쓴 뒤 R69 되읽기."""
+        """v1 FLOW_ON/FLOW_OFF(_apply_flow_onoff_with_L0, MFC.py:1084-1129): R69 로 지금 마스크를 읽고 그 채널만 바꿔 L0 → R69 확인.
+        R69 를 끝내 못 읽으면 실패 — v1 의 "0000" 대체값(1086)은 다른 채널을 끌 수 있어 쓰지 않는다."""
         if ch not in (1, 2, 3, 4):
             raise ValueError(ch)
-        tries = self.cfg["MFC_VERIFY_TRIES"]
-        box: Dict[str, str] = {}
-        seen: List[str] = []
+        name = f"ch{ch}_{'on' if on else 'off'}"
 
-        def read(s):
-            bits = parse_r69(self._query(s, "R69"))
-            if bits is None:
-                raise MfcError("R69 형식 다름")
+        def gen():
+            ans = yield ("q", "R69")
+            bits = parse_r69(ans or "")
+            if ans is None or len(bits) != 4:
+                raise MfcVerifyError(f"{name}: R69 를 읽지 못함({ans!r}) — L0 를 보내지 않음")
             b = list(bits)
             b[ch - 1] = "1" if on else "0"
-            box["bits"] = "".join(b)
-
-        def write(s):
-            self._send(s, f"L0{box['bits']}")
-
-        def verify(k):
-            def fn(s):
-                try:
-                    ans = self._query(s, "R69")
-                except Cancelled:
-                    raise
-                except Exception as e:
-                    ans = f"무응답({type(e).__name__})"
-                seen.append(ans)
-                if parse_r69(ans) == box["bits"]:
-                    self._emit("verify_ok", f"ch{ch} {'ON' if on else 'OFF'}: L0{box['bits']} → R69={ans}")
-                    return SEQ_DONE
-                if k >= tries:
-                    raise MfcVerifyError(f"ch{ch}: L0{box['bits']} 뒤 R69 = " + "/".join(seen))
-            return fn
-
-        def done(n, reason, results):
-            if reason and reason != "BENCH_READ_ONLY":
-                self._emit("verify_mismatch", f"ch{ch} on/off 실패 " + "/".join(seen), "VERIFY_MISMATCH")
-            if on_done:
-                on_done(n, "VERIFY_MISMATCH" if reason and reason != "BENCH_READ_ONLY" else reason, results)
-
-        steps = [("R69 읽기", read), ("L0 쓰기", write)] + [(f"R69 {k}", verify(k)) for k in range(1, tries + 1)]
-        self.worker.submit_sequence(Sequence(f"mfc:ch{ch}_{'on' if on else 'off'}", steps, gap_s=self.gap_s,
-                                             step_timeout_s=self.q_timeout_s + self.gap_s + 0.2, on_done=done,
-                                             confirms_link=False))
+            yield from self._l0_gen(name, "".join(b))
+        self._op(name, gen(), on_done)
 
     def set_sp(self, n: int, mtorr: float, on_done=None) -> None:
-        hw = round(self.mtorr_to_pct(mtorr), 2)
-        tol = self.cfg["MFC_SP1_VERIFY_TOL"]
+        """SP1: R1 확인 1 s 간격 5회(v1 _verify_simple_async). SP2~SP4: v1 은 되읽기 없이 확인 — R(n) 1회 읽어 다르면 경고만."""
+        cmd, hw = sp_cmd(n, mtorr, float(self.cfg["MFC_PRESSURE_FS_TORR"]))
+        tol = max(float(self.cfg["MFC_SP1_VERIFY_TOL"]), 1e-9)
 
-        def ok():
+        def ok(a):
+            v = parse_pressure(a) if a is not None else None
+            return v is not None and abs(v - hw) <= tol
+
+        def gen():
+            yield ("w", cmd)
             if n == 1:
+                yield from self._verify_loop("S1", "R1", ok, VERIFY_TRIES)
                 self.sp_mtorr = mtorr
-        self._write_verify(f"S{n}", f"S{n} {hw:.2f}", f"R{n}",
-                           lambda a: (v := parse_pressure(a)) is not None and abs(v - hw) <= tol, on_done, after_ok=ok)
+            else:
+                ans = yield ("q", f"R{n}")
+                if ok(ans):
+                    self._emit("verify_ok", f"S{n}: R{n}={ans}")
+                else:
+                    self._emit("sp_readback", f"S{n}: {cmd} 뒤 R{n} = {ans!r} — 경고만(v1 은 되읽기 없이 진행)",
+                               "VERIFY_MISMATCH")
+        self._op(f"S{n}", gen(), on_done)
 
     def select_sp(self, n: int, on_done=None) -> None:
-        def ok():
+        """D1~D4 → R7 확인 1 s 간격 5회(v1 _verify_simple_async SPn_ON, MFC.py:983-1021)."""
+        def gen():
+            yield ("w", f"D{n}")
+            yield from self._verify_loop(
+                f"D{n}", "R7", lambda a: bool(a) and a.startswith("M") and len(a) > 1 and a[1] == str(n), VERIFY_TRIES)
             self.sp_active = n
-        self._write_verify(f"D{n}", f"D{n}", "R7", lambda a: a.startswith("M") and len(a) > 1 and a[1] == str(n),
-                           on_done, after_ok=ok)
+        self._op(f"D{n}", gen(), on_done)
 
     def valve(self, open_: bool, on_done=None) -> None:
+        """O·C → 밸브 대기(MFC_VALVE_SETTLE_SEC) → R6 확인 5회, 2·4번째 뒤 다시 보내고 밸브 대기(v1 MFC.py:1172-1211)."""
         cmd = "O" if open_ else "C"
+        settle = float(self.cfg["MFC_VALVE_SETTLE_SEC"])
 
-        def ok():
+        def pos_ok(a):
+            m = re.match(r"^(?:V\s*)?\+?([+\-]?\d+(?:\.\d+)?)$", (a or "").strip())
+            pos = float(m.group(1)) if m else None
+            return pos is not None and (pos > 99.0 if open_ else pos < 1.0)
+
+        def gen():
+            yield ("w", cmd)
+            yield ("sleep", settle)
+            yield from self._verify_loop(f"valve_{cmd}", "R6", pos_ok, VERIFY_TRIES, resend=cmd, resend_on=(2, 4),
+                                         resend_wait=settle)
             self.sp_active = 0
-        self._write_verify(f"valve_{cmd}", cmd, "R6",
-                           lambda a: (v := parse_pressure(a)) is not None and (v >= 99.0 if open_ else v <= 1.0),
-                           on_done, settle_s=self.cfg["MFC_VALVE_SETTLE_SEC"], after_ok=ok)
+        self._op(f"valve_{cmd}", gen(), on_done)
 
     def zero(self, cmd: str, on_done=None) -> None:
         """영점(L5~L8 1, Z1) — 되읽기 없음."""
         if not re.fullmatch(r"L[5-8] 1|Z1", cmd):
             raise ValueError(cmd)
-        self.worker.submit_sequence(Sequence(f"mfc:{cmd}", [(cmd, lambda s: self._send(s, cmd))],
-                                             step_timeout_s=self.gap_s + 0.5, on_done=on_done, confirms_link=False))
+
+        def gen():
+            yield ("w", cmd)
+        self._op(cmd, gen(), on_done)
+
+
+# ───────── 쓰기 명령 글자 ─────────
+def flow_cmd(ch: int, sccm: float, fs: float) -> tuple:
+    """Q{ch} 값 — (명령, 되읽기 비교 %FS)."""
+    pct = round(float(sccm) / float(fs) * 100.0, 1)
+    return f"Q{ch} {pct:.1f}", pct
+
+
+def sp_cmd(n: int, mtorr: float, fs_torr: float) -> tuple:
+    """S{n} 값 — (명령, 되읽기 비교 %FS)."""
+    hw = round(float(mtorr) / 1000.0 / float(fs_torr) * 100.0, 2)
+    return f"S{n} {hw:.2f}", hw

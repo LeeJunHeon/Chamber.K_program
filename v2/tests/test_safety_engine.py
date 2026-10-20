@@ -311,7 +311,7 @@ def test_step_runner_timeout_moves_on():
 
 
 def test_stop_and_all_stop_sequences_from_table():
-    h = H(state="MAIN", uses_heater=True, filament_by_process=True)
+    h = H(state="MAIN", uses_heater=True, filament_by_process=True, dc_on=True, rfp_on=True)
     assert h.s.stop()
     h.settle()
     kinds = [k for k, _ in h.calls]
@@ -335,7 +335,7 @@ def test_stop_and_all_stop_sequences_from_table():
 
 
 def test_stop_sequence_exception_still_runs_must_steps():
-    h = H(state="MAIN", uses_heater=True, filament_by_process=True)
+    h = H(state="MAIN", uses_heater=True, filament_by_process=True, dc_on=True, rfp_on=True)
 
     def boom(a, done):
         raise RuntimeError("셔터 쓰기 예외")
@@ -347,7 +347,7 @@ def test_stop_sequence_exception_still_runs_must_steps():
     assert kinds == ["IG_FILAMENT_OFF", "HEATER_FORCE_OFF", "RFP_SAFE_OFF", "RF_SAFE_OFF", "GAS_FLOW_OFF", "GAS_EXHAUST",
                      "GAS_VALVES_CLOSE"]
     res = dict((n, st) for n, _, st in h.e.seq_results["stop"])
-    assert res[2].startswith("error:") and res[4] == "error:DC_OFF_UNCONFIRMED" and res[11] == "ok"
+    assert res[2].startswith("error:") and res[4] == "sent" and res[13] == "error:DC_OFF_UNCONFIRMED" and res[12] == "ok"
 
 
 def test_all_stop_exception_skips_only_optional():

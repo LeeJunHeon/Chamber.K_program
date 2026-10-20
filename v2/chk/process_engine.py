@@ -11,6 +11,8 @@ POWER_WAIT(S36) 공식 한도, PRESSURE_SP1(S37) WAIT_PRESSURE 한도(fail_on_ti
 
 끝맺음: 행 정상 끝 → SafetyEngine.end_row(정지 순서) → run_end done → 다음 행(CSV_BETWEEN) 또는 DONE.
 STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장비 오류) → run_end error(첫 사유). ALL STOP → error(ALL_STOP).
+행 끝 정지 순서(STOPPING) 중에 온 STOP·중단·ALL STOP 은 late_stop 으로 사유를 남겨, 정지 순서가 끝나면 다음 행을 시작하지 않고
+리스트를 끝낸다(v1 csv_cancelled — core/process_service.py:725-727·742-743·868·938-943·1026).
 딜레이 행·행 사이에는 장비가 없어 정지 순서 없이 리스트를 바로 정리한다(v1 cancel_csv_list_now). 리스트가 끝나거나 취소되면
 적재도 해제한다(v1 st.clear_csv_list — process_states 의 DONE→LOADED 는 쓰지 않음).
 시작 거부(결정 5-2-4): 레시피가 쓰는 장비가 설정에서 꺼져 있으면 DEVICE_DISABLED, 연결 안 됐으면 LINK_DOWN.
@@ -86,6 +88,7 @@ class ProcessEngine:
         self.dcc = DcControl(cfg, dc, self._dev_msg)
         self.rfc = RfControl(cfg, plc, self._dev_msg)
         self.filament_by_process = False
+        self.dc_on = self.rf_on = self.rfp_on = False     # 이번 행에서 출력 명령을 냈다(v1 is_dc_on·is_rf_on·is_rfpulse_on)
         self.comm_aborted = False
         self._next_tick_mono = 0.0
         self._settle_pending = False
@@ -117,6 +120,10 @@ class ProcessEngine:
     @property
     def uses_heater(self) -> bool:
         return heater_used(self.params)
+
+    @property
+    def rf_ref_waiting(self) -> bool:
+        return self.rfc.ref_waiting
 
     @property
     def heater_recipe_running(self) -> bool:
@@ -313,6 +320,9 @@ class ProcessEngine:
             if self.state in ("CSV_DELAY", "CSV_BETWEEN"):
                 self._cancel_list("USER_STOP")
                 return
+            if self.state == "STOPPING":
+                self.late_stop("aborted", "USER_STOP")
+                return
             if self.state in ACT and self.safety is not None:
                 self.safety.stop()
 
@@ -322,6 +332,14 @@ class ProcessEngine:
             self.end_kind, self.end_code = "aborted", "USER_STOP"
             self._halt()
             self._set_state("STOPPING")
+
+    def late_stop(self, kind: str, code: str) -> None:
+        """정지 순서(행 끝 포함) 중에 온 STOP·중단·ALL STOP — 첫 사유를 남긴다. 정지 순서가 끝나면 이 행은 그 사유로 끝나고
+        리스트는 다음 행 없이 끝난다(v1 step_ok=False·csv_cancelled)."""
+        with self._lock:
+            if self.state == "STOPPING" and self.row_is_process and self.end_kind in (None, "done"):
+                self.end_kind, self.end_code = kind, code
+                self._emit(ProcEvent("warn", f"정지 순서 중 {code} — 리스트를 끝낸다", code))
 
     def on_abort(self, reason: str) -> None:
         with self._lock:
@@ -397,6 +415,7 @@ class ProcessEngine:
         self.params, self.run_name, self.run_id = params, name, uuid.uuid4().hex[:12]
         self.end_kind = self.end_code = None
         self.row_is_process, self.comm_aborted, self.filament_by_process = True, False, False
+        self.dc_on = self.rf_on = self.rfp_on = False
         self.power, self.base = {}, {}
         steps = build_process_steps(params, self.cfg, ig_enabled=bool(self.cfg["IG_ENABLED"]),
                                     rfpulse_present=bool(self.cfg["RFPULSE_ENABLED"]))
@@ -404,7 +423,7 @@ class ProcessEngine:
              "HEATER_RAMP": self._h_heater_ramp, "HEATER_SET": self._h_heater_set, "HEATER_WAIT": self._h_heater_wait,
              "IG_FILAMENT_ON": self._h_ig_on, "IG_BASE_WAIT": self._h_ig_wait, "IG_FILAMENT_OFF": self._h_ig_off,
              "POWER_WAIT": self._h_power_wait}
-        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, h, self._step_event)
+        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, h, self._step_event, cfg=self.cfg)
         if self.safety is not None:
             self.safety.engine.new_run()
         self._emit(ProcEvent("run_start", name, data={"name": name, "params": dict(params), "run_id": self.run_id}))
@@ -543,7 +562,10 @@ class ProcessEngine:
                 b["emission_since"] = t
         else:
             b["emission_since"] = None
-        settled = b.get("emission_since") is not None and t - b["emission_since"] >= float(c["IG_SETTLE_SEC"])
+        # IG_SETTLE 은 드라이버가 처음 방출을 확인한 시각(ig.emission_since)부터 — 없으면 이 대기에서 처음 본 시각
+        es = getattr(self.ig, "emission_since", None) if (fil and emi) else None
+        since = es if es is not None else b.get("emission_since")
+        settled = since is not None and t - since >= float(c["IG_SETTLE_SEC"])
         if ion is None or fil is None:
             cond = None                                  # 모름(stale·fail·suppressed) — 판정 유지
         else:
@@ -556,6 +578,7 @@ class ProcessEngine:
     def _relight(self, b, now):
         b["relights"] += 1
         b["relight_t0"] = now
+        self.filament_by_process = True                    # 재점등한 필라멘트도 공정 소유 — 정지 때 끈다(v1 pc:1092-1094·1254)
         self._emit(ProcEvent("warn", f"베이스 대기 중 필라멘트 꺼짐 — 재점등 {b['relights']}/{self.cfg['IG_MAX_RELIGHTS']}"))
         self.ig.filament_on()
         return "wait"
@@ -599,10 +622,13 @@ class ProcessEngine:
             pw.update(timeout=self.power_wait_timeout(dc_w, rf_w, rfp_w), rfp=None)
             nt = _NextTick(self._next_tick_mono)
             if dc_w > 0:
+                self.dc_on = True
                 self.dcc.start(dc_w, tick=nt)
             if rf_w > 0:
+                self.rf_on = True
                 self.rfc.start(rf_w, float(p.get("rf_offset") or 0.0), float(p.get("rf_param") or 1.0))
             if rfp_w > 0:
+                self.rfp_on = True
                 def done(name, reason, results):
                     pw["rfp"] = reason is None
                     if self.safety is not None:

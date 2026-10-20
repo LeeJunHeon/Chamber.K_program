@@ -269,6 +269,9 @@ class SafetyEngine:
                     self.run_reason = reason
         if not first:
             self._emit(SafetyEvent("also", rule, reason, f"이미 정지 중({self.stopping}) 또는 공정 없음 — 이벤트만", "warn", t))
+            late = getattr(self.process, "late_stop", None)
+            if late is not None:                       # 정지 순서 중의 중단 — 리스트를 끝내도록 공정 쪽에 알린다
+                late("error", reason)
             return False
         self._emit(SafetyEvent("abort", rule, reason, "공정 중단", "error", t))
         if not getattr(self.process, "needs_stop_sequence", True):

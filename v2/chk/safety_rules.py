@@ -305,20 +305,26 @@ class SeqStep:
     nowait: bool = False         # 보내기만 하고 다음 단계로(결과는 뒤의 AWAIT 단계가 받는다)
 
 
+# v1 _stop_impl·_power_off_sequence(controller/process_controller.py:1785-1981): 필라멘트 OFF 1회(기다리지 않음) → MS 닫기 →
+# 히터 OFF → DC OFF·RF Pulse OFF 를 보내 놓고(켰을 때만, 기다리지 않음) RF 램프다운 → RF Pulse 완료 대기 → 유량 OFF → 배기 →
+# 건 셔터 → 차단밸브. v2 는 RF 램프다운 뒤 enable 도 OFF(v2 방식 유지), 끝에서 DC OFF 결과를 받아 기록한다.
 STOP_SEQUENCE: tuple = (
-    SeqStep(1, Act("IG_FILAMENT_OFF"), "IG_FILAMENT_OFF_TIMEOUT_SEC", False, "이번 공정에서 필라멘트를 켰으면",
-            "베이스 대기 정리"),
+    SeqStep(1, Act("IG_FILAMENT_OFF"), "", False, "이번 공정에서 필라멘트를 켰으면",
+            "베이스 대기 정리 — 1회 요청, 결과를 기다리지 않음(v1 _ig_cancel)", nowait=True),
     SeqStep(2, Act("SHUTTERS_CLOSE", {"which": "ms"}), "", True, "", "Main 셔터 닫기"),
     SeqStep(3, Act("HEATER_FORCE_OFF"), "", True, "공정이 히터를 쓰는 행이면", "히터 RUN=0, 램프 원복"),
-    SeqStep(4, Act("DC_SAFE_OFF"), "", True, "", "DC OFF(확인형)"),
-    SeqStep(5, Act("RFP_SAFE_OFF"), "STOP_RFPULSE_OFF_TIMEOUT_SEC", True, "", "RF Pulse OFF 를 RF 램프다운보다 먼저"),
+    SeqStep(4, Act("DC_SAFE_OFF"), "", True, "이번 행에서 DC 를 켰으면", "DC OFF(확인형) — 보내고 다음으로", nowait=True),
+    SeqStep(5, Act("RFP_SAFE_OFF"), "", True, "이번 행에서 RF Pulse 를 켰으면", "RF Pulse OFF — 보내고 다음으로(램프다운 없음)",
+            nowait=True),
     SeqStep(6, Act("RF_RAMP_DOWN"), "STOP_RF_RAMPDOWN_TIMEOUT_SEC", True, "RF 사용 중",
             "RF_RAMP_DOWN_STEP_COUNTS 씩 0.5 s 간격, 한도 넘으면 즉시 0"),
     SeqStep(7, Act("RF_SAFE_OFF"), "", True, "", "DAC 0·enable OFF"),
-    SeqStep(8, Act("GAS_FLOW_OFF"), "STOP_FLOW_OFF_TIMEOUT_SEC", True, "", "채널별 FLOW OFF 확인(R69)"),
-    SeqStep(9, Act("GAS_EXHAUST"), "STOP_EXHAUST_WAIT_SEC", True, "", "MFC 밸브 열기(배기)"),
-    SeqStep(10, Act("SHUTTERS_CLOSE", {"which": "s1,s2"}), "", True, "", "건 셔터 닫기"),
-    SeqStep(11, Act("GAS_VALVES_CLOSE"), "", True, "", "Ar·O2 차단밸브 닫기"),
+    SeqStep(8, Act("AWAIT", {"no": 5}), "STOP_RFPULSE_OFF_TIMEOUT_SEC", True, "", "RF Pulse OFF 완료 대기"),
+    SeqStep(9, Act("GAS_FLOW_OFF"), "STOP_FLOW_OFF_TIMEOUT_SEC", True, "", "FLOW OFF 확인(R69)"),
+    SeqStep(10, Act("GAS_EXHAUST"), "STOP_EXHAUST_WAIT_SEC", True, "", "MFC 밸브 열기(배기)"),
+    SeqStep(11, Act("SHUTTERS_CLOSE", {"which": "s1,s2"}), "", True, "", "건 셔터 닫기"),
+    SeqStep(12, Act("GAS_VALVES_CLOSE"), "", True, "", "Ar·O2 차단밸브 닫기"),
+    SeqStep(13, Act("AWAIT", {"no": 4}), "", True, "", "DC OFF 결과(기록)"),
 )
 
 # ALL STOP — 말 그대로 전부 끈다(사용자 결정 2026-10-20, v1 과 같게). 각 단계 독립(앞 단계 예외와 무관).

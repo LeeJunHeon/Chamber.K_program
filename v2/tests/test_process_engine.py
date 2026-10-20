@@ -125,7 +125,7 @@ def test_stop_during_main_and_during_delay(tmp_path):
     assert "MAIN" in seq and seq[-3:] == ["STOPPING", "ABORTED", "IDLE"]
     assert r.rig.sims["dc"].out is False
     seqs = r.rig.safety.engine.seq_results
-    assert "stop" in seqs and all(s in ("ok", "not_needed") for _, _, s in seqs["stop"])
+    assert "stop" in seqs and all(s in ("ok", "not_needed", "sent") for _, _, s in seqs["stop"])
 
 
 def test_stop_and_all_stop_during_delay_cancel_list(tmp_path):

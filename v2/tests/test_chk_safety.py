@@ -89,7 +89,7 @@ def test_plc250_mv_closed_detect_latency(tmp_path, offset):
 
 
 def test_mv_closed_abort_runs_full_stop_sequence(tmp_path):
-    c, rig = make(tmp_path, state="MAIN", uses_dc=True)
+    c, rig = make(tmp_path, state="MAIN", uses_dc=True, dc_on=True)
     plc, dcs, mfcs = rig.sims["plc"], rig.sims["dc"], rig.sims["mfc"]
     for k in ("mv", "ms", "s1", "s2", "ar_valve", "o2_valve"):
         plc.coils[A[k]] = True
@@ -105,8 +105,8 @@ def test_mv_closed_abort_runs_full_stop_sequence(tmp_path):
     e = rig.safety.engine
     assert e.run_reason == "MV_CLOSED" and rig.process.state == "ABORTED"
     res = {n: st for n, _, st in e.seq_results["abort"]}
-    assert res == {1: "not_needed", 2: "ok", 3: "not_needed", 4: "ok", 5: "ok", 6: "not_needed", 7: "ok", 8: "ok",
-                   9: "ok", 10: "ok", 11: "ok"}, res
+    assert res == {1: "not_needed", 2: "ok", 3: "not_needed", 4: "sent", 5: "not_needed", 6: "not_needed", 7: "ok",
+                   8: "not_needed", 9: "ok", 10: "ok", 11: "ok", 12: "ok", 13: "ok"}, res
     assert dcs.out is False and not any(mfcs.on)
     for k in ("ms", "s1", "s2", "ar_valve", "o2_valve"):
         assert plc.coils[A[k]] is False, k
@@ -134,7 +134,7 @@ def test_all_stop_turns_off_every_plc_output(tmp_path):
 
 def test_stop_sequence_exception_real_devices(tmp_path):
     """셔터 닫기 단계가 예외를 내도 DC OFF·가스 차단 등 필수 단계는 실제 장비에 실행된다."""
-    c, rig = make(tmp_path, state="MAIN", uses_dc=True)
+    c, rig = make(tmp_path, state="MAIN", uses_dc=True, dc_on=True)
     plc, dcs = rig.sims["plc"], rig.sims["dc"]
     for k in ("mv", "ar_valve", "o2_valve", "ms"):
         plc.coils[A[k]] = True
@@ -146,12 +146,12 @@ def test_stop_sequence_exception_real_devices(tmp_path):
     at(c, 6.3, lambda: plc.coils.__setitem__(A["mv"], False))
     run(rig, 25)
     res = {n: st for n, _, st in rig.safety.engine.seq_results["abort"]}
-    assert res[2].startswith("error:RuntimeError") and res[10].startswith("error:RuntimeError")
-    assert res[4] == "ok" and res[8] == "ok" and res[11] == "ok"
+    assert res[2].startswith("error:RuntimeError") and res[11].startswith("error:RuntimeError")
+    assert res[4] == "sent" and res[13] == "ok" and res[9] == "ok" and res[12] == "ok"
     assert dcs.out is False and plc.coils[A["ar_valve"]] is False and plc.coils[A["o2_valve"]] is False
     assert plc.coils[A["ms"]] is True                         # 예외 난 단계만 못 함
     steps = [e for e in rig.events if getattr(e, "kind", "") == "step"]
-    assert len(steps) == 11
+    assert len(steps) == 13
 
 
 def test_idle_rig_no_trips(tmp_path):
