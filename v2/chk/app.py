@@ -41,13 +41,14 @@ from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
 from v2.chk.local_server import LocalServer
-from v2.chk.system import ChkSystem, new_store, serial_transports
+from v2.chk.system import APP_RETENTION, ChkSystem, new_store, serial_transports
+
+SIM_APP_LOG_KEEP = APP_RETENTION.sim_log  # 실행 프로그램 sim: 시뮬레이터가 받은 요청 기록 상한(system.Retention 에 모음)
 
 PROGRAM = "chk-v2"
 DEFAULT_CONFIG_DIR = r"C:\ChamberK_v2\config"
 CONFIRM_WINDOW_S = 5.0             # 히터 운전 중 Ctrl+C 두 번째 확인 시간
 SHUTDOWN_HEATER_WAIT_S = 3.0       # 정상 종료: 히터 RUN=0 결과를 기다리는 시간
-SIM_APP_LOG_KEEP = 1000            # 실행 프로그램 sim: 시뮬레이터가 받은 요청 기록 상한(시험용 기록 — 며칠 켜 둬도 늘지 않게)
 FORCE_DEADLINE_S = 3.5             # 강제 종료: 이 시간 안에 끝낸다(창 닫기 한도 약 5초)
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
@@ -219,7 +220,8 @@ class App:
         else:
             tr = serial_transports(self.clock, self.cfg, serial_factory=self.serial_factory)
         self.system = ChkSystem(self.clock, self.cfg, self.data_dir, tr, mode=mode.value, store=self.store,
-                                nas_dir=self.cfg.get("NAS_COPY_DIR") or None, program=PROGRAM, version=self.version)
+                                nas_dir=self.cfg.get("NAS_COPY_DIR") or None, program=PROGRAM, version=self.version,
+                                retention=APP_RETENTION)       # 화면·시험용 기록은 작게(운전 기록은 기록 파일·허브)
         return self.system
 
     def start(self) -> int:

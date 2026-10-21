@@ -2,7 +2,9 @@
 
 - put_row / put_event 는 큐에 넣기만 한다(가득 차면 버리고 dropped 를 센다 — tick 은 절대 기다리지 않음).
 - 쓰기 스레드: 일별 SQLite(WAL) snap_YYYYMMDD.sqlite 의 snapshot·events 표에 쓴다. 1초마다 commit.
-  날이 바뀌면 지난 날을 CSV(snap_YYYYMMDD.csv, utf-8-sig)로 내보내고 보관 기간이 지난 로컬 파일을 지운다.
+  날이 바뀌면 지난 날을 CSV(snap_YYYYMMDD.csv, utf-8-sig)로 내보내고 보관 기간이 지난 로컬 파일을 지운다 — 따로 스레드에서
+  (recorder-csv). 쓰기 스레드가 내보내기를 기다리면 하루치(8만 행)를 내보내는 동안 새 행이 큐에 쌓인다(5-7 오래 켜 두기에서 찾음 —
+  가상 시계 10 시간 시험에서 자정 뒤 쓰기가 멈추고 큐가 시간당 수천 행씩 늘었다).
 - NAS 사본 스레드: nas_period_s 마다 지난 날 파일(.sqlite·.csv)을 복사하고, nas_today_period_s 마다 오늘 DB 를 SQLite backup 으로
   만든 일관된 사본(staging)을 복사한다. 실패하면 다음 회차에 다시. 복사가 멈춰도 쓰기·tick 과 무관.
   NAS 쪽은 지우지 않는다(사본 전체 보관).
@@ -71,6 +73,7 @@ class Recorder:
         self._writer: Optional[threading.Thread] = None
         self._nas: Optional[threading.Thread] = None
         self._db_lock = threading.Lock()   # 오늘 DB 경로·열기 상태 보호(NAS 스레드가 backup 할 때)
+        self._exports: List[threading.Thread] = []
 
     # ───────── 넣기(제어 쪽 — 기다리지 않음) ─────────
     def put_row(self, row: Dict[str, Any]) -> None:
@@ -104,11 +107,14 @@ class Recorder:
             self._nas.start()
 
     def flush(self, timeout_s: float = 10.0) -> bool:
-        """큐가 다 쓰일 때까지(시험·종료용)."""
+        """큐가 다 쓰이고 지난 날 CSV 내보내기가 끝날 때까지(시험·종료용)."""
         t0 = time.monotonic()
         while self._q.unfinished_tasks and time.monotonic() - t0 < timeout_s:
             time.sleep(0.005)
-        return not self._q.unfinished_tasks
+        for t in list(self._exports):
+            t.join(max(0.0, timeout_s - (time.monotonic() - t0)))
+        self._exports = [t for t in self._exports if t.is_alive()]
+        return not self._q.unfinished_tasks and not self._exports
 
     def stop(self, timeout_s: float = 10.0) -> None:
         self.flush(timeout_s)
@@ -145,12 +151,18 @@ class Recorder:
                        "message TEXT, context TEXT)")
             db.commit()
             self._db, self._day = db, day
-        if old is not None:
-            try:
-                self.export_csv(old)
-            except Exception as e:
-                self.errors.append(f"CSV 내보내기 {old}: {e!r}")
-            self.prune()
+        if old is not None:                # 지난 날 CSV·정리는 따로 스레드(쓰기는 새 날 DB 로 계속)
+            self._exports = [t for t in self._exports if t.is_alive()]
+            t = threading.Thread(target=self._export_old, args=(old,), name="recorder-csv", daemon=True)
+            t.start()
+            self._exports.append(t)
+
+    def _export_old(self, day: str) -> None:
+        try:
+            self.export_csv(day)
+        except Exception as e:
+            self.errors.append(f"CSV 내보내기 {day}: {e!r}")
+        self.prune()
 
     def _write_loop(self) -> None:
         sql_row = (f"INSERT OR REPLACE INTO snapshot ({', '.join(_q(c) for c in self.columns)}) "

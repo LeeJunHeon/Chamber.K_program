@@ -3,6 +3,7 @@ import csv
 import datetime as dt
 import sqlite3
 import threading
+import time
 
 import pytest
 
@@ -154,6 +155,26 @@ def test_recorder_sqlite_csv_rollover(tmp_path):
     db2 = sqlite3.connect(tmp_path / "snap_20261016.sqlite")
     assert db2.execute("SELECT flag FROM snapshot").fetchall() == [(0,)]
     db2.close()
+    assert list(r.errors) == []
+
+
+def test_recorder_keeps_writing_while_previous_day_csv_exports(tmp_path):
+    """5-7 — 지난 날 CSV 내보내기는 따로 스레드. 쓰기 스레드가 기다리면 그동안 새 날 행이 큐에 쌓였다(가상 10 시간에서 자정 뒤)."""
+    r = Recorder(tmp_path, COLS, today_fn=lambda: dt.date(2026, 10, 16))
+    gate, real = threading.Event(), r.export_csv
+    r.export_csv = lambda day: (gate.wait(10), real(day))[1]
+    r.start()
+    r.put_row(_row("2026-10-15T23:59:59", 1))
+    for k in range(200):
+        r.put_row(_row(f"2026-10-16T00:{k // 60:02d}:{k % 60:02d}", k + 2))
+    t0 = time.monotonic()
+    while r.written < 201 and time.monotonic() - t0 < 5:
+        time.sleep(0.01)
+    assert r.written == 201 and r._q.qsize() == 0                          # 내보내기가 막혀 있어도 새 날 행은 쓰임
+    assert not (tmp_path / "snap_20261015.csv").exists() and r._exports[0].is_alive()
+    gate.set()
+    assert r.flush(5) and (tmp_path / "snap_20261015.csv").exists()
+    r.stop()
     assert list(r.errors) == []
 
 

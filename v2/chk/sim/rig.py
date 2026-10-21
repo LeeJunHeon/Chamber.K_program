@@ -25,7 +25,7 @@ from v2.chk.sim.dc_sim import DcSim
 from v2.chk.sim.ig_sim import IgSim
 from v2.chk.sim.mfc_sim import MfcSim
 from v2.chk.sim.plc_sim import PlcSim
-from v2.chk.system import ChkSystem, new_store
+from v2.chk.system import TEST_RETENTION, ChkSystem, Retention, new_store
 
 
 def make_sims(start: float = 0.0, log_keep: Optional[int] = None):
@@ -48,16 +48,17 @@ def sim_transports(clock, sims) -> Dict[str, SimTransport]:
 
 
 class ChkRig(ChkSystem):
-    """시험 하니스 — 시뮬레이터를 만들어 실행 프로그램과 같은 조립(ChkSystem)에 넣는다. 설정 저장소는 out_dir/config."""
+    """시험 하니스 — 시뮬레이터를 만들어 실행 프로그램과 같은 조립(ChkSystem)에 넣는다. 설정 저장소는 out_dir/config.
+    retention = 기록 크기(기본 TEST_RETENTION — 결과를 보려고 크게, APP_RETENTION 이면 실행 프로그램과 같게)."""
 
     def __init__(self, clock, out_dir: Path, cfg: Optional[Dict[str, Any]] = None, scenario: str = "none",
-                 simple_process: bool = False, mode: str = "sim") -> None:
-        self.chamber, self.sims = make_sims(clock.monotonic())
+                 simple_process: bool = False, mode: str = "sim", retention: Retention = TEST_RETENTION) -> None:
+        self.chamber, self.sims = make_sims(clock.monotonic(), log_keep=retention.sim_log)
         self.scenario = scenario
         out = Path(out_dir)
         super().__init__(clock, dict(defaults(P.PARAMS), **(cfg or {})), out, sim_transports(clock, self.sims), mode=mode,
                          simple_process=simple_process, store=new_store(out / "config"),
-                         scenario_hook=self._scenario if scenario == "light" else None)
+                         scenario_hook=self._scenario if scenario == "light" else None, retention=retention)
 
     def _scenario(self, t) -> None:
         s = t.seq

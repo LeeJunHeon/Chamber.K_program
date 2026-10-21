@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import collections
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
@@ -44,7 +45,27 @@ DEVICES = ("plc", "mfc", "dc", "rfpulse", "ig")
 ENABLE_KEY = {"rfpulse": "RFPULSE_ENABLED", "ig": "IG_ENABLED"}
 STREAK = {"plc": "PLC_FAIL_STREAK", "mfc": "MFC_FAIL_STREAK", "dc": "DC_FAIL_STREAK",
           "rfpulse": "RFPULSE_FAIL_STREAK", "ig": "IG_FAIL_STREAK"}
-EVENTS_KEEP = 20000                # 최근 내부 이벤트(링 버퍼)
+EVENTS_KEEP = 20000                # 최근 내부 이벤트(링 버퍼) — 시험 하니스 기본
+
+
+@dataclass(frozen=True)
+class Retention:
+    """메모리에 두는 고정 크기 기록의 크기 — 한 곳(사용자 지시 5-7). 운전 기록은 기록 파일(Recorder)·MessageHub 가 남기므로
+    이 기록들은 화면·시험용이다. 시험 하니스(기본)는 결과를 보려고 크게, 실행 프로그램(APP_RETENTION)은 작게 —
+    크게 두면 공정을 계속 돌릴 때 다 차기까지(하루~이틀) 메모리가 늘어 보여 진짜 누수와 구분되지 않는다.
+    크기가 설정·상수로 정해지는 다른 기록(실행 프로그램에서도 그대로):
+      PLC 블랙박스 BLACKBOX_SECONDS × 4(250 ms 폴링) · 허브 소비자 큐 hub.SUB_QUEUE 1000 · plc250 평가 시각 2400 ·
+      정지 순서 스레드 64 · 기록 오류 목록 recorder.ERRORS_KEEP 200 · 블랙박스 파일 이름 100 ·
+      웹 명령 id uplink.CMD_KEEP 2000 · 웹 보관함 UPLINK_SPOOL_MAX_MB(디스크)."""
+    events: int = EVENTS_KEEP          # ChkSystem.events·ProcessEngine.events·SafetyEngine.events·HeaterEngine.events
+    notifications: int = 5000          # ChkSafety.notifications
+    hub_recent: int = 500              # MessageHub.recent(브라우저·웹 연결이 다시 붙을 때 이어 받는 링 버퍼)
+    tick_stats: int = 21600            # TickLoop.jitters·close_lags(6 시간분)
+    sim_log: Optional[int] = None      # 시뮬레이터가 받은 요청 기록(None = simdev.SIM_LOG_KEEP 50000)
+
+
+TEST_RETENTION = Retention()
+APP_RETENTION = Retention(events=1000, notifications=1000, hub_recent=500, tick_stats=21600, sim_log=1000)
 
 
 def serial_settings(cfg: Dict[str, Any], ports: Optional[Dict[str, str]] = None) -> Dict[str, SerialSettings]:
@@ -126,7 +147,7 @@ class ChkSystem:
     def __init__(self, clock, cfg: Dict[str, Any], data_dir: Path, transports: Dict[str, Transport], mode: str = "sim",
                  simple_process: bool = False, store: Optional[ConfigStore] = None, nas_dir: Optional[str] = None,
                  events_keep: int = EVENTS_KEEP, scenario_hook: Optional[Callable[[Any], None]] = None,
-                 program: str = "chk-v2", version: str = "unknown") -> None:
+                 program: str = "chk-v2", version: str = "unknown", retention: Retention = TEST_RETENTION) -> None:
         self.clock = clock
         self.cfg = cfg                           # 모든 구성 요소가 이 사전을 같이 본다(복사하지 않음)
         self.mode = mode
@@ -135,8 +156,11 @@ class ChkSystem:
         c = self.cfg
         wr = self.policy.device_writes
         self.enabled = {k: bool(c[ENABLE_KEY[k]]) if k in ENABLE_KEY else True for k in DEVICES}
-        self.events: "collections.deque[Any]" = collections.deque(maxlen=events_keep)
-        self.hub = MessageHub(self)
+        self.retention = rt = retention
+        if events_keep != EVENTS_KEEP:
+            rt = Retention(events_keep, rt.notifications, rt.hub_recent, rt.tick_stats, rt.sim_log)
+        self.events: "collections.deque[Any]" = collections.deque(maxlen=rt.events)
+        self.hub = MessageHub(self, recent_keep=rt.hub_recent)
         # 가드는 포트(전송) 바로 위
         self.guards = {k: GuardedTransport(transports[k], k, mode, c, on_event=self._ev) for k in DEVICES}
         self.workers = {k: Worker(k, self.guards[k], writes_allowed=wr, fail_streak=c[STREAK[k]],
@@ -189,7 +213,29 @@ class ChkSystem:
         self._scenario_hook = scenario_hook
         self.loop = TickLoop(clock, self.bus, [self.recorder.put_row, self.safety.on_row, self._on_row],
                              tick_hooks=[self._tick], extra_fn=self._extra)
+        self._apply_retention(rt)
         self.started = False
+
+    def _apply_retention(self, rt: Retention) -> None:
+        """구성 요소가 만든 기록의 크기를 rt 로(기록은 화면·시험용 — 제어는 읽지 않는다)."""
+        def resize(obj, name, n):
+            q = getattr(obj, name, None)
+            if q is not None and q.maxlen != n:
+                setattr(obj, name, collections.deque(q, maxlen=n))
+        for obj in (self.process, self.safety.engine, self.heater):
+            resize(obj, "events", rt.events)
+        resize(self.safety, "notifications", rt.notifications)
+        resize(self.loop, "jitters", rt.tick_stats)
+        resize(self.loop, "close_lags", rt.tick_stats)
+
+    def retention_report(self) -> Dict[str, int]:
+        """실제로 쓰는 기록 크기(보고·시험용)."""
+        p, s, h, lp = self.process, self.safety, self.heater, self.loop
+        return {"system.events": self.events.maxlen, "process.events": getattr(getattr(p, "events", None), "maxlen", 0) or 0,
+                "safety.events": s.engine.events.maxlen, "heater.events": h.events.maxlen,
+                "safety.notifications": s.notifications.maxlen, "safety.poll_eval_s": s.poll_eval_s.maxlen,
+                "hub.recent": self.hub.recent.maxlen, "tick.jitters": lp.jitters.maxlen, "tick.close_lags": lp.close_lags.maxlen,
+                "plc.blackbox": self.plc.blackbox.maxlen, "recorder.errors": self.recorder.errors.maxlen}
 
     # ── 상태 ──
     def busy(self) -> bool:
