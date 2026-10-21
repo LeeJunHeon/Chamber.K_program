@@ -182,7 +182,8 @@ class ChkSystem:
         self.config = (ConfigApply(store, c, self.busy, getattr(self.process, "_lock", None) or _NullLock(),
                                    self.hub.config_ack) if store is not None else None)
         self.core = ChkCore(c, self.process, self.heater, self.safety, self.plc, self.ig, self.links,
-                            on_result=self.hub.cmd_result, config=self.config)
+                            on_result=self.hub.cmd_result, config=self.config, writes_allowed=wr)
+        self.uplink = None                       # app 이 웹 연결을 붙이면(uplink.Uplink) — state.uplink 로 보인다
         self.plc.fast_listeners.append(self.safety.on_poll)
         self.plc.fast_listeners.append(self.heater.on_poll)
         self._scenario_hook = scenario_hook

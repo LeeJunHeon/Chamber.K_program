@@ -124,10 +124,15 @@ PARAMS: tuple = (
           desc="로컬 서버(127.0.0.1:LOCAL_HMI_PORT)가 / 와 정적 파일로 내주는 폴더(폴더 밖 경로는 막음). 화면 파일은 웹 단계에서 넣는다"),
     _inst("NAS_COPY_DIR", "NAS 사본 폴더", S, r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK2",
           pattern=r".*", safety=L, src=_V2, desc="빈 값이면 NAS 복사 안 함. 제어 흐름과 분리된 스레드가 복사"),
+    _inst("UPLINK_IN_SIM", "sim 에서도 웹 연결(웹 개발용)", B, False, safety=H, src=_V2, locked=True,
+          desc="켜면 sim 도 웹에 연결한다(웹 단계 개발용). 이때 EQUIPMENT_ID 가 -SIM 으로 끝나야 시작한다 — 진짜 장비 기록과 "
+               "섞이지 않게(아니면 시작 거부). 웹은 hello 의 runMode 로 sim 장비를 구분한다. 웹에서 바꾸지 않는다"),
 
     # ───────────── 비밀값(secret) — 장비 로컬 파일에만, 웹에 보내지 않음 ─────────────
     _p("UPLINK_URL", "secret", "웹 수집 주소", "", S, "", scope=Scope.SECRET, apply=RESTART,
-       pattern=r"(https://.+)?", v1_key="ERP_INGEST_URL", src="lib/config_local.py (이름만)"),
+       pattern=r"(https?://.+)?", v1_key="ERP_INGEST_URL", src="lib/config_local.py (이름만)",
+       desc="웹의 장비 연결 기준 주소 — POST {주소}/ingest, GET {주소}/stream. https 는 인증서 확인, http 면 시작 때 경고. "
+            "로그·화면에는 호스트만"),
     _p("UPLINK_TOKEN", "secret", "웹 수집 토큰(장비별)", "", S, "", scope=Scope.SECRET, apply=RESTART,
        v1_key="ERP_INGEST_TOKEN", src="lib/config_local.py (이름만)"),
 
@@ -483,13 +488,15 @@ PARAMS: tuple = (
     # ───────────── 웹 연동(uplink) ─────────────
     _p("UPLINK_INTERVAL_MS", "uplink", "웹 전송 주기", "ms", I, 1000, 500, 10000, safety=L, apply=LIVE,
        src="reporter.py (_loop 1 s)"),
-    _p("UPLINK_STATE_HEARTBEAT_SEC", "uplink", "변화 없을 때 state 재전송", "s", I, 10, 2, 60, safety=L,
-       apply=LIVE, src="reporter.py"),
     _p("UPLINK_TIMEOUT_SEC", "uplink", "웹 요청 응답 제한", "s", F, 15.0, 2.0, 60.0, safety=L,
        src="reporter.py (_post timeout=15)"),
     _p("UPLINK_SPOOL_MAX_MB", "uplink", "미전송 보관 상한", "MB", I, 5, 1, 500, safety=L, src="reporter.py"),
     _p("UPLINK_SUMMARY_PERIOD_SEC", "uplink", "웹으로 보내는 스냅샷 요약 주기", "s", I, 60, 10, 600, safety=L,
-       apply=LIVE, src=_V2),
+       apply=LIVE, src=_V2, desc="정각에 맞춘 구간마다 숫자 열의 last·mean·min·max, 장비별 ok 비율·최대 나이, 행 수(snapshot_summary)"),
+    _p("UPLINK_CLOCK_SKEW_SEC", "uplink", "웹 명령 만료 판정 허용 시계 차", "s", F, 5.0, 0.0, 60.0, safety=L, apply=LIVE,
+       src=_V2, desc="명령의 expiresAt 이 장비 시계로 이 시간보다 더 지났으면 실행하지 않고 COMMAND_EXPIRED"),
+    _p("UPLINK_DOWN_SEC", "uplink", "웹 연결 끊김 알림 기준", "s", I, 30, 5, 600, safety=L, apply=LIVE, src=_V2,
+       desc="웹 보내기 실패가 이 시간을 넘게 이어지면 UPLINK_DOWN 경고(공정·안전은 그대로 — 기록·화면에만)"),
 
     # ───────────── 기록(record) ─────────────
     _p("SNAPSHOT_RETENTION_DAYS", "record", "1초 기록 보관 기간", "일", I, 180, 7, 3650, safety=L, apply=RESTART, src=_V2),
@@ -581,7 +588,7 @@ CROSS_RULES: tuple = (
     _r("X24", ("RFPULSE_REFP_AUTO_OFF_SEC", "RFPULSE_REFP_SEC"), "장비 반사 자동 차단(명령 33) > 소프트웨어 반사파 판정",
        lambda v: _need(v["RFPULSE_REFP_AUTO_OFF_SEC"] > v["RFPULSE_REFP_SEC"],
                        "명령 33 시간이 소프트웨어 판정보다 짧다 — 평소에도 장비가 먼저 끈다")),
-    _r("X23", ("RUN_MODE", "UPLINK_URL"), "sim 모드는 웹 주소를 쓰지 않는다(쓰더라도 무시) — prod 는 주소 필요",
+    _r("X23", ("RUN_MODE", "UPLINK_URL"), "sim 모드는 웹 주소를 쓰지 않는다(UPLINK_IN_SIM 이 아니면 무시) — prod 는 주소 필요",
        lambda v: _need(v["RUN_MODE"] != "prod" or bool(v["UPLINK_URL"]),
                        "prod 인데 UPLINK_URL 이 비었다")),
 )
@@ -598,6 +605,8 @@ def _ports_unique(v: Mapping[str, Any]) -> bool:
 
 # ───────────── v2 에서 뺀 키·상수 ─────────────
 DROPPED: tuple = (
+    Dropped("UPLINK_STATE_HEARTBEAT_SEC", "결정 8(2026-10-20) — state 는 POST(UPLINK_INTERVAL_MS)마다 최신 하나. "
+            "따로 재전송 주기가 없다", "reporter.py"),
     Dropped("_HEATER_COOLDOWN_TARGET_C", "설명 문장을 키로 넣은 것 — 쓰는 곳 없음(죽은 키)", _JSON),
     Dropped("HEATER_TEMP_SCALE", "PLC 래더 고정 사실(0.1 °C/카운트). 바꾸면 한계값 전송(×10 고정)과 단위가 "
             "어긋나고 0 이면 0 나누기 — devices.HEATER_TEMP_SCALE_C_PER_COUNT 상수로", _JSON,

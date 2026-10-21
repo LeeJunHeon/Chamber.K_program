@@ -4,6 +4,7 @@
   version · hash(정의 내용의 sha256 — 현재값 제외) · paramSchemaHash(paramdef.schema_hash — CONFIG_APPLY 의 schemaHash)
   params        파라미터 정의(키·이름·묶음·단위·형식·범위·허용값·기본값·현재값·안전 등급·적용 시점·역할·v1 근거·설명·
                 웹 잠금 webLocked — 웹에서 못 바꾸는 키, 버전 4)
+                버전 5: uplink 설정(UPLINK_CLOCK_SKEW_SEC·UPLINK_DOWN_SEC·UPLINK_IN_SIM), 공정 기록 by(요청자), COMMAND_EXPIRED
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
   recipe        행 레시피 열(rf_pulse_freq 는 kHz) · 히터 레시피 열
@@ -28,7 +29,7 @@ from v2.chk import process_states as PS
 from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 
-EXPORT_VERSION = 4
+EXPORT_VERSION = 5
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -37,11 +38,11 @@ EVENTS: tuple = (
     ("block", "블록 시작·끝(phase start/end, result ok/failed/aborted/error, reason)",
      ("no", "type", "label", "stage", "params", "phase", "result", "reason", "index", "total", "elapsed_s", "t", "run_id")),
     ("adjust", "공정 중 수정(PROCESS_ADJUST) — result rejected/scheduled/applied → confirmed/failed",
-     ("device", "item", "old", "new", "source", "result", "reason", "t", "run_id", "state", "block", "level")),
+     ("device", "item", "old", "new", "source", "by", "result", "reason", "t", "run_id", "state", "block", "level")),
     ("state", "상태 전이", ("from", "to", "t")),
     ("warn", "경고(OUTPUTS_LEFT_ON·COND_WAIT_TIMEOUT·ADJUST_SETTLE_TIMEOUT …)", ()),
     ("reject", "적재·시작 거부(블록 검사 오류 목록)", ("errors",)),
-    ("plc_manual", "공정 중 PLC 버튼(PLC_MANUAL_IN_PROCESS)", ("target", "on", "source", "t", "run_id", "state", "level")),
+    ("plc_manual", "공정 중 PLC 버튼(PLC_MANUAL_IN_PROCESS)", ("target", "on", "source", "by", "t", "run_id", "state", "level")),
     ("stop_rest", "정상 끝 정지 중 STOP·이상 중단 — 뺀 단계를 이어서 실행(남김 취소)", ("steps", "level")),
     ("run_end", "행 끝", ("name", "status", "reason")),
     ("list_done", "레시피 리스트 끝", ()),

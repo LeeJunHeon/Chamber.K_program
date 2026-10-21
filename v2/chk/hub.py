@@ -7,7 +7,7 @@ type
 - 나머지(ProcEvent·SafetyEvent·HeaterEvent·드라이버 이벤트)는 event {level, code, ruleId, message, context}.
   ProcEvent 의 kind·data 는 context 에(context.kind·context.data), 출처는 context.source(process·safety·heater·장비 이름).
 
-소비자(로컬 서버 — 이번, uplink — 5-7)는 subscribe() 로 받는다. 소비자마다 길이 제한 큐 — 넘치면 그 소비자만 끊는다
+소비자(로컬 서버, uplink — 5-7)는 subscribe() 로 받는다. 소비자마다 길이 제한 큐 — 넘치면 그 소비자만 끊는다
 (tick·worker 를 막지 않는다: 넣기는 put_nowait 뿐). 연결 때 최신 state 하나 + 최근 메시지(링 버퍼, last_seq 뒤부터).
 last_seq 가 없거나 지금 seq 보다 크면(지난 실행의 번호 — 프로그램을 다시 켠 뒤 브라우저가 옛 번호로 이어 붙음) 처음부터:
 마지막 hello + 최신 state + 최근 메시지 전부. 링 버퍼에서 이미 밀려난 메시지가 last_seq 뒤에 있으면 sub.gap = (첫 seq, 끝 seq).
@@ -113,6 +113,13 @@ class MessageHub:
             s.put(env)
         return env
 
+    def envelope(self, type_: str, data: Dict[str, Any]) -> dict:
+        """seq 를 받지만 링 버퍼·소비자에 넣지 않는 envelope(uplink 가 연결마다 맨 앞에 싣는 hello)."""
+        with self._lock:
+            self.seq += 1
+            return {"id": uuid.uuid4().hex, "instance": self.instance, "seq": self.seq, "ts": utc_iso(self._wall()),
+                    "type": type_, "data": data}
+
     def subscribe(self, last_seq: Optional[int] = None, maxsize: int = SUB_QUEUE, name: str = "") -> Subscriber:
         """새 소비자 — 최신 state 하나 + 최근 메시지(last_seq 가 있으면 그 뒤부터)를 먼저 넣는다.
         last_seq 가 지금 seq 보다 크면(지난 실행의 번호) 없는 것으로 — 마지막 hello 부터 처음부터 보낸다."""
@@ -159,7 +166,7 @@ class MessageHub:
                 "configVersion": s.config_version, "webSchemaHash": self.web_schema_hash,
                 "snapshotColumns": list(s.bus.columns),
                 "commandKinds": [c.kind for c in C.COMMANDS if Source.HMI in c.sources],
-                "writesAllowed": bool(s.policy.device_writes)}
+                "writesAllowed": bool(s.policy.device_writes), "deviceUtc": utc_iso(self._wall())}
 
     def hello(self) -> dict:
         return self.publish("hello", self.hello_data())
@@ -249,7 +256,8 @@ class MessageHub:
                 "configPending": ({"idle": dict(st.pending_idle), "restart": dict(st.pending_restart)}
                                   if st is not None and (st.pending_idle or st.pending_restart) else None),
                 "snapshot": row, "left": dict(getattr(p, "left", {}) or {}),
-                "stopping": s.safety.engine.stopping}
+                "stopping": s.safety.engine.stopping,
+                "uplink": up.status() if (up := getattr(s, "uplink", None)) is not None else {"enabled": False}}
 
 
 def _param_hash() -> str:

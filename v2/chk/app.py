@@ -7,6 +7,9 @@
   3 로그(LOCAL_DATA_DIR\\logs 회전 로그 — 콘솔에는 시작 줄·경고·오류만)
   4 조립(system.ChkSystem — sim: 시뮬레이터, bench·prod: SerialTransport + 그 모드 가드) → worker 시작 → tick 스레드 → 서버.
     bench·prod 에서 포트가 사용 중이거나 없으면 죽지 않고 worker 재연결로 계속 시도(링크 끊김으로 보임).
+  5 웹 연결(uplink — 계약은 common.messages): prod·bench 는 연결, sim 은 안 함. UPLINK_IN_SIM 이면 sim 도 — 이때 EQUIPMENT_ID 가
+    -SIM 으로 끝나야 한다(아니면 1 단계에서 시작 거부, 종료 코드 2). UPLINK_URL 이 비면 경고만(웹 연결 없이 운전).
+    주소는 호스트만 콘솔·로그에, 토큰은 어디에도. http 주소면 시작 때 경고 한 번. 조립 뒤·worker 시작 전에 붙는다(hello 부터 받게).
 버전은 .git 의 HEAD·ref 파일을 읽어서(git 명령을 실행하지 않음), 못 읽으면 unknown.
 
 종료(v1 main.py:4977 closeEvent 와 같은 조건)
@@ -31,6 +34,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.clock import RealClock
@@ -52,6 +56,7 @@ CTRL_C, CTRL_BREAK, CTRL_CLOSE, CTRL_LOGOFF, CTRL_SHUTDOWN = 0, 1, 2, 5, 6
 CTRL_NAMES = {CTRL_CLOSE: "CTRL_CLOSE", CTRL_LOGOFF: "CTRL_LOGOFF", CTRL_SHUTDOWN: "CTRL_SHUTDOWN"}
 WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
 WM_DESTROY, WM_CLOSE = 0x0002, 0x0010
+SIM_ID_SUFFIX = "-SIM"               # UPLINK_IN_SIM 일 때 장비 ID 끝
 REFUSE_PROCESS = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
 REFUSE_GAS = "히터 가스 사용 중 — 히터 가스를 해제한 뒤 종료"
 CONFIRM_HEATER = "종료하면 히터가 꺼집니다 — 5초 안에 Ctrl+C 를 한 번 더"
@@ -122,6 +127,7 @@ class App:
         self._session: Optional[threading.Thread] = None
         self._session_hwnd = None
         self.sims = None
+        self.uplink = None
 
     # ───────── 1 설정 ─────────
     def load_config(self) -> bool:
@@ -132,7 +138,16 @@ class App:
         except (ConfigError, ValueError) as e:
             self.say(f"[중지] 설정을 쓸 수 없음 — 시작 거부: {e}")
             return False
+        if self.uplink_wanted() and RunMode(self.cfg["RUN_MODE"]) is RunMode.SIM                 and not str(self.cfg["EQUIPMENT_ID"]).endswith(SIM_ID_SUFFIX):
+            self.say(f"[중지] UPLINK_IN_SIM(sim 웹 연결)인데 EQUIPMENT_ID {self.cfg['EQUIPMENT_ID']} 가 {SIM_ID_SUFFIX} 으로 끝나지 않음 "
+                     "— 진짜 장비 기록과 섞이지 않게 시작 거부")
+            return False
         return True
+
+    def uplink_wanted(self) -> bool:
+        """웹 연결 정책 — prod·bench 는 연결, sim 은 UPLINK_IN_SIM 일 때만."""
+        mode = RunMode(self.cfg["RUN_MODE"])
+        return bool(policy(mode).uplink or (mode is RunMode.SIM and self.cfg.get("UPLINK_IN_SIM")))
 
     # ───────── 2 포트 바인드 ─────────
     def bind_server(self) -> bool:
@@ -182,7 +197,17 @@ class App:
                 f"설정 버전 {st.version}({st.source}) · 설정 폴더 {self.config_dir}",
                 f"로컬 화면 http://127.0.0.1:{self.server.port if self.server else c['LOCAL_HMI_PORT']}/ · "
                 f"화면 파일 {c['LOCAL_HMI_STATIC_DIR']}",
-                f"기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · NAS 사본 {nas}"]
+                f"기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · NAS 사본 {nas}",
+                f"웹 연결 {self._uplink_line()}"]
+
+    def _uplink_line(self) -> str:
+        if not self.uplink_wanted():
+            return "끔(sim)"
+        url = str(self.cfg.get("UPLINK_URL") or "")
+        if not url:
+            return "주소 없음 — 연결 안 함"
+        u = urlsplit(url)
+        return f"{u.hostname}({u.scheme})"                   # 호스트만 — 경로·토큰은 쓰지 않는다
 
     # ───────── 4 조립·시작 ─────────
     def build(self) -> ChkSystem:
@@ -216,6 +241,7 @@ class App:
                           "확인 못 함" if u32 is None else ("아니오(user32 로드됨)" if u32 else "예"))
             s = self.build()
             self._start_log_consumer()
+            self.start_uplink(s)
             s.start(ready_timeout_s=float(self.cfg["CONNECT_INIT_TIMEOUT_SEC"]) + 3.0)
             down = [k for k, w in s.workers.items() if s.enabled[k] and not w.ready]
             msg = "장비 연결: " + ", ".join(f"{k} {'준비' if s.workers[k].ready else '연결 안 됨(재시도 중)'}"
@@ -232,6 +258,24 @@ class App:
             self._teardown()
             return EXIT_START
         return EXIT_OK
+
+    def start_uplink(self, s: ChkSystem) -> None:
+        if not self.uplink_wanted():
+            return
+        url = str(self.cfg.get("UPLINK_URL") or "")
+        if not url:
+            self.log.warning("웹 연결: UPLINK_URL 이 비어 있음 — 웹 연결 없이 운전(local_override.json 에 넣고 다시 시작)")
+            return
+        if urlsplit(url).scheme != "https":
+            self.log.warning("웹 연결: 주소가 https 가 아님(%s) — 암호화·인증서 확인 없음, 시험용으로만", urlsplit(url).hostname)
+        from v2.chk.uplink import Uplink
+        try:
+            up = Uplink(s, url, str(self.cfg.get("UPLINK_TOKEN") or ""), self.data_dir)
+        except Exception as e:                             # 보관함 폴더를 못 쓰는 등 — 웹 없이 운전(공정·안전은 그대로)
+            self.log.warning("웹 연결 준비 실패 — 웹 연결 없이 운전: %s", type(e).__name__)
+            return
+        self.uplink = s.uplink = up
+        up.start()
 
     def _start_log_consumer(self) -> None:
         """장비 메시지(state 제외)를 로그 파일로 — MessageHub 의 소비자 하나(느리면 그 소비자만 끊기고 다시 붙는다)."""
@@ -444,6 +488,8 @@ class App:
             s.stop()                                       # tick 멈춤 → worker 정지(포트 닫기) → 기록 flush → 메시지 끝
         if self._tick_thread is not None:
             self._tick_thread.join(3.0)
+        if self.uplink is not None:
+            self.uplink.stop()                             # 남은 메시지는 보관함에(다음 시작 때 올림)
         if self.server is not None:
             self.server.stop()
         if self._log_thread is not None:
