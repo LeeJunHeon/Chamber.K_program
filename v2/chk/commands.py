@@ -2,7 +2,7 @@
 
 경로
 - web      : vanam-process — 공정·레시피·히터·PLC 조작·설정
-- hmi      : 노트북 로컬 화면 — STOP·ALL STOP·Buzz Stop·히터 정지만(로그인 없음)
+- hmi      : 노트북 로컬 화면 — STOP·ALL STOP·Buzz Stop·히터 정지 + 공정 중 값 수정(PROCESS_ADJUST source local, 5-4)(로그인 없음)
 - internal : 안전 엔진·공정 엔진 — 안전 조치(safety_rules 의 action)
 
 v1 근거: integrations/erp_commands.py(명령·거부 규칙), main.py:_erp_exec_heater_command, core/process_service.py.
@@ -48,6 +48,10 @@ CHK_REASONS: tuple = (
     Reason("COMMAND_NOT_ALLOWED", "장비에 보내지 않는 명령(예: 이온 게이지 디개스 C·D)", "reject"),
     Reason("DOOR_CONFLICT", "도어 올림·내림 동시 요청", "reject"),
     Reason("CONFIG_H_IN_PROCESS", "공정 중 H 등급 설정 변경 금지", "reject"),
+    Reason("ADJUST_NOT_USED", "공정 중 수정: 이번 공정에서 쓰지 않는 장비·항목", "reject"),
+    Reason("ADJUST_OUT_OF_RANGE", "공정 중 수정: 범위 밖(레시피와 같은 상한·펄스 ON/OFF 시간)", "reject"),
+    Reason("ADJUST_NOT_APPLICABLE", "공정 중 수정: 지금 블록에 해당 없음(대기 끝내기는 대기·조건 대기 블록만)", "reject"),
+    Reason("ADJUST_BUSY", "공정 중 수정: 장비가 시작 중(RF Pulse START) — 끝난 뒤에", "reject"),
     # 공정 중단(abort)
     Reason("MV_CLOSED", "공정 중 메인 밸브 닫힘", "abort"),
     Reason("MV_INTERLOCK_LOST", "공정 중 MV 인터록 해제 지속", "abort"),
@@ -112,6 +116,8 @@ CHK_REASONS: tuple = (
     Reason("OUTPUTS_LEFT_ON", "정상 끝 정지 블록 없이 끝남 — 켜져 있는 출력(끄지 않음)", "info"),
     Reason("HEATER_NO_TARGET", "히터 도달 대기 블록인데 히터 목표 없음 — 건너뜀", "info"),
     Reason("RF_OFF_FAILED", "파워 끄기 블록의 RF OFF 결과 오류", "info"),
+    Reason("PROCESS_ADJUST", "공정 중 값 수정 기록(장비·항목·이전 → 새 값·출처·결과)", "info"),
+    Reason("ADJUST_SETTLE_TIMEOUT", "공정 중 수정 뒤 새 목표에 한도 안에 못 감 — 이탈 판정 다시 켬", "info"),
 )
 
 ALL_REASONS: tuple = COMMON_REASONS + CHK_REASONS
@@ -269,6 +275,12 @@ COMMANDS: tuple = (
     C("IG_FILAMENT", "이온 게이지 필라멘트", (WEB,), "operator", IDLE_STATES, ("IG_ON_NOT_ATM",), (_a("on", "bool"),),
       desc="유휴 상태에서만(공정 중에는 공정 엔진만 A/B). 켜기는 ATM 센서가 켜져 있으면 거부. "
            "무응답 유예 IG_FILAMENT_SWITCH_QUIET_SEC, B 뒤 IG_RELIGHT_LOCKOUT_SEC 안의 A 는 늦춤"),
+    C("PROCESS_ADJUST", "공정 중 값 수정", (WEB, HMI), "operator", (ANY_STATE,), ("RUNNING",),
+      (_a("device", "enum", enum=("mfc", "dc", "rf", "rfpulse", "heater", "process")), _a("item", "str"),
+       _a("value", "any", desc="blocks.ADJUST_ITEMS 의 형식·범위"), _a("source", "enum", False, enum=("web", "local"),
+                                                                     desc="비우면 경로(web·hmi → local)")),
+      desc="이번 공정의 그 값을 바꾼다 — 지금 쓰는 블록이면 바로(드라이버 경로·되읽기), 아직 안 온 블록이면 그 블록이 새 값으로. "
+           "공정 밖·정지 중 PROCESS_NOT_RUNNING. 결과 기록 ProcEvent adjust(PROCESS_ADJUST)", v1="v2"),
     # 설정
     C("CONFIG_APPLY", "설정 적용", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),
       (_a("version", "int", min=1), _a("values", "obj"), _a("schemaHash", "str")),

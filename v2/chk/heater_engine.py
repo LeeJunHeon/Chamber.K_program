@@ -1391,6 +1391,30 @@ class HeaterEngine:
             self.port.run(True)
             self.proc.update(target=float(target), phase="RAMP", t0=None)
 
+    def process_adjust(self, target: Optional[float] = None, rate: Optional[float] = None) -> bool:
+        """공정 중 수정(PROCESS_ADJUST heater.target·heater.ramp) — 공정이 히터 램프·목표를 낸 뒤면 바로:
+        속도는 D00020(ramp_raw)과 감속 접근 속도, 목표는 감속 접근을 새 목표로 다시(못 쓰면 이 속도로 SV 직접 — process_set 과 같은
+        경로). 도달·유지 대기 중이면 그 대기를 새 목표로 처음부터(한도 다시 계산). 아직 낸 적 없으면 False(그 블록이 새 값으로)."""
+        with self._lock:
+            p = self.proc
+            if not p:
+                return False
+            if rate is not None:
+                p["rate"] = float(rate)
+                self.port.ramp(ramp_raw(float(rate)))
+            if self.owner != "process" or p.get("target") is None:
+                return rate is not None and target is None
+            tgt = float(target) if target is not None else float(p["target"])
+            r = p.get("rate") or float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"])
+            self.ramp.stop(restore_rate=False)
+            if not self.ramp.start(tgt, r, "공정 수정"):
+                self.port.ramp(ramp_raw(r))
+                self.port.target(tgt)
+            p["target"] = tgt
+            if p.get("phase") in ("RAMP", "SOAK", "HOLD_WAIT"):
+                p.update(phase="RAMP", t0=None)
+            return True
+
     def process_wait_tick(self, now: float):
         """HEATER_WAIT — v1 _heater_wait + _heater_hold_wait. 'wait' | 'reached' | ('fail', 코드).
         phase: RAMP(목표 ±tol 밖·램프 중) → SOAK(±tol 을 HEATER_SOAK_TIME_SEC 유지 확인) → HOLD_WAIT(유지 모드 진입 대기·폴백)."""

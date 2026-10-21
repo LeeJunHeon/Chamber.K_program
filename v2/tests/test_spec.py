@@ -74,7 +74,8 @@ def test_command_table_refs():
 
 def test_hmi_only_stop_commands():
     hmi = {c.kind for c in C.COMMANDS if Source.HMI in c.sources}
-    assert hmi == {"PROCESS_STOP", "ALL_STOP", "BUZZ_STOP", "HEATER_STOP"}
+    # 정지 명령 + 공정 중 값 수정(사용자 지시 5-4 ③ — source web·local)
+    assert hmi == {"PROCESS_STOP", "ALL_STOP", "BUZZ_STOP", "HEATER_STOP", "PROCESS_ADJUST"}
 
 
 def test_plc_buttons_map_to_addrs():

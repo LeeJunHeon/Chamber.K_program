@@ -457,6 +457,9 @@ PARAMS: tuple = (
     _p("SP1_TIMEOUT_SEC", "process", "SP1(WP) 도달 한도(넘으면 중단)", "s", F, 300.0, 30.0, 3600.0,
        src="controller/process_controller.py:628"),
     _p("POWER_WAIT_TIMEOUT_SEC", "process", "파워 도달 대기 최소 한도", "s", F, 600.0, 60.0, 7200.0),
+    _p("ADJUST_SETTLE_MAX_SEC", "process", "공정 중 수정 뒤 이탈 판정 쉼 상한", "s", F, 120.0, 10.0, 3600.0, src=_V2,
+       desc="PROCESS_ADJUST 로 DC·RF Pulse 목표를 바꾸면 새 목표에 다시 도달할 때까지 이탈 판정(S31C·S34A)을 쉰다 — "
+            "이 시간이 지나면 도달하지 못해도 다시 켠다(경고 ADJUST_SETTLE_TIMEOUT)"),
     _p("POWER_WAIT_TIMEOUT_MAX_SEC", "process", "파워 도달 대기 절대 상한", "s", F, 7200.0, 600.0, 14400.0,
        safety=H, src="lib/config.py:676 (고정값)"),
     _p("POWER_WAIT_EST_FACTOR", "process", "파워 대기 예상 시간 배수", "배", F, 1.5, 1.0, 5.0, safety=L,

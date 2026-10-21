@@ -73,6 +73,11 @@ class ChkCore:
             return p.load(str(a.get("name") or ""), a["rows"])
         if kind == "RECIPE_CLEAR":
             return p.clear()
+        if kind == "PROCESS_ADJUST":
+            src = a.get("source") or ("local" if source == Source.HMI else "web")
+            if src not in ("web", "local") or "value" not in a:
+                return "BAD_ARGS"
+            return p.adjust(str(a.get("device") or ""), str(a.get("item") or ""), a["value"], src)
         if kind == "RECIPE_START":
             return p.start_recipe()
         if kind == "PLC_BUTTON":

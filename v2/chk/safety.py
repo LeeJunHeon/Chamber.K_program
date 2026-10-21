@@ -15,7 +15,8 @@ ALL STOP 은 v1 처럼 전부 끈다(사용자 결정 2026-10-20 — 펌프 유�
 적용 구간(블록 공정, 사용자 결정 2026-10-20): 공정 상태 이름 대신 장비·블록 상태로 —
 무출력 S31A·S33A = 그 장비 램프 중(dc_ramping·rf_ramping), 두절·반사파 S30·S34C·S32 = 그 장비 출력 명령 뒤(dc_on·rfp_on·rf_on),
 이탈 감시 S31C·S33B·S34A·S38A·S38B = 지금 블록의 감시(watching), S39B = 베이스 압력 대기 블록, S34D = RF Pulse 를 쓰는 행(시작 실패 이벤트는 START 에서만 온다).
-기본 템플릿에서는 지금(5-3)과 같은 판정이다(SimpleProcess 는 상태 이름으로 같은 값을 낸다 — blocks.watch_for_state).
+공정 중 수정(PROCESS_ADJUST) 뒤에는 새 목표에 다시 도달할 때까지 S31C(dc_settling)·S34A(rfp_settling)를 쉬고,
+RF 는 램프로 돌아가 유지 중에만 보는 S33B 가 저절로 쉰다. 기본 템플릿에서는 지금(5-3)과 같은 판정이다(SimpleProcess 는 상태 이름으로 같은 값을 낸다 — blocks.watch_for_state).
 STOP·이상 중단 정지 순서는 설정 STOP_SEQUENCE_ORDER(단계 번호 순서, 빠진 번호는 끔). ALL STOP 은 고정.
 """
 from __future__ import annotations
@@ -337,7 +338,7 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
           lambda v, c: _dev(c.dc_set_w if c.dc_set_w is not None else v.get("dc.set_w"), v.get("dc.p"),
                             C["DC_TOLERANCE_W"], C["DC_POWER_ERROR_RATIO"]),
           _fixed(_abort("DC_POWER_DEVIATION")), _p("DC_POWER_ERROR_SEC"), states=ACT,
-          applies=lambda c: c.uses_dc and c.watching("dc"), block="dc"),
+          applies=lambda c: c.uses_dc and c.watching("dc") and not getattr(c, "dc_settling", False), block="dc"),
         # RF(아날로그) 이상 중단은 v1 처럼 정지 순서의 램프다운(8 카운트/0.5 s) 뒤 OFF — 즉시 0 은 ALL STOP 만
         # (v1 RFpower.py:100-102·124-131·158-167·210-214). 반사파는 RF 를 켠 뒤만(RFpower.py:79-81),
         # 반사파 대기 중에는 무출력·이탈 판정을 멈춘다(RFpower.py:91-104).
@@ -361,7 +362,7 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
               c.rfp_set_w if c.rfp_set_w is not None else v.get("rfp.set_w"), v.get("rfp.fwd_w"),
               C["RFPULSE_FORP_TOLERANCE_PERCENT"] / 100.0) is True),
           _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_FORWARD_DEVIATION")), _p("RFPULSE_FORP_SEC"), states=ACT,
-          applies=lambda c: c.uses_rfp and c.watching("rfp"), block="rfp"),
+          applies=lambda c: c.uses_rfp and c.watching("rfp") and not getattr(c, "rfp_settling", False), block="rfp"),
         L("S34B", "abort", "tick",
           lambda v, c: None if v.get("rfp.ref_w") is None else v.get("rfp.ref_w") >= C["RFPULSE_REFP_LIMIT_WATTS"],
           _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_REFLECTED_HIGH")), _p("RFPULSE_REFP_SEC"), states=ACT,

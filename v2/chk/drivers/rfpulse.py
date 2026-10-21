@@ -226,17 +226,18 @@ class RfPulseDriver:
                 advance(("err", r.error or r.reason or r.status))
         advance(None)
 
-    def _exec_retry(self, name: str, cmd: int, data: bytes = b"", limit: float = ACK_TIMEOUT_S):
+    def _exec_retry(self, name: str, cmd: int, data: bytes = b"", limit: float = ACK_TIMEOUT_S, off_fix: bool = True):
         """설정 명령 한 단계 — v1 _make_cmd(retries=3)·_fail_inflight·_try_csr_recovery:
         실패(무응답·NAK·CSR ≠ 0)면 max(150 ms, 간격) 뒤(CSR 5 는 max(간격 × 1.5, 1200 ms)) 다시, 3회.
-        CSR 1(Host 아님) → 14 Host 뒤, CSR 2(RF ON 중) → 1 RF OFF 뒤 다시 — 이것도 재시도 한 번을 쓴다."""
+        CSR 1(Host 아님) → 14 Host 뒤, CSR 2(RF ON 중) → 1 RF OFF 뒤 다시 — 이것도 재시도 한 번을 쓴다.
+        off_fix=False(공정 중 수정 — RF 를 켠 채 바꾸는 것)면 CSR 2 에 RF OFF 를 하지 않고 실패로."""
         tries = 0
         while True:
             r = yield ("x", cmd, data, limit)
             csr = (r[1][0] if r[1] else -1) if r[0] == "ok" else None
             if csr == 0:
                 return
-            if csr in (1, 2) and cmd not in (SET_CONTROL, RF_OFF) and tries < START_RETRIES:
+            if (csr == 1 or (csr == 2 and off_fix)) and cmd not in (SET_CONTROL, RF_OFF) and tries < START_RETRIES:
                 fix = SET_CONTROL if csr == 1 else RF_OFF
                 f = yield ("x", fix, b"\x02" if fix == SET_CONTROL else b"", RF_ONOFF_TIMEOUT_S if fix == RF_OFF else ACK_TIMEOUT_S)
                 self._emit("csr_recovery", f"{name}: CSR {csr}({CSR_TEXT[csr]}) → 명령 {fix} 뒤 다시 ({f[0]})")
@@ -321,6 +322,48 @@ class RfPulseDriver:
             self._op("start", delayed(), done)
         else:
             self._op("start", g, done)
+
+    # ───────── 공정 중 수정(PROCESS_ADJUST) ─────────
+    def adjust(self, power_w: Optional[float] = None, freq_hz: Optional[int] = None, duty: Optional[int] = None,
+               on_done: Optional[Callable[[str, Optional[str], list], None]] = None) -> None:
+        """RF 를 켠 채 셋포인트(8)·주파수(93)·듀티(96) 바꾸기 — START 와 같은 재시도(CSR·3회, CSR 2 에 RF OFF 는 하지 않음),
+        주파수·듀티는 193·196 되읽기(요청한 항목만, 질의 1회 재시도). 불일치는 RFP_CONFIG_MISMATCH(RF 는 끄지 않음)."""
+        if power_w is not None and power_w > self.cfg["RFPULSE_MAX_POWER"]:
+            raise ValueError(f"목표 {power_w} W > RFPULSE_MAX_POWER")
+
+        def query_retry(cmd: int, n: int):
+            for _ in range(2):
+                r = yield ("x", cmd, b"", self.q_timeout_s)
+                if r[0] == "ok" and len(r[1]) >= n:
+                    return r[1]
+            return None
+
+        def gen():
+            if power_w is not None:
+                yield from self._exec_retry("셋포인트(수정)", SET_SETPOINT, aebus.le(int(round(power_w)), 2), off_fix=False)
+                self.set_w = float(power_w)
+            if freq_hz is not None:
+                yield from self._exec_retry("주파수(수정)", SET_FREQ, aebus.le(int(freq_hz), 3), off_fix=False)
+            if duty is not None:
+                yield from self._exec_retry("듀티(수정)", SET_DUTY, aebus.le(int(duty), 2), off_fix=False)
+            bad = []
+            if freq_hz is not None:
+                fb = yield from query_retry(Q_FREQ, 3)
+                f = aebus.u24(fb) if fb is not None else None
+                self.freq_hz = f if f is not None else self.freq_hz
+                if f is None or abs(f - int(freq_hz)) > 1:
+                    bad.append(f"주파수 요청 {freq_hz} → {f}")
+            if duty is not None:
+                db = yield from query_retry(Q_DUTY, 2)
+                d = aebus.u16(db) if db is not None else None
+                self.duty_pct = d if d is not None else self.duty_pct
+                if d is None or d != int(duty):
+                    bad.append(f"듀티 요청 {duty} → {d}")
+            if bad:
+                self._emit("config_readback", "공정 중 수정 되읽기 불일치: " + ", ".join(bad), "RFP_CONFIG_MISMATCH")
+                raise RfpConfigMismatch(", ".join(bad))
+            self._emit("adjusted", f"공정 중 수정 확인 — {power_w} W · {self.freq_hz} Hz · {self.duty_pct} %")
+        self._op("adjust", gen(), on_done)
 
     # ───────── RF OFF(안전) ─────────
     def rf_off_confirmed(self, on_done: Optional[Callable[[Any], None]] = None) -> None:

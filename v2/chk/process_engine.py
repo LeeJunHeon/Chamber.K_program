@@ -24,6 +24,11 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
 - 정상 끝 정지 블록(END_STOP)이 정지 순서(SafetyEngine.end_row)를 낸다. 중간에 있으면 정지 순서 뒤 다음 블록으로.
   정상 끝 정지 없이 목록이 끝나면 켜진 출력을 경고(OUTPUTS_LEFT_ON)로만 남기고 끄지 않는다.
 - 사용 장비(uses_*)는 블록에서(blocks.uses_of). 안전 규칙의 적용 구간은 장비 상태(dc_ramping·rf_ramping)와 블록 감시(watching).
+
+공정 중 값 수정(adjust, 5-4 ③ — PROCESS_ADJUST): "이번 공정의 그 값"을 바꾼다. 값 바꾸기는 여기 한 곳에서
+검사(공정 중·범위·이번 공정에서 쓰는 항목) → 드라이버 쓰기(지금 쓰는 중이면 — 되읽기 확인 포함) → 판정 기준 갱신
+(overrides·cur_vals → 아직 안 온 블록이 새 값, 이탈 판정 지속 시간 처음부터, 파워는 다시 도달할 때까지 이탈 판정 쉼) → 기록
+(ProcEvent "adjust" PROCESS_ADJUST: 장비·항목·이전 → 새 값·출처·결과(rejected/scheduled/applied → confirmed/failed)·사유).
 """
 from __future__ import annotations
 
@@ -114,6 +119,8 @@ class ProcessEngine:
         self.cur_vals: Dict[str, Any] = {}      # 스텝이 장비에 쓴 값(항목 키 → 값)
         self.flow_on = {1: False, 2: False}
         self.rfp_target: Optional[float] = None
+        self.rfp_started = False                # RF Pulse START 가 끝났다(공정 중 수정은 그 뒤에만)
+        self.settle: Dict[str, float] = {}      # 공정 중 수정 뒤 새 목표에 도달할 때까지 이탈 판정 쉼(장비 → 시작 시각)
         self._end_stop_resume = False
 
     # ── 안전 엔진이 보는 것 ──
@@ -159,6 +166,14 @@ class ProcessEngine:
     def block_type(self) -> Optional[str]:
         b = self.block
         return b.type if b is not None and self.state in ACT else None
+
+    @property
+    def dc_settling(self) -> bool:
+        return "dc" in self.settle
+
+    @property
+    def rfp_settling(self) -> bool:
+        return "rfp" in self.settle
 
     def watching(self, item: str) -> bool:
         """이탈 감시(S31C·S33B·S34A·S38A·S38B) — 지금 블록의 watch. 블록이 없으면 기본값."""
@@ -482,6 +497,7 @@ class ProcessEngine:
             self.row_is_process = False
             self.filament_by_process = False
             self.params = {}
+            self.flow_on, self.settle = {1: False, 2: False}, {}       # 행이 끝나면 판정 기준도 정리
             if kind_ == "done" and self.list_active and self.csv_index + 1 < len(self.rows):
                 self._set_state("CSV_BETWEEN")
                 return
@@ -534,6 +550,7 @@ class ProcessEngine:
         self.blocks, self.insts, self.uses = blocks, insts, BK.uses_of(blocks)
         self.block_idx, self.overrides, self.cur_vals = -1, {}, {}
         self.flow_on, self.rfp_target, self._end_stop_resume = {1: False, 2: False}, None, False
+        self.rfp_started, self.settle = False, {}
         self.end_kind = self.end_code = None
         self.row_is_process, self.comm_aborted, self.filament_by_process = True, False, False
         self.dc_on = self.rf_on = self.rfp_on = False
@@ -574,7 +591,12 @@ class ProcessEngine:
 
     def _step_event(self, e: StepEvent) -> None:
         if e.kind in ("step", "istep") and self.runner is not None and 0 <= e.index < len(self.runner.steps):
-            self._block_start(self.runner.steps[e.index].block)
+            s = self.runner.steps[e.index]
+            self._block_start(s.block)
+            if (s.spec or {}).get("main") and "process.main_remaining" in self.overrides and self.runner.cur is not None:
+                v = float(self.overrides.pop("process.main_remaining"))       # 메인 전에 수정한 길이 — 이 메인 블록이 쓴다
+                self.runner.cur.extra["dur"] = v
+                self._adjust_rec("process", "main_remaining", s.duration_sec, v, "scheduled", "applied", None)
         if e.kind == "step":
             self._emit(ProcEvent("step", e.detail))
         elif e.kind == "warn":
@@ -615,6 +637,7 @@ class ProcessEngine:
             if self.state not in ACT or self.runner is None:
                 return
             self.rfc.tick(view.get("rf.fwd_w"), view.get("rf.ref_w"))
+            self._settle_tick(view, now)
             self.runner.tick(view, now)
             if self.runner.failed and self.state in ACT:
                 if self.safety is not None:
@@ -726,13 +749,13 @@ class ProcessEngine:
     def _h_heater_ramp(self, r, s, cur, view, now):
         if not cur.issued:
             cur.issued = True
-            self.heater.process_ramp(float(s.value or self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]))
+            self.heater.process_ramp(float(self._resolve(s, s.value) or self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]))
         return "next" if now - cur.t0 >= HEATER_RAMP_SETTLE_S else "wait"
 
     def _h_heater_set(self, r, s, cur, view, now):
         if not cur.issued:
             cur.issued = True
-            self.heater.process_set(float(s.value or 0.0))
+            self.heater.process_set(float(self._resolve(s, s.value) or 0.0))
         return "next" if now - cur.t0 >= HEATER_SET_SETTLE_S else "wait"
 
     def _h_heater_wait(self, r, s, cur, view, now):
@@ -829,6 +852,158 @@ class ProcessEngine:
             return "next"
         return "wait"
 
+    # ── 공정 중 값 수정(PROCESS_ADJUST) ──
+    def _adjust_rec(self, device: str, item: str, old: Any, new: Any, source: str, result: str, reason: Optional[str]) -> None:
+        self._emit(ProcEvent("adjust", f"{device}.{item} {old} → {new} ({source}) {result}{' ' + reason if reason else ''}",
+                             "PROCESS_ADJUST", {"device": device, "item": item, "old": old, "new": new, "source": source,
+                                                "result": result, "reason": reason, "t": self.clock.wall(),
+                                                "run_id": self.run_id or None, "state": self.state,
+                                                "block": self.block.no if self.block is not None else None,
+                                                "level": "warn" if result in ("rejected", "failed") else "info"}))
+
+    def _uses_item(self, ai: BK.AdjustItem) -> bool:
+        if ai.device in ("dc", "rf", "rfpulse"):
+            return bool(self.uses[{"dc": "dc", "rf": "rf", "rfpulse": "rfp"}[ai.device]])
+        return self.runner is not None and any(s.ref == ai.key for s in self.runner.steps)
+
+    def _adjust_old(self, ai: BK.AdjustItem):
+        if ai.key == "rfpulse.freq_hz":
+            hz = self.overrides.get(ai.key, self.cur_vals.get(ai.key))
+            return None if hz is None else hz / 1000.0
+        if ai.key == "process.main_remaining":
+            r = self.runner
+            if r is not None and r.step is not None and (r.step.spec or {}).get("main") and r.cur is not None:
+                return self.remain_s()
+            return self.overrides.get(ai.key)
+        return self.overrides.get(ai.key, self.cur_vals.get(ai.key))
+
+    def adjust(self, device: str, item: str, value: Any, source: str = "web") -> Optional[str]:
+        """PROCESS_ADJUST — 돌려주는 값은 거부 사유 코드 또는 None. 결과는 ProcEvent("adjust")."""
+        with self._lock:
+            ai = BK.adjust_item(str(device), str(item))
+            if ai is None:
+                self._adjust_rec(str(device), str(item), None, value, source, "rejected", "BAD_ARGS")
+                return "BAD_ARGS"
+            old = self._adjust_old(ai)
+            why = self._adjust_check(ai, value)
+            if why:
+                self._adjust_rec(device, item, old, value, source, "rejected", why)
+                return why
+            result = self._adjust_apply(ai, value, source, old)
+            self._adjust_rec(device, item, old, value, source, result, None)
+            return None
+
+    def _adjust_check(self, ai: BK.AdjustItem, value: Any) -> Optional[str]:
+        if not self.row_is_process or self.state not in ACT or self.runner is None:
+            return "PROCESS_NOT_RUNNING"                                  # 공정 밖·정지 순서 중·딜레이 행
+        e = BK._check_param(ai.param, value, self.cfg, ())
+        if e:
+            return "BAD_ARGS" if ("숫자" in e or "정수" in e or "true/false" in e) else "ADJUST_OUT_OF_RANGE"
+        r = self.runner
+        if ai.key == "process.skip_wait":
+            s = r.step
+            if value is not True or s is None:
+                return "BAD_ARGS" if value is not True else "ADJUST_NOT_APPLICABLE"
+            if not (s.spec or {}).get("skippable"):
+                return "ADJUST_NOT_APPLICABLE"                             # 대기·조건 대기 블록이 아님
+            return None
+        if not self._uses_item(ai):
+            return "ADJUST_NOT_USED"                                       # 이번 공정에서 쓰지 않는 장비·항목
+        if ai.device == "rfpulse":
+            if self.rfp_on and not self.rfp_started:
+                return "ADJUST_BUSY"                                       # START 중 — 끝난 뒤에
+            hz = int(round(float(value) * 1000.0)) if ai.item == "freq" else self.overrides.get(
+                "rfpulse.freq_hz", self.cur_vals.get("rfpulse.freq_hz"))
+            du = int(value) if ai.item == "duty" else self.overrides.get("rfpulse.duty", self.cur_vals.get("rfpulse.duty"))
+            if hz and du and RC.pulse_edge_violation(float(hz), float(du), self.cfg["RFPULSE_PULSE_MIN_EDGE_US"]):
+                return "ADJUST_OUT_OF_RANGE"
+        return None
+
+    def _adjust_apply(self, ai: BK.AdjustItem, value: Any, source: str, old: Any) -> str:
+        """판정 기준 갱신 + 지금 쓰는 중이면 드라이버 경로로. 'applied'(바로) 또는 'scheduled'(아직 안 온 블록이 새 값으로)."""
+        key, now, r = ai.key, self.clock.monotonic(), self.runner
+        eng = self.safety.engine if self.safety is not None else None
+        reset = lambda: [eng.reset_rule(x) for x in ai.rules] if eng is not None else None
+
+        def confirm(res_reason):
+            ok = res_reason is None
+            self._adjust_rec(ai.device, ai.item, old, value, source, "confirmed" if ok else "failed", res_reason)
+            if (not ok and res_reason == "RFP_CONFIG_MISMATCH" and self.cfg["RFPULSE_VERIFY_PULSE_CONFIG"]
+                    and eng is not None and self.active):
+                eng.abort("RFP_CONFIG_MISMATCH", rule="adjust")             # START 되읽기 불일치와 같은 처리(S35)
+        seq_cb = lambda name, reason, results: confirm(reason)
+        if key == "process.skip_wait":
+            r.cur.extra["skip"] = True
+            return "applied"
+        if key == "process.main_remaining":
+            s = r.step
+            if s is not None and (s.spec or {}).get("main") and r.cur is not None:
+                r.cur.extra["dur"] = (now - r.cur.t0) + float(value)
+                return "applied"
+            self.overrides[key] = float(value)
+            return "scheduled"
+        v = int(round(float(value) * 1000.0)) if key == "rfpulse.freq_hz" else (
+            int(value) if ai.param.type == "int" else (float(value) if ai.param.type == "float" else value))
+        self.overrides[key] = v
+        live = False
+        if ai.device == "mfc":
+            reset()
+            if key in self.cur_vals:
+                live = True
+                self.cur_vals[key] = v
+                if key == "mfc.wp":
+                    self.mfc.set_sp(1, v, on_done=seq_cb)
+                else:
+                    self.mfc.set_flow(1 if key == "mfc.ar_flow" else 2, v, on_done=seq_cb)
+        elif key == "dc.power":
+            if self.dc_on and self.dcc.state != DcControl.IDLE:
+                live = True
+                self.cur_vals[key] = v
+                self.dcc.retarget(v)
+                self.settle["dc"] = now
+            reset()
+        elif key == "rf.power":
+            if self.rf_on and self.rfc.state != RfControl.IDLE:
+                live = True
+                self.cur_vals[key] = v
+                self.rfc.retarget(v)                                       # 유지 → 램프(S33B 는 유지 중에만)
+            reset()
+        elif ai.device == "rfpulse":
+            if self.rfp_on and self.rfp_started:
+                live = True
+                self.cur_vals[key] = v
+                kw = {"power": "power_w", "freq": "freq_hz", "duty": "duty"}[ai.item]
+                if ai.item == "power":
+                    self.rfp_target = v
+                    self.settle["rfp"] = now
+                self.rfp.adjust(**{kw: v}, on_done=seq_cb)
+            reset()
+        elif ai.device == "heater":
+            live = bool(self.heater.process_adjust(**{"target" if ai.item == "target" else "rate": v}))
+            if live:
+                self.cur_vals[key] = v
+        return "applied" if live else "scheduled"
+
+    def _settle_tick(self, view, now: float) -> None:
+        """공정 중 수정 뒤 이탈 판정 쉼 — 새 목표에 다시 도달하면(또는 ADJUST_SETTLE_MAX_SEC 가 지나면) 판정을 다시 켠다."""
+        lim = float(self.cfg["ADJUST_SETTLE_MAX_SEC"])
+        if "dc" in self.settle:
+            if self.dcc.reached or self.dcc.state == DcControl.IDLE:
+                self.settle.pop("dc")
+            elif now - self.settle["dc"] >= lim:
+                self.settle.pop("dc")
+                self._emit(ProcEvent("warn", f"DC 새 목표 {self.dcc.target:.1f} W 에 {lim:.0f} s 안에 못 감 — 이탈 판정 다시 켬",
+                                     "ADJUST_SETTLE_TIMEOUT"))
+        if "rfp" in self.settle:
+            fwd, tgt = view.get("rfp.fwd_w"), self.rfp_target
+            tol = float(self.cfg["RFPULSE_FORP_TOLERANCE_PERCENT"]) / 100.0
+            if not self.rfp_on or tgt is None or (fwd is not None and abs(float(fwd) - tgt) < tgt * tol):
+                self.settle.pop("rfp")
+            elif now - self.settle["rfp"] >= lim:
+                self.settle.pop("rfp")
+                self._emit(ProcEvent("warn", f"RF Pulse 새 목표 {tgt:.0f} W 에 {lim:.0f} s 안에 못 감 — 이탈 판정 다시 켬",
+                                     "ADJUST_SETTLE_TIMEOUT"))
+
     # 파워 대기(v1 _power_wait)
     def power_wait_timeout(self, dc_w: float, rf_w: float, rfp_w: float) -> float:
         c, est = self.cfg, []
@@ -880,6 +1055,7 @@ class ProcessEngine:
                 self.cur_vals.update({"rfpulse.power": rfp_w, "rfpulse.freq_hz": fhz, "rfpulse.duty": duty})
                 def done(name, reason, results):
                     pw["rfp"] = reason is None
+                    self.rfp_started = reason is None
                     if self.safety is not None:
                         self.safety.on_rfp_start_done(name, reason, results)
                 self.rfp.start(rfp_w, freq_hz=fhz, duty=duty, on_done=done, tick=nt)

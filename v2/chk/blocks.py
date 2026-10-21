@@ -671,3 +671,61 @@ def params_summary(blocks: List[dict], name: str, cfg: Mapping[str, Any]) -> Dic
             "use_rf_pulse": u["rfp"], "rf_pulse_power": g("power_on", "rfp_power"),
             "use_heater": u["heater"], "heater_temp": g("heater_ramp", "target_c"),
             "rf_offset": float(cfg["RF_CAL_OFFSET"]), "rf_param": float(cfg["RF_CAL_GAIN"])}
+
+
+# ───────────── 공정 중 수정(PROCESS_ADJUST, 5-4 ③) ─────────────
+@dataclass(frozen=True)
+class AdjustItem:
+    device: str                 # mfc · dc · rf · rfpulse · heater · process
+    item: str
+    key: str                    # 항목 키 — 이 값을 쓰는 스텝의 ref(공정 값 cur_vals 의 키)
+    param: BParam               # 값 형식·범위(레시피·블록과 같은 상한)
+    apply: str                  # 바로 적용하는 경로(드라이버)
+    when_live: str              # "지금 쓰는 중" 판단
+    rules: tuple = ()           # 바꾼 순간 지속 시간을 다시 세는 이탈 판정
+    settle: bool = False        # 새 목표에 다시 도달할 때까지 이탈 판정 쉼
+
+    def public(self) -> dict:
+        return {"device": self.device, "item": self.item, "key": self.key, "param": self.param.public(), "apply": self.apply,
+                "whenLive": self.when_live, "rules": list(self.rules), "settle": self.settle}
+
+
+ADJUST_ITEMS: tuple = (
+    AdjustItem("mfc", "ar_flow", "mfc.ar_flow", P("value", "float", "sccm", min=0.0, min_exclusive=True, required=True),
+               "Q1 쓰기 → R65 되읽기(MfcDriver.set_flow)", "Ch1 유량을 이미 설정했으면", ("S38A",)),
+    AdjustItem("mfc", "o2_flow", "mfc.o2_flow", P("value", "float", "sccm", min=0.0, min_exclusive=True, required=True),
+               "Q2 쓰기 → R66 되읽기(MfcDriver.set_flow)", "Ch2 유량을 이미 설정했으면", ("S38A",)),
+    AdjustItem("mfc", "wp", "mfc.wp", P("value", "float", "mTorr", min=0.0, max=1000.0, min_exclusive=True, required=True),
+               "S1 쓰기 → R1 되읽기 5회(MfcDriver.set_sp). SP1 도달 대기 중이면 목표·안정 시간 다시",
+               "SP1 을 이미 썼으면", ("S38B",)),
+    AdjustItem("dc", "power", "dc.power", P("value", "float", "W", min=0.0, min_exclusive=True, param_max="DC_MAX_POWER",
+                                            required=True),
+               "DcControl 목표 — 지금 정전류 루프가 따라감(CURR 쓰기)", "DC 를 켰으면", ("S31C",), True),
+    AdjustItem("rf", "power", "rf.power", P("value", "float", "W", min=0.0, min_exclusive=True, param_max="RF_MAX_POWER",
+                                            required=True),
+               "RfControl 목표 — RF_RAMP_STEP_W(1 W/s) 램프로 올리거나 내림, 도달하면 유지", "RF 를 켰으면", ("S33B",), True),
+    AdjustItem("rfpulse", "power", "rfpulse.power", P("value", "float", "W", min=0.0, min_exclusive=True,
+                                                     param_max="RFPULSE_MAX_POWER", required=True),
+               "명령 8 셋포인트(CSR, 3회 재시도 — RF 는 켠 채)", "RF Pulse START 가 끝났으면", ("S34A",), True),
+    AdjustItem("rfpulse", "freq", "rfpulse.freq_hz", P("value", "float", "kHz", param_min="RFPULSE_PULSE_FREQ_MIN_HZ",
+                                                      param_max="RFPULSE_PULSE_FREQ_MAX_HZ", param_scale=0.001, required=True),
+               "명령 93(Hz = round(kHz × 1000)) → 193 되읽기", "RF Pulse START 가 끝났으면"),
+    AdjustItem("rfpulse", "duty", "rfpulse.duty", P("value", "int", "%", param_min="RFPULSE_DUTY_MIN", param_max="RFPULSE_DUTY_MAX",
+                                                   required=True),
+               "명령 96 → 196 되읽기", "RF Pulse START 가 끝났으면"),
+    AdjustItem("heater", "target", "heater.target", P("value", "float", "°C", min=0.0, min_exclusive=True,
+                                                     param_max="HEATER_MAX_TEMP", required=True),
+               "감속 접근 프로파일러 새 목표(HeaterEngine.process_adjust) — 도달 대기 중이면 대기를 새 목표로", "히터 목표를 냈으면"),
+    AdjustItem("heater", "ramp", "heater.ramp", P("value", "float", "°C/min", min=6.0, param_max="HEATER_RECIPE_RAMP_MAX_C_PER_MIN",
+                                                 required=True),
+               "D00020 + 감속 접근 속도(HeaterEngine.process_adjust)", "히터 램프를 냈으면"),
+    AdjustItem("process", "main_remaining", "process.main_remaining", P("value", "float", "s", min=0.0, max=7 * 86400.0,
+                                                                        required=True),
+               "지금 메인 블록 남은 시간 = 값(아직이면 다음 메인 블록 길이)", "메인 블록이 돌고 있으면"),
+    AdjustItem("process", "skip_wait", "process.skip_wait", P("value", "bool", "", required=True),
+               "지금 대기·조건 대기 블록을 바로 끝냄(value=true)", "대기·조건 대기 블록이 돌고 있을 때만"),
+)
+
+
+def adjust_item(device: str, item: str) -> Optional[AdjustItem]:
+    return next((a for a in ADJUST_ITEMS if a.device == device and a.item == item), None)

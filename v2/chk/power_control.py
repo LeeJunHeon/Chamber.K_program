@@ -147,6 +147,7 @@ class RfControl:
         self.pwm = 0
         self.ref_waiting = False
         self.reached = False
+        self.down = False                 # 목표를 낮춘 재설정(retarget) 중 — 스텝을 내린 뒤 ±1 보정
 
     def power_to_dac(self, w: float) -> int:
         base = (w / float(self.cfg["RF_MAX_POWER"])) * D.RF_DAC_FULL_SCALE
@@ -156,6 +157,7 @@ class RfControl:
         self.target = min(float(target_w), float(self.cfg["RF_MAX_POWER"]))
         self.offset, self.param = float(offset), float(param)
         self.step_w, self.pwm, self.ref_waiting, self.reached = 0.0, 0, False, False
+        self.down = False
         self.state = self.RAMPING_UP
         self.plc._rf_set_w = self.target
         self._emit("info", f"RF 시작 (목표 {self.target:.1f} W, offset {self.offset:g} / param {self.param:g})")
@@ -164,6 +166,7 @@ class RfControl:
         """켜진 채 목표만 바꾼다 — 지금 스텝 목표에서 RF_RAMP_STEP_W(1 W/s)씩 새 목표로(올리든 내리든), 도달하면 유지."""
         self.target = min(float(target_w), float(self.cfg["RF_MAX_POWER"]))
         self.reached = False
+        self.down = self.target < self.step_w - 1e-9
         if self.state != self.IDLE:
             self.state = self.RAMPING_UP
         self.plc._rf_set_w = self.target
@@ -197,10 +200,15 @@ class RfControl:
                 self.state, self.reached = self.MAINTAINING, True
                 self._emit("info", f"{self.target:g}W 도달. 파워 유지 시작")
                 return
-            if self.step_w > self.target + 1e-9:                 # 목표를 낮춘 경우 — 같은 속도로 내린다
-                self.step_w = max(self.step_w - float(c["RF_RAMP_STEP_W"]), self.target)
-                self.pwm = self.power_to_dac(self.step_w)
-            elif fwd >= self.step_w:
+            if self.down:                                        # 목표를 낮춘 경우 — 같은 속도로 내린 뒤 유지처럼 ±1
+                if self.step_w > self.target + 1e-9:
+                    self.step_w = max(self.step_w - float(c["RF_RAMP_STEP_W"]), self.target)
+                    self.pwm = self.power_to_dac(self.step_w)
+                else:
+                    self.pwm = max(0, min(full, self.pwm + (1 if fwd < self.target else -1)))
+                self.plc.rf_write_dac(self.pwm)
+                return
+            if fwd >= self.step_w:
                 self.step_w = min(self.step_w + float(c["RF_RAMP_STEP_W"]), self.target)
                 self.pwm = self.power_to_dac(self.step_w)
             else:
