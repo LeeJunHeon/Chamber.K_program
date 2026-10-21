@@ -244,6 +244,10 @@ class ConfigStore:
         if secrets:
             return ApplyResult("rejected", "CONFIG_SECRET_FROM_WEB", [f"비밀값 포함: {secrets}"])
         cand = self._effective(values)
+        locked = [f"{k}: 지금 {self.values.get(k)!r} ≠ 받은 {values.get(k, cand.get(k))!r}" for k in sorted(self.by_key)
+                  if self.by_key[k].web_locked and self.values.get(k) != values.get(k, cand.get(k))]
+        if locked:                                  # 실행 모드·장비 ID — 덮어쓰기 파일에 없어도 웹에서는 못 바꾼다
+            return ApplyResult("rejected", "CONFIG_LOCKED_KEY", [f"웹에서 바꿀 수 없는 키: {'; '.join(locked)}"])
         errs = check_config(self.defs, self.rules, cand)
         if errs:
             return ApplyResult("rejected", "CONFIG_INVALID", errs)

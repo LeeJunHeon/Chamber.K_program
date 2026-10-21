@@ -32,27 +32,27 @@ _COM = r"COM[1-9][0-9]{0,2}"
 
 def _p(key, group, label, unit, type_, default, lo=None, hi=None, *, safety=M, apply=IDLE,
        scope=Scope.PROCESS, role=None, desc="", enum=None, pattern=None, v1_key=None,
-       v1_default=None, src=_JSON, pending=False, note="", v1_period=None) -> ParamDef:
+       v1_default=None, src=_JSON, pending=False, note="", v1_period=None, locked=False) -> ParamDef:
     if role is None:
         role = Role.ADMIN if (safety is H or scope is not Scope.PROCESS) else Role.OPERATOR
     return ParamDef(key=key, group=group, label=label, desc=desc or label, unit=unit, type=type_,
                     default=default, min=lo, max=hi, enum=enum, pattern=pattern, safety=safety,
                     apply=apply, scope=scope, role=role, v1_key=v1_key, v1_default=v1_default,
-                    v1_source=src, pending_confirm=pending, note=note, v1_period_s=v1_period)
+                    v1_source=src, pending_confirm=pending, note=note, v1_period_s=v1_period, web_locked=locked)
 
 
 def _inst(key, label, type_, default, *, desc="", pattern=None, lo=None, hi=None, enum=None,
-          safety=M, v1_key=None, src=_JSON, unit="", v1_default=None) -> ParamDef:
+          safety=M, v1_key=None, src=_JSON, unit="", v1_default=None, locked=False) -> ParamDef:
     return _p(key, "install", label, unit, type_, default, lo, hi, safety=safety, apply=RESTART,
               scope=Scope.INSTALL, desc=desc, pattern=pattern, enum=enum, v1_key=v1_key, src=src,
-              v1_default=v1_default)
+              v1_default=v1_default, locked=locked)
 
 
 PARAMS: tuple = (
     # ───────────── 설치값(install) — 웹 admin + 노트북 비상 덮어쓰기, 재시작 필요 ─────────────
-    _inst("EQUIPMENT_ID", "장비 ID", S, "CHK2", pattern=r"[A-Z0-9][A-Z0-9-]{1,15}", safety=H, src=_V2,
-          desc="웹에서 장비를 구분하는 ID. 개발 중 CHK2 — v1(CHK)과 섞이지 않게 한다"),
-    _inst("RUN_MODE", "실행 모드", E, "sim", enum=("sim", "bench", "prod"), safety=H, src=_V2,
+    _inst("EQUIPMENT_ID", "장비 ID", S, "CHK2", pattern=r"[A-Z0-9][A-Z0-9-]{1,15}", safety=H, src=_V2, locked=True,
+          desc="웹에서 장비를 구분하는 ID. 개발 중 CHK2 — v1(CHK)과 섞이지 않게 한다. 웹에서 바꾸지 않는다(노트북 설정 파일로만)"),
+    _inst("RUN_MODE", "실행 모드", E, "sim", enum=("sim", "bench", "prod"), safety=H, src=_V2, locked=True,
           desc="sim=가짜 장비·외부 연결 없음 / bench=실장비 읽기 전용 / prod=운전. "
                "로컬 파일이 없으면 sim. prod 는 명시적으로만"),
     _inst("PLC_PORT", "PLC 포트", S, "COM9", pattern=_COM, safety=H),

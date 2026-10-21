@@ -170,8 +170,37 @@ def test_override_install_and_secret(tmp_path):
     vals = s.load()
     assert vals["RUN_MODE"] == "bench" and vals["MFC_PORT"] == "COM21" and vals["UPLINK_TOKEN"] == "t"
     r = s.apply(1, _web_values(MFC_PORT="COM22"), SH, busy=False)
-    assert r.overridden_keys == ["MFC_PORT", "RUN_MODE"]       # 웹의 RUN_MODE=sim 도 노트북 bench 에 가려짐
+    assert r.reason == "CONFIG_LOCKED_KEY" and "RUN_MODE" in r.errors[0]     # 웹의 RUN_MODE=sim ≠ 지금 bench — 잠금
+    r = s.apply(1, _web_values(MFC_PORT="COM22", RUN_MODE="bench"), SH, busy=False)
+    assert r.status == "applied" and r.overridden_keys == ["MFC_PORT"]
     assert _store(tmp_path).load()["MFC_PORT"] == "COM21"        # 덮어쓰기가 이긴다
+
+
+@pytest.mark.parametrize("patch", [{"RUN_MODE": "prod"},
+                                   {"RUN_MODE": "bench"}, {"EQUIPMENT_ID": "CHK9"}])
+def test_run_mode_and_equipment_id_locked_from_web(tmp_path, patch):
+    """덮어쓰기 파일에 없어도 웹에서 실행 모드(sim → prod 등)·장비 ID 를 바꾸지 않는다 — 나머지 설치 키는 restart 대기."""
+    s = _store(tmp_path)
+    s.load()
+    before = dict(s.values)
+    r = s.apply(1, _web_values(**patch), SH, busy=False)
+    assert r.status == "rejected" and r.reason == "CONFIG_LOCKED_KEY"
+    assert s.values == before and not (tmp_path / ACTIVE).exists()
+    assert s.apply(1, _web_values(MFC_PORT="COM22"), SH, busy=False).status == "pending_restart"   # 다른 설치 키는 그대로
+
+
+def test_rollback_with_locked_key_changed_is_rejected(tmp_path):
+    from v2.common.config_store import _content_hash
+    s = _store(tmp_path)
+    s.load()
+    assert s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False).status == "applied"
+    assert s.apply(2, _web_values(FLOW_ERROR_SEC=8), SH, busy=False).status == "applied"
+    prev = json.loads((tmp_path / PREV).read_text(encoding="utf-8"))   # 손으로 고친 이전 파일(장비 ID 가 다름)
+    prev["values"]["EQUIPMENT_ID"] = "CHK9"
+    prev["contentHash"] = _content_hash(prev["version"], prev["schemaHash"], prev["values"])
+    (tmp_path / PREV).write_text(json.dumps(prev), encoding="utf-8")
+    r = s.rollback(busy=False, by="web")
+    assert r.status == "rejected" and r.reason == "CONFIG_LOCKED_KEY" and s.values["EQUIPMENT_ID"] == "CHK2"
 
 
 @pytest.mark.parametrize("vals", [

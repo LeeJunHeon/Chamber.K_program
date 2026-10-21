@@ -11,6 +11,7 @@ scenario "light": 가스 20 sccm·SP1 5 mTorr(MFC) → 필라멘트 켜기(IG) �
 """
 from __future__ import annotations
 
+import collections
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -27,12 +28,19 @@ from v2.chk.sim.plc_sim import PlcSim
 from v2.chk.system import ChkSystem, new_store
 
 
-def make_sims(start: float = 0.0):
+def make_sims(start: float = 0.0, log_keep: Optional[int] = None):
     """공용 챔버 + 시뮬레이터 5개 — (chamber, {장비: 시뮬레이터}). start = 시계의 지금(실제 시계는 부팅 뒤 초 —
-    0 에서 시작하면 첫 응답 때 그만큼을 0.1 s 씩 따라잡느라 멈춘 것처럼 된다)."""
+    0 에서 시작하면 첫 응답 때 그만큼을 0.1 s 씩 따라잡느라 멈춘 것처럼 된다). log_keep = 받은 요청 기록 상한
+    (None 이면 시험용 기본 SIM_LOG_KEEP — 실행 프로그램 sim 은 기록이 필요 없어 작게)."""
     chamber = Chamber(start)
-    return chamber, {"plc": PlcSim(start=start, chamber=chamber), "mfc": MfcSim(chamber), "dc": DcSim(chamber),
-                     "rfpulse": CesarSim(chamber), "ig": IgSim(chamber, start=start)}
+    sims = {"plc": PlcSim(start=start, chamber=chamber), "mfc": MfcSim(chamber), "dc": DcSim(chamber),
+            "rfpulse": CesarSim(chamber), "ig": IgSim(chamber, start=start)}
+    if log_keep is not None:
+        for x in sims.values():
+            for name in ("rx_log", "received", "frames"):
+                if hasattr(x, name):
+                    setattr(x, name, collections.deque(getattr(x, name), maxlen=log_keep))
+    return chamber, sims
 
 
 def sim_transports(clock, sims) -> Dict[str, SimTransport]:

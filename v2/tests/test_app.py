@@ -3,7 +3,8 @@
 COM 포트·외부 네트워크 없이(sim, 127.0.0.1 만). 기록·설정은 임시 폴더에만.
 - 실제 시계: 조립 sim 을 임시 폴더로 시작 → hello·schema → stream 에서 2 s 안에 state → POST PROCESS_STOP(HMI) ok·cmd_result →
   POST CONFIG_APPLY(HMI) SOURCE_NOT_ALLOWED → 정상 종료(포트·스레드 정리). 같은 포트로 두 번째 실행은 바로 끝(장비 포트 안 엶).
-- 가상 시계(ChkRig — 같은 조립): 설정 적용(live·idle·restart·S48·rollback·config_ack·이력), 종료(Ctrl+C 거부·두 번 확인·강제 종료).
+- 가상 시계(ChkRig — 같은 조립): 설정 적용(live·idle·restart·S48·rollback·config_ack·이력·실행 모드·장비 ID 잠금),
+  종료(Ctrl+C 거부·두 번 확인·강제 종료).
 """
 import json
 import socket
@@ -115,7 +116,9 @@ def test_app_sim_start_api_and_clean_shutdown(tmp_path):
     s = socket.socket()                                           # 포트가 풀렸다
     s.bind(("127.0.0.1", port))
     s.close()
-    assert (tmp_path / "data" / "logs" / "chk_v2.log").exists()
+    log = (tmp_path / "data" / "logs" / "chk_v2.log").read_text(encoding="utf-8")
+    assert "히터 RUN=0 쓰기: " in log and "시간 초과" not in log
+    assert "조치 실패" not in log and " ERROR " not in log            # S41 쓰기가 끝난 뒤 포트를 닫는다(CANCELLED 없음)
 
 
 def test_second_instance_on_same_port_exits_before_opening_device_ports(tmp_path):
@@ -287,6 +290,35 @@ def test_config_idle_restart_h_rollback_history(tmp_path):
     v["UPLINK_TOKEN"] = "x"
     assert rig.core.command("CONFIG_APPLY", {"version": 9, "values": v, "schemaHash": param_schema_hash()}).reason \
         == "CONFIG_SECRET_FROM_WEB"
+    # 실행 모드·장비 ID 는 웹에서 바꾸지 않는다(덮어쓰기에 없어도) — config_ack rejected
+    assert _apply(rig, 9, RUN_MODE="prod").reason == "CONFIG_LOCKED_KEY"
+    assert _apply(rig, 9, EQUIPMENT_ID="CHK9").reason == "CONFIG_LOCKED_KEY"
+    ack = _acks(rig)[-1]
+    assert ack["status"] == "rejected" and ack["reasonCode"] == "CONFIG_LOCKED_KEY" and "EQUIPMENT_ID" in ack["errors"][0]
+    assert rig.cfg["RUN_MODE"] == "sim" and rig.cfg["EQUIPMENT_ID"] == "CHK2" and rig.store.version == 3
+
+
+def test_sims_start_at_clock_time():
+    """실제 시계(부팅 뒤 초)로 sim 을 만들면 첫 질의가 바로 답한다 — MfcSim·CesarSim 이 0 에서 시작하면 첫 응답 때
+    부팅 뒤 초를 0.1 s 씩 따라잡느라 연결 때 질의(R33·R34·R74·R75)가 시간 초과 → MFC_SCALE_UNREAD 였다."""
+    from v2.chk.sim.rig import make_sims
+    t0 = 500_000.0
+    _, sims = make_sims(t0)
+    assert all(getattr(x, "t", t0) == t0 for x in sims.values())
+    w = time.perf_counter()
+    assert sims["mfc"].respond(b"R33\r", t0 + 0.01)
+    assert time.perf_counter() - w < 0.1
+    # 받은 요청 기록은 길이 제한(시험 하니스 SIM_LOG_KEEP, 실행 프로그램 sim 은 SIM_APP_LOG_KEEP)
+    from v2.chk.app import SIM_APP_LOG_KEEP
+    from v2.common.simdev import SIM_LOG_KEEP
+    assert sims["plc"].frames.maxlen == sims["mfc"].received.maxlen == SIM_LOG_KEEP
+    _, small = make_sims(t0, log_keep=SIM_APP_LOG_KEEP)
+    for x in small.values():
+        logs = [getattr(x, n) for n in ("rx_log", "received", "frames") if hasattr(x, n)]
+        assert logs and all(q.maxlen == SIM_APP_LOG_KEEP for q in logs)
+    for k in range(SIM_APP_LOG_KEEP + 50):
+        small["mfc"].respond(b"R5", t0 + 1 + k * 0.1)
+    assert len(small["mfc"].received) == SIM_APP_LOG_KEEP
 
 
 def test_local_override_key_is_not_changed_from_web(tmp_path):
@@ -390,26 +422,30 @@ def test_local_override_example_is_valid(tmp_path):
     assert v["RUN_MODE"] == "sim" and v["UPLINK_TOKEN"] == "" and v["LOCAL_HMI_PORT"] == 8710
     cmd = (repo_root() / "run_chk_v2.cmd").read_bytes()
     assert b"\r\n" in cmd and "닫지 마세요".encode() in cmd and b"-m v2.chk --config-dir" in cmd
+    assert b'cd /d "%~dp0"' in cmd and b"py -3.13" in cmd and b"C:\\Users" not in cmd     # PC 별 경로 없음
 
 
 @pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows 전용")
-def test_session_end_window_calls_force_exit():
+def test_session_end_window_calls_force_exit(caplog):
     import ctypes
     from ctypes import wintypes
     from v2.chk.app import WM_ENDSESSION, WM_QUERYENDSESSION
-    app = App(print_fn=lambda s: None)
-    calls = []
-    app.force_exit = lambda why="": calls.append(why)
-    hwnd = app.start_session_window()
-    assert hwnd
     u = ctypes.WinDLL("user32")
     u.SendMessageW.restype = ctypes.c_ssize_t
     u.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-    assert u.SendMessageW(hwnd, WM_QUERYENDSESSION, 0, 0) == 1           # 거부하지 않음
-    u.SendMessageW(hwnd, WM_ENDSESSION, 0, 0)                             # 취소된 종료 — 아무것도 안 함
-    u.SendMessageW(hwnd, WM_ENDSESSION, 1, 0)
-    assert calls == ["WM_ENDSESSION"]
-    u.PostMessageW(hwnd, 0x0012, 0, 0)                                     # WM_QUIT
+    for _ in range(2):                                    # 닫고 다시 만들어도(창 클래스 등록 해제) 새 처리기로
+        app = App(print_fn=lambda s: None)
+        calls = []
+        app.force_exit = lambda why="": calls.append(why)
+        hwnd = app.start_session_window()
+        assert hwnd
+        assert u.SendMessageW(hwnd, WM_QUERYENDSESSION, 0, 0) == 1           # 거부하지 않음
+        u.SendMessageW(hwnd, WM_ENDSESSION, 0, 0)                             # 취소된 종료 — 아무것도 안 함
+        u.SendMessageW(hwnd, WM_ENDSESSION, 1, 0)
+        assert calls == ["WM_ENDSESSION"]
+        app.stop_session_window()                                             # 스레드가 끝난다(conftest 가 남은 스레드 확인)
+        assert app._session is None
+    assert not [r for r in caplog.records if "감시 실패" in r.getMessage()]
 
 
 def test_ctrl_c_refused_while_heater_gas_held(tmp_path):

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from v2.common.simdev import SimDevice
+from v2.common.simdev import SimDevice, sim_log
 from v2.chk.sim.chamber import Chamber
 
 BUSY_S = 0.5
@@ -38,7 +38,7 @@ class DcSim(SimDevice):
                      "VOLT:OVL?": "630.0000", "CURR:UCL?": "0.0000", "CURR:OCL?": "2.1000", "FACT:AUTO-CUR?": "0",
                      "FACT:AUTO-LOC?": "0", "FACT:OVP?": "1", "FACT:OCP?": "1", "FACT:ADC?": "20Hz"}
         self.busy_until = -1.0
-        self.received: List[tuple] = []
+        self.received = sim_log()               # 받은 요청(시험용, 길이 제한)
         self.ignored_queries = 0
 
     def respond(self, data: bytes, now: float):

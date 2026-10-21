@@ -11,7 +11,7 @@ from v2.chk import params as P
 from v2.chk import safety_rules as SR
 from v2.chk import web_schema as W
 
-PINNED = (3, "a19b926114c1b2c794082360c67aa0c2fed3c3747083d96a04fb225bc2b09bcf")
+PINNED = (4, "b29a06c4df14d2a11abcea98b729724e42637d6a538ad3974828326a34509402")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "params", "crossRules", "dropped", "commands", "preconditions",
        "reasons", "plcButtons", "recipe", "blocks", "adjust", "stopSequence", "allStopSequence", "states", "events"]
 
@@ -32,6 +32,7 @@ def test_bundle_shape_and_values():
     by = {p["key"]: p for p in b["params"]}
     assert set(by) == {p.key for p in P.PARAMS}
     assert by["SP4_MTORR"]["current"] == 25.0 and by["SP4_MTORR"]["default"] == 30.0 and by["FLOW_ERROR_SEC"]["pending"] == 9
+    assert {k for k, d in by.items() if d["webLocked"]} == {"RUN_MODE", "EQUIPMENT_ID"}    # 웹에서 못 바꾸는 키(버전 4)
     for p in P.PARAMS:
         d = by[p.key]
         assert {"label", "group", "unit", "type", "min", "max", "default", "current", "safety", "apply", "v1Source", "desc"} <= set(d)

@@ -2,7 +2,8 @@
 
 묶음(JSON 하나, bundle()):
   version · hash(정의 내용의 sha256 — 현재값 제외) · paramSchemaHash(paramdef.schema_hash — CONFIG_APPLY 의 schemaHash)
-  params        파라미터 정의(키·이름·묶음·단위·형식·범위·허용값·기본값·현재값·안전 등급·적용 시점·역할·v1 근거·설명)
+  params        파라미터 정의(키·이름·묶음·단위·형식·범위·허용값·기본값·현재값·안전 등급·적용 시점·역할·v1 근거·설명·
+                웹 잠금 webLocked — 웹에서 못 바꾸는 키, 버전 4)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
   recipe        행 레시피 열(rf_pulse_freq 는 kHz) · 히터 레시피 열
@@ -27,7 +28,7 @@ from v2.chk import process_states as PS
 from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 
-EXPORT_VERSION = 3
+EXPORT_VERSION = 4
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -57,6 +58,7 @@ def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any]) -
             "pending": None if secret else pending.get(p.key),
             "safety": p.safety.value, "apply": p.apply.value, "scope": p.scope.value, "role": p.role.value,
             "v1Key": p.v1_key, "v1Source": p.v1_source, "v1Default": p.v1_default, "pendingConfirm": p.pending_confirm,
+            "webLocked": p.web_locked,
             "desc": p.desc, "note": p.note}
 
 

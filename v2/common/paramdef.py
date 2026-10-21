@@ -73,6 +73,7 @@ class ParamDef:
     pending_confirm: bool = False   # 사용자 확인 대기 — 권장안으로 넣어 둠
     note: str = ""
     v1_period_s: Optional[float] = None   # v1 판정 주기 — v1 은 횟수, v2 기본값 = v1 횟수 × 이 주기(초, 시간 기반 판정)
+    web_locked: bool = False        # 웹에서 바꾸지 않는 키(CONFIG_APPLY·ROLLBACK 에 지금 값과 다른 값 → CONFIG_LOCKED_KEY)
 
     def public_dict(self) -> dict:
         """웹으로 보내는 정의. secret 은 기본값을 싣지 않는다."""
@@ -85,7 +86,7 @@ class ParamDef:
             "pattern": self.pattern,
             "safety": self.safety.value, "apply": self.apply.value,
             "scope": self.scope.value, "role": self.role.value,
-            "pendingConfirm": self.pending_confirm,
+            "pendingConfirm": self.pending_confirm, "webLocked": self.web_locked,
         }
         return d
 

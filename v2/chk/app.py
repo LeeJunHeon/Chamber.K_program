@@ -42,6 +42,7 @@ PROGRAM = "chk-v2"
 DEFAULT_CONFIG_DIR = r"C:\ChamberK_v2\config"
 CONFIRM_WINDOW_S = 5.0             # 히터 운전 중 Ctrl+C 두 번째 확인 시간
 SHUTDOWN_HEATER_WAIT_S = 3.0       # 정상 종료: 히터 RUN=0 결과를 기다리는 시간
+SIM_APP_LOG_KEEP = 1000            # 실행 프로그램 sim: 시뮬레이터가 받은 요청 기록 상한(시험용 기록 — 며칠 켜 둬도 늘지 않게)
 FORCE_DEADLINE_S = 3.5             # 강제 종료: 이 시간 안에 끝낸다(창 닫기 한도 약 5초)
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
@@ -49,6 +50,7 @@ EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
 CTRL_C, CTRL_BREAK, CTRL_CLOSE, CTRL_LOGOFF, CTRL_SHUTDOWN = 0, 1, 2, 5, 6
 CTRL_NAMES = {CTRL_CLOSE: "CTRL_CLOSE", CTRL_LOGOFF: "CTRL_LOGOFF", CTRL_SHUTDOWN: "CTRL_SHUTDOWN"}
 WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
+WM_DESTROY, WM_CLOSE = 0x0002, 0x0010
 REFUSE_PROCESS = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
 REFUSE_GAS = "히터 가스 사용 중 — 히터 가스를 해제한 뒤 종료"
 CONFIRM_HEATER = "종료하면 히터가 꺼집니다 — 5초 안에 Ctrl+C 를 한 번 더"
@@ -116,6 +118,8 @@ class App:
         self.forced_result: Optional[dict] = None
         self.version = system.version if system is not None else git_version()
         self._ctrl_ref = None
+        self._session: Optional[threading.Thread] = None
+        self._session_hwnd = None
         self.sims = None
 
     # ───────── 1 설정 ─────────
@@ -184,7 +188,7 @@ class App:
         mode = RunMode(self.cfg["RUN_MODE"])
         if mode is RunMode.SIM:
             from v2.chk.sim.rig import make_sims, sim_transports
-            _, self.sims = make_sims(self.clock.monotonic())
+            _, self.sims = make_sims(self.clock.monotonic(), log_keep=SIM_APP_LOG_KEEP)
             tr = sim_transports(self.clock, self.sims)
         else:
             tr = serial_transports(self.clock, self.cfg, serial_factory=self.serial_factory)
@@ -308,7 +312,21 @@ class App:
         t = threading.Thread(target=self._session_loop, args=(ready, box), name="session-watch", daemon=True)
         t.start()
         ready.wait(3.0)
-        return box.get("hwnd")
+        self._session, self._session_hwnd = t, box.get("hwnd")
+        return self._session_hwnd
+
+    def stop_session_window(self) -> None:
+        """숨은 창 닫기(WM_CLOSE → WM_DESTROY → 메시지 루프 끝) — 정상 종료·시험에서 스레드를 남기지 않게."""
+        if self._session is None:
+            return
+        if self._session_hwnd:
+            import ctypes
+            from ctypes import wintypes
+            u = ctypes.WinDLL("user32")
+            u.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            u.PostMessageW(self._session_hwnd, WM_CLOSE, 0, 0)
+        self._session.join(2.0)
+        self._session = self._session_hwnd = None
 
     def _session_loop(self, ready: threading.Event, box: Dict[str, Any]) -> None:
         try:
@@ -331,6 +349,7 @@ class App:
                                           ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND, wintypes.HMENU,
                                           wintypes.HINSTANCE, wintypes.LPVOID]
             k.GetModuleHandleW.restype = wintypes.HMODULE
+            u.UnregisterClassW.argtypes = [wintypes.LPCWSTR, wintypes.HINSTANCE]
 
             def proc(h, msg, wp, lp):
                 if msg == WM_QUERYENDSESSION:
@@ -339,6 +358,9 @@ class App:
                 if msg == WM_ENDSESSION:
                     if wp:
                         self.force_exit("WM_ENDSESSION")
+                    return 0
+                if msg == WM_DESTROY:
+                    u.PostQuitMessage(0)
                     return 0
                 return u.DefWindowProcW(h, msg, wp, lp)
             self._wndproc = WNDPROC(proc)
@@ -356,6 +378,7 @@ class App:
             while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
                 u.TranslateMessage(ctypes.byref(msg))
                 u.DispatchMessageW(ctypes.byref(msg))
+            u.UnregisterClassW("ChkV2Session", wc.hInstance)   # 다음 창(시험에서 다시 만들 때)이 이 창 처리기를 쓰지 않게
         except Exception as e:
             ready.set()
             self.log.warning("로그오프·윈도우 종료 감시 실패: %r", e)
@@ -400,9 +423,16 @@ class App:
                 s.heater.recipe_stop("프로그램 종료")
             s.safety.event("shutdown")                     # S41 HEATER_FORCE_OFF
             if s.workers["plc"].ready:
-                ok = self.clock.wait_until(self.clock.monotonic() + SHUTDOWN_HEATER_WAIT_S,
-                                           lambda: bool(s.plc.last) and s.plc.last.values.get("heater.run") is False)
-                self.log.info("히터 RUN=0 확인: %s", ok)
+                # 지난 읽기 값(이미 RUN=0)이 아니라 쓰기 끝을 기다린다 — 같은 큐 뒤에 하나 더 넣어 S41 쓰기까지 끝난 뒤에
+                # 포트를 닫는다(먼저 닫으면 S41 쓰기가 CANCELLED)
+                res: Dict[str, Any] = {}
+
+                def fin(r):
+                    res["r"] = r.status
+                    self.clock.notify()
+                s.plc.heater_run(False, on_done=fin)
+                ok = self.clock.wait_until(self.clock.monotonic() + SHUTDOWN_HEATER_WAIT_S, lambda: "r" in res)
+                self.log.info("히터 RUN=0 쓰기: %s", res["r"] if ok else "시간 초과")
         self._teardown()
         self.say("종료")
 
@@ -417,6 +447,7 @@ class App:
             self.server.stop()
         if self._log_thread is not None:
             self._log_thread.join(2.0)
+        self.stop_session_window()
         for h in self._log_handlers:
             h.flush()
             self.log.removeHandler(h)

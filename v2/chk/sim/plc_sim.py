@@ -25,12 +25,12 @@ from __future__ import annotations
 
 import math
 import struct
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from v2.common.modbus_rtu import (
     READ_COILS, READ_REGS, WRITE_COIL, WRITE_COILS, WRITE_REG, WRITE_REGS, crc_ok, with_crc,
 )
-from v2.common.simdev import SimDevice
+from v2.common.simdev import SimDevice, sim_log
 from v2.chk import devices as D
 from v2.chk.sim.chamber import Chamber
 
@@ -57,7 +57,7 @@ class PlcSim(SimDevice):
         self.slave, self.baud = slave, baud
         self.scan_delay_s, self.usb_latency_s = scan_delay_s, usb_latency_s
         self.t = start
-        self.frames: List[Tuple[float, bytes]] = []     # 받은 요청(시험: 쓰기가 나갔는지)
+        self.frames = sim_log()                         # 받은 요청(시험: 쓰기가 나갔는지, 길이 제한)
         # 주입·설정
         self.sensors = {"air": True, "g1": True, "g2": True, "water": True}
         self.itl_fault = False

@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional
 
-from v2.common.simdev import SimDevice
+from v2.common.simdev import SimDevice, sim_log
 from v2.chk.sim.chamber import BASE_TORR, THROTTLE_MIN, TORR_PER_SCCM, Chamber
 
 QUERY_LATENCY_S = 0.03
@@ -46,9 +46,9 @@ class MfcSim(SimDevice):
         self.sp_sel = 0
         self.valve_mode = "open"                # open / closed / hold / control
         self.valve = 1.0
-        self.t = 0.0
+        self.t = self.chamber.t                 # 공용 챔버 시각부터(0 이면 실제 시계에서 첫 응답 때 부팅 뒤 초를 0.1 s 씩 따라잡음)
         self.last_cmd_t = -1e9
-        self.received: List[tuple] = []
+        self.received = sim_log()               # 받은 요청(시험용, 길이 제한)
         self.dropped = 0
         self.ignore_writes: set = set()         # 시험: 이 접두어의 쓰기를 무시(되읽기 불일치)
 

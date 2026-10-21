@@ -11,10 +11,17 @@ LineDevice: 줄 단위 ASCII 프로토콜
 """
 from __future__ import annotations
 
+import collections
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 Value = Union[float, int, str, Callable[[float], Any]]
+SIM_LOG_KEEP = 50_000      # 시뮬레이터가 받은 요청 기록(시험용) 상한 — 실행 프로그램 sim 을 며칠 켜 둬도 늘지 않게(PLC 약 1 시간치)
+
+
+def sim_log() -> "collections.deque":
+    """받은 요청 기록 — (시각, 바이트) 길이 제한 링 버퍼."""
+    return collections.deque(maxlen=SIM_LOG_KEEP)
 
 
 @dataclass(frozen=True)
@@ -35,7 +42,7 @@ class SimDevice:
         self.latency_s = latency_s
         self.jitter = jitter
         self.faults: List[Fault] = []
-        self.rx_log: List[Tuple[float, bytes]] = []
+        self.rx_log: "collections.deque[Tuple[float, bytes]]" = sim_log()
 
     def add_fault(self, kind: str, start: float, end: float, extra_s: float = 0.0) -> None:
         self.faults.append(Fault(kind, start, end, extra_s))

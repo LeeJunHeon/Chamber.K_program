@@ -15,7 +15,7 @@ from __future__ import annotations
 import math
 from typing import List, Optional
 
-from v2.common.simdev import SimDevice
+from v2.common.simdev import SimDevice, sim_log
 from v2.chk.sim.chamber import Chamber
 
 E_LATENCIES = (0.25, 0.275, 0.30)
@@ -56,7 +56,7 @@ class IgSim(SimDevice):
         self.emission_since: Optional[float] = None
         self.last_b: Optional[float] = None
         self.n_e = 0
-        self.received: List[tuple] = []
+        self.received = sim_log()               # 받은 요청(시험용, 길이 제한)
         self.gauge_a_offline = False
 
     # ───────── 상태 진행 ─────────

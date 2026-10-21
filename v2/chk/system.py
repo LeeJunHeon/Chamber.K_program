@@ -71,8 +71,9 @@ class ConfigApply:
     """웹 설정 적용(CONFIG_APPLY·CONFIG_ROLLBACK) — ConfigStore 와 실행 cfg 사전을 잇는다(5-6 ④).
 
     busy = 공정 진행·정지 순서·CSV 리스트·공정 밖 정리·히터 레시피·히터 가스 중(S48 H 등급 거부·idle 키 대기).
-    설치·비밀 키: 비밀값은 웹에서 받지 않고(CONFIG_SECRET_FROM_WEB), local_override 가 정한 키는 웹 값보다 덮어쓰기가 이긴다
-    (overriddenKeys). install 키는 restart 대기.
+    설치·비밀 키: 비밀값은 웹에서 받지 않고(CONFIG_SECRET_FROM_WEB), RUN_MODE·EQUIPMENT_ID 는 지금 값과 다르면 거부
+    (CONFIG_LOCKED_KEY — 덮어쓰기에 없어도), local_override 가 정한 키는 웹 값보다 덮어쓰기가 이긴다(overriddenKeys).
+    install 키는 restart 대기.
     """
 
     def __init__(self, store: ConfigStore, cfg: Dict[str, Any], busy: Callable[[], bool], lock,
