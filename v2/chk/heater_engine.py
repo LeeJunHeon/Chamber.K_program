@@ -1130,6 +1130,7 @@ class HeaterEngine:
         self._after: List[Callable[[], None]] = []      # 잠금 밖에서 부를 것(공정 중단 — 잠금 순서 꼬임 방지)
         self.recipe.on_finished = self._recipe_finished
         self.owner: Optional[str] = None           # None / manual / recipe / process
+        self.handed_over = False                    # 정상 끝 정지에서 히터 단계를 빼 공정이 넘긴 히터(그대로인 동안만 참)
         self.pending: Optional[tuple] = None        # 가스 준비 뒤 할 일 ("manual_on", v) / ("recipe",)
         self.atm_hold = False                       # 냉각 보호 가스 유지 중
         self._prev_run: Optional[bool] = None
@@ -1294,6 +1295,7 @@ class HeaterEngine:
 
     def manual_off(self) -> None:
         with self._lock:
+            self.handed_over = False                    # 히터 카드로 끔 — 지난 공정이 남긴 히터가 아니다
             if self.pending is not None:
                 self.pending = None
                 self.atm.release("사용자 취소")
@@ -1326,6 +1328,7 @@ class HeaterEngine:
             self.ramp.stop()
             self.recipe.load(name, steps)
             self.owner = "recipe"
+            self.handed_over = False
             if gas and (gas.get("use_ar") or gas.get("use_o2")) and self.atm.state != Atmosphere.READY:
                 why = self.atm.start(bool(gas.get("use_ar")), bool(gas.get("use_o2")), float(gas.get("ar_flow") or 0),
                                      float(gas.get("o2_flow") or 0), float(gas.get("wp_mtorr") or 0))
@@ -1383,6 +1386,7 @@ class HeaterEngine:
         """HEATER_SET — 감속 접근으로 올리고 RUN(v1 _on_process_heater_target·_on_process_heater_run)."""
         with self._lock:
             self.owner = "process"
+            self.handed_over = False                    # 다음 행·공정이 다시 가져감
             rate = self.proc.get("rate") or float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"])
             self.ramp.stop(restore_rate=False)
             if not self.ramp.start(float(target), rate, "공정"):
@@ -1503,6 +1507,40 @@ class HeaterEngine:
     @property
     def process_phase(self) -> str:
         return self.proc.get("phase", "")
+
+    def handover(self) -> Optional[float]:
+        """정상 끝 정지에서 히터 단계(3)를 빼고 행이 끝남 — 소유 process → manual. 목표·감속 접근은 그대로 이어 간다
+        (웹 히터 카드 명령을 받는다). 켜져 있지 않거나 공정 소유가 아니면 None. 넘긴 목표를 돌려준다."""
+        with self._lock:
+            if self.owner != "process" or not self.st.get("run"):
+                return None
+            target = self.ramp.target()
+            if target is None:
+                target = self.proc.get("target") if self.proc.get("target") is not None else self.st.get("sv")
+            self.owner, self.handed_over, self.proc = "manual", True, {}
+            return target
+
+    def left_on(self) -> bool:
+        """넘겨받은 상태 그대로 켜져 있음 — 히터 카드로 끈 적 없고, 히터 레시피·히터 가스가 잡지 않았다(목표만 바꾼 것은 그대로)."""
+        return bool(self.handed_over and self.st.get("run") and not self.recipe.is_running() and not self.atm.is_active()
+                    and self.owner == "manual")
+
+    def handover_off(self) -> None:
+        """넘긴 히터 끄기(공정 밖 STOP 정리·다음 공정의 정지 순서) — process_off 와 같은 정리(RUN=0·램프 원복·감속 접근 멈춤·소유 해제)."""
+        with self._lock:
+            self.ramp.stop(restore_rate=False)
+            self.port.run(False)
+            self.port.ramp(ramp_raw(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]))
+            if self.owner == "manual":
+                self.owner = None
+            self.handed_over = False
+
+    def drop_handover(self) -> None:
+        """ALL STOP 뒤 — 넘긴 히터 기록을 지운다(ALL STOP 이 RUN=0)."""
+        with self._lock:
+            if self.handed_over and self.owner == "manual":
+                self.owner = None
+            self.handed_over = False
 
     def process_off(self) -> None:
         """v1 _heater_off — RUN=0, 램프 속도 원복(공정이 히터를 썼을 때만 부른다)."""

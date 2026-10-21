@@ -1,7 +1,7 @@
 """챔버K 명령 처리 — 웹·로컬 화면 명령을 검사(commands.check_command + 장비 값 조건)하고 엔진에 넘긴다.
 
 결과는 (성공, 사유 코드). 다음 단계(로컬 HMI·웹 연동)가 이 함수 하나를 부른다. 골든 하니스도 이것으로 v1 원격 명령을 흉내 낸다.
-- PROCESS_STOP: 공정이 없으면 아무것도 하지 않고 성공(v1). RECIPE_CLEAR: 적재가 없으면 성공, 공정 중이면 PROCESS_RUNNING(v1 B5).
+- PROCESS_STOP: 공정이 없으면 지난 공정이 남긴 출력만 정리(OUTPUTS_CLEANUP), 남은 게 없으면 아무것도 하지 않고 성공(v1). RECIPE_CLEAR: 적재가 없으면 성공, 공정 중이면 PROCESS_RUNNING(v1 B5).
 - PLC_BUTTON: PLC 링크가 없으면 LINK_DOWN(v1 B6). 공정 중에도 모두 허용(v1, 사용자 결정 2026-10-20) — 공정 중 실행은
   공정 기록에 PLC_MANUAL_IN_PROCESS(info: 대상·켬/끔·출처·시각).
 - ALL_STOP: 공정 여부와 무관 — SafetyEngine.all_stop.

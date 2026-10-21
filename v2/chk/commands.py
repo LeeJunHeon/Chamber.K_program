@@ -48,6 +48,7 @@ CHK_REASONS: tuple = (
     Reason("COMMAND_NOT_ALLOWED", "장비에 보내지 않는 명령(예: 이온 게이지 디개스 C·D)", "reject"),
     Reason("DOOR_CONFLICT", "도어 올림·내림 동시 요청", "reject"),
     Reason("CONFIG_H_IN_PROCESS", "공정 중 H 등급 설정 변경 금지", "reject"),
+    Reason("CLEANUP_RUNNING", "공정 밖 STOP 정리 중 — 끝난 뒤에 시작", "reject"),
     Reason("ADJUST_NOT_USED", "공정 중 수정: 이번 공정에서 쓰지 않는 장비·항목", "reject"),
     Reason("ADJUST_OUT_OF_RANGE", "공정 중 수정: 범위 밖(레시피와 같은 상한·펄스 ON/OFF 시간)", "reject"),
     Reason("ADJUST_NOT_APPLICABLE", "공정 중 수정: 지금 블록에 해당 없음(대기 끝내기는 대기·조건 대기 블록만)", "reject"),
@@ -115,6 +116,8 @@ CHK_REASONS: tuple = (
     Reason("PLC_MANUAL_IN_PROCESS", "공정 중 PLC 버튼 실행(기록 — 대상·켬/끔·출처·시각)", "info"),
     Reason("OUTPUTS_LEFT_ON", "정상 끝 정지에서 뺀 단계로 남긴 출력(히터·유량·차단밸브·셔터·MFC 밸브·필라멘트) — 일부러 남긴 것", "info"),
     Reason("AUTO_END_STOP", "목록 끝이 정상 끝 정지가 아니어서 기본 끝 정지를 덧붙임", "info"),
+    Reason("HEATER_HANDOVER", "정상 끝 정지에서 히터를 남김 — 소유를 공정 → 수동(웹 히터 카드)으로", "info"),
+    Reason("OUTPUTS_CLEANUP", "공정 밖 STOP — 지난 공정이 남긴 출력 정리(단계별 결과)", "info"),
     Reason("HEATER_NO_TARGET", "히터 도달 대기 블록인데 히터 목표 없음 — 건너뜀", "info"),
     Reason("RF_OFF_FAILED", "파워 끄기 블록의 RF OFF 결과 오류", "info"),
     Reason("PROCESS_ADJUST", "공정 중 값 수정 기록(장비·항목·이전 → 새 값·출처·결과)", "info"),
@@ -222,7 +225,8 @@ STOPPABLE = ACTIVE_STATES + ("STOPPING",)
 COMMANDS: tuple = (
     # 정지 — 로컬 화면에서도. bench 모드에서는 worker 가 BENCH_READ_ONLY 로 거부하므로 로컬 화면은
     # "읽기 전용 — 조작은 장비 앞면으로" 를 표시해야 한다(로컬 화면 단계 할 일)
-    C("PROCESS_STOP", "공정 STOP", (WEB, HMI), "operator", (ANY_STATE,), desc="공정이 없으면 아무것도 하지 않고 성공(v1 과 같게)",
+    C("PROCESS_STOP", "공정 STOP", (WEB, HMI), "operator", (ANY_STATE,),
+      desc="공정이 없으면 지난 공정이 남긴 출력만 정리(OUTPUTS_CLEANUP), 없으면 아무것도 하지 않고 성공(v1 과 같게) — 로컬 화면 STOP 도 같다",
       v1="PROCESS_STOP"),
     C("ALL_STOP", "ALL STOP", (WEB, HMI, INT), "operator", (ANY_STATE,), desc="공정 여부와 무관 — safety_rules.ALL_STOP_SEQUENCE",
       v1="ALL_STOP"),

@@ -24,6 +24,10 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
 - 정상 끝 정지 블록(END_STOP)이 정지 순서(SafetyEngine.end_row)를 낸다. 중간에 있으면 정지 순서 뒤 다음 블록으로.
   목록 끝이 정상 끝 정지가 아니면 blocks.expand 가 "자동 끝 정지"를 덧붙인다(AUTO_END_STOP) — 목록 끝은 늘 정상 끝 정지.
   STOP·이상 중단 정지 순서는 고정(표 전체), 정상 끝 정지만 skip(파워 끄기 단계는 못 뺀다 — 사용자 결정 2026-10-21).
+- 남긴 출력(left): 정상 끝 정지에서 뺀 단계 때문에 실제로 켜진 채 끝난 것(넘긴 히터·유량·차단밸브·셔터·MFC 밸브·필라멘트) —
+  OUTPUTS_LEFT_ON(info). 히터 단계를 빼면 HeaterEngine 소유를 manual 로 넘긴다(HEATER_HANDOVER). 공정 밖 STOP 은 남긴 것 중
+  지금도 켜진 것만 고정 정지 순서로 정리(OUTPUTS_CLEANUP), 없으면 아무것도 하지 않고 성공(v1). 공정 중 STOP·이상 중단·끝 정지의
+  정지 순서도 남긴 것(아직 그대로인 것)을 함께 끈다. ALL STOP 은 기록도 지운다.
 - 사용 장비(uses_*)는 블록에서(blocks.uses_of). 안전 규칙의 적용 구간은 장비 상태(dc_ramping·rf_ramping)와 블록 감시(watching).
 
 공정 중 값 수정(adjust, 5-4 ③ — PROCESS_ADJUST): "이번 공정의 그 값"을 바꾼다. 값 바꾸기는 여기 한 곳에서
@@ -122,6 +126,10 @@ class ProcessEngine:
         self.rfp_target: Optional[float] = None
         self.rfp_started = False                # RF Pulse START 가 끝났다(공정 중 수정은 그 뒤에만)
         self.settle: Dict[str, float] = {}      # 공정 중 수정 뒤 새 목표에 도달할 때까지 이탈 판정 쉼(장비 → 시작 시각)
+        self.left: Dict[str, Any] = {}          # 남긴 출력(행이 끝난 뒤 — 항목 → 기록 값)
+        self.end_skip: tuple = ()               # 이번 정상 끝 정지에서 뺀 단계
+        self.cleaning = False                   # 공정 밖 STOP 정리 중
+        self.last_view = None
         self._end_stop_resume = False
 
     # ── 안전 엔진이 보는 것 ──
@@ -354,6 +362,8 @@ class ProcessEngine:
         with self._lock:
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
+            if self.cleaning:
+                return "CLEANUP_RUNNING"
             if self.rows:
                 return "RECIPE_LOADED"
             row = dict(row or {})
@@ -378,6 +388,8 @@ class ProcessEngine:
         with self._lock:
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
+            if self.cleaning:
+                return "CLEANUP_RUNNING"
             if not self.rows:
                 return "RECIPE_NOT_LOADED"
             if self.heater.recipe_running and any(r.get("delay_s") is None and self._row_uses(r)["heater"]
@@ -429,16 +441,89 @@ class ProcessEngine:
         return None
 
     def stop(self) -> None:
-        """사용자 STOP — 지금 행 중단 + 리스트 취소(v1 ProcessService.stop)."""
+        """사용자 STOP — 지금 행 중단 + 리스트 취소(v1 ProcessService.stop). 공정 밖이면 지난 공정이 남긴 출력만 정리
+        (남은 게 없으면 아무것도 하지 않음 — v1)."""
         with self._lock:
             if self.state in ("CSV_DELAY", "CSV_BETWEEN"):
                 self._cancel_list("USER_STOP")
+                self._cleanup_left()
                 return
             if self.state == "STOPPING":
                 self.late_stop("aborted", "USER_STOP")
                 return
             if self.state in ACT and self.safety is not None:
                 self.safety.stop()
+                return
+            self._cleanup_left()
+
+    # ── 남긴 출력 ──
+    def left_on(self, item: str) -> bool:
+        """남긴 출력이 지금도 켜져 있나(지난 공정이 남긴 것이고 그대로). 가스는 히터 가스가 MFC 를 잡으면 제외."""
+        if item not in self.left:
+            return False
+        h = self.heater
+        if item == "heater":
+            return bool(getattr(h, "left_on", lambda: False)())
+        if item in ("ar", "o2", "mfc_valve", "ar_valve", "o2_valve") and h.atm.is_active():
+            return False
+        if item == "filament":
+            last = getattr(self.ig, "last", None)
+            return bool(last is not None and getattr(last, "filament", False))
+        if item in ("ms", "s1", "s2", "ar_valve", "o2_valve"):
+            last = self.plc.last
+            return bool(last is not None and last.values.get(f"plc.{item}"))
+        if item in ("ar", "o2"):
+            v = self.last_view
+            x = v.get(f"mfc.{item}_sccm") if v is not None else None
+            return x is None or float(x) > 0.1                 # 값을 모르면 켜진 것으로(끄는 쪽)
+        return True                                             # mfc_valve — 배기를 하지 않았다(위치는 안 본다)
+
+    def _record_left(self) -> None:
+        """정상 끝 정지 뒤 — 뺀 단계 때문에 실제로 켜진 채 남은 것. 히터 단계를 뺐으면 소유를 넘긴다."""
+        sk, left = set(self.end_skip), {}
+        last = self.plc.last.values if self.plc.last is not None else {}
+        ig = getattr(self.ig, "last", None)
+        if 1 in sk and ig is not None and getattr(ig, "filament", False):
+            left["filament"] = True
+        if 2 in sk and last.get("plc.ms"):
+            left["ms"] = True
+        if 3 in sk:
+            tgt = self.heater.handover() if self.heater.owner == "process" else None
+            if tgt is not None:
+                self._emit(ProcEvent("heater_handover", f"히터를 켠 채 넘김 — 목표 {tgt} °C(웹 히터 카드로 조작)",
+                                     "HEATER_HANDOVER", {"target": tgt, "level": "info"}))
+            if self.heater.left_on():
+                left["heater"] = {"target": tgt if tgt is not None else self.heater.st.get("sv")}
+        if 9 in sk:
+            for ch, g in ((1, "ar"), (2, "o2")):
+                if self.flow_on[ch]:
+                    left[g] = self.cur_vals.get(f"mfc.{g}_flow")
+        if 10 in sk and (self.uses["ar"] or self.uses["o2"]):
+            left["mfc_valve"] = True
+        if 11 in sk:
+            left.update({k: True for k in ("s1", "s2") if last.get(f"plc.{k}")})
+        if 12 in sk:
+            left.update({k: True for k in ("ar_valve", "o2_valve") if last.get(f"plc.{k}")})
+        self.left = left
+        if left:
+            self._emit(ProcEvent("warn", f"정상 끝 정지에서 뺀 단계로 남긴 출력: {', '.join(left)}", "OUTPUTS_LEFT_ON",
+                                 {"outputs": list(left), "left": dict(left), "skip": sorted(sk), "level": "info"}))
+
+    def _cleanup_left(self) -> bool:
+        """공정 밖 STOP — 남긴 것 중 지금도 켜진 것만 고정 정지 순서로. 정리 중 STOP 은 무시. 정리했으면 True."""
+        if self.cleaning:
+            return False
+        items = [k for k in self.left if self.left_on(k)]
+        if not items:
+            self.left = {}
+            return False
+        if self.safety is None:
+            return False
+        self.cleaning = True
+        self._emit(ProcEvent("cleanup_start", f"지난 공정이 남긴 출력 정리: {', '.join(items)}", "OUTPUTS_CLEANUP",
+                             {"items": items, "level": "info"}))
+        self.safety.cleanup(items)
+        return True
 
     # ── 안전 엔진이 부르는 것 ──
     def on_stop(self) -> None:
@@ -468,16 +553,26 @@ class ProcessEngine:
             if self.state in ACT:
                 self._set_state("STOPPING")
 
-    def _halt(self, cancel_runner: bool = True) -> None:
+    def _halt(self, cancel_runner: bool = True, heater: bool = True) -> None:
         if self.runner is not None and cancel_runner:
             self.runner.cancel()
         self.dcc.stop()
         self.rfc.stop()
-        if self.uses_heater:
+        if heater and self.uses_heater:
             self.heater.process_off()
 
     def on_stop_done(self, kind: str) -> None:
         with self._lock:
+            if kind == "cleanup":
+                res = self.safety.engine.seq_results.get("cleanup", []) if self.safety is not None else []
+                self._emit(ProcEvent("cleanup", "남긴 출력 정리 끝 — " + ", ".join(f"{n}:{st}" for n, _, st in res),
+                                     "OUTPUTS_CLEANUP", {"steps": [{"no": n, "act": a, "status": st} for n, a, st in res],
+                                                         "items": list(self.left), "level": "info"}))
+                self.left, self.cleaning = {}, False
+                return
+            if kind == "all_stop":
+                self.left = {}                                    # ALL STOP 은 전부 끈다 — 남긴 기록도 지움
+                self.heater.drop_handover()
             if not self.row_is_process:
                 return
             r = self.runner
@@ -493,6 +588,11 @@ class ProcessEngine:
             if kind == "row_end" and self.end_kind is None:
                 self.end_kind = "done"
             kind_, code = self.end_kind or "error", self.end_code
+            if kind == "row_end" and kind_ == "done" and self.end_skip:
+                self._record_left()                                # 뺀 단계로 남은 것(히터는 소유 넘김)
+            else:
+                self.left = {}                                     # 정지 순서 전체 — 남긴 것도 함께 꺼졌다
+            self.end_skip = ()
             self._block_end("ok" if kind_ == "done" else kind_, code)
             self._emit(ProcEvent("run_end", kind_, code, {"name": self.run_name, "status": kind_, "reason": code}))
             self.row_is_process = False
@@ -551,7 +651,7 @@ class ProcessEngine:
         self.blocks, self.insts, self.uses = blocks, insts, BK.uses_of(blocks)
         self.block_idx, self.overrides, self.cur_vals = -1, {}, {}
         self.flow_on, self.rfp_target, self._end_stop_resume = {1: False, 2: False}, None, False
-        self.rfp_started, self.settle = False, {}
+        self.rfp_started, self.settle, self.end_skip = False, {}, ()
         self.end_kind = self.end_code = None
         self.row_is_process, self.comm_aborted, self.filament_by_process = True, False, False
         self.dc_on = self.rf_on = self.rfp_on = False
@@ -627,6 +727,7 @@ class ProcessEngine:
     def on_row(self, view) -> None:
         with self._lock:
             now = self.clock.monotonic()
+            self.last_view = view
             if self._settle_pending and self.state in ("DONE", "ABORTED"):
                 self._settle_pending = False
                 self._set_state("LOADED" if self.rows else "IDLE")
@@ -726,7 +827,9 @@ class ProcessEngine:
             skip = tuple((s.spec or {}).get("skip") or ())
             if self.safety is not None and self.safety.engine.end_row(skip=skip):
                 self._end_stop_resume = r.idx + 1 < len(r.steps)
-                self._halt(cancel_runner=False)            # 제어 루프를 멈추고 정지 순서로(상태 STOPPING — 진행 상태 규칙 끔)
+                self.end_skip = skip
+                # 제어 루프를 멈추고 정지 순서로(상태 STOPPING — 진행 상태 규칙 끔). 히터는 3단계가 끈다(빼면 남긴다)
+                self._halt(cancel_runner=False, heater=False)
                 self._set_state("STOPPING")
             return "wait"
         return "next" if cur.done else "wait"

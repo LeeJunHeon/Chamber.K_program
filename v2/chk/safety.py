@@ -616,9 +616,24 @@ class ChkSafety:
         rf_on = lambda: p.uses_rf or bool(self.plc.last and (self.plc.last.values.get("rf.dac") or 0) > 0)
         drop = set(skip or ()) - set(SR.END_STOP_MUST_KEEP)
         order = [s for s in SR.STOP_SEQUENCE if s.no not in drop]
-        return self._steps(order, {"1": lambda: p.filament_by_process, "3": lambda: p.uses_heater,
+        left = getattr(p, "left_on", lambda item: False)       # 앞 행·지난 공정이 남긴 것(아직 그대로인 것)도 함께 정리
+        return self._steps(order, {"1": lambda: p.filament_by_process or left("filament"),
+                                   "3": lambda: p.uses_heater or left("heater"),
                                    "4": lambda: bool(getattr(p, "dc_on", False)),
                                    "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})
+
+    def cleanup_steps(self, items) -> List[Step]:
+        """공정 밖 STOP — 지난 공정이 남긴 것 중 지금도 켜진 것만(고정 정지 순서, 파워 단계는 남을 수 없어 건너뜀)."""
+        it = set(items)
+        no = lambda: False
+        return self._steps(SR.STOP_SEQUENCE, {
+            "1": lambda: "filament" in it, "2": lambda: "ms" in it, "3": lambda: "heater" in it,
+            "4": no, "5": no, "6": no, "7": no,
+            "9": lambda: bool(it & {"ar", "o2"}), "10": lambda: bool(it & {"mfc_valve", "ar", "o2"}),
+            "11": lambda: bool(it & {"s1", "s2"}), "12": lambda: bool(it & {"ar_valve", "o2_valve"})}, {})
+
+    def cleanup(self, items) -> None:
+        self.engine._start_seq("cleanup", self.cleanup_steps(items))
 
     def all_stop_steps(self) -> List[Step]:
         p = self.process
@@ -644,6 +659,12 @@ class ChkSafety:
             done(None)
 
         def heater_off(a, done):
+            h = self.heater
+            if h is not None:                          # 공정 소유면 process_off(RUN=0·램프 원복·감속 멈춤·소유 해제), 넘긴 히터면 그 정리
+                if h.owner == "process":
+                    h.process_off()
+                elif getattr(h, "handed_over", False):
+                    h.handover_off()
             plc.heater_run(False, on_done=_req(done))
 
         def residual(a, done):
