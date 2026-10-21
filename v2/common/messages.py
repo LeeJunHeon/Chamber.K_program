@@ -51,6 +51,8 @@ MESSAGES: tuple = (
         _f("configVersion", "int", True, "장비가 쓰고 있는 설정 버전(0 = 기본값)"),
         _f("snapshotColumns", "list", True, "1초 스냅샷 열 이름"),
         _f("commandKinds", "list", True, "장비가 받는 명령 종류"),
+        _f("webSchema", "obj", False, "웹 설정 내보내기 묶음(chk.web_schema.bundle — 설정·레시피·블록·공정 중 수정·정지 순서)"),
+        _f("webSchemaHash", "str", True, "묶음 정의 해시(바뀌었을 때만 webSchema 를 싣는다)"),
     )),
     MessageDef("state", "up", "현재 상태 1개(변화가 있으면 매 주기, 없으면 UPLINK_STATE_HEARTBEAT_SEC 마다)", (
         _f("procState", "str", True, "공정 상태 기계 상태"),
@@ -102,6 +104,10 @@ MESSAGES: tuple = (
         _f("errors", "list", False, "검사 오류 목록"),
         _f("appliedKeys", "list", False, "바로 적용한 키"),
         _f("pendingKeys", "list", False, "대기 중 키"),
+        _f("kind", "str", False, "apply / rollback(CONFIG_ROLLBACK)"),
+        _f("by", "str", False, "요청자"),
+        _f("changes", "list", False, "[{key, old, new}] — 설정 변경 이력"),
+        _f("values", "obj", False, "rollback 이면 새 버전의 값 전체(웹 DB 를 맞춘다)"),
     )),
     MessageDef("command", "down", "웹 → 장비 명령(POST 응답의 commands[])", (
         _f("id", "str", True, "명령 id"),

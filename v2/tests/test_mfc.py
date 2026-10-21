@@ -170,3 +170,18 @@ def test_connect_scale_check_matches_and_mismatches():
     assert r.d.scale_mismatch is None
     assert [e.reason for e in r.events if e.kind == "scale"] == ["MFC_SCALE_UNREAD"]
     r.done()
+
+
+def test_sp4_written_and_read_back_with_r4():
+    """5-4 ④ — SP4_MTORR(30 mTorr) → S4 3.00(%FS, FS 1 Torr) 쓰고 R4 'S4+003.00'(10/20 bench 형식)으로 되읽기."""
+    r = Rig()
+    t0 = r.c.monotonic()
+    assert r.seq(r.d.set_sp, 4, 30.0) is None
+    sent = [d for tt, d in r.sim.received if tt >= t0]
+    assert sent[:2] == [b"S4 3.00\r", b"R4\r"]
+    assert r.sim._query("R4") == "S4+003.00"
+    assert [e for e in r.events if e.kind == "verify_ok" and "R4=S4+003.00" in e.detail]
+    r.sim.ignore_writes = {"S4"}
+    assert r.seq(r.d.set_sp, 4, 15.0) is None                           # SP2~SP4 불일치는 경고만(v1 은 되읽기 없음)
+    assert [e for e in r.events if e.kind == "sp_readback" and e.reason == "VERIFY_MISMATCH"]
+    r.done()

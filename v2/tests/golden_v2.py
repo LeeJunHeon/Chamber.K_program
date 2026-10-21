@@ -159,6 +159,25 @@ def _fix_count_to_time(name, units):
     return out
 
 
+def _fix_sp4(name, units):
+    """기본 템플릿의 가스 안정화: SP4 ON 앞에 SP4_SET(설정 SP4_MTORR) — v1 은 D4 만."""
+    from v2.common.paramdef import defaults
+    from v2.chk import params as P
+    sp4 = float(defaults(P.PARAMS)["SP4_MTORR"])
+    out = []
+    for u in units:
+        if u[0] == "steps":
+            steps = []
+            for s in u[1]:
+                if s["action"] == "MFC_CMD" and s["params"][0] == "SP4_ON":
+                    steps.append({"action": "MFC_CMD", "params": ["SP4_SET", {"value": sp4}], "value": None,
+                                  "duration_sec": None, "timer_purpose": None})
+                steps.append(s)
+            u = ("steps", steps)
+        out.append(u)
+    return out
+
+
 def _fix_connect_reject(name, units):
     out, skip = [], False
     for u in units:
@@ -192,6 +211,10 @@ INTENDED_DIFFS: tuple = (
     IntendedDiff("COUNT_TO_TIME", "4-3 결정: 횟수 판정을 시간 판정으로",
                  "WAIT_PRESSURE 'stable_count 3회 연속' → 'stable_sec 6 s 동안'(v1 실제 소요 시간, PRESSURE_WAIT_STABLE_SEC)",
                  lambda n: True, _fix_count_to_time),
+    IntendedDiff("SP4_FROM_CONFIG", "사용자 결정 2026-10-20(5-4 ④): SP4 값을 설정에서(SP4_MTORR)",
+                 "v1 은 가스 안정화에서 D4(SP4 선택)만 보내고 S4 는 쓰지 않았다(장비에 남은 값 사용) → v2 기본 템플릿은 SP4 ON 앞에 "
+                 "SP4_SET(S4 = SP4_MTORR 30 mTorr, R4 되읽기 — 10/20 bench 'S4+003.00')",
+                 lambda n: True, _fix_sp4),
     IntendedDiff("CONNECT_FAIL_REJECT", "5-2 결정 4: 연결 안 된 장비를 쓰면 시작 거부",
                  "v1 은 시작한 뒤 연결 실패로 끝냈다(run_start·run_end error) → v2 는 시작하지 않고 LINK_DOWN",
                  lambda n: n == "05_connection_failed", _fix_connect_reject),
@@ -927,7 +950,8 @@ class Result:
 
 def compare(name: str, actual: List[tuple]) -> Result:
     exp = expected_units(name)
-    used = [d.id for d in intended_for(name) if d.id != "COUNT_TO_TIME" or any(u[0] == "steps" for u in exp)]
+    used = [d.id for d in intended_for(name) if d.id not in ("COUNT_TO_TIME", "SP4_FROM_CONFIG")
+            or any(u[0] == "steps" for u in exp)]
     diff = []
     for i in range(max(len(exp), len(actual))):
         e = exp[i] if i < len(exp) else None

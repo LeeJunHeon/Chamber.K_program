@@ -18,6 +18,12 @@
 - 통과하면 파일에 원자적으로 저장(임시 파일 → fsync → 바꿔치기, 이전 active 는 prev 로).
 - 적용 시점: live 는 즉시, idle 은 busy 면 대기(on_idle 에서 적용), restart 는 재시작까지 대기.
   즉시 적용분만 반영한 실행 값이 키 사이 규칙을 어기면 그 live 키도 idle 대기로 미룬다.
+
+이력·되돌리기(사용자 지시 5-4 ④)
+- config_history.jsonl : 적용 요청마다 한 줄 {at, by, kind(apply·rollback), version, status, reason, changes[{key, old, new}]}
+  (old = 그때까지 저장된 웹 값, 비밀값은 원래 저장하지 않으므로 이력에도 없다). 거부된 요청도 사유와 함께 남긴다.
+- rollback(busy, by): config_prev.json(직전 버전)의 값을 새 버전(지금 버전 + 1)으로 다시 적용 — 같은 검사·S48·적용 시점 규칙.
+  웹은 config_ack(kind=rollback, values)로 받아 자기 DB 를 맞춘다(값의 원본은 계속 웹). 이전 버전이 없으면 CONFIG_NO_PREVIOUS.
 """
 from __future__ import annotations
 
@@ -34,6 +40,7 @@ from v2.common.paramdef import Apply, CrossRule, ParamDef, Safety, Scope, check_
 ACTIVE = "config_active.json"
 PREV = "config_prev.json"
 OVERRIDE = "local_override.json"
+HISTORY = "config_history.jsonl"
 
 
 class ConfigError(RuntimeError):
@@ -48,6 +55,10 @@ class ApplyResult:
     applied_keys: list = field(default_factory=list)
     pending_keys: list = field(default_factory=list)
     overridden_keys: list = field(default_factory=list)   # 노트북 덮어쓰기에 가려진 키
+    version: Optional[int] = None                          # 이 요청의 버전(되돌리기는 새로 매긴 버전)
+    kind: str = "apply"                                    # apply / rollback
+    values: Optional[dict] = None                          # 되돌리기: 새 버전의 값 전체(웹이 DB 를 맞춘다)
+    changes: list = field(default_factory=list)            # [{key, old, new}]
 
 
 def _content_hash(version: int, schema_hash: str, values: Mapping[str, Any]) -> str:
@@ -86,6 +97,10 @@ class ConfigStore:
     @property
     def override_path(self) -> Path:
         return self.dir / OVERRIDE
+
+    @property
+    def history_path(self) -> Path:
+        return self.dir / HISTORY
 
     def _read_override(self) -> dict:
         if not self.override_path.exists():
@@ -172,7 +187,55 @@ class ConfigStore:
         return dict(self.values)
 
     # ───────── 적용 ─────────
-    def apply(self, version: int, values: Mapping[str, Any], schema_hash: str, busy: bool) -> ApplyResult:
+    def apply(self, version: int, values: Mapping[str, Any], schema_hash: str, busy: bool, by: str = "",
+              kind: str = "apply") -> ApplyResult:
+        """CONFIG_APPLY — 결과와 함께 이력 한 줄(누가·언제·이전 → 새 값)."""
+        before = dict(self.persisted)
+        res = self._apply(version, values, schema_hash, busy)
+        keys = sorted((set(before) | set(values)) - self.secret_keys)
+        res.version, res.kind = version, kind
+        res.changes = [{"key": k, "old": before.get(k), "new": values.get(k)} for k in keys if before.get(k) != values.get(k)]
+        self._log({"at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"), "by": by, "kind": kind,
+                   "version": version, "status": res.status, "reason": res.reason, "changes": res.changes})
+        return res
+
+    def rollback(self, busy: bool, by: str = "") -> ApplyResult:
+        """이전 버전으로 되돌리기 — config_prev.json 의 값을 새 버전(지금 + 1)으로 적용(검사·S48·적용 시점은 CONFIG_APPLY 와 같다)."""
+        if not self.prev_path.exists():
+            return ApplyResult("rejected", "CONFIG_NO_PREVIOUS", ["이전 버전 없음"], kind="rollback")
+        try:
+            prev_version, vals, _ = self._read_file(self.prev_path)
+        except Exception as e:
+            return ApplyResult("rejected", "CONFIG_NO_PREVIOUS", [f"이전 버전을 쓸 수 없음: {e}"], kind="rollback")
+        res = self.apply(self.version + 1, vals, self.schema_hash, busy, by=by, kind=f"rollback:{prev_version}")
+        res.kind = "rollback"
+        if res.status != "rejected":
+            res.values = dict(vals)
+        return res
+
+    def history(self, limit: int = 100) -> list:
+        """최근 이력(새 것이 뒤). 깨진 줄은 건너뛴다."""
+        if not self.history_path.exists():
+            return []
+        out = []
+        for line in self.history_path.read_text(encoding="utf-8").splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+        return out[-limit:]
+
+    def _log(self, entry: dict) -> None:
+        try:
+            self.dir.mkdir(parents=True, exist_ok=True)
+            with open(self.history_path, "a", encoding="utf-8", newline="\n") as f:
+                f.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+        except OSError:
+            pass                                   # 이력 실패가 적용을 막지 않는다(적용 결과는 config_ack 로 웹에)
+
+    def _apply(self, version: int, values: Mapping[str, Any], schema_hash: str, busy: bool) -> ApplyResult:
         if schema_hash != self.schema_hash:
             return ApplyResult("rejected", "CONFIG_HASH_MISMATCH", ["스키마 해시 불일치"])
         if not isinstance(version, int) or isinstance(version, bool) or version <= self.version:

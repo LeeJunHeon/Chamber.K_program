@@ -11,6 +11,7 @@
 
 기본 템플릿(template_blocks): v1 행(recipe.PROCESS_COLUMNS) → v1 _build_steps(controller/process_controller.py:486-682)와
 같은 순서의 블록 목록. 펼치면 지금(5-3)과 같은 스텝이 나온다 — 골든이 이 템플릿으로 비교한다.
+다른 곳은 가스 안정화의 SP4_SET 하나(S4 = SP4_MTORR 쓰기·R4 되읽기, 의도된 차이 SP4_FROM_CONFIG — 5-4 ④).
 
 펼치기(expand): 블록 → process_steps.ProcessStep 목록(실행은 지금 StepRunner·드라이버 경로 그대로).
   스텝마다 block(블록 순번 — insts 의 번호)과 ref(공정 중 수정 항목 키 — 5-4 ③)를 단다.
@@ -53,7 +54,7 @@ COND_FIELDS: tuple = (
 COND_OPS: tuple = (("le", "≤ 값"), ("ge", "≥ 값"), ("near", "값 ± 허용"))
 
 SHUTTERS: tuple = (("g1", "S1_button", "Gun Shutter 1"), ("g2", "S2_button", "Gun Shutter 2"), ("ms", "MS_button", "Main Shutter"))
-SP_DEFAULT_KEY = {2: "SP2_MTORR", 3: "SP3_MTORR"}
+SP_DEFAULT_KEY = {2: "SP2_MTORR", 3: "SP3_MTORR", 4: "SP4_MTORR"}
 
 REPEAT_MAX = 100
 MAX_DEPTH = 4
@@ -146,7 +147,7 @@ BLOCK_DEFS: tuple = (
     BlockDef("pressure", "압력 설정", (
         P("sp", "int", "", required=True, min=1, max=4, desc="설정점 번호"),
         P("value", "float", "mTorr", None, min=0.0, max=1000.0, min_exclusive=True,
-          desc="비우면 SP2·SP3 은 SP2_MTORR·SP3_MTORR, SP1 은 필요(레시피 작업 압력)"),
+          desc="비우면 SP2·SP3·SP4 는 SP2_MTORR·SP3_MTORR·SP4_MTORR, SP1 은 필요(레시피 작업 압력)"),
         P("set", "bool", default=True, desc="S{n} 쓰기(되읽기)"), P("select", "bool", default=True, desc="D{n} 선택(R7 확인)"),
         P("wait", "bool", default=True, desc="도달 대기"),
         P("tol_ratio", "float", "비율", "cfg:PRESSURE_WAIT_TOL_RATIO", min=0.01, max=0.5),
@@ -421,7 +422,8 @@ def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bo
     out.append(B("gas_intro", ar=ar, ar_flow=float(p.get("ar_flow", default_flow) or 0.0) if ar else None,
                  o2=o2, o2_flow=float(p.get("o2_flow", default_flow) or 0.0) if o2 else None, zero=True))
     stab = int(round(cfg["GAS_STABILIZE_SEC"]))
-    out.append(B("pressure", "SP4", "GAS_STABILIZE", sp=4, value=None, set=False, select=True, wait=False,
+    # SP4: 설정 SP4_MTORR 를 S4 로 쓰고 R4 로 되읽은 뒤 D4(사용자 결정 2026-10-20 — v1 은 D4 만, 의도된 차이 SP4_FROM_CONFIG)
+    out.append(B("pressure", "SP4", "GAS_STABILIZE", sp=4, value=None, set=True, select=True, wait=False,
                  tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
     out.append(B("wait", f"압력 안정화 대기({stab}초)", "GAS_STABILIZE", sec=stab, watch=None))
     guns = [g for g, k in (("g1", "use_g1"), ("g2", "use_g2")) if p.get(k)]

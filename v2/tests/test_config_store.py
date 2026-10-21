@@ -189,3 +189,36 @@ def test_prod_without_url_refused(tmp_path):
     (tmp_path / OVERRIDE).write_text(json.dumps({"values": {"RUN_MODE": "prod"}}), encoding="utf-8")
     with pytest.raises(ConfigError):
         _store(tmp_path).load()
+
+
+# ───────── 이력·되돌리기(5-4 ④) ─────────
+def test_history_records_who_when_old_new(tmp_path):
+    s = _store(tmp_path)
+    s.load()
+    r = s.apply(1, _web_values(FLOW_ERROR_SEC=7, SP4_MTORR=25.0), SH, busy=False, by="kim@vanam")
+    assert r.status == "applied" and r.version == 1 and r.kind == "apply"
+    assert {c["key"]: (c["old"], c["new"]) for c in r.changes} == {"FLOW_ERROR_SEC": (defaults(P.PARAMS)["FLOW_ERROR_SEC"], 7),
+                                                                     "SP4_MTORR": (30.0, 25.0)}
+    bad = s.apply(2, _web_values(HEATER_MV_LIMIT=1400), SH, busy=False, by="lee@vanam")
+    assert bad.status == "rejected"
+    h = s.history()
+    assert [(x["version"], x["by"], x["status"]) for x in h] == [(1, "kim@vanam", "applied"), (2, "lee@vanam", "rejected")]
+    assert h[1]["reason"] == "CONFIG_INVALID" and h[0]["at"] and not any(c["key"] in SECRETS for x in h for c in x["changes"])
+
+
+def test_rollback_to_previous_version(tmp_path):
+    s = _store(tmp_path)
+    s.load()
+    assert s.rollback(False).reason == "CONFIG_NO_PREVIOUS"
+    s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False, by="a")
+    s.apply(2, _web_values(FLOW_ERROR_SEC=9, STOP_SEQUENCE_ORDER="2,1"), SH, busy=False, by="b")
+    r = s.rollback(busy=True, by="c")                                    # 공정 중 — H 등급(STOP_SEQUENCE_ORDER) 변경은 거부(S48)
+    assert r.status == "rejected" and r.reason == "CONFIG_H_IN_PROCESS"
+    r = s.rollback(busy=False, by="c")
+    assert r.status == "applied" and r.kind == "rollback" and r.version == 3
+    assert r.values["FLOW_ERROR_SEC"] == 7 and s.values["FLOW_ERROR_SEC"] == 7 and s.values["STOP_SEQUENCE_ORDER"] == \
+        defaults(P.PARAMS)["STOP_SEQUENCE_ORDER"]
+    assert {c["key"] for c in r.changes} == {"FLOW_ERROR_SEC", "STOP_SEQUENCE_ORDER"}
+    s2 = _store(tmp_path)
+    assert s2.load()["FLOW_ERROR_SEC"] == 7 and s2.version == 3
+    assert [x["kind"] for x in s.history()] == ["apply", "apply", "rollback:1", "rollback:1"]
