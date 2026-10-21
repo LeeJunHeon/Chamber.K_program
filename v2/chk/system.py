@@ -6,8 +6,8 @@
 
 연결
 - 안전 규칙(ChkSafety): plc250 = PLC 폴링 직후(fast_listeners), tick = 행이 닫힌 뒤(sink), 드라이버 이벤트 → 이벤트 규칙.
-- 1초 행이 닫히면: 기록 → 안전 규칙(tick) → 히터(on_tick) → 공정(on_row).
-- 내부 이벤트(ProcEvent·SafetyEvent·HeaterEvent·드라이버)는 events(링 버퍼)·기록·listeners 로.
+- 1초 행이 닫히면: 기록 → 안전 규칙(tick) → 히터(on_tick) → 공정(on_row) → 장비 메시지(state).
+- 내부 이벤트(ProcEvent·SafetyEvent·HeaterEvent·드라이버)는 events(링 버퍼)·기록·MessageHub 로.
 - 기록은 data_dir, NAS 사본은 모드 정책(nas_copy)이 켜고 NAS_COPY_DIR 이 있을 때만.
 - 설정: ConfigStore(읽기) + 모든 구성 요소가 같이 보는 cfg 사전.
 """
@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import collections
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Optional
 
 from v2.common.commands import Source
 from v2.common.config_store import ConfigStore
@@ -35,6 +35,7 @@ from v2.chk.drivers.mfc import MfcDriver
 from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
 from v2.chk.heater_engine import HeaterEngine
+from v2.chk.hub import MessageHub
 from v2.chk.process_engine import ProcessEngine
 from v2.chk.safety import ChkSafety, SimpleProcess, View
 
@@ -79,7 +80,7 @@ class ChkSystem:
         wr = self.policy.device_writes
         self.enabled = {k: bool(c[ENABLE_KEY[k]]) if k in ENABLE_KEY else True for k in DEVICES}
         self.events: "collections.deque[Any]" = collections.deque(maxlen=events_keep)
-        self.listeners: List[Callable[[Any], None]] = []   # 내부 이벤트 소비자
+        self.hub = MessageHub(self)
         # 가드는 포트(전송) 바로 위
         self.guards = {k: GuardedTransport(transports[k], k, mode, c, on_event=self._ev) for k in DEVICES}
         self.workers = {k: Worker(k, self.guards[k], writes_allowed=wr, fail_streak=c[STREAK[k]],
@@ -122,7 +123,8 @@ class ChkSystem:
         self.store = store
         if store is not None and not store.values:
             store.load()
-        self.core = ChkCore(c, self.process, self.heater, self.safety, self.plc, self.ig, self.links)
+        self.core = ChkCore(c, self.process, self.heater, self.safety, self.plc, self.ig, self.links,
+                            on_result=self.hub.cmd_result)
         self.plc.fast_listeners.append(self.safety.on_poll)
         self.plc.fast_listeners.append(self.heater.on_poll)
         self._scenario_hook = scenario_hook
@@ -141,6 +143,7 @@ class ChkSystem:
         self.heater.on_tick(v)
         if hasattr(self.process, "on_row"):
             self.process.on_row(v)
+        self.hub.on_row(row)
 
     def _extra(self, t) -> dict:
         out = {"heater.hold": self.heater.hold_label}
@@ -162,11 +165,10 @@ class ChkSystem:
             self.recorder.put_event(iso_local(self.clock.wall()), "error", "INTERNAL_ERROR", where, repr(e))
 
     def _hub(self, e) -> None:
-        for fn in self.listeners:
-            try:
-                fn(e)
-            except Exception as x:                # 소비자 실패가 제어를 막지 않는다
-                self._dispatch_error("listener", x)
+        try:
+            self.hub.on_event(e)
+        except Exception as x:                    # 메시지 만들기 실패가 제어를 막지 않는다
+            self._dispatch_error("hub", x)
 
     def _pev(self, e) -> None:
         self.events.append(e)
@@ -204,6 +206,7 @@ class ChkSystem:
         """worker 를 시작하고, 모두 연결·초기화가 끝날 때까지(최대 ready_timeout_s) 기다린 뒤 돌아온다 —
         첫 tick 의 읽기가 연결 초기화 뒤에 줄 서서 실패로 남지 않게. 모두 준비되면 True(아니어도 worker 는 계속 재연결)."""
         self.recorder.start()
+        self.hub.hello()                             # 첫 메시지(장비 연결 이벤트보다 먼저)
         with self.clock.hold():
             for k, x in self.workers.items():
                 if self.enabled[k]:                  # 설정에서 꺼진 장비는 포트를 열지 않는다
@@ -220,6 +223,7 @@ class ChkSystem:
             if self.enabled[k]:
                 x.stop()
         self.recorder.stop()
+        self.hub.close()
 
     def command(self, kind: str, args: Optional[dict] = None, source: Source = Source.WEB, cid: Any = None):
         return self.core.command(kind, args, source=source, cid=cid)

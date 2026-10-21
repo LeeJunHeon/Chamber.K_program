@@ -120,6 +120,8 @@ PARAMS: tuple = (
           desc="127.0.0.1 에서만 연다"),
     _inst("LOCAL_DATA_DIR", "로컬 기록 폴더", S, r"C:\ChamberK_v2\data", pattern=r".+", safety=L,
           src=_V2, desc="1초 스냅샷 SQLite·일별 CSV·이벤트·블랙박스"),
+    _inst("LOCAL_HMI_STATIC_DIR", "로컬 화면 파일 폴더", S, r"C:\ChamberK_v2\hmi", pattern=r".+", safety=L, src=_V2,
+          desc="로컬 서버(127.0.0.1:LOCAL_HMI_PORT)가 / 와 정적 파일로 내주는 폴더(폴더 밖 경로는 막음). 화면 파일은 웹 단계에서 넣는다"),
     _inst("NAS_COPY_DIR", "NAS 사본 폴더", S, r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK2",
           pattern=r".*", safety=L, src=_V2, desc="빈 값이면 NAS 복사 안 함. 제어 흐름과 분리된 스레드가 복사"),
 

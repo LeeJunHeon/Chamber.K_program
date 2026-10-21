@@ -5,6 +5,7 @@
 - PLC_BUTTON: PLC 링크가 없으면 LINK_DOWN(v1 B6). 공정 중에도 모두 허용(v1, 사용자 결정 2026-10-20) — 공정 중 실행은
   공정 기록에 PLC_MANUAL_IN_PROCESS(info: 대상·켬/끔·출처·시각).
 - ALL_STOP: 공정 여부와 무관 — SafetyEngine.all_stop.
+- 결과는 on_result(cid, kind, 결과, 출처) — MessageHub 가 cmd_result 메시지로(어느 화면이든 누가 무엇을 했는지 보게).
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ class CmdResult:
 
 class ChkCore:
     def __init__(self, cfg: Dict[str, Any], process, heater, safety, plc, ig, links: Dict[str, Callable[[], bool]],
-                 on_result: Optional[Callable[[Any, str, CmdResult], None]] = None) -> None:
+                 on_result: Optional[Callable[[Any, str, CmdResult, Source], None]] = None) -> None:
         self.cfg, self.process, self.heater, self.safety, self.plc, self.ig = cfg, process, heater, safety, plc, ig
         self.links = links
         self.on_result = on_result
@@ -35,10 +36,16 @@ class ChkCore:
 
     def command(self, kind: str, args: Optional[dict] = None, source: Source = Source.WEB, cid: Any = None) -> CmdResult:
         args = dict(args or {})
-        r = self._run(kind, args, source)
+        try:
+            r = self._run(kind, args, source)
+        except Exception:
+            r = "INTERNAL_ERROR"
         res = CmdResult(r is None, r)
         if self.on_result:
-            self.on_result(cid, kind, res)
+            try:
+                self.on_result(cid, kind, res, source)
+            except Exception:
+                pass
         return res
 
     def _run(self, kind: str, a: dict, source: Source) -> Optional[str]:

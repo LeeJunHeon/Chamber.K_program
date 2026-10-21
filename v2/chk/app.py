@@ -3,6 +3,7 @@
 시작 순서
   1 설정 읽기(ConfigStore — config_active·config_prev·local_override·config_history 가 --config-dir 에). notes 는 로그·콘솔에.
     RUN_MODE 는 설정에서만(기본 sim, prod 는 local_override.json 에 명시). 설정을 쓸 수 없으면 시작 거부(종료 코드 2).
+  2 로컬 서버 포트 바인드(127.0.0.1:LOCAL_HMI_PORT) — 실패 = 이미 실행 중 → 알리고 끝(종료 코드 3). 장비 포트를 열기 전에.
   3 로그(LOCAL_DATA_DIR\\logs 회전 로그 — 콘솔에는 시작 줄·경고·오류만)
   4 조립(system.ChkSystem — sim: 시뮬레이터, bench·prod: SerialTransport + 그 모드 가드) → worker 시작 → tick 스레드 → 서버.
     bench·prod 에서 포트가 사용 중이거나 없으면 죽지 않고 worker 재연결로 계속 시도(링크 끊김으로 보임).
@@ -26,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional
 from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
+from v2.chk.local_server import LocalServer
 from v2.chk.system import ChkSystem, new_store, serial_transports
 
 PROGRAM = "chk-v2"
@@ -33,7 +35,7 @@ DEFAULT_CONFIG_DIR = r"C:\ChamberK_v2\config"
 SHUTDOWN_HEATER_WAIT_S = 3.0       # 정상 종료: 히터 RUN=0 결과를 기다리는 시간
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
-EXIT_OK, EXIT_CONFIG, EXIT_START = 0, 2, 4
+EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
 
 
 def repo_root() -> Path:
@@ -72,9 +74,12 @@ class App:
         self.system: Optional[ChkSystem] = system
         self.store = system.store if system is not None else None
         self.cfg: Dict[str, Any] = system.cfg if system is not None else {}
+        self.server: Optional[LocalServer] = None
         self.log = logging.getLogger("chk")
         self._log_handlers: List[logging.Handler] = []
         self._tick_thread: Optional[threading.Thread] = None
+        self._log_thread: Optional[threading.Thread] = None
+        self._log_sub = None
         self._ctrl_c = 0
         self._done = threading.Event()
         self.version = system.version if system is not None else git_version()
@@ -88,6 +93,18 @@ class App:
             resolve_mode(self.cfg.get("RUN_MODE"))
         except (ConfigError, ValueError) as e:
             self.say(f"[중지] 설정을 쓸 수 없음 — 시작 거부: {e}")
+            return False
+        return True
+
+    # ───────── 2 포트 바인드 ─────────
+    def bind_server(self) -> bool:
+        self.server = LocalServer(int(self.cfg["LOCAL_HMI_PORT"]), self.cfg.get("LOCAL_HMI_STATIC_DIR"))
+        try:
+            self.server.bind()
+        except OSError as e:
+            self.say(f"[중지] 로컬 서버 포트 127.0.0.1:{self.cfg['LOCAL_HMI_PORT']} 를 열 수 없음 — 이미 실행 중일 수 있습니다"
+                     f"(장비 포트는 열지 않고 끝냅니다): {e}")
+            self.server = None
             return False
         return True
 
@@ -125,6 +142,8 @@ class App:
         nas = c.get("NAS_COPY_DIR") if pol.nas_copy and c.get("NAS_COPY_DIR") else "끔"
         return [f"챔버K v2 — 모드 {mode.value} · 장비 {c['EQUIPMENT_ID']} · 버전 {self.version}",
                 f"설정 버전 {st.version}({st.source}) · 설정 폴더 {self.config_dir}",
+                f"로컬 화면 http://127.0.0.1:{self.server.port if self.server else c['LOCAL_HMI_PORT']}/ · "
+                f"화면 파일 {c['LOCAL_HMI_STATIC_DIR']}",
                 f"기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · NAS 사본 {nas}"]
 
     # ───────── 4 조립·시작 ─────────
@@ -144,6 +163,8 @@ class App:
         """1~4 단계. 0 이면 실행 중(run 으로 기다림), 아니면 종료 코드."""
         if not self.load_config():
             return EXIT_CONFIG
+        if not self.bind_server():
+            return EXIT_RUNNING
         try:
             self.setup_logging()
             for line in self._start_lines():
@@ -153,6 +174,7 @@ class App:
                 self.say(f"설정: {n}")
                 self.log.info("설정: %s", n)
             s = self.build()
+            self._start_log_consumer()
             s.start(ready_timeout_s=float(self.cfg["CONNECT_INIT_TIMEOUT_SEC"]) + 3.0)
             down = [k for k, w in s.workers.items() if s.enabled[k] and not w.ready]
             msg = "장비 연결: " + ", ".join(f"{k} {'준비' if s.workers[k].ready else '연결 안 됨(재시도 중)'}"
@@ -160,6 +182,8 @@ class App:
             self.say(msg)
             (self.log.warning if down else self.log.info)(msg)
             self._tick_thread = self.clock.start_thread(s.loop.run, "tick")
+            self.server.attach(s)
+            self.server.start()
             self.say("실행 중 — 멈추려면 Ctrl+C")
         except Exception as e:
             self.say(f"[중지] 시작 실패: {e!r}")
@@ -167,6 +191,35 @@ class App:
             self._teardown()
             return EXIT_START
         return EXIT_OK
+
+    def _start_log_consumer(self) -> None:
+        """장비 메시지(state 제외)를 로그 파일로 — MessageHub 의 소비자 하나(느리면 그 소비자만 끊기고 다시 붙는다)."""
+        lv = {"error": logging.ERROR, "warn": logging.WARNING, "info": logging.INFO}
+
+        def run():
+            while not self._done.is_set():
+                sub = self.system.hub.subscribe(name="log")
+                self._log_sub = sub
+                while True:
+                    env = sub.get(1.0)
+                    if env is None:
+                        if self._done.is_set():
+                            return
+                        continue
+                    if not isinstance(env, dict):
+                        break
+                    t, d = env["type"], env["data"]
+                    if t == "state":
+                        continue
+                    if t == "event":
+                        level = lv.get(d.get("level"), logging.INFO)
+                        src = (d.get("context") or {}).get("source")
+                        self.log.log(level, "%s %s %s%s", src, d.get("code"), d.get("message"),
+                                     f" ({d['ruleId']})" if d.get("ruleId") else "")
+                    else:
+                        self.log.info("%s %s", t, _short(d))
+        self._log_thread = threading.Thread(target=run, name="log-consumer", daemon=True)
+        self._log_thread.start()
 
     # ───────── 실행 ─────────
     def run(self) -> int:
@@ -215,11 +268,23 @@ class App:
             s.stop()                                       # tick 멈춤 → worker 정지(포트 닫기) → 기록 flush → 메시지 끝
         if self._tick_thread is not None:
             self._tick_thread.join(3.0)
+        if self.server is not None:
+            self.server.stop()
+        if self._log_thread is not None:
+            self._log_thread.join(2.0)
         for h in self._log_handlers:
             h.flush()
             self.log.removeHandler(h)
             h.close()
         self._log_handlers = []
+
+def _short(d: Any, n: int = 300) -> str:
+    import json
+    try:
+        return json.dumps(d, ensure_ascii=False, default=str)[:n]
+    except Exception:
+        return repr(d)[:n]
+
 
 def main(argv=None) -> int:
     for st in (sys.stdout, sys.stderr):
