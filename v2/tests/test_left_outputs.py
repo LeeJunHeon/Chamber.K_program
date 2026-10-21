@@ -5,6 +5,8 @@
 - 공정 밖 STOP: 남긴 것 중 지금도 켜진 것만 고정 정지 순서로 정리(OUTPUTS_CLEANUP), 없으면 아무것도 안 함(v1)
 - 공정 중 STOP 의 정지 순서는 앞 행이 남긴 히터도 끈다
 """
+import pytest
+
 from v2.chk.sim.plc_sim import A
 from v2.tests.test_process_engine import FAST, R, SHORT
 
@@ -124,3 +126,38 @@ def test_stop_outside_process_without_left_does_nothing(tmp_path):
     r.run(100)
     assert all(x.ok for x in r.results) and not r.ev("cleanup_start") and not r.ev("heater_handover")
     assert not [e for e in r.ev("warn") if e.code == "OUTPUTS_LEFT_ON"]
+
+
+E_BLOCKS = [{"type": "heater_ramp", "params": {"target_c": 40.0, "ramp_c_per_min": 60.0}}, GAS,
+            {"type": "power_on", "params": {"rf_power": 100.0}}, {"type": "wait", "params": {"sec": 3}},
+            {"type": "end_stop", "params": {"skip": [3, 9, 10, 12]}}]
+
+
+@pytest.mark.parametrize("how", ["stop", "abort"])
+def test_stop_during_end_stop_cancels_leaving(tmp_path, how):
+    """검토 E(5-6 ①) — 정상 끝 정지(STOPPING, skip [3,9,10,12]) 중 STOP·이상 중단 → 남김 취소: 뺀 단계를 이어서 실행."""
+    r = R(tmp_path, FAST)
+    r.on(3, r.cmd("PROCESS_START", {"blocks": E_BLOCKS}))
+    got = {}
+
+    def act():
+        got["stopping"] = r.rig.safety.engine.stopping
+        if how == "stop":
+            got["res"] = r.rig.core.command("PROCESS_STOP")
+        else:
+            r.plc.coils[A["mv"]] = False
+            got["res"] = r.rig.safety.engine.abort("MV_CLOSED", rule="S2")
+    r.when(lambda: r.rig.process.state == "STOPPING" and r.rig.safety.engine.stopping == "row_end", act)
+    r.run(300)
+    assert got["stopping"] == "row_end"
+    want = ("aborted", "USER_STOP") if how == "stop" else ("error", "MV_CLOSED")
+    assert [(e.data["status"], e.data["reason"]) for e in r.ev("run_end")] == [want]
+    rest = {n: st for n, _, st in r.rig.safety.engine.seq_results["stop_rest"]}
+    assert sorted(rest) == [3, 9, 10, 12] and all(st == "ok" for st in rest.values()), rest
+    assert r.plc.coils[A["heater_run"]] is False and r.rig.heater.owner is None and not r.rig.heater.handed_over
+    assert not any(r.rig.sims["mfc"].on) and r.plc.coils[A["ar_valve"]] is False
+    assert not r.rig.process.left and not r.ev("heater_handover")
+    assert not [e for e in r.ev("warn") if e.code == "OUTPUTS_LEFT_ON"]
+    assert r.ev("stop_rest")[0].data["steps"] == [3, 9, 10, 12]
+    ends = [e for e in r.ev("run_end")]
+    assert r.rig.safety.engine.stopping is None and r.rig.process.state in ("IDLE", "LOADED") and ends

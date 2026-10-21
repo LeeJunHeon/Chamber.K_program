@@ -28,6 +28,8 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
   OUTPUTS_LEFT_ON(info). 히터 단계를 빼면 HeaterEngine 소유를 manual 로 넘긴다(HEATER_HANDOVER). 공정 밖 STOP 은 남긴 것 중
   지금도 켜진 것만 고정 정지 순서로 정리(OUTPUTS_CLEANUP), 없으면 아무것도 하지 않고 성공(v1). 공정 중 STOP·이상 중단·끝 정지의
   정지 순서도 남긴 것(아직 그대로인 것)을 함께 끈다. ALL STOP 은 기록도 지운다.
+  정상 끝 정지(STOPPING) 중에 STOP·이상 중단이 오면 남김을 취소한다 — 그 정지 순서가 끝나면 뺀 단계를 표 순서로 이어서
+  실행하고(stop_rest, 조건은 STOP 과 같게 — 히터는 process_off 로 소유 해제) run_end. HEATER_HANDOVER·OUTPUTS_LEFT_ON 은 없다.
 - 사용 장비(uses_*)는 블록에서(blocks.uses_of). 안전 규칙의 적용 구간은 장비 상태(dc_ramping·rf_ramping)와 블록 감시(watching).
 
 공정 중 값 수정(adjust, 5-4 ③ — PROCESS_ADJUST): "이번 공정의 그 값"을 바꾼다. 값 바꾸기는 여기 한 곳에서
@@ -46,6 +48,7 @@ from v2.common.judge import Persist
 from v2.chk import blocks as BK
 from v2.chk import process_states as PS
 from v2.chk import recipe as RC
+from v2.chk import safety_rules as SR
 from v2.chk.power_control import DcControl, RfControl
 from v2.chk.process_steps import (HEATER_RAMP_SETTLE_S, HEATER_SET_SETTLE_S, POWER_STOP_SETTLE_S, ProcessStep,
                                   StepEvent, StepRunner, base_pressure_of, heater_used,
@@ -585,6 +588,15 @@ class ProcessEngine:
                 self._set_state(nxt if nxt in ACT else "WAIT")
                 return
             self._end_stop_resume = False
+            drop = sorted(set(self.end_skip) - set(SR.END_STOP_MUST_KEEP))
+            if (kind == "row_end" and self.end_kind in ("aborted", "error") and drop and self.end_code != "ALL_STOP"
+                    and self.safety is not None):
+                # 정상 끝 정지 중 STOP·이상 중단 — 남김 취소: 뺀 단계를 표 순서로 이어서 실행한 뒤 run_end(5-6 ①)
+                self.end_skip = ()
+                self._emit(ProcEvent("stop_rest", f"정지 순서 중 {self.end_code} — 뺀 단계 {drop} 이어서 실행",
+                                     self.end_code, {"steps": drop, "level": "info"}))
+                self.safety.stop_rest(drop)
+                return
             if kind == "row_end" and self.end_kind is None:
                 self.end_kind = "done"
             kind_, code = self.end_kind or "error", self.end_code

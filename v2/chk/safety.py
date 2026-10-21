@@ -19,6 +19,7 @@ ALL STOP 은 v1 처럼 전부 끈다(사용자 결정 2026-10-20 — 펌프 유�
 RF 는 램프로 돌아가 유지 중에만 보는 S33B 가 저절로 쉰다. 기본 템플릿에서는 지금(5-3)과 같은 판정이다(SimpleProcess 는 상태 이름으로 같은 값을 낸다 — blocks.watch_for_state).
 STOP·이상 중단 정지 순서는 고정(SR.STOP_SEQUENCE 전체, v1 처럼 — 사용자 결정 2026-10-21). 정상 끝 정지(end_row)만
 end_stop 블록의 skip 으로 단계를 뺄 수 있다(파워 끄기 단계 SR.END_STOP_MUST_KEEP 는 못 뺀다). ALL STOP 도 고정.
+정상 끝 정지 중에 STOP·이상 중단이 오면 남김을 취소한다 — 그 정지 순서가 끝나면 뺀 단계를 표 순서로 이어서(stop_rest).
 """
 from __future__ import annotations
 
@@ -621,6 +622,14 @@ class ChkSafety:
                                    "3": lambda: p.uses_heater or left("heater"),
                                    "4": lambda: bool(getattr(p, "dc_on", False)),
                                    "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})
+
+    def rest_steps(self, drop) -> List[Step]:
+        """정상 끝 정지 중 STOP·이상 중단 — 그 정지 순서에서 뺀 단계만 표 순서로(조건은 STOP 과 같다)."""
+        d = set(drop)
+        return [s for s in self.stop_steps() if s.no in d]
+
+    def stop_rest(self, drop) -> None:
+        self.engine.run_seq("stop_rest", self.rest_steps(drop))
 
     def cleanup_steps(self, items) -> List[Step]:
         """공정 밖 STOP — 지난 공정이 남긴 것 중 지금도 켜진 것만(고정 정지 순서, 파워 단계는 남을 수 없어 건너뜀)."""

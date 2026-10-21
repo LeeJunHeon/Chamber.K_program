@@ -294,6 +294,13 @@ class SafetyEngine:
         self._start_seq("row_end", self.stop_steps(skip) if skip else self.stop_steps())
         return True
 
+    def run_seq(self, name: str, steps: List[Step]) -> None:
+        """공정 쪽이 이어서 내는 정지 순서(정지 중 표시를 이 이름으로 — 그동안 STOP·중단은 late_stop 으로 간다)."""
+        with self._lock:
+            if self.stopping is None:
+                self.stopping = name
+        self._start_seq(name, steps)
+
     def stop(self) -> bool:
         with self._lock:
             if not self.process.active or self.stopping is not None:
