@@ -8,7 +8,7 @@
   recipe        행 레시피 열(rf_pulse_freq 는 kHz) · 히터 레시피 열
   blocks        블록 정의(종류·값·단위·범위·기본값·설명) + 감시 항목·조건 값·한도
   adjust        공정 중 수정 항목(장비 → 세부, 형식·범위·적용 방식·판정)
-  stopSequence  STOP·이상 중단·행 끝 정지 단계(설정 STOP_SEQUENCE_ORDER 로 순서·켜기/끄기) · allStopSequence(고정)
+  stopSequence  STOP·이상 중단·행 끝 정지 단계(고정 — 정상 끝 정지만 end_stop skip, 파워 단계 제외) · allStopSequence(고정)
   states        공정 상태 이름 · events 웹이 받는 공정 기록 이벤트(종류·data 키)
 범위가 파라미터 값에 묶인 항목(paramMin·paramMax·paramScale)은 웹이 params 의 현재값으로 계산한다.
 hash 는 정의만으로 계산한다(현재값·대기값 제외) — 내용이 바뀌면 시험(test_web_schema)이 알고 EXPORT_VERSION 을 올리게 한다.
@@ -104,10 +104,11 @@ def definitions() -> Dict[str, Any]:
                    "rules": "값 범위·꺼진 장비만 검사 — 순서·조합 규칙 없음(사용자 결정 2026-10-20)"},
         "adjust": {"command": "PROCESS_ADJUST", "items": [a.public() for a in BK.ADJUST_ITEMS],
                    "settleParam": "ADJUST_SETTLE_MAX_SEC"},
-        "stopSequence": {"configKey": "STOP_SEQUENCE_ORDER", "default": next(p.default for p in P.PARAMS
-                                                                            if p.key == "STOP_SEQUENCE_ORDER"),
-                         "steps": [_seq(s) for s in SR.STOP_SEQUENCE],
-                         "desc": "단계 번호를 실행 순서대로(쉼표), 빠진 번호는 끔. 정상 끝 정지 블록은 skip 으로 더 끈다"},
+        "stopSequence": {"stopFixed": True, "steps": [_seq(s) for s in SR.STOP_SEQUENCE],
+                         "endStopMustKeep": list(SR.END_STOP_MUST_KEEP),
+                         "autoEndStop": "펼친 마지막 스텝이 정상 끝 정지가 아니면 기본 끝 정지(뺀 단계 없음, label "
+                                        f"'{BK.AUTO_END_STOP_LABEL}', auto)를 덧붙인다 — 공정이 끝날 때 파워는 항상 끈다",
+                         "desc": "STOP·이상 중단은 표 전체(고정). 정상 끝 정지(end_stop 블록)만 skip 으로 1·2·3·9·10·11·12 를 뺄 수 있다"},
         "allStopSequence": {"fixed": True, "steps": [_seq(s) for s in SR.ALL_STOP_SEQUENCE]},
         "states": [{"name": s.name, "label": s.label, "kind": s.kind.value} for s in PS.STATES],
         "events": [{"kind": k, "label": lab, "data": list(keys)} for k, lab, keys in EVENTS],

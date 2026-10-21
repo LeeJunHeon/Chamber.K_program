@@ -22,7 +22,8 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
 - 블록 시작·끝·결과는 ProcEvent("block")(번호·종류·라벨·값). 화면·기록 상태는 지금 블록 번호/전체·종류·라벨·남은 시간
   (proc.block·proc.block_type·proc.block_label·proc.remain_s) — 상태 이름은 블록의 stage(기본 템플릿은 v1 이름).
 - 정상 끝 정지 블록(END_STOP)이 정지 순서(SafetyEngine.end_row)를 낸다. 중간에 있으면 정지 순서 뒤 다음 블록으로.
-  정상 끝 정지 없이 목록이 끝나면 켜진 출력을 경고(OUTPUTS_LEFT_ON)로만 남기고 끄지 않는다.
+  목록 끝이 정상 끝 정지가 아니면 blocks.expand 가 "자동 끝 정지"를 덧붙인다(AUTO_END_STOP) — 목록 끝은 늘 정상 끝 정지.
+  STOP·이상 중단 정지 순서는 고정(표 전체), 정상 끝 정지만 skip(파워 끄기 단계는 못 뺀다 — 사용자 결정 2026-10-21).
 - 사용 장비(uses_*)는 블록에서(blocks.uses_of). 안전 규칙의 적용 구간은 장비 상태(dc_ramping·rf_ramping)와 블록 감시(watching).
 
 공정 중 값 수정(adjust, 5-4 ③ — PROCESS_ADJUST): "이번 공정의 그 값"을 바꾼다. 값 바꾸기는 여기 한 곳에서
@@ -567,6 +568,9 @@ class ProcessEngine:
         self._emit(ProcEvent("run_start", name, data={"name": name, "params": dict(params), "run_id": self.run_id,
                                                        "blocks": [b.record() for b in insts]}))
         self._emit(ProcEvent("steps", name, data={"steps": [s.unit() for s in steps if not s.internal]}))
+        if insts and insts[-1].auto:
+            self._emit(ProcEvent("auto_end_stop", f"목록 끝이 정상 끝 정지가 아니어서 '{insts[-1].label}'(블록 {insts[-1].no}) 덧붙임",
+                                 "AUTO_END_STOP", {"no": insts[-1].no, "level": "info"}))
         self._set_state(steps[0].state if steps[0].state in ACT else "WAIT")
 
     # ── 블록 기록 ──
@@ -644,7 +648,9 @@ class ProcessEngine:
                     self.safety.engine.abort(self.runner.failed, rule="process")
                 return
             if self.runner.finished and self.state in ACT:
-                self._finish_without_stop()
+                # 목록 끝은 늘 정상 끝 정지(자동 끝 정지 포함)라 여기는 정지 순서를 못 낸 경우뿐(안전 엔진 없음)
+                self.end_kind = self.end_kind or "done"
+                self.on_stop_done("row_end")
                 return
             s = self.runner.step
             if s is not None and self.state in ACT:
@@ -653,27 +659,6 @@ class ProcessEngine:
                     st = "HEATER_HOLD_WAIT"
                 if st in ACT:
                     self._set_state(st)
-
-    def _finish_without_stop(self) -> None:
-        """정상 끝 정지 블록 없이 목록이 끝남 — 켜진 출력은 끄지 않고 경고만(사용자 결정 2026-10-20). 제어 루프는 멈춘다
-        (출력은 마지막 설정 그대로)."""
-        on = []
-        if self.dc_on:
-            on.append("dc")
-        if self.rf_on or self.rfc.state != RfControl.IDLE:
-            on.append("rf")
-        if self.rfp_on:
-            on.append("rfpulse")
-        on += [g for ch, g in ((1, "ar"), (2, "o2")) if self.flow_on[ch]]
-        if self.uses_heater and self.heater.st.get("run"):
-            on.append("heater")
-        self.dcc.stop()
-        self.rfc.stop()
-        if on:
-            self._emit(ProcEvent("warn", f"정상 끝 정지 블록 없이 끝남 — 켜져 있는 출력 {', '.join(on)} (끄지 않음)",
-                                 "OUTPUTS_LEFT_ON", {"outputs": on, "level": "warn"}))
-        self.end_kind = self.end_kind or "done"
-        self.on_stop_done("blocks_end")
 
     # ── 스텝 처리기(StepRunner handlers) ──
     def _h_dc_stop(self, r, s, cur, view, now):

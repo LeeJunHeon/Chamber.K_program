@@ -211,14 +211,35 @@ def test_rollback_to_previous_version(tmp_path):
     s.load()
     assert s.rollback(False).reason == "CONFIG_NO_PREVIOUS"
     s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False, by="a")
-    s.apply(2, _web_values(FLOW_ERROR_SEC=9, STOP_SEQUENCE_ORDER="2,1"), SH, busy=False, by="b")
-    r = s.rollback(busy=True, by="c")                                    # 공정 중 — H 등급(STOP_SEQUENCE_ORDER) 변경은 거부(S48)
+    s.apply(2, _web_values(FLOW_ERROR_SEC=9, DC_MAX_POWER=400.0), SH, busy=False, by="b")
+    r = s.rollback(busy=True, by="c")                                    # 공정 중 — H 등급(DC_MAX_POWER) 변경은 거부(S48)
     assert r.status == "rejected" and r.reason == "CONFIG_H_IN_PROCESS"
     r = s.rollback(busy=False, by="c")
     assert r.status == "applied" and r.kind == "rollback" and r.version == 3
-    assert r.values["FLOW_ERROR_SEC"] == 7 and s.values["FLOW_ERROR_SEC"] == 7 and s.values["STOP_SEQUENCE_ORDER"] == \
-        defaults(P.PARAMS)["STOP_SEQUENCE_ORDER"]
-    assert {c["key"] for c in r.changes} == {"FLOW_ERROR_SEC", "STOP_SEQUENCE_ORDER"}
+    assert r.values["FLOW_ERROR_SEC"] == 7 and s.values["FLOW_ERROR_SEC"] == 7 and s.values["DC_MAX_POWER"] == \
+        defaults(P.PARAMS)["DC_MAX_POWER"]
+    assert {c["key"] for c in r.changes} == {"FLOW_ERROR_SEC", "DC_MAX_POWER"}
     s2 = _store(tmp_path)
     assert s2.load()["FLOW_ERROR_SEC"] == 7 and s2.version == 3
     assert [x["kind"] for x in s.history()] == ["apply", "apply", "rollback:1", "rollback:1"]
+
+
+def test_removed_stop_sequence_order_in_saved_file(tmp_path):
+    """5-5 — 지운 키 STOP_SEQUENCE_ORDER 가 저장 파일에 남아 있으면: 해시가 다르니 정의가 바뀐 파일로 읽고 그 키는 버린다(notes).
+    웹이 옛 해시로 보내면 CONFIG_HASH_MISMATCH, 새 해시인데 그 키가 있으면 CONFIG_INVALID(정의되지 않은 키)."""
+    import v2.common.config_store as cs
+    s = _store(tmp_path)
+    s.load()
+    s.apply(1, _web_values(), SH, busy=False)
+    p = tmp_path / ACTIVE
+    obj = json.loads(p.read_text(encoding="utf-8"))
+    obj["values"]["STOP_SEQUENCE_ORDER"] = "2,1"
+    obj["schemaHash"] = "5-4"
+    obj["contentHash"] = cs._content_hash(obj["version"], "5-4", obj["values"])
+    p.write_text(json.dumps(obj), encoding="utf-8")
+    s2 = _store(tmp_path)
+    vals = s2.load()
+    assert "STOP_SEQUENCE_ORDER" not in vals and s2.source == "active"
+    assert any("STOP_SEQUENCE_ORDER" in n for n in s2.notes)
+    assert s2.apply(2, _web_values(STOP_SEQUENCE_ORDER="2,1"), "5-4", busy=False).reason == "CONFIG_HASH_MISMATCH"
+    assert s2.apply(2, _web_values(STOP_SEQUENCE_ORDER="2,1"), SH, busy=False).reason == "CONFIG_INVALID"

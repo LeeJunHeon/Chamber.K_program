@@ -2,8 +2,8 @@
 
 - 기본 템플릿을 펼치면 5-3 의 스텝 빌더와 같은 스텝(동작·인자·값·시간·문구·상태 이름)이 나온다 — 아래 REF 가 5-3 빌더 사본
 - 순서 규칙 없음: 어떤 순서든 받는다(값 범위·꺼진 장비만 거부)
-- 블록 시작·끝 기록, 화면 상태(블록 번호/전체·종류·라벨·남은 시간), 정상 끝 정지 없이 끝나면 OUTPUTS_LEFT_ON 경고만
-- 이탈 감시는 블록 watch 로(S31C·S38A …), 무출력은 램프 중에만, STOP 정지 순서는 STOP_SEQUENCE_ORDER
+- 블록 시작·끝 기록, 화면 상태(블록 번호/전체·종류·라벨·남은 시간), 목록 끝이 정상 끝 정지가 아니면 자동 끝 정지
+- 이탈 감시는 블록 watch 로(S31C·S38A …), 무출력은 램프 중에만, STOP·이상 중단 정지 순서는 고정(5-5)
 """
 import itertools
 import math
@@ -203,35 +203,54 @@ def test_repeat_unrolls_nested_with_numbers():
     assert not errs
     steps, insts = BK.expand(ok, C0)
     assert [i.no for i in insts] == ["1", "2.1#1", "2.2.1#1.1", "2.2.1#1.2", "2.2.1#1.3",
-                                     "2.1#2", "2.2.1#2.1", "2.2.1#2.2", "2.2.1#2.3"]
-    assert [s.duration_sec for s in steps] == [1, 2, 3, 3, 3, 2, 3, 3, 3]
+                                     "2.1#2", "2.2.1#2.1", "2.2.1#2.2", "2.2.1#2.3", "3"]     # 3 = 자동 끝 정지
+    assert insts[-1].auto and [s.duration_sec for s in steps if s.action == "DELAY"] == [1, 2, 3, 3, 3, 2, 3, 3, 3]
     too_big = [{"type": "repeat", "params": {"count": 100}, "blocks": [
         {"type": "repeat", "params": {"count": 100}, "blocks": [{"type": "wait", "params": {"sec": 1}}]}]}]
     _, errs, _ = _chk(too_big)
     assert errs and "펼친 스텝" in errs[0]
 
 
-def test_stop_sequence_order_param():
-    vals = dict(C0, STOP_SEQUENCE_ORDER="2,1,3")
-    assert check_config(P.PARAMS, P.CROSS_RULES, vals) == []
-    for bad in ("1,1,2", "1,99", "a,b"):
-        assert check_config(P.PARAMS, P.CROSS_RULES, dict(C0, STOP_SEQUENCE_ORDER=bad)), bad
+def test_stop_sequence_is_fixed():
+    """STOP·이상 중단 = 표 전체(고정, 사용자 결정 2026-10-21). skip 은 정상 끝 정지에서만, 파워 단계는 빼지 않는다."""
+    assert "STOP_SEQUENCE_ORDER" not in {p.key for p in P.PARAMS}
     h = H(state="MAIN")
-    h.s.cfg = dict(CFG, STOP_SEQUENCE_ORDER="2,12,7")
-    assert [s.no for s in h.s.stop_steps()] == [2, 12, 7]
-    assert [s.no for s in h.s.stop_steps(skip=(12,))] == [2, 7]
-    h.s.cfg = dict(CFG)
-    assert [s.no for s in h.s.stop_steps()] == list(range(1, 14))      # 기본값 = v1 순서
+    h.s.cfg = dict(CFG, STOP_SEQUENCE_ORDER="2,12,7")                  # 남아 있어도 읽지 않는다
+    assert [s.no for s in h.s.stop_steps()] == list(range(1, 14))
+    assert [s.no for s in h.s.stop_steps(skip=(3, 12))] == [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 13]
+    assert [s.no for s in h.s.stop_steps(skip=(4, 13))] == list(range(1, 14))     # 파워 단계는 빼지 않음
 
 
-def test_stop_uses_configured_order(tmp_path):
-    r = R(tmp_path, dict(FAST, STOP_SEQUENCE_ORDER="2,4,13,11"))
+def test_stop_runs_full_fixed_order(tmp_path):
+    r = R(tmp_path, FAST)
     r.on(3, r.cmd("PROCESS_START", {"row": dict(SHORT, process_time=2.0)}))
     r.when(lambda: r.rig.process.state == "MAIN", r.cmd("PROCESS_STOP"))
     r.run(120)
-    assert [n for n, _, _ in r.rig.safety.engine.seq_results["stop"]] == [2, 4, 13, 11]
-    assert r.rig.sims["dc"].out is False and r.plc.coils[A["s1"]] is False
-    assert r.plc.coils[A["ar_valve"]] is True                            # 12(차단밸브 닫기)는 껐다
+    assert [n for n, _, _ in r.rig.safety.engine.seq_results["stop"]] == list(range(1, 14))
+    assert r.rig.sims["dc"].out is False and r.plc.coils[A["s1"]] is False and r.plc.coils[A["ar_valve"]] is False
+
+
+def test_end_stop_skip_cannot_drop_power_steps():
+    for n in (4, 5, 6, 7, 8, 13):
+        ok, errs, _ = _chk([{"type": "end_stop", "params": {"skip": [3, n]}}])
+        assert ok is None and errs and "파워 끄기 단계는 뺄 수 없음" in errs[0], n
+    ok, errs, _ = _chk([{"type": "end_stop", "params": {"skip": [1, 2, 3, 9, 10, 11, 12]}}])
+    assert not errs
+
+
+def test_abort_with_skip_free_order_still_turns_power_off(tmp_path):
+    """검토 A — MV 닫힘(S2) 중단: 정지 순서 13단계 전체 → DC·유량 꺼짐, 차단밸브 닫힘."""
+    r = R(tmp_path, FAST)
+    bl = [GAS, {"type": "power_on", "params": {"dc_power": 100.0}}, {"type": "wait", "params": {"sec": 60}},
+          {"type": "end_stop", "params": {"skip": [3, 9, 10, 11, 12]}}]
+    r.on(3, r.cmd("PROCESS_START", {"blocks": bl}))
+    r.when(lambda: r.rig.process.state == "WAIT" and r.rig.process.dcc.holding,
+           lambda: r.plc.coils.__setitem__(A["mv"], False))
+    r.run(150)
+    assert [(e.data["status"], e.data["reason"]) for e in r.ev("run_end")] == [("error", "MV_CLOSED")]
+    assert [n for n, _, _ in r.rig.safety.engine.seq_results["abort"]] == list(range(1, 14))
+    assert r.rig.sims["dc"].out is False and not any(r.rig.sims["mfc"].on)
+    assert r.plc.coils[A["ar_valve"]] is False and r.plc.coils[A["o2_valve"]] is False
 
 
 # ───────────── 감시·적용 구간 ─────────────
@@ -297,17 +316,26 @@ def test_free_order_block_recipe_runs_to_end(tmp_path):
     assert not [e for e in r.rig.safety.engine.events if e.kind in ("fired", "abort")]
 
 
-def test_no_end_stop_leaves_outputs_on_with_warning(tmp_path):
+def test_no_end_stop_gets_auto_end_stop(tmp_path):
+    """검토 C — end_stop 없는 목록: 자동 끝 정지가 덧붙어 DC·Ar 를 끈다(사용자 결정 2026-10-21)."""
     r = R(tmp_path, FAST)
     bl = [GAS, {"type": "power_on", "params": {"dc_power": 100.0}}, {"type": "wait", "params": {"sec": 3}}]
     r.on(3, r.cmd("PROCESS_START", {"blocks": bl}))
+    snaps = []
+    r.rig.loop.tick_hooks.append(lambda t: snaps.append(r.rig.process.snapshot_fields()))
     r.run(120)
-    ends = r.ev("run_end")
-    assert [e.data["status"] for e in ends] == ["done"]
-    w = [e for e in r.ev("warn") if e.code == "OUTPUTS_LEFT_ON"]
-    assert w and set(w[0].data["outputs"]) == {"dc", "ar"}
-    assert r.rig.sims["dc"].out is True and r.rig.sims["mfc"].on[0] is True       # 끄지 않음
-    assert "row_end" not in r.rig.safety.engine.seq_results
+    assert [e.data["status"] for e in r.ev("run_end")] == ["done"]
+    last = r.ev("run_start")[0].data["blocks"][-1]
+    assert (last["type"], last["label"], last["auto"], last["no"]) == ("end_stop", "자동 끝 정지", True, "4")
+    assert [e.code for e in r.ev("auto_end_stop")] == ["AUTO_END_STOP"]
+    assert ("4/4", "end_stop", "자동 끝 정지") in {(s["proc.block"], s["proc.block_type"], s["proc.block_label"]) for s in snaps}
+    assert not [e for e in r.ev("warn") if e.code == "OUTPUTS_LEFT_ON"]
+    assert r.rig.sims["dc"].out is False and not any(r.rig.sims["mfc"].on) and r.plc.coils[A["ar_valve"]] is False
+    assert [n for n, _, _ in r.rig.safety.engine.seq_results["row_end"]] == list(range(1, 14))
+    # 기본 템플릿은 끝이 end_stop 이라 덧붙이지 않는다
+    p = row_to_params(RC.check_process_row(SHORT, C0)[0], C0)
+    _, insts = BK.expand(BK.template_blocks(p, C0, ig_enabled=True), C0)
+    assert not any(i.auto for i in insts)
 
 
 def test_end_stop_in_middle_continues_to_next_block(tmp_path):
@@ -317,9 +345,10 @@ def test_end_stop_in_middle_continues_to_next_block(tmp_path):
     r.run(120)
     assert [e.data["status"] for e in r.ev("run_end")] == ["done"]
     starts = [e.data["label"] for e in r.ev("block") if e.data["phase"] == "start"]
-    assert starts[-1] == "뒤"
-    res = r.rig.safety.engine.seq_results["row_end"]
-    assert 12 not in [n for n, _, _ in res] and not any(r.rig.sims["mfc"].on)
+    assert starts[-2:] == ["뒤", "자동 끝 정지"]
+    seqs = [e.detail for e in r.rig.safety.engine.events if e.kind == "seq_done" and e.rule == "row_end"]
+    assert len(seqs) == 2 and "12:" not in seqs[0] and "12:" in seqs[1]   # 중간 끝 정지는 12 를 빼고, 자동 끝 정지는 전부
+    assert not any(r.rig.sims["mfc"].on) and r.plc.coils[A["ar_valve"]] is False
     st = [s for s, _ in r.states()]
     assert st.index("STOPPING") < st.index("WAIT")
 
@@ -362,3 +391,7 @@ def test_block_recipe_rejections(tmp_path):
     r.run(8)
     assert [x.reason for x in r.results] == [e for _, _, e in seq]
     assert any(e.code == "RECIPE_INVALID" and e.data["errors"] for e in r.ev("reject"))
+    r2 = R(tmp_path / "skip", FAST)
+    r2.on(3, r2.cmd("RECIPE_LOAD", {"name": "s", "blocks": [{"type": "end_stop", "params": {"skip": [6]}}]}))
+    r2.run(5)
+    assert [x.reason for x in r2.results] == ["RECIPE_INVALID"]

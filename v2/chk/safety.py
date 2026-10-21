@@ -17,7 +17,8 @@ ALL STOP 은 v1 처럼 전부 끈다(사용자 결정 2026-10-20 — 펌프 유�
 이탈 감시 S31C·S33B·S34A·S38A·S38B = 지금 블록의 감시(watching), S39B = 베이스 압력 대기 블록, S34D = RF Pulse 를 쓰는 행(시작 실패 이벤트는 START 에서만 온다).
 공정 중 수정(PROCESS_ADJUST) 뒤에는 새 목표에 다시 도달할 때까지 S31C(dc_settling)·S34A(rfp_settling)를 쉬고,
 RF 는 램프로 돌아가 유지 중에만 보는 S33B 가 저절로 쉰다. 기본 템플릿에서는 지금(5-3)과 같은 판정이다(SimpleProcess 는 상태 이름으로 같은 값을 낸다 — blocks.watch_for_state).
-STOP·이상 중단 정지 순서는 설정 STOP_SEQUENCE_ORDER(단계 번호 순서, 빠진 번호는 끔). ALL STOP 은 고정.
+STOP·이상 중단 정지 순서는 고정(SR.STOP_SEQUENCE 전체, v1 처럼 — 사용자 결정 2026-10-21). 정상 끝 정지(end_row)만
+end_stop 블록의 skip 으로 단계를 뺄 수 있다(파워 끄기 단계 SR.END_STOP_MUST_KEEP 는 못 뺀다). ALL STOP 도 고정.
 """
 from __future__ import annotations
 
@@ -609,17 +610,12 @@ class ChkSafety:
                             s.nowait))
         return out
 
-    def stop_order(self) -> List[int]:
-        """STOP·이상 중단·행 끝 정지 순서 — 설정 STOP_SEQUENCE_ORDER(단계 번호, 빠진 번호는 끔). 비거나 없으면 표 순서."""
-        raw = str(self.cfg.get("STOP_SEQUENCE_ORDER") or "").strip()
-        nos = [s.no for s in SR.STOP_SEQUENCE]
-        return [int(x) for x in raw.split(",") if x.strip()] if raw else nos
-
     def stop_steps(self, skip=()) -> List[Step]:
+        """STOP·이상 중단 = 표 전체(고정). skip 은 정상 끝 정지(end_row)에서만 오고, 파워 끄기 단계는 빼지 않는다."""
         p = self.process
         rf_on = lambda: p.uses_rf or bool(self.plc.last and (self.plc.last.values.get("rf.dac") or 0) > 0)
-        table = {s.no: s for s in SR.STOP_SEQUENCE}
-        order = [table[n] for n in self.stop_order() if n in table and n not in set(skip or ())]
+        drop = set(skip or ()) - set(SR.END_STOP_MUST_KEEP)
+        order = [s for s in SR.STOP_SEQUENCE if s.no not in drop]
         return self._steps(order, {"1": lambda: p.filament_by_process, "3": lambda: p.uses_heater,
                                    "4": lambda: bool(getattr(p, "dc_on", False)),
                                    "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})

@@ -477,10 +477,6 @@ PARAMS: tuple = (
        src="controller/process_controller.py:1922"),
     _p("STOP_STEP_WAIT_DEFAULT_SEC", "stop", "STOP·ALL STOP 단계 기본 기다림(표에 한도가 없는 단계)", "s", F, 5.0, 1.0, 60.0,
        src=_V2, desc="정지 순서에서 한도 파라미터가 없는 단계의 완료를 기다리는 시간 — 넘으면 다음 단계로(5-1)"),
-    _p("STOP_SEQUENCE_ORDER", "stop", "STOP·이상 중단·행 끝 정지 순서", "", S, "1,2,3,4,5,6,7,8,9,10,11,12,13",
-       safety=H, pattern=r"\s*\d{1,2}(\s*,\s*\d{1,2})*\s*", src="controller/process_controller.py:1785-1981",
-       desc="safety_rules.STOP_SEQUENCE 단계 번호를 실행 순서대로(쉼표). 빠진 번호는 끈다. 기본값 = v1 순서. "
-            "ALL STOP 은 고정(ALL_STOP_SEQUENCE)"),
 
     # ───────────── 웹 연동(uplink) ─────────────
     _p("UPLINK_INTERVAL_MS", "uplink", "웹 전송 주기", "ms", I, 1000, 500, 10000, safety=L, apply=LIVE,
@@ -583,24 +579,10 @@ CROSS_RULES: tuple = (
     _r("X24", ("RFPULSE_REFP_AUTO_OFF_SEC", "RFPULSE_REFP_SEC"), "장비 반사 자동 차단(명령 33) > 소프트웨어 반사파 판정",
        lambda v: _need(v["RFPULSE_REFP_AUTO_OFF_SEC"] > v["RFPULSE_REFP_SEC"],
                        "명령 33 시간이 소프트웨어 판정보다 짧다 — 평소에도 장비가 먼저 끈다")),
-    _r("X26", ("STOP_SEQUENCE_ORDER",), "정지 순서는 safety_rules.STOP_SEQUENCE 단계 번호, 중복 없음",
-       lambda v: _stop_order_error(v["STOP_SEQUENCE_ORDER"])),
     _r("X23", ("RUN_MODE", "UPLINK_URL"), "sim 모드는 웹 주소를 쓰지 않는다(쓰더라도 무시) — prod 는 주소 필요",
        lambda v: _need(v["RUN_MODE"] != "prod" or bool(v["UPLINK_URL"]),
                        "prod 인데 UPLINK_URL 이 비었다")),
 )
-
-
-def _stop_order_error(raw: str) -> Optional[str]:
-    from v2.chk.safety_rules import STOP_SEQUENCE
-    nos = {s.no for s in STOP_SEQUENCE}
-    got = [int(x) for x in str(raw).split(",") if x.strip()]
-    bad = [n for n in got if n not in nos]
-    if bad:
-        return f"없는 단계 번호 {bad} (있는 번호 {min(nos)}~{max(nos)})"
-    if len(got) != len(set(got)):
-        return "같은 단계 번호가 두 번"
-    return None
 
 
 def _ports_unique(v: Mapping[str, Any]) -> bool:

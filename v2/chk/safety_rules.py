@@ -316,7 +316,8 @@ class SeqStep:
     nowait: bool = False         # 보내기만 하고 다음 단계로(결과는 뒤의 AWAIT 단계가 받는다)
 
 
-# 실행 순서·켜기/끄기는 설정 STOP_SEQUENCE_ORDER(기본 = 이 표 순서, 사용자 결정 2026-10-20). 정상 끝 정지 블록은 단계를 더 끌 수 있다.
+# STOP·이상 중단은 늘 이 표 순서 전체(v1 처럼 고정 — 사용자 결정 2026-10-21, 설정으로 바꾸지 않음).
+# 정상 끝 정지(end_stop 블록)만 skip 으로 단계를 뺄 수 있고, 파워 끄기 단계(END_STOP_MUST_KEEP)는 뺄 수 없다.
 # v1 _stop_impl·_power_off_sequence(controller/process_controller.py:1785-1981): 필라멘트 OFF 1회(기다리지 않음) → MS 닫기 →
 # 히터 OFF → DC OFF·RF Pulse OFF 를 보내 놓고(켰을 때만, 기다리지 않음) RF 램프다운 → RF Pulse 완료 대기 → 유량 OFF → 배기 →
 # 건 셔터 → 차단밸브. v2 는 RF 램프다운 뒤 enable 도 OFF(v2 방식 유지), 끝에서 DC OFF 결과를 받아 기록한다.
@@ -338,6 +339,10 @@ STOP_SEQUENCE: tuple = (
     SeqStep(12, Act("GAS_VALVES_CLOSE"), "", True, "", "Ar·O2 차단밸브 닫기"),
     SeqStep(13, Act("AWAIT", {"no": 4}), "", True, "", "DC OFF 결과(기록)"),
 )
+
+# 정상 끝 정지에서 뺄 수 없는 단계 — DC OFF·RF Pulse OFF·RF 램프다운·RF OFF·RF Pulse 완료 대기·DC OFF 결과
+# (공정이 끝날 때 파워는 항상 끈다 — 사용자 결정 2026-10-21). 1·2·3·9·10·11·12(필라멘트·셔터·히터·가스)는 뺄 수 있다.
+END_STOP_MUST_KEEP: tuple = (4, 5, 6, 7, 8, 13)
 
 # ALL STOP — 말 그대로 전부 끈다(사용자 결정 2026-10-20, v1 과 같게). 각 단계 독립(앞 단계 예외와 무관).
 # v1 순서(core/process_service.py:746-812): 히터 레시피 중단 → 중단 표시 → PLC 비상 정지(device/PLC.py:1390-1447 — 버튼 코일

@@ -4,7 +4,10 @@
 - 블록 순서·조합은 자유 — 순서를 막거나 순서 때문에 더 검사하는 규칙은 없다. 검사는 블록 값의 범위(파라미터 상한 연결)와
   설정에서 꺼진 장비(HEATER_ENABLED·IG_ENABLED·RFPULSE_ENABLED)뿐.
 - "시작 전 정리"·"정상 끝 정지"도 일반 블록 — 기본 템플릿에 들어 있고 빼거나 바꿀 수 있다.
-  정상 끝 정지가 없는 목록은 공정이 끝날 때 켜져 있는 출력(DC·RF·RF Pulse·유량·히터)을 경고 이벤트로만 남긴다(끄지 않음).
+- 공정이 끝날 때 파워는 항상 끈다(사용자 결정 2026-10-21): 펼친 마지막 스텝이 정상 끝 정지가 아니면 기본 끝 정지
+  (뺀 단계 없음, label "자동 끝 정지", auto)를 덧붙이고, end_stop 의 skip 에는 파워 끄기 단계(safety_rules.END_STOP_MUST_KEEP)를
+  넣을 수 없다(값 검사). 무언가 남기려면 end_stop 블록을 넣고 그 단계(필라멘트·셔터·히터·가스)만 뺀다.
+  STOP·이상 중단 정지 순서는 고정(safety_rules.STOP_SEQUENCE 전체).
 - 운전 중 장비 보호(SafetyEngine 규칙)는 순서와 무관 — 적용 구간은 공정 상태 이름이 아니라 블록·장비 상태:
   무출력(S31A·S33A) = 그 장비가 램프 중, 두절·반사파(S30·S34C·S32) = 그 장비 출력 명령 뒤,
   이탈 감시(S31C·S33B·S34A·S38A·S38B) = 지금 블록의 watch(대기·메인·조건 대기 블록이 정한다, 그 밖의 블록은 WATCH_DEFAULT).
@@ -56,6 +59,7 @@ COND_OPS: tuple = (("le", "≤ 값"), ("ge", "≥ 값"), ("near", "값 ± 허용
 SHUTTERS: tuple = (("g1", "S1_button", "Gun Shutter 1"), ("g2", "S2_button", "Gun Shutter 2"), ("ms", "MS_button", "Main Shutter"))
 SP_DEFAULT_KEY = {2: "SP2_MTORR", 3: "SP3_MTORR", 4: "SP4_MTORR"}
 
+AUTO_END_STOP_LABEL = "자동 끝 정지"
 REPEAT_MAX = 100
 MAX_DEPTH = 4
 MAX_EXPANDED_STEPS = 3000
@@ -206,9 +210,10 @@ BLOCK_DEFS: tuple = (
     BlockDef("repeat", "반복", (P("count", "int", "회", required=True, min=1, max=REPEAT_MAX),),
         "", container=True, steps="안의 블록을 count 번(중첩 가능)", v1="v2"),
     BlockDef("end_stop", "정상 끝 정지", (
-        P("skip", "steps", "", None, desc="건너뛸 정지 순서 단계 번호(safety_rules.STOP_SEQUENCE). 순서는 STOP_SEQUENCE_ORDER"),),
-        "STOPPING", steps="SafetyEngine.end_row — 지금 행 끝 정지 순서", v1="pc:1785-2019",
-        desc="기본 템플릿의 마지막. 중간에 두면 정지 순서 뒤 다음 블록으로"),
+        P("skip", "steps", "", None, desc="건너뛸 정지 순서 단계 번호(safety_rules.STOP_SEQUENCE) — 1·2·3·9·10·11·12 만"
+          "(필라멘트·셔터·히터·가스). 파워 끄기 4·5·6·7·8·13 은 뺄 수 없음(사용자 결정 2026-10-21)"),),
+        "STOPPING", steps="SafetyEngine.end_row — 지금 행 끝 정지 순서(표 순서 고정, skip 만 뺀다)", v1="pc:1785-2019",
+        desc="기본 템플릿의 마지막. 중간에 두면 정지 순서 뒤 다음 블록으로. 목록 끝이 이 블록이 아니면 자동으로 덧붙는다"),
 )
 
 
@@ -261,6 +266,10 @@ def _check_param(p: BParam, v: Any, cfg: Mapping[str, Any], stop_nos: tuple) -> 
     if t == "steps":
         if not isinstance(v, list) or any(not isinstance(x, int) or isinstance(x, bool) or x not in stop_nos for x in v):
             return f"정지 순서 단계 번호 목록({min(stop_nos)}~{max(stop_nos)})"
+        from v2.chk.safety_rules import END_STOP_MUST_KEEP
+        keep = sorted(set(v) & set(END_STOP_MUST_KEEP))
+        if keep:
+            return f"파워 끄기 단계는 뺄 수 없음(사용자 결정 2026-10-21): {keep}"
         return None
     if t == "watch":
         if not isinstance(v, dict) or any(k not in WATCH_DEFAULT or not isinstance(x, bool) for k, x in v.items()):
@@ -466,9 +475,11 @@ class BlockInst:
     params: Dict[str, Any]
     watch: Dict[str, bool] = field(default_factory=dict)
     ended: bool = False
+    auto: bool = False                 # 자동 끝 정지(목록 끝이 정상 끝 정지가 아니어서 덧붙임)
 
     def record(self) -> dict:
-        return {"no": self.no, "type": self.type, "label": self.label, "stage": self.stage, "params": dict(self.params)}
+        return {"no": self.no, "type": self.type, "label": self.label, "stage": self.stage, "params": dict(self.params),
+                "auto": self.auto}
 
 
 def _cfgv(v: Any, cfg: Mapping[str, Any]) -> Any:
@@ -492,10 +503,14 @@ class _Ctx:
 
 def expand(blocks: List[dict], cfg: Mapping[str, Any], *, ig_enabled: Optional[bool] = None,
            rfpulse_present: Optional[bool] = None) -> tuple:
-    """블록 → (스텝 목록, 블록 목록). 블록마다 스텝이 하나 이상(값이 없어 할 일이 없으면 NOP — 블록 시작·끝 기록용)."""
+    """블록 → (스텝 목록, 블록 목록). 블록마다 스텝이 하나 이상(값이 없어 할 일이 없으면 NOP — 블록 시작·끝 기록용).
+    펼친 마지막 스텝이 정상 끝 정지가 아니면 기본 끝 정지를 덧붙인다(auto — 공정이 끝날 때 파워는 항상 끈다)."""
     ctx = _Ctx(cfg, bool(cfg["IG_ENABLED"]) if ig_enabled is None else ig_enabled,
                bool(cfg.get("RFPULSE_ENABLED", True)) if rfpulse_present is None else rfpulse_present)
     _expand_list(ctx, blocks, "")
+    if not ctx.steps or ctx.steps[-1].action != "END_STOP":
+        _expand_block(ctx, {"type": "end_stop", "params": {}, "label": AUTO_END_STOP_LABEL}, str(len(blocks) + 1))
+        ctx.insts[-1].auto = True
     return ctx.steps, ctx.insts
 
 
