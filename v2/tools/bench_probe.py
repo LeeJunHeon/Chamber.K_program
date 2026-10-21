@@ -45,9 +45,8 @@ from v2.chk.drivers.ig import E_ITEM_COUNT, IgDriver
 from v2.chk.drivers.mfc import MfcDriver
 from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
+from v2.chk.system import DEVICES, ENABLE_KEY, serial_settings
 
-DEVICES = ("plc", "mfc", "dc", "rfpulse", "ig")
-ENABLE_KEY = {"rfpulse": "RFPULSE_ENABLED", "ig": "IG_ENABLED"}
 TEXT_DEVICES = ("dc", "ig", "mfc")                    # 녹화를 글자로 보여 줄 장비(나머지는 hex)
 RANGE_KEYS = ("rf.fwd_w", "rf.ref_w", "rf.dac", "dc.v", "dc.i", "mfc.ar_sccm", "mfc.o2_sccm", "mfc.pressure_mtorr",
               "ig.ion_torr", "ig.a_torr", "ig.b_torr")
@@ -61,12 +60,7 @@ BANNER = """
 
 
 def _settings(cfg: Dict[str, Any], ports: Dict[str, str]) -> Dict[str, SerialSettings]:
-    par = {"none": "N", "odd": "O", "even": "E"}[cfg["RFPULSE_PARITY"]]
-    return {"plc": SerialSettings(ports["plc"], cfg["PLC_BAUD"]),
-            "mfc": SerialSettings(ports["mfc"], cfg["MFC_BAUD"]),
-            "dc": SerialSettings(ports["dc"], cfg["DC_BAUD"]),
-            "rfpulse": SerialSettings(ports["rfpulse"], cfg["RFPULSE_BAUD"], parity=par),
-            "ig": SerialSettings(ports["ig"], cfg["IG_BAUD"])}
+    return serial_settings(cfg, ports)                  # 포트 설정은 조립(v2.chk.system)과 같은 것
 
 
 def _pct(xs: List[float], p: float) -> float:

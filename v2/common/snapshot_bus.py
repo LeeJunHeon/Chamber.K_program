@@ -17,13 +17,16 @@
 """
 from __future__ import annotations
 
+import collections
 import datetime as _dt
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, Optional, Sequence
 
 from v2.common.clock import Tick, TickScheduler
 from v2.common.snapshot import DeviceBlock, FieldDef, Quality, row_columns
 from v2.common.worker import Request, Result, Status, Worker
+
+STATS_KEEP = 21600                 # tick 통계(jitter·행 닫기 지연) 최근 6시간분 — 링 버퍼
 
 
 @dataclass
@@ -210,8 +213,8 @@ class TickLoop:
         self.tick_hooks = list(tick_hooks)      # 읽기를 보낸 직후 tick 으로 부른다(하트비트·CURR 쓰기 예약 등)
         self.extra_fn = extra_fn
         self.scheduler = TickScheduler(clock, period)
-        self.jitters: List[float] = []
-        self.close_lags: List[float] = []     # 행을 닫은 시각 − tick 시각(ms)
+        self.jitters: "collections.deque[float]" = collections.deque(maxlen=STATS_KEEP)
+        self.close_lags: "collections.deque[float]" = collections.deque(maxlen=STATS_KEEP)   # 행을 닫은 시각 − tick 시각(ms)
         self.missed = 0
         self.rows = 0
         self._stop = False

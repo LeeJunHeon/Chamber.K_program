@@ -23,6 +23,7 @@ end_stop 블록의 skip 으로 단계를 뺄 수 있다(파워 끄기 단계 SR.
 """
 from __future__ import annotations
 
+import collections
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -425,10 +426,10 @@ class ChkSafety:
         self.engine.all_stop_steps = self.all_stop_steps
         self.locks: set = set()
         self._prev_run: Optional[bool] = None
-        self.notifications: List[dict] = []
-        self.poll_eval_s: List[float] = []        # plc250 평가 시각(시험: 폴링 → 조치 지연)
+        self.notifications: "collections.deque[dict]" = collections.deque(maxlen=5000)   # 최근 알림(링 버퍼)
+        self.poll_eval_s: "collections.deque[float]" = collections.deque(maxlen=2400)   # plc250 평가 시각(시험: 폴링 → 조치 지연)
         self.first_done: set = set()              # S51 — 첫 정상 읽기를 본 장비(재연결 때는 다시 하지 않음)
-        self.residual: List[tuple] = []           # S51 조치 기록 (장비, 코드, 조치)
+        self.residual: List[tuple] = []           # S51 조치 기록 (장비, 코드, 조치) — 실행당 장비별 한 번뿐(늘지 않음)
 
     # ── 연결 고리 ──
     def on_poll(self, poll) -> None:

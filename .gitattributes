@@ -13,3 +13,6 @@
 *.pdf  binary
 *.png  binary
 *.jpg  binary
+
+# 윈도우 배치 파일은 CRLF 로(cmd 는 LF 만 있으면 줄을 잘못 읽는 경우가 있다)
+*.cmd text eol=crlf

@@ -58,7 +58,7 @@ class Recorder:
         self.copy_fn = copy_fn
         self.today_fn = today_fn
         self.wall_fn = wall_fn
-        self.blackbox_files: List[Path] = []
+        self.blackbox_files: "collections.deque[Path]" = collections.deque(maxlen=100)
         self._q: "queue.Queue" = queue.Queue(maxsize=max_queue)
         self.dropped = 0
         self.written = 0

@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import collections
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
@@ -28,6 +29,7 @@ from v2.common.judge import Persist
 
 # 우선순위(작을수록 먼저)
 PRIO = {"all_stop": 0, "abort": 1, "off": 2, "notify": 3, "maintain": 4}
+EVENTS_KEEP = 20000                # 최근 기록(길이 제한 링 버퍼)
 
 
 @dataclass(frozen=True)
@@ -159,7 +161,7 @@ class SafetyEngine:
         self.handlers = handlers
         self.process = process
         self.on_event = on_event
-        self.events: List[SafetyEvent] = []
+        self.events: "collections.deque[SafetyEvent]" = collections.deque(maxlen=EVENTS_KEEP)
         self._p: Dict[str, Persist] = {}
         self._fired: Dict[str, bool] = {}
         self._lock = threading.Lock()
@@ -168,7 +170,7 @@ class SafetyEngine:
         self.runner = StepRunner(clock, handlers, self._emit)
         self.last_fire_t: Dict[str, float] = {}
         self.seq_results: Dict[str, List[tuple]] = {}
-        self._threads: List[Any] = []
+        self._threads: "collections.deque[Any]" = collections.deque(maxlen=64)   # 최근 정지 순서 스레드
 
     # ───────── 이벤트 ─────────
     def _emit(self, e: SafetyEvent) -> None:

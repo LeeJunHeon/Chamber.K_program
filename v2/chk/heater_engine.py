@@ -1138,7 +1138,7 @@ class HeaterEngine:
         self.atm_hold = False                       # 냉각 보호 가스 유지 중
         self._prev_run: Optional[bool] = None
         self.proc: Dict[str, Any] = {}              # 공정 도달·유지 대기 상태
-        self.events: List[HeaterEvent] = []
+        self.events: "deque[HeaterEvent]" = deque(maxlen=20000)   # 최근 기록(링 버퍼)
 
     # ── 공용 ──
     def _emit(self, e: HeaterEvent) -> None:

@@ -39,6 +39,7 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
 """
 from __future__ import annotations
 
+import collections
 import threading
 import uuid
 from dataclasses import dataclass
@@ -57,6 +58,7 @@ from v2.chk.process_steps import (HEATER_RAMP_SETTLE_S, HEATER_SET_SETTLE_S, POW
 ACT = frozenset(PS.ACTIVE_STATES)
 DC_EST_VOLTAGE_V = 300.0          # v1 process_controller.DC_EST_VOLTAGE_V
 RFPULSE_EST_SEC = 20.0            # v1 RFPULSE_EST_SEC
+EVENTS_KEEP = 20000               # 최근 기록(길이 제한 링 버퍼 — 운전 중 끝없이 쌓이지 않게)
 
 
 def _row_error_code(errs: List[str]) -> str:
@@ -91,7 +93,7 @@ class ProcessEngine:
         self.safety = None                      # ChkSafety — 연결은 만든 쪽이(서로 참조)
         self._lock = threading.RLock()
         self.state = "IDLE"
-        self.events: List[ProcEvent] = []
+        self.events: "collections.deque[ProcEvent]" = collections.deque(maxlen=EVENTS_KEEP)
         # 레시피
         self.recipe_name = ""
         self.rows: List[Dict[str, Any]] = []
