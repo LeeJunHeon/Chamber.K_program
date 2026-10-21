@@ -1065,6 +1065,9 @@ class Atmosphere:
             return "가스를 하나 이상 선택"
         if (use_ar and ar_flow <= 0) or (use_o2 and o2_flow <= 0) or sp1 <= 0:
             return "유량·압력은 0 보다 커야 함"
+        for on, f, key in ((use_ar, ar_flow, "MFC_AR_FS_SCCM"), (use_o2, o2_flow, "MFC_O2_FS_SCCM")):
+            if on and f > float(self.cfg[key]):
+                return f"유량 {f:g} sccm > 상한 {float(self.cfg[key]):g} sccm({key} = 100 %FS)"
         self.channels, self.buttons, flows = [], [], {}
         if use_ar:
             self.channels.append(1), self.buttons.append("Ar_Button")

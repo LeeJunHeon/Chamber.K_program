@@ -192,3 +192,25 @@ def test_heater_target_during_wait(tmp_path):
     reached = [e for e in r.rig.events if type(e).__name__ == "HeaterEvent" and e.kind == "reached"]
     assert reached and "45.0" in reached[0].detail
     assert [e.data["status"] for e in r.ev("run_end")] == ["done"]
+
+
+def test_flow_upper_limit_is_full_scale(tmp_path):
+    """검토 D — 유량 상한 = MFC_AR_FS_SCCM·MFC_O2_FS_SCCM(100 sccm = 100 %FS): 공정 중 수정·레시피 행·블록·히터 명령·히터 레시피."""
+    r = R(tmp_path, FAST)
+    r.on(3, r.cmd("RECIPE_LOAD", {"name": "x", "rows": [dict(SHORT, ar_flow=140.0)]}))
+    r.on(4, r.cmd("RECIPE_LOAD", {"name": "b", "blocks": [{"type": "gas_intro", "params": {"ar": True, "ar_flow": 140.0}}]}))
+    r.on(5, r.cmd("HEATER_ON", {"value": 40.0, "use_ar": True, "ar_flow": 140.0, "wp_mtorr": 5.0}))
+    r.on(6, r.cmd("HEATER_RECIPE_RUN", {"name": "h", "steps": [{"target_c": 40, "ramp_c_per_min": 6, "soak_min": 1}],
+                                         "gas": {"use_ar": True, "ar_flow": 140.0, "wp_mtorr": 5.0}}))
+    r.on(7, r.cmd("RECIPE_LOAD", {"name": "ok", "rows": [dict(SHORT, ar_flow=100.0)]}))
+    r.on(8, r.cmd("RECIPE_CLEAR"))
+    r.on(9, r.cmd("PROCESS_START", {"row": LONG}))
+    r.when(lambda: r.rig.process.state == "MAIN", adj(r, "mfc", "ar_flow", 140.0))
+    r.when(lambda: r.rig.process.state == "MAIN", r.cmd("PROCESS_STOP"))
+    r.run(200)
+    got = [x.reason for x in r.results if x is not None]
+    assert got[:8] == ["RECIPE_INVALID", "RECIPE_INVALID", "BAD_ARGS", "RECIPE_INVALID", None, None, None,
+                       "ADJUST_OUT_OF_RANGE"], got
+    errs = [e.data["errors"] for e in r.ev("reject")][0]
+    assert any("> 100" in e for e in errs)                                # 오류 문구에 상한
+    assert r.rig.heater.atm.state == "IDLE"

@@ -143,8 +143,10 @@ BLOCK_DEFS: tuple = (
         "BASE_WAIT", steps="IG_FILAMENT_ON · IG_BASE_WAIT · IG_FILAMENT_OFF", v1="pc:1036-1273",
         desc="IG_ENABLED 가 꺼져 있으면 시작 거부(DEVICE_DISABLED)"),
     BlockDef("gas_intro", "가스 도입", (
-        P("ar", "bool", default=False), P("ar_flow", "float", "sccm", None, min=0.0, min_exclusive=True, desc="ar 이면 필요"),
-        P("o2", "bool", default=False), P("o2_flow", "float", "sccm", None, min=0.0, min_exclusive=True, desc="o2 이면 필요"),
+        P("ar", "bool", default=False), P("ar_flow", "float", "sccm", None, min=0.0, min_exclusive=True, param_max="MFC_AR_FS_SCCM",
+                                          desc="ar 이면 필요. 상한 = Ar 풀스케일"),
+        P("o2", "bool", default=False), P("o2_flow", "float", "sccm", None, min=0.0, min_exclusive=True, param_max="MFC_O2_FS_SCCM",
+                                          desc="o2 이면 필요. 상한 = O2 풀스케일"),
         P("zero", "bool", default=True, desc="MFC·압력 영점")),
         "GAS_INTRO", steps="MFC_ZEROING · PS_ZEROING · 차단밸브 열기 · FLOW_SET · FLOW_ON(유량 안정화)",
         v1="pc:560 build_gas_intro_steps"),
@@ -708,9 +710,11 @@ class AdjustItem:
 
 
 ADJUST_ITEMS: tuple = (
-    AdjustItem("mfc", "ar_flow", "mfc.ar_flow", P("value", "float", "sccm", min=0.0, min_exclusive=True, required=True),
+    AdjustItem("mfc", "ar_flow", "mfc.ar_flow", P("value", "float", "sccm", min=0.0, min_exclusive=True, param_max="MFC_AR_FS_SCCM",
+                                                  required=True),
                "Q1 쓰기 → R65 되읽기(MfcDriver.set_flow)", "Ch1 유량을 이미 설정했으면", ("S38A",)),
-    AdjustItem("mfc", "o2_flow", "mfc.o2_flow", P("value", "float", "sccm", min=0.0, min_exclusive=True, required=True),
+    AdjustItem("mfc", "o2_flow", "mfc.o2_flow", P("value", "float", "sccm", min=0.0, min_exclusive=True, param_max="MFC_O2_FS_SCCM",
+                                                  required=True),
                "Q2 쓰기 → R66 되읽기(MfcDriver.set_flow)", "Ch2 유량을 이미 설정했으면", ("S38A",)),
     AdjustItem("mfc", "wp", "mfc.wp", P("value", "float", "mTorr", min=0.0, max=1000.0, min_exclusive=True, required=True),
                "S1 쓰기 → R1 되읽기 5회(MfcDriver.set_sp). SP1 도달 대기 중이면 목표·안정 시간 다시",

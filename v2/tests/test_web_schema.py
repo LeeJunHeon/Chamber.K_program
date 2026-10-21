@@ -11,7 +11,7 @@ from v2.chk import params as P
 from v2.chk import safety_rules as SR
 from v2.chk import web_schema as W
 
-PINNED = (1, "8df8279804e7d9ddcea4c8c0c673f7bde11f5b6f4d10b2e4c237c747a12e847e")
+PINNED = (2, "0dc0315908c58fb047e9946cc8531cd6f7f8570e0d298d339f122f96c71c5273")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "params", "crossRules", "dropped", "commands", "preconditions",
        "reasons", "plcButtons", "recipe", "blocks", "adjust", "stopSequence", "allStopSequence", "states", "events"]
 
@@ -42,7 +42,18 @@ def test_bundle_shape_and_values():
     assert [d["type"] for d in b["blocks"]["defs"]] == [d.type for d in BK.BLOCK_DEFS]
     assert len(b["adjust"]["items"]) == len(BK.ADJUST_ITEMS)
     assert [s["no"] for s in b["stopSequence"]["steps"]] == [s.no for s in SR.STOP_SEQUENCE]
-    assert b["stopSequence"]["configKey"] == "STOP_SEQUENCE_ORDER" and b["allStopSequence"]["fixed"]
+    ss = b["stopSequence"]
+    assert ss["stopFixed"] is True and "configKey" not in ss and ss["endStopMustKeep"] == [4, 5, 6, 7, 8, 13]
+    assert "자동 끝 정지" in ss["autoEndStop"] and b["allStopSequence"]["fixed"]
+    assert "STOP_SEQUENCE_ORDER" not in by
+    codes = {r["code"]: r for r in b["reasons"]}
+    assert {"AUTO_END_STOP", "HEATER_HANDOVER", "OUTPUTS_CLEANUP", "CLEANUP_RUNNING"} <= set(codes)
+    assert "뺀 단계" in codes["OUTPUTS_LEFT_ON"]["label"]
+    gi = [d for d in b["blocks"]["defs"] if d["type"] == "gas_intro"][0]["params"]
+    assert {p["name"]: p["paramMax"] for p in gi if p["name"].endswith("_flow")} == {"ar_flow": "MFC_AR_FS_SCCM",
+                                                                                     "o2_flow": "MFC_O2_FS_SCCM"}
+    es = [d for d in b["blocks"]["defs"] if d["type"] == "end_stop"][0]["params"][0]
+    assert "뺄 수 없음" in es["desc"]
     rf = [c for c in b["recipe"]["processColumns"] if c["name"] == "rf_pulse_freq"][0]
     assert rf["unit"] == "kHz"
 

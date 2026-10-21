@@ -33,9 +33,11 @@ class Col:
 PROCESS_COLUMNS: tuple = (
     Col("process_name", "str", "", "optional", v1_name="Process_name", desc="'delay N[s|m|h|d]' 이면 딜레이 행. 비면 STEP{n}"),
     Col("ar", "bool", "", "optional", v1_name="Ar"),
-    Col("ar_flow", "float", "sccm", "if:ar", min=0.0, min_exclusive=True, v1_name="Ar_flow"),
+    Col("ar_flow", "float", "sccm", "if:ar", min=0.0, min_exclusive=True, param_max="MFC_AR_FS_SCCM", v1_name="Ar_flow",
+        desc="상한 = Ar 채널 풀스케일(100 sccm = 100 %FS, MFC p.78)"),
     Col("o2", "bool", "", "optional", v1_name="O2"),
-    Col("o2_flow", "float", "sccm", "if:o2", min=0.0, min_exclusive=True, v1_name="O2_flow"),
+    Col("o2_flow", "float", "sccm", "if:o2", min=0.0, min_exclusive=True, param_max="MFC_O2_FS_SCCM", v1_name="O2_flow",
+        desc="상한 = O2 채널 풀스케일"),
     Col("base_pressure", "float", "Torr", "optional", param_min="BASE_PRESSURE_MIN_TORR",
         param_max="BASE_PRESSURE_MAX_TORR", v1_name="base_pressure", desc="0·빈 값이면 베이스 대기 안 함"),
     Col("working_pressure", "float", "mTorr", "always", min=0.0, max=1000.0, min_exclusive=True,
@@ -77,9 +79,9 @@ HEATER_STEP_COLUMNS: tuple = (
 
 HEATER_GAS_COLUMNS: tuple = (
     Col("use_ar", "bool", "", "optional", v1_name="use_ar"),
-    Col("ar_flow", "float", "sccm", "if:use_ar", min=0.0, min_exclusive=True, v1_name="ar_flow"),
+    Col("ar_flow", "float", "sccm", "if:use_ar", min=0.0, min_exclusive=True, param_max="MFC_AR_FS_SCCM", v1_name="ar_flow"),
     Col("use_o2", "bool", "", "optional", v1_name="use_o2"),
-    Col("o2_flow", "float", "sccm", "if:use_o2", min=0.0, min_exclusive=True, v1_name="o2_flow"),
+    Col("o2_flow", "float", "sccm", "if:use_o2", min=0.0, min_exclusive=True, param_max="MFC_O2_FS_SCCM", v1_name="o2_flow"),
     Col("wp_mtorr", "float", "mTorr", "optional", min=0.0, max=1000.0, min_exclusive=True, v1_name="wp_mtorr",
         desc="가스를 쓰면 필수"),
 )
