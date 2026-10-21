@@ -90,7 +90,7 @@ class PlcDriver:
                  rng: Optional[random.Random] = None) -> None:
         self.clock = clock
         self.worker = worker
-        self.cfg = dict(cfg)
+        self.cfg = cfg                     # 같은 설정 사전(웹 설정 적용이 그 자리에서 바꾼다)
         self.writes_allowed = writes_allowed
         self.on_event = on_event
         self.blackbox_sink = blackbox_sink

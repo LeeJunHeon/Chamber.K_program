@@ -132,16 +132,16 @@ PARAMS: tuple = (
        v1_key="ERP_INGEST_TOKEN", src="lib/config_local.py (이름만)"),
 
     # ───────────── 1초 수집(tick) ─────────────
-    _p("TICK_DEADLINE_MS", "tick", "1초 수집 마감", "ms", I, 900, 500, 950, safety=M, src=_V2,
+    _p("TICK_DEADLINE_MS", "tick", "1초 수집 마감", "ms", I, 900, 500, 950, safety=M, apply=RESTART, src=_V2,
        desc="정각 초 t 에 읽기를 보내고 t+이 값에 행을 닫는다. 늦은 응답은 다음 행에 stale"),
-    _p("PLC_FAST_POLL_MS", "tick", "PLC 내부 폴링 주기", "ms", I, 250, 100, 500, safety=H, src=_V2,
+    _p("PLC_FAST_POLL_MS", "tick", "PLC 내부 폴링 주기", "ms", I, 250, 100, 500, safety=H, apply=RESTART, src=_V2,
        desc="안전 비트(MV·인터록·히터)를 보는 주기. 1초에 4번 중 정각 회차를 스냅샷에 쓴다",
        v1_default=200, note="v1 200 ms(상대 타이머)"),
-    _p("PLC_READ_DEADLINE_MS", "tick", "PLC 읽기 마감", "ms", I, 400, 100, 900, src=_V2),
-    _p("MFC_READ_DEADLINE_MS", "tick", "MFC 읽기 마감", "ms", I, 900, 200, 950, src=_V2),
-    _p("DC_READ_DEADLINE_MS", "tick", "DC 읽기 마감", "ms", I, 500, 100, 900, src=_V2),
-    _p("RFPULSE_READ_DEADLINE_MS", "tick", "RF Pulse 읽기 마감", "ms", I, 900, 200, 950, src=_V2),
-    _p("IG_RESPONSE_LIMIT_MS", "tick", "이온 게이지 E 응답 제한", "ms", I, 1200, 900, 1900, src="lib/config.py:756 (v1 실측 근거)",
+    _p("PLC_READ_DEADLINE_MS", "tick", "PLC 읽기 마감", "ms", I, 400, 100, 900, apply=RESTART, src=_V2),
+    _p("MFC_READ_DEADLINE_MS", "tick", "MFC 읽기 마감", "ms", I, 900, 200, 950, apply=RESTART, src=_V2),
+    _p("DC_READ_DEADLINE_MS", "tick", "DC 읽기 마감", "ms", I, 500, 100, 900, apply=RESTART, src=_V2),
+    _p("RFPULSE_READ_DEADLINE_MS", "tick", "RF Pulse 읽기 마감", "ms", I, 900, 200, 950, apply=RESTART, src=_V2),
+    _p("IG_RESPONSE_LIMIT_MS", "tick", "이온 게이지 E 응답 제한", "ms", I, 1200, 900, 1900, apply=RESTART, src="lib/config.py:756 (v1 실측 근거)",
        desc="E 응답을 tick 마감 뒤에도 이만큼까지 받아 다음 행에 late 로 쓴다(그동안 다음 E 는 보내지 않음 — stale). "
             "넘기면 fail. 장비별 읽기 마감 ≤ tick 마감 규칙(X12)의 예외 — 평소 250~300 ms, 레인지 찾기 860 ms",
        v1_key="IG_RESPONSE_TIMEOUT_MS"),
@@ -170,7 +170,7 @@ PARAMS: tuple = (
     _p("MV_INTERLOCK_ABORT_MS", "plc", "MV 인터록 해제 지속 중단", "ms", I, 1000, 200, 5000, safety=H,
        src="main.py:3839", desc="공정 중 MV_INTERLOCK 이 이만큼 연속 OFF 면 중단(순간 끊김은 기록만)"),
     _p("BLACKBOX_SECONDS", "plc", "PLC 블랙박스 길이", "s", I, 60, 10, 600, safety=L,
-       src="device/PLC.py:178 (deque 300 × 200 ms)"),
+       apply=RESTART, src="device/PLC.py:178 (deque 300 × 200 ms)"),
 
     # ───────────── MFC(경고·알림만, 공정은 계속) ─────────────
     _p("FLOW_ERROR_TOLERANCE", "mfc", "유량 이탈 허용 비율", "비율", F, 0.10, 0.01, 0.5, apply=LIVE,
@@ -492,7 +492,7 @@ PARAMS: tuple = (
        apply=LIVE, src=_V2),
 
     # ───────────── 기록(record) ─────────────
-    _p("SNAPSHOT_RETENTION_DAYS", "record", "1초 기록 보관 기간", "일", I, 180, 7, 3650, safety=L, src=_V2),
+    _p("SNAPSHOT_RETENTION_DAYS", "record", "1초 기록 보관 기간", "일", I, 180, 7, 3650, safety=L, apply=RESTART, src=_V2),
     _p("NAS_SYNC_PERIOD_SEC", "record", "NAS 사본 주기(지난 날 파일)", "s", I, 60, 10, 3600, safety=L, apply=RESTART,
        src=_V2),
     _p("NAS_TODAY_COPY_SEC", "record", "NAS 오늘 DB 사본 주기", "s", I, 600, 60, 86400, safety=L, apply=RESTART, src=_V2,

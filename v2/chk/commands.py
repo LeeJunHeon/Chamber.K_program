@@ -89,6 +89,8 @@ CHK_REASONS: tuple = (
     Reason("HEATER_GAS_FAILED", "히터 가스 준비 실패", "abort"),
     Reason("COND_WAIT_TIMEOUT", "조건 대기 블록 한도 초과(on_timeout=abort)", "abort"),
     Reason("PRESSURE_WAIT_TIMEOUT", "압력 블록(SP2~SP4) 도달 한도 초과(on_timeout=abort)", "abort"),
+    Reason("PROGRAM_EXIT", "프로그램 강제 종료(콘솔 창 닫기·로그오프·윈도우 종료) — 파워 출력만 끄고 PLC 릴레이는 유지(결정 4)",
+           "abort"),
     # 경고·정보
     Reason("FLOW_DEVIATION", "가스 유량 이탈(경고만)", "info"),
     Reason("PRESSURE_DEVIATION", "압력 이탈(경고만)", "info"),

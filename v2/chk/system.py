@@ -6,10 +6,11 @@
 
 연결
 - 안전 규칙(ChkSafety): plc250 = PLC 폴링 직후(fast_listeners), tick = 행이 닫힌 뒤(sink), 드라이버 이벤트 → 이벤트 규칙.
-- 1초 행이 닫히면: 기록 → 안전 규칙(tick) → 히터(on_tick) → 공정(on_row) → 장비 메시지(state).
+- 1초 행이 닫히면: 기록 → 안전 규칙(tick) → 히터(on_tick) → 공정(on_row) → 설정 대기 적용(idle) → 장비 메시지(state).
 - 내부 이벤트(ProcEvent·SafetyEvent·HeaterEvent·드라이버)는 events(링 버퍼)·기록·MessageHub 로.
 - 기록은 data_dir, NAS 사본은 모드 정책(nas_copy)이 켜고 NAS_COPY_DIR 이 있을 때만.
-- 설정: ConfigStore(읽기) + 모든 구성 요소가 같이 보는 cfg 사전.
+- 설정(ConfigApply): ConfigStore + 모든 구성 요소가 같이 보는 cfg 사전. live 키는 공정 잠금 아래 그 자리에서,
+  idle 키는 idle 이 되면(tick 마다 확인), restart 키는 재시작 때. 결과는 config_ack 메시지.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from v2.common.commands import Source
-from v2.common.config_store import ConfigStore
+from v2.common.config_store import ApplyResult, ConfigStore
 from v2.common.mode import RunMode, policy
 from v2.common.paramdef import schema_hash
 from v2.common.recorder import Recorder
@@ -64,6 +65,60 @@ def serial_transports(clock, cfg: Dict[str, Any], ports: Optional[Dict[str, str]
     st = serial_settings(cfg, ports)
     return {k: SerialTransport(clock, st[k], open_timeout_s=cfg["PORT_OPEN_TIMEOUT_SEC"], serial_factory=serial_factory)
             for k in DEVICES}
+
+
+class ConfigApply:
+    """웹 설정 적용(CONFIG_APPLY·CONFIG_ROLLBACK) — ConfigStore 와 실행 cfg 사전을 잇는다(5-6 ④).
+
+    busy = 공정 진행·정지 순서·CSV 리스트·공정 밖 정리·히터 레시피·히터 가스 중(S48 H 등급 거부·idle 키 대기).
+    설치·비밀 키: 비밀값은 웹에서 받지 않고(CONFIG_SECRET_FROM_WEB), local_override 가 정한 키는 웹 값보다 덮어쓰기가 이긴다
+    (overriddenKeys). install 키는 restart 대기.
+    """
+
+    def __init__(self, store: ConfigStore, cfg: Dict[str, Any], busy: Callable[[], bool], lock,
+                 on_ack: Callable[[dict], None]) -> None:
+        self.store, self.cfg, self.busy, self.lock, self.on_ack = store, cfg, busy, lock, on_ack
+
+    def _push(self, keys) -> None:
+        with self.lock:                                   # 공정 잠금 아래 그 자리에서(모든 구성 요소가 같은 사전을 본다)
+            for k in keys:
+                self.cfg[k] = self.store.values[k]
+
+    def _ack(self, res: ApplyResult, by: str) -> dict:
+        d = {"version": res.version, "status": res.status, "reasonCode": res.reason, "errors": list(res.errors),
+             "appliedKeys": list(res.applied_keys), "pendingKeys": list(res.pending_keys),
+             "overriddenKeys": list(res.overridden_keys), "kind": res.kind, "by": by, "changes": list(res.changes),
+             "values": res.values}
+        self.on_ack(d)
+        return d
+
+    def apply(self, a: dict, by: str) -> Optional[str]:
+        v, vals, sh = a.get("version"), a.get("values"), a.get("schemaHash")
+        if not isinstance(v, int) or isinstance(v, bool) or not isinstance(vals, dict) or not isinstance(sh, str):
+            return "BAD_ARGS"
+        res = self.store.apply(v, vals, sh, self.busy(), by=by)
+        if res.status != "rejected":
+            self._push(res.applied_keys)
+        self._ack(res, by)
+        return res.reason
+
+    def rollback(self, by: str) -> Optional[str]:
+        res = self.store.rollback(self.busy(), by=by)
+        if res.status != "rejected":
+            self._push(res.applied_keys)
+        self._ack(res, by)
+        return res.reason
+
+    def tick(self) -> None:
+        """idle 이 되면 대기 중 idle 키 적용(ConfigStore.on_idle) → config_ack(kind idle)."""
+        if not self.store.pending_idle or self.busy():
+            return
+        keys = self.store.on_idle()
+        if keys:
+            self._push(keys)
+            self.on_ack({"version": self.store.version, "status": "applied", "reasonCode": None, "errors": [],
+                         "appliedKeys": keys, "pendingKeys": sorted(self.store.pending_restart), "overriddenKeys": [],
+                         "kind": "idle", "by": "system", "changes": [], "values": None})
 
 
 class ChkSystem:
@@ -123,8 +178,10 @@ class ChkSystem:
         self.store = store
         if store is not None and not store.values:
             store.load()
+        self.config = (ConfigApply(store, c, self.busy, getattr(self.process, "_lock", None) or _NullLock(),
+                                   self.hub.config_ack) if store is not None else None)
         self.core = ChkCore(c, self.process, self.heater, self.safety, self.plc, self.ig, self.links,
-                            on_result=self.hub.cmd_result)
+                            on_result=self.hub.cmd_result, config=self.config)
         self.plc.fast_listeners.append(self.safety.on_poll)
         self.plc.fast_listeners.append(self.heater.on_poll)
         self._scenario_hook = scenario_hook
@@ -133,6 +190,12 @@ class ChkSystem:
         self.started = False
 
     # ── 상태 ──
+    def busy(self) -> bool:
+        """설정 적용의 busy(S48·idle 대기) — 공정 진행·정지 순서·CSV 리스트·공정 밖 정리·히터 레시피·히터 가스."""
+        p, h = self.process, self.heater
+        return bool(p.active or p.state == "STOPPING" or getattr(p, "list_active", False) or getattr(p, "cleaning", False)
+                    or h.recipe_running or h.atm.is_active() or self.safety.engine.stopping)
+
     @property
     def config_version(self) -> int:
         return self.store.version if self.store is not None else 0
@@ -143,6 +206,11 @@ class ChkSystem:
         self.heater.on_tick(v)
         if hasattr(self.process, "on_row"):
             self.process.on_row(v)
+        if self.config is not None:
+            try:
+                self.config.tick()
+            except Exception as e:
+                self._dispatch_error("config", e)
         self.hub.on_row(row)
 
     def _extra(self, t) -> dict:
@@ -227,6 +295,14 @@ class ChkSystem:
 
     def command(self, kind: str, args: Optional[dict] = None, source: Source = Source.WEB, cid: Any = None):
         return self.core.command(kind, args, source=source, cid=cid)
+
+
+class _NullLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
 def param_schema_hash() -> str:

@@ -253,6 +253,7 @@ class ConfigStore:
             if hs:
                 return ApplyResult("rejected", "CONFIG_H_IN_PROCESS", [f"공정 중 H 등급 변경: {hs}"])
 
+        self.dir.mkdir(parents=True, exist_ok=True)          # 새 설치(설정 폴더 없음)에서 첫 적용
         atomic_write_json_pair(self.active_path, self.prev_path, {
             "version": version, "schemaHash": schema_hash,
             "savedAt": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),

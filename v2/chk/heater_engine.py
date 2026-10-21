@@ -34,6 +34,11 @@ from v2.chk.process_steps import (StepRunner, build_gas_intro_steps, build_gas_p
 HOLD_DRIFT_DEFAULTS = ("HEATER_HOLD_DRIFT_PV_REL", "HEATER_HOLD_DRIFT_MV_REL", "HEATER_HOLD_DRIFT_TC2_REL")
 
 
+def _cfg(key: str, conv=float):
+    """설정값을 쓰는 때 읽는다(생성 때 복사하지 않음 — 웹 설정 적용이 idle 키를 바꾸면 다음 판정부터 새 값, 5-6 ④)."""
+    return property(lambda self: conv(self.cfg[key]))
+
+
 @dataclass
 class HeaterEvent:
     kind: str            # message / engaged / give_up / alert / saturated / recipe_step / recipe_finished / gas / reached
@@ -201,21 +206,21 @@ class RampProfiler:
 
 # ───────────── HeaterHold(controller/heater_hold.py) ─────────────
 class HeaterHold:
+    mode = _cfg("HEATER_HOLD_MODE", str)
+    mv_limit, mv_min = _cfg("HEATER_MV_LIMIT", int), _cfg("HEATER_MV_MIN", int)
+    enter_tol, enter_sec = _cfg("HEATER_HOLD_MV_ENTER_TOL_C"), _cfg("HEATER_HOLD_MV_ENTER_SEC")
+    arrive_tol = _cfg("HEATER_HOLD_MV_ARRIVE_TOL_C")
+    drift_pv, drift_mv = _cfg("HEATER_HOLD_MV_DRIFT_PV_C"), _cfg("HEATER_HOLD_MV_DRIFT_MV")
+    tc2_margin, tc2_drift = _cfg("HEATER_HOLD_TC2_MARGIN_C"), _cfg("HEATER_HOLD_TC2_DRIFT_C")
+    rel_pv, rel_mv, rel_tc2 = (_cfg(k) for k in HOLD_DRIFT_DEFAULTS)
+    mv_sat_rel = _cfg("HEATER_MV_SAT_REL")
+    engage_timeout = _cfg("HEATER_HOLD_ENGAGE_TIMEOUT_SEC")
+    reapply_sec = _cfg("HEATER_HOLD_REAPPLY_SEC")
+    dev_warn_c, dev_warn_sec = _cfg("HEATER_TC1_DEV_WARN_C"), _cfg("HEATER_TC1_DEV_WARN_SEC")
+    dev_ok_c = _cfg("HEATER_TC1_DEV_OK_C")
+
     def __init__(self, cfg, port: HeaterPort, msg: Callable[[str, str], None], emit: Callable[[HeaterEvent], None],
                  clock: Callable[[], float]) -> None:
-        c = cfg
-        self.mode = str(c["HEATER_HOLD_MODE"])
-        self.mv_limit, self.mv_min = int(c["HEATER_MV_LIMIT"]), int(c["HEATER_MV_MIN"])
-        self.enter_tol, self.enter_sec = float(c["HEATER_HOLD_MV_ENTER_TOL_C"]), float(c["HEATER_HOLD_MV_ENTER_SEC"])
-        self.arrive_tol = float(c["HEATER_HOLD_MV_ARRIVE_TOL_C"])
-        self.drift_pv, self.drift_mv = float(c["HEATER_HOLD_MV_DRIFT_PV_C"]), float(c["HEATER_HOLD_MV_DRIFT_MV"])
-        self.tc2_margin, self.tc2_drift = float(c["HEATER_HOLD_TC2_MARGIN_C"]), float(c["HEATER_HOLD_TC2_DRIFT_C"])
-        self.rel_pv, self.rel_mv, self.rel_tc2 = (float(c[k]) for k in HOLD_DRIFT_DEFAULTS)
-        self.mv_sat_rel = float(c["HEATER_MV_SAT_REL"])
-        self.engage_timeout = float(c["HEATER_HOLD_ENGAGE_TIMEOUT_SEC"])
-        self.reapply_sec = float(c["HEATER_HOLD_REAPPLY_SEC"])
-        self.dev_warn_c, self.dev_warn_sec = float(c["HEATER_TC1_DEV_WARN_C"]), float(c["HEATER_TC1_DEV_WARN_SEC"])
-        self.dev_ok_c = float(c["HEATER_TC1_DEV_OK_C"])
         self.cfg, self.port, self._msg_fn, self._emit, self._now = cfg, port, msg, emit, clock
         self._h = self._fresh()
         self._ring: deque = deque()
@@ -648,11 +653,13 @@ class HeaterHold:
 
 # ───────────── DAC 포화 감시(controller/heater_saturation.py) ─────────────
 class SaturationGuard:
+    mv_limit, mv_min = _cfg("HEATER_MV_LIMIT", int), _cfg("HEATER_MV_MIN", int)
+    sat_sec, rel = _cfg("HEATER_MV_SAT_SEC"), _cfg("HEATER_MV_SAT_REL")
+    pre_window, fallback = _cfg("HEATER_SAT_PRE_WINDOW_SEC"), _cfg("HEATER_SAT_FALLBACK_REL")
+
     def __init__(self, cfg, port: HeaterPort, msg: Callable[[str, str], None], emit: Callable[[HeaterEvent], None],
                  clock: Callable[[], float]) -> None:
-        self.mv_limit, self.mv_min = int(cfg["HEATER_MV_LIMIT"]), int(cfg["HEATER_MV_MIN"])
-        self.sat_sec, self.rel = float(cfg["HEATER_MV_SAT_SEC"]), float(cfg["HEATER_MV_SAT_REL"])
-        self.pre_window, self.fallback = float(cfg["HEATER_SAT_PRE_WINDOW_SEC"]), float(cfg["HEATER_SAT_FALLBACK_REL"])
+        self.cfg = cfg
         self.port, self._msg, self._emit, self._now = port, msg, emit, clock
         self._hist: deque = deque()
         self._sat_since = 0.0

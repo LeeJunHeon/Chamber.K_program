@@ -9,8 +9,16 @@
     bench·prod 에서 포트가 사용 중이거나 없으면 죽지 않고 worker 재연결로 계속 시도(링크 끊김으로 보임).
 버전은 .git 의 HEAD·ref 파일을 읽어서(git 명령을 실행하지 않음), 못 읽으면 unknown.
 
-종료: Ctrl+C → 정상 종료(히터 레시피 정지 → S41(히터 RUN=0) → 결과를 짧게 기다림 → worker 정지·포트 닫기 →
-기록 flush → 서버 정지).
+종료(v1 main.py:4977 closeEvent 와 같은 조건)
+- Ctrl+C: 공정 진행·정지 순서·CSV 리스트(딜레이·행 사이)·공정 밖 정리 중이거나 히터 가스가 잡혀 있으면 거부(콘솔에 이유).
+  히터 운전·히터 레시피 중이면 "종료하면 히터가 꺼집니다 — 5초 안에 Ctrl+C 를 한 번 더"(v1 확인창 대신).
+  정상 종료: 히터 레시피 정지 → S41(히터 RUN=0) → 결과를 짧게 기다림 → worker 정지·포트 닫기 → 기록 flush → 서버 정지.
+- 강제 종료(콘솔 창 닫기·로그오프·윈도우 종료 — SetConsoleCtrlHandler): 거부할 수 없으므로 결정 4(2026-10-20)대로 파워 출력만 끈다 —
+  DC OFF, RF DAC 0·enable OFF, RF Pulse OFF, 히터 RUN=0(히터 레시피 중단). PLC 릴레이(펌프·밸브·가스 차단밸브·셔터)와 MFC 는 그대로.
+  공정 중이었으면 run_end error PROGRAM_EXIT. 창 닫기는 약 5초 안에 끝나야 하므로 확인을 기다리지 않는 명령을 먼저 보내고 기록 flush.
+  로그오프·윈도우 종료: user32.dll 이 올라온 프로세스(이 파이썬은 처음부터 올라와 있다)에는 콘솔 신호가 오지 않으므로(Windows 규칙)
+  숨은 최상위 창으로 WM_ENDSESSION 을 받아 같게 처리한다. 시작 때 user32 여부를 로그에 남긴다.
+- 다음 시작 때는 S51(남은 파워 OFF)·S15(남은 히터 RUN 정리)가 정리한다.
 """
 from __future__ import annotations
 
@@ -32,10 +40,18 @@ from v2.chk.system import ChkSystem, new_store, serial_transports
 
 PROGRAM = "chk-v2"
 DEFAULT_CONFIG_DIR = r"C:\ChamberK_v2\config"
+CONFIRM_WINDOW_S = 5.0             # 히터 운전 중 Ctrl+C 두 번째 확인 시간
 SHUTDOWN_HEATER_WAIT_S = 3.0       # 정상 종료: 히터 RUN=0 결과를 기다리는 시간
+FORCE_DEADLINE_S = 3.5             # 강제 종료: 이 시간 안에 끝낸다(창 닫기 한도 약 5초)
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
 EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
+CTRL_C, CTRL_BREAK, CTRL_CLOSE, CTRL_LOGOFF, CTRL_SHUTDOWN = 0, 1, 2, 5, 6
+CTRL_NAMES = {CTRL_CLOSE: "CTRL_CLOSE", CTRL_LOGOFF: "CTRL_LOGOFF", CTRL_SHUTDOWN: "CTRL_SHUTDOWN"}
+WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
+REFUSE_PROCESS = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
+REFUSE_GAS = "히터 가스 사용 중 — 히터 가스를 해제한 뒤 종료"
+CONFIRM_HEATER = "종료하면 히터가 꺼집니다 — 5초 안에 Ctrl+C 를 한 번 더"
 
 
 def repo_root() -> Path:
@@ -64,6 +80,19 @@ def git_version(root: Optional[Path] = None) -> str:
         return "unknown"
 
 
+def user32_loaded() -> Optional[bool]:
+    """user32.dll 이 올라와 있으면 로그오프·윈도우 종료 신호(CTRL_LOGOFF·CTRL_SHUTDOWN)를 받지 못한다."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.GetModuleHandleW.restype = ctypes.c_void_p
+        return bool(k.GetModuleHandleW("user32.dll"))
+    except Exception:
+        return None
+
+
 class App:
     def __init__(self, config_dir: str = DEFAULT_CONFIG_DIR, print_fn: Callable[[str], None] = print,
                  serial_factory: Optional[Callable] = None, clock=None, system: Optional[ChkSystem] = None) -> None:
@@ -80,9 +109,13 @@ class App:
         self._tick_thread: Optional[threading.Thread] = None
         self._log_thread: Optional[threading.Thread] = None
         self._log_sub = None
+        self._confirm_t: Optional[float] = None
         self._ctrl_c = 0
         self._done = threading.Event()
+        self._forced = threading.Lock()
+        self.forced_result: Optional[dict] = None
         self.version = system.version if system is not None else git_version()
+        self._ctrl_ref = None
         self.sims = None
 
     # ───────── 1 설정 ─────────
@@ -173,6 +206,9 @@ class App:
             for n in self.store.notes:
                 self.say(f"설정: {n}")
                 self.log.info("설정: %s", n)
+            u32 = user32_loaded()
+            self.log.info("로그오프·윈도우 종료 신호 수신 가능: %s",
+                          "확인 못 함" if u32 is None else ("아니오(user32 로드됨)" if u32 else "예"))
             s = self.build()
             self._start_log_consumer()
             s.start(ready_timeout_s=float(self.cfg["CONNECT_INIT_TIMEOUT_SEC"]) + 3.0)
@@ -184,7 +220,7 @@ class App:
             self._tick_thread = self.clock.start_thread(s.loop.run, "tick")
             self.server.attach(s)
             self.server.start()
-            self.say("실행 중 — 멈추려면 Ctrl+C")
+            self.say("실행 중 — 멈추려면 Ctrl+C (창을 닫으면 파워 출력만 끄고 끝납니다)")
         except Exception as e:
             self.say(f"[중지] 시작 실패: {e!r}")
             self.log.exception("시작 실패")
@@ -234,8 +270,9 @@ class App:
                 self._ctrl_c += 1
             while self._ctrl_c > 0:
                 self._ctrl_c -= 1
-                self.shutdown()
-                return EXIT_OK
+                if self.on_ctrl_c() == "exit":
+                    self.shutdown()
+                    return EXIT_OK
         return EXIT_OK
 
     def install_handlers(self) -> None:
@@ -244,6 +281,114 @@ class App:
         signal.signal(signal.SIGINT, sig)
         if hasattr(signal, "SIGBREAK"):
             signal.signal(signal.SIGBREAK, sig)
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
+                proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)
+
+                def handler(ctrl):
+                    if ctrl in CTRL_NAMES:
+                        self.force_exit(CTRL_NAMES[ctrl])
+                        return True
+                    return False                           # Ctrl+C·Break 는 파이썬 처리기(SIGINT)로
+                self._ctrl_ref = proto(handler)
+                ctypes.WinDLL("kernel32").SetConsoleCtrlHandler(self._ctrl_ref, True)
+            except Exception as e:
+                self.log.warning("콘솔 닫기 처리기 설치 실패: %r", e)
+            self.start_session_window()
+
+    def start_session_window(self) -> Optional[int]:
+        """로그오프·윈도우 종료 — user32 가 올라온 프로세스는 콘솔 신호(CTRL_LOGOFF·CTRL_SHUTDOWN) 대신 최상위 창에
+        WM_QUERYENDSESSION·WM_ENDSESSION 을 받는다. 숨은 창 하나로 받아 창 닫기와 같게(force_exit) 처리한다. hwnd 를 돌려준다."""
+        if sys.platform != "win32":
+            return None
+        ready = threading.Event()
+        box: Dict[str, Any] = {}
+        t = threading.Thread(target=self._session_loop, args=(ready, box), name="session-watch", daemon=True)
+        t.start()
+        ready.wait(3.0)
+        return box.get("hwnd")
+
+    def _session_loop(self, ready: threading.Event, box: Dict[str, Any]) -> None:
+        try:
+            import ctypes
+            from ctypes import wintypes
+            u = ctypes.WinDLL("user32", use_last_error=True)
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            LRESULT = ctypes.c_ssize_t
+            WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+
+            class WNDCLASSW(ctypes.Structure):
+                _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+                            ("cbWndExtra", ctypes.c_int), ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
+                            ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HBRUSH),
+                            ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
+            u.DefWindowProcW.restype = LRESULT
+            u.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+            u.CreateWindowExW.restype = wintypes.HWND
+            u.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_int,
+                                          ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.HWND, wintypes.HMENU,
+                                          wintypes.HINSTANCE, wintypes.LPVOID]
+            k.GetModuleHandleW.restype = wintypes.HMODULE
+
+            def proc(h, msg, wp, lp):
+                if msg == WM_QUERYENDSESSION:
+                    self.log.warning("로그오프·윈도우 종료 요청(WM_QUERYENDSESSION) 받음")
+                    return 1                               # 거부하지 않는다(결정 4 — 파워 출력만 끄고 끝)
+                if msg == WM_ENDSESSION:
+                    if wp:
+                        self.force_exit("WM_ENDSESSION")
+                    return 0
+                return u.DefWindowProcW(h, msg, wp, lp)
+            self._wndproc = WNDPROC(proc)
+            wc = WNDCLASSW()
+            wc.lpfnWndProc, wc.lpszClassName, wc.hInstance = self._wndproc, "ChkV2Session", k.GetModuleHandleW(None)
+            u.RegisterClassW(ctypes.byref(wc))
+            hwnd = u.CreateWindowExW(0, "ChkV2Session", "chk-v2 session", 0, 0, 0, 0, 0, None, None, wc.hInstance, None)
+            box["hwnd"] = hwnd
+            ready.set()
+            if not hwnd:
+                self.log.warning("로그오프·윈도우 종료 감시 창을 만들지 못함(%s)", ctypes.get_last_error())
+                return
+            self.log.info("로그오프·윈도우 종료 감시 창(WM_ENDSESSION) 준비")
+            msg = wintypes.MSG()
+            while u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                u.TranslateMessage(ctypes.byref(msg))
+                u.DispatchMessageW(ctypes.byref(msg))
+        except Exception as e:
+            ready.set()
+            self.log.warning("로그오프·윈도우 종료 감시 실패: %r", e)
+
+    # ───────── Ctrl+C ─────────
+    def exit_check(self) -> tuple:
+        """("refuse", 이유) / ("confirm", 문구) / ("ok", "") — v1 closeEvent 와 같은 조건."""
+        s = self.system
+        p, h = s.process, s.heater
+        if (p.active or p.state == "STOPPING" or getattr(p, "list_active", False) or getattr(p, "cleaning", False)
+                or s.safety.engine.stopping):
+            return "refuse", REFUSE_PROCESS
+        if h.atm.is_active():
+            return "refuse", REFUSE_GAS
+        if h.recipe_running or h.st.get("run"):
+            return "confirm", CONFIRM_HEATER
+        return "ok", ""
+
+    def on_ctrl_c(self) -> str:
+        """"refused" / "confirm"(한 번 더 기다림) / "exit"."""
+        kind, msg = self.exit_check()
+        now = self.clock.monotonic()
+        if kind == "refuse":
+            self._confirm_t = None
+            self.say(f"[종료 거부] {msg}")
+            self.log.warning("종료 거부: %s", msg)
+            return "refused"
+        if kind == "confirm" and (self._confirm_t is None or now - self._confirm_t > CONFIRM_WINDOW_S):
+            self._confirm_t = now
+            self.say(f"[확인] {msg}")
+            self.log.warning("종료 확인 대기: %s", msg)
+            return "confirm"
+        return "exit"
 
     def shutdown(self) -> None:
         """정상 종료 — 히터 레시피 정지 → S41(히터 RUN=0) → 결과 기다림 → worker 정지·포트 닫기 → 기록 flush → 서버 정지."""
@@ -277,6 +422,56 @@ class App:
             self.log.removeHandler(h)
             h.close()
         self._log_handlers = []
+
+    # ───────── 강제 종료(콘솔 창 닫기·로그오프·윈도우 종료) ─────────
+    def force_exit(self, why: str = "CTRL_CLOSE") -> Optional[dict]:
+        """결정 4 — 파워 출력만 끈다(확인을 기다리지 않고 먼저 보냄). PLC 릴레이·MFC 는 그대로."""
+        if not self._forced.acquire(blocking=False):
+            return None
+        s = self.system
+        if s is None:
+            return None
+        clk = self.clock
+        t0 = clk.monotonic()
+        p, h = s.process, s.heater
+        was = bool(getattr(p, "row_is_process", False) and (p.active or p.state == "STOPPING"))
+        done: Dict[str, bool] = {}
+        sent: List[str] = []
+
+        def cb(name):
+            done[name] = False
+            sent.append(name)
+
+            def fin(*a):
+                done[name] = True
+                clk.notify()
+            return fin
+        for ctl in ("dcc", "rfc"):                         # 제어 루프가 다시 켜지 않게
+            if hasattr(p, ctl):
+                getattr(p, ctl).stop()
+        s.dc.output_off_confirmed(on_done=cb("DC OFF"))
+        s.plc.rf_off(on_done=cb("RF DAC 0·enable OFF"))
+        if s.enabled["rfpulse"]:
+            s.rfp.rf_off_confirmed(on_done=cb("RF Pulse OFF"))
+        if h.recipe_running:
+            h.recipe_abort("PROGRAM_EXIT")
+            sent.append("히터 레시피 중단")
+        s.plc.heater_run(False, on_done=cb("히터 RUN=0"))
+        t_sent = clk.monotonic() - t0
+        if was and hasattr(p, "program_exit"):
+            p.program_exit()
+        s.recorder.flush(1.0)
+        clk.wait_until(t0 + FORCE_DEADLINE_S, lambda: all(done.values()))
+        res = {"why": why, "sent": sent, "done": [k for k, v in done.items() if v],
+               "sent_s": round(t_sent, 3), "elapsed_s": round(clk.monotonic() - t0, 3), "process_was_running": was}
+        self.forced_result = res
+        self.log.warning("강제 종료(%s) — 보낸 명령 %s, 끝난 것 %s, %.2f s(보내기 %.3f s)%s", why, sent, res["done"],
+                         res["elapsed_s"], t_sent, " — run_end error PROGRAM_EXIT" if was else "")
+        s.recorder.flush(0.5)
+        for hd in self._log_handlers:
+            hd.flush()
+        return res
+
 
 def _short(d: Any, n: int = 300) -> str:
     import json

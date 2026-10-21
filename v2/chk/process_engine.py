@@ -623,6 +623,27 @@ class ProcessEngine:
                 self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
             self._settle_pending = True
 
+    def program_exit(self) -> bool:
+        """프로그램 강제 종료(콘솔 창 닫기 등, app.force_exit) — 공정 중이면 run_end error PROGRAM_EXIT 기록.
+        파워 출력 끄기는 app 이 이미 보냈다(결정 4 — PLC 릴레이는 그대로이므로 정지 순서는 내지 않는다)."""
+        with self._lock:
+            if not self.row_is_process or not (self.state in ACT or self.state == "STOPPING"):
+                return False
+            self.end_kind, self.end_code = "error", "PROGRAM_EXIT"
+            if self.runner is not None:
+                self.runner.cancel()
+            self.dcc.stop()
+            self.rfc.stop()
+            self._block_end("error", "PROGRAM_EXIT")
+            self._emit(ProcEvent("run_end", "error", "PROGRAM_EXIT",
+                                 {"name": self.run_name, "status": "error", "reason": "PROGRAM_EXIT"}))
+            self.row_is_process = False
+            if self.list_active:
+                self._emit(ProcEvent("list_cancel", self.recipe_name, "PROGRAM_EXIT"))
+                self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
+            self._set_state("ABORTED")
+            return True
+
     def _cancel_list(self, code: str) -> None:
         self._emit(ProcEvent("list_cancel", self.recipe_name, code))
         self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1

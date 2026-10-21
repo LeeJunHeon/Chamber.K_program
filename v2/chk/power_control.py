@@ -36,11 +36,15 @@ class DcControl:
         self.state = self.IDLE
         self.target = 0.0
         self.current = 0.0
-        self.voltage_guard = float(cfg["DC_MAX_VOLTAGE"]) - 20.0
         self.stall_since: Optional[float] = None
         self.reached = False
         self.started_ok: Optional[bool] = None
         dc.meas_listeners.append(self._on_meas)
+
+    @property
+    def voltage_guard(self) -> float:
+        """전압 상한 근처(DC_MAX_VOLTAGE − 20 V) — 쓰는 때 읽는다(웹 설정 적용, 5-6 ④)."""
+        return float(self.cfg["DC_MAX_VOLTAGE"]) - 20.0
 
     def start(self, target_w: float, tick=None) -> None:
         c = self.cfg

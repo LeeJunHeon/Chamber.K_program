@@ -73,7 +73,7 @@ def parse_status(b: bytes) -> Dict[str, bool]:
 class RfPulseDriver:
     def __init__(self, clock, worker: Worker, cfg: Dict[str, Any], writes_allowed: bool,
                  on_event: Optional[Callable[[RfpEvent], None]] = None) -> None:
-        self.clock, self.worker, self.cfg = clock, worker, dict(cfg)
+        self.clock, self.worker, self.cfg = clock, worker, cfg            # 같은 설정 사전(웹 설정 적용이 그 자리에서 바꾼다)
         self.writes_allowed = writes_allowed
         self.on_event = on_event
         self.addr = cfg["RFPULSE_ADDR"]

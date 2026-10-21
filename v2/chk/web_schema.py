@@ -27,7 +27,7 @@ from v2.chk import process_states as PS
 from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -41,6 +41,7 @@ EVENTS: tuple = (
     ("warn", "경고(OUTPUTS_LEFT_ON·COND_WAIT_TIMEOUT·ADJUST_SETTLE_TIMEOUT …)", ()),
     ("reject", "적재·시작 거부(블록 검사 오류 목록)", ("errors",)),
     ("plc_manual", "공정 중 PLC 버튼(PLC_MANUAL_IN_PROCESS)", ("target", "on", "source", "t", "run_id", "state", "level")),
+    ("stop_rest", "정상 끝 정지 중 STOP·이상 중단 — 뺀 단계를 이어서 실행(남김 취소)", ("steps", "level")),
     ("run_end", "행 끝", ("name", "status", "reason")),
     ("list_done", "레시피 리스트 끝", ()),
     ("list_cancel", "레시피 리스트 취소", ()),

@@ -5,6 +5,7 @@
 - PLC_BUTTON: PLC 링크가 없으면 LINK_DOWN(v1 B6). 공정 중에도 모두 허용(v1, 사용자 결정 2026-10-20) — 공정 중 실행은
   공정 기록에 PLC_MANUAL_IN_PROCESS(info: 대상·켬/끔·출처·시각).
 - ALL_STOP: 공정 여부와 무관 — SafetyEngine.all_stop.
+- CONFIG_APPLY·CONFIG_ROLLBACK(웹만): system.ConfigApply → ConfigStore.apply/rollback. 결과는 config_ack 메시지.
 - 결과는 on_result(cid, kind, 결과, 출처) — MessageHub 가 cmd_result 메시지로(어느 화면이든 누가 무엇을 했는지 보게).
 """
 from __future__ import annotations
@@ -26,10 +27,11 @@ class CmdResult:
 
 class ChkCore:
     def __init__(self, cfg: Dict[str, Any], process, heater, safety, plc, ig, links: Dict[str, Callable[[], bool]],
-                 on_result: Optional[Callable[[Any, str, CmdResult, Source], None]] = None) -> None:
+                 on_result: Optional[Callable[[Any, str, CmdResult, Source], None]] = None, config=None) -> None:
         self.cfg, self.process, self.heater, self.safety, self.plc, self.ig = cfg, process, heater, safety, plc, ig
         self.links = links
         self.on_result = on_result
+        self.config = config                    # system.ConfigApply(없으면 설정 명령은 UNKNOWN_COMMAND)
 
     def _plc_up(self) -> bool:
         return self.links.get("plc", lambda: False)()
@@ -60,6 +62,11 @@ class ChkCore:
         if kind == "ALL_STOP":
             self.safety.all_stop()
             return None
+        if kind in ("CONFIG_APPLY", "CONFIG_ROLLBACK"):
+            if self.config is None:
+                return "UNKNOWN_COMMAND"
+            by = str(a.get("requestedBy") or a.get("by") or getattr(source, "value", source))
+            return self.config.apply(a, by) if kind == "CONFIG_APPLY" else self.config.rollback(by)
         if kind == "BUZZ_STOP":
             if not self._plc_up():
                 return "LINK_DOWN"

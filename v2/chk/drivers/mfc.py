@@ -87,7 +87,7 @@ def parse_r69(line: str) -> str:
 class MfcDriver:
     def __init__(self, clock, worker: Worker, cfg: Dict[str, Any], writes_allowed: bool,
                  on_event: Optional[Callable[[MfcEvent], None]] = None) -> None:
-        self.clock, self.worker, self.cfg = clock, worker, dict(cfg)
+        self.clock, self.worker, self.cfg = clock, worker, cfg            # 같은 설정 사전(웹 설정 적용이 그 자리에서 바꾼다)
         self.writes_allowed = writes_allowed
         self.on_event = on_event
         self.gap_s = cfg["MFC_CMD_GAP_MS"] / 1000.0
