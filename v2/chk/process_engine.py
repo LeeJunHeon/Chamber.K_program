@@ -16,6 +16,14 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
 딜레이 행·행 사이에는 장비가 없어 정지 순서 없이 리스트를 바로 정리한다(v1 cancel_csv_list_now). 리스트가 끝나거나 취소되면
 적재도 해제한다(v1 st.clear_csv_list — process_states 의 DONE→LOADED 는 쓰지 않음).
 시작 거부(결정 5-2-4): 레시피가 쓰는 장비가 설정에서 꺼져 있으면 DEVICE_DISABLED, 연결 안 됐으면 LINK_DOWN.
+
+블록 공정(blocks.py, 사용자 결정 2026-10-20): 한 행 = 블록 목록. v1 행은 기본 템플릿 블록으로 바꿔 받는다(같은 스텝).
+- RECIPE_LOAD·PROCESS_START 는 v1 행과 {"blocks": [...]} 행을 둘 다 받는다(CSV 리스트·딜레이 행은 지금처럼).
+- 블록 시작·끝·결과는 ProcEvent("block")(번호·종류·라벨·값). 화면·기록 상태는 지금 블록 번호/전체·종류·라벨·남은 시간
+  (proc.block·proc.block_type·proc.block_label·proc.remain_s) — 상태 이름은 블록의 stage(기본 템플릿은 v1 이름).
+- 정상 끝 정지 블록(END_STOP)이 정지 순서(SafetyEngine.end_row)를 낸다. 중간에 있으면 정지 순서 뒤 다음 블록으로.
+  정상 끝 정지 없이 목록이 끝나면 켜진 출력을 경고(OUTPUTS_LEFT_ON)로만 남기고 끄지 않는다.
+- 사용 장비(uses_*)는 블록에서(blocks.uses_of). 안전 규칙의 적용 구간은 장비 상태(dc_ramping·rf_ramping)와 블록 감시(watching).
 """
 from __future__ import annotations
 
@@ -25,11 +33,12 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.judge import Persist
+from v2.chk import blocks as BK
 from v2.chk import process_states as PS
 from v2.chk import recipe as RC
 from v2.chk.power_control import DcControl, RfControl
 from v2.chk.process_steps import (HEATER_RAMP_SETTLE_S, HEATER_SET_SETTLE_S, POWER_STOP_SETTLE_S, ProcessStep,
-                                  StepEvent, StepRunner, base_pressure_of, build_process_steps, heater_used,
+                                  StepEvent, StepRunner, base_pressure_of, heater_used,
                                   row_to_params)
 
 ACT = frozenset(PS.ACTIVE_STATES)
@@ -95,6 +104,17 @@ class ProcessEngine:
         self._settle_pending = False
         self.power: Dict[str, Any] = {}
         self.base: Dict[str, Any] = {}
+        # 블록
+        self.blocks: List[dict] = []
+        self.insts: List[BK.BlockInst] = []
+        self.uses: Dict[str, Any] = BK.uses_of([])
+        self.block_idx = -1
+        self.block_t0 = 0.0
+        self.overrides: Dict[str, Any] = {}     # 공정 중 수정 — 항목 키 → 이번 공정의 새 값
+        self.cur_vals: Dict[str, Any] = {}      # 스텝이 장비에 쓴 값(항목 키 → 값)
+        self.flow_on = {1: False, 2: False}
+        self.rfp_target: Optional[float] = None
+        self._end_stop_resume = False
 
     # ── 안전 엔진이 보는 것 ──
     @property
@@ -108,19 +128,43 @@ class ProcessEngine:
 
     @property
     def uses_dc(self) -> bool:
-        return float(self.params.get("dc_power") or 0) > 0
+        return bool(self.uses["dc"])
 
     @property
     def uses_rf(self) -> bool:
-        return float(self.params.get("rf_power") or 0) > 0
+        return bool(self.uses["rf"])
 
     @property
     def uses_rfp(self) -> bool:
-        return bool(self.params.get("use_rf_pulse")) and float(self.params.get("rf_pulse_power") or 0) > 0
+        return bool(self.uses["rfp"])
 
     @property
     def uses_heater(self) -> bool:
-        return heater_used(self.params)
+        return bool(self.uses["heater"])
+
+    @property
+    def dc_ramping(self) -> bool:
+        """무출력 판정(S31A) 구간 — DC 가 램프업 중(v1 _tick_ramping_up)."""
+        return self.dcc.state == DcControl.RAMPING_UP
+
+    @property
+    def rf_ramping(self) -> bool:
+        return self.rfc.state == RfControl.RAMPING_UP
+
+    @property
+    def block(self) -> Optional[BK.BlockInst]:
+        return self.insts[self.block_idx] if 0 <= self.block_idx < len(self.insts) else None
+
+    @property
+    def block_type(self) -> Optional[str]:
+        b = self.block
+        return b.type if b is not None and self.state in ACT else None
+
+    def watching(self, item: str) -> bool:
+        """이탈 감시(S31C·S33B·S34A·S38A·S38B) — 지금 블록의 watch. 블록이 없으면 기본값."""
+        b = self.block
+        w = b.watch if b is not None else BK.WATCH_DEFAULT
+        return bool(w.get(item, False))
 
     @property
     def rf_ref_waiting(self) -> bool:
@@ -152,16 +196,17 @@ class ProcessEngine:
 
     @property
     def rfp_set_w(self):
-        return float(self.params.get("rf_pulse_power") or 0) if self.uses_rfp else None
+        return self.rfp_target if self.uses_rfp else None
 
     @property
     def flow_set(self) -> Dict[str, Optional[float]]:
-        return {"ar": self.params.get("ar_flow") if self.params.get("use_ar_gas") else None,
-                "o2": self.params.get("o2_flow") if self.params.get("use_o2_gas") else None}
+        """유량 이탈(S38A) 기준 — 켜 둔 채널의 설정값(공정 중 수정 반영)."""
+        return {"ar": self.cur_vals.get("mfc.ar_flow") if self.flow_on[1] else None,
+                "o2": self.cur_vals.get("mfc.o2_flow") if self.flow_on[2] else None}
 
     @property
     def sp1_mtorr(self):
-        return self.params.get("sp1_set") or None
+        return self.cur_vals.get("mfc.wp") or None
 
     # ── 기록 ──
     def _emit(self, e: ProcEvent) -> None:
@@ -187,8 +232,32 @@ class ProcessEngine:
             self._emit(ProcEvent("state", f"{old}→{s}", data={"from": old, "to": s, "t": self.clock.monotonic()}))
 
     def snapshot_fields(self) -> Dict[str, Any]:
+        b = self.block if self.row_is_process and (self.state in ACT or self.state == "STOPPING") else None
         return {"proc.state": self.state, "proc.run_id": self.run_id or None,
-                "proc.row": (self.csv_index + 1) if self.list_active else None}
+                "proc.row": (self.csv_index + 1) if self.list_active else None,
+                "proc.block": f"{b.index + 1}/{len(self.insts)}" if b is not None else None,
+                "proc.block_type": b.type if b is not None else None,
+                "proc.block_label": (b.label or b.no) if b is not None else None,
+                "proc.remain_s": self.remain_s()}
+
+    def remain_s(self) -> Optional[int]:
+        """지금 대기 스텝(DELAY·조건 대기·압력 대기)의 남은 초 — 화면용. 딜레이 행이면 그 남은 시간."""
+        now = self.clock.monotonic()
+        if self.state == "CSV_DELAY":
+            return max(0, int(round(self.delay_s - (now - self.delay_t0))))
+        r = self.runner
+        if r is None or self.state not in ACT or r.step is None or r.cur is None:
+            return None
+        s, cur = r.step, r.cur
+        if s.action == "DELAY":
+            dur = float(cur.extra.get("dur", s.duration_sec) or 0)
+        elif s.action == "COND_WAIT":
+            dur = float(s.params["timeout_sec"])
+        elif s.action == "MFC_CMD" and s.params[0] == "WAIT_PRESSURE":
+            dur = float(s.params[1]["timeout_sec"])
+        else:
+            return None
+        return max(0, int(round(dur - (now - cur.t0))))
 
     def ui_check(self) -> Dict[str, Any]:
         """v1 골든 check 와 같은 뜻의 값(process_running·csv_mode·csv_index·csv_delay_active)."""
@@ -219,13 +288,39 @@ class ProcessEngine:
                 return None, "RECIPE_INVALID"
             if not any(v not in (None, "", False) for v in r.values()):
                 continue                                # 빈 행(v1 row_has_content)
-            ok, errs, _ = RC.check_process_row(r, self.cfg)
-            if errs:
-                return None, _row_error_code(errs)
+            ok, err = self._check_row(r)
+            if err:
+                return None, err
             out.append(ok)
         if not out:
             return None, "RECIPE_INVALID"
         return out, None
+
+    def _check_row(self, r: Dict[str, Any]) -> tuple:
+        """행 하나 → (정리된 행, 사유). 블록 행 {"process_name"(선택), "blocks": [...]} 또는 v1 행·딜레이 행."""
+        if "blocks" in r:
+            if set(r) - {"process_name", "blocks"} or not isinstance(r.get("process_name", ""), (str, type(None))):
+                return None, "RECIPE_INVALID"
+            bl, errs, warns = BK.check_blocks(r["blocks"], self.cfg)
+            if errs:
+                self._emit(ProcEvent("reject", "; ".join(errs[:5]), _row_error_code(errs), {"errors": errs}))
+                return None, _row_error_code(errs)
+            return {"process_name": r.get("process_name") or "", "blocks": bl}, None
+        ok, errs, _ = RC.check_process_row(r, self.cfg)
+        if errs:
+            return None, _row_error_code(errs)
+        return ok, None
+
+    def _row_uses(self, r: Dict[str, Any]) -> Dict[str, Any]:
+        """적재된 행이 쓰는 장비. v1 행은 그 행의 기본 템플릿과 같은 판단(지금 _device_guard 와 같은 조건)."""
+        if "blocks" in r:
+            return BK.uses_of(r["blocks"])
+        p = row_to_params(r, self.cfg)
+        u = BK.uses_of([])
+        u.update(dc=float(p.get("dc_power") or 0) > 0, rf=float(p.get("rf_power") or 0) > 0,
+                 rfp=bool(p.get("use_rf_pulse")) and float(p.get("rf_pulse_power") or 0) > 0,
+                 heater=heater_used(p), ig=base_pressure_of(p) > 0, ar=bool(p.get("use_ar_gas")), o2=bool(p.get("use_o2_gas")))
+        return u
 
     def clear(self) -> Optional[str]:
         with self._lock:
@@ -245,18 +340,22 @@ class ProcessEngine:
                 return "PROCESS_RUNNING"
             if self.rows:
                 return "RECIPE_LOADED"
-            r = {k: v for k, v in dict(row or {}).items() if k not in ("use_heater", "heater_temp", "heater_ramp")}
-            ok, errs, _ = RC.check_process_row(r, self.cfg)
-            if errs:
-                return _row_error_code(errs)
+            row = dict(row or {})
+            if "blocks" not in row:                     # v1 수동 공정은 히터를 쓰지 않는다(히터 열 무시)
+                row = {k: v for k, v in row.items() if k not in ("use_heater", "heater_temp", "heater_ramp")}
+            ok, why = self._check_row(row)
+            if why:
+                return why
             if ok.get("delay_s") is not None:
                 return "RECIPE_INVALID"
-            params = row_to_params(ok, self.cfg)
-            why = self._start_guard(params)
+            u = self._row_uses(ok)
+            if u["heater"] and self.heater.recipe_running:
+                return "HEATER_RECIPE_CONFLICT"
+            why = self._device_guard(u) or self._plc_guard()
             if why:
                 return why
             self.list_active, self.csv_index = False, -1
-            self._start_row(params, "Single CHK")
+            self._start_row(ok, "Single CHK")
             return None
 
     def start_recipe(self) -> Optional[str]:
@@ -265,11 +364,12 @@ class ProcessEngine:
                 return "PROCESS_RUNNING"
             if not self.rows:
                 return "RECIPE_NOT_LOADED"
-            if self.heater.recipe_running and any(r.get("use_heater") is True for r in self.rows):
+            if self.heater.recipe_running and any(r.get("delay_s") is None and self._row_uses(r)["heater"]
+                                                  for r in self.rows):
                 return "HEATER_RECIPE_CONFLICT"
             for r in self.rows:
                 if r.get("delay_s") is None:
-                    why = self._device_guard(row_to_params(r, self.cfg))
+                    why = self._device_guard(self._row_uses(r))
                     if why:
                         return why
             why = self._plc_guard()
@@ -287,33 +387,30 @@ class ProcessEngine:
     @property
     def list_uses_heater(self) -> bool:
         """적재된 행 중 하나라도 히터를 쓰는가(v1 _csv_list_uses_heater)."""
-        return any(r.get("use_heater") is True and float(r.get("heater_temp") or 0) > 0 for r in self.rows)
+        return any(r.get("delay_s") is None and self._row_uses(r)["heater"] for r in self.rows)
 
-    def _device_guard(self, p: Dict[str, Any]) -> Optional[str]:
-        """결정 5-2-4 — 꺼진 장비 DEVICE_DISABLED, 연결 안 된 장비 LINK_DOWN."""
+    def _device_guard(self, u: Dict[str, Any]) -> Optional[str]:
+        """결정 5-2-4 — 꺼진 장비 DEVICE_DISABLED, 연결 안 된 장비 LINK_DOWN. u = 행이 쓰는 장비(_row_uses)."""
         c = self.cfg
-        if heater_used(p) and not c["HEATER_ENABLED"]:
+        if u["heater"] and not c["HEATER_ENABLED"]:
             return "DEVICE_DISABLED"
-        if base_pressure_of(p) > 0 and not c["IG_ENABLED"]:
+        if u["ig"] and not c["IG_ENABLED"]:
             return "DEVICE_DISABLED"
-        if p.get("use_rf_pulse") and float(p.get("rf_pulse_power") or 0) > 0 and not c["RFPULSE_ENABLED"]:
+        if u["rfp"] and not c["RFPULSE_ENABLED"]:
             return "DEVICE_DISABLED"
         if getattr(self.mfc, "scale_mismatch", None):
             return "MFC_SCALE_MISMATCH"                          # 연결 때 R33·R34·R74·R75·R37 대조(값은 자동으로 바꾸지 않음)
         need = ["plc", "mfc"]
-        if float(p.get("dc_power") or 0) > 0:
+        if u["dc"]:
             need.append("dc")
-        if p.get("use_rf_pulse") and float(p.get("rf_pulse_power") or 0) > 0:
+        if u["rfp"]:
             need.append("rfpulse")
-        if base_pressure_of(p) > 0:
+        if u["ig"]:
             need.append("ig")
         for k in need:
             if not self.links.get(k, lambda: False)():
                 return "LINK_DOWN"
         return None
-
-    def _start_guard(self, p: Dict[str, Any]) -> Optional[str]:
-        return self._device_guard(p) or self._plc_guard()
 
     def stop(self) -> None:
         """사용자 STOP — 지금 행 중단 + 리스트 취소(v1 ProcessService.stop)."""
@@ -355,8 +452,8 @@ class ProcessEngine:
             if self.state in ACT:
                 self._set_state("STOPPING")
 
-    def _halt(self) -> None:
-        if self.runner is not None:
+    def _halt(self, cancel_runner: bool = True) -> None:
+        if self.runner is not None and cancel_runner:
             self.runner.cancel()
         self.dcc.stop()
         self.rfc.stop()
@@ -367,9 +464,20 @@ class ProcessEngine:
         with self._lock:
             if not self.row_is_process:
                 return
+            r = self.runner
+            if (kind == "row_end" and self.end_kind is None and self._end_stop_resume and r is not None
+                    and not r.cancelled and r.cur is not None):
+                # 목록 중간의 정상 끝 정지 블록 — 정지 순서 뒤 다음 블록으로
+                self._end_stop_resume = False
+                r.cur.done = True
+                nxt = r.steps[r.idx + 1].state if r.idx + 1 < len(r.steps) else "PRE_CLEAN"
+                self._set_state(nxt if nxt in ACT else "WAIT")
+                return
+            self._end_stop_resume = False
             if kind == "row_end" and self.end_kind is None:
                 self.end_kind = "done"
             kind_, code = self.end_kind or "error", self.end_code
+            self._block_end("ok" if kind_ == "done" else kind_, code)
             self._emit(ProcEvent("run_end", kind_, code, {"name": self.run_name, "status": kind_, "reason": code}))
             self.row_is_process = False
             self.filament_by_process = False
@@ -409,33 +517,82 @@ class ProcessEngine:
                 self._set_state("CSV_DELAY")
                 return
             n, i = len(self.rows), self.csv_index + 1
-            self._start_row(row_to_params(r, self.cfg), f"CSV {i}/{n} - {r.get('process_name') or f'STEP{i}'}")
+            self._start_row(r, f"CSV {i}/{n} - {r.get('process_name') or f'STEP{i}'}")
             return
 
-    def _start_row(self, params: Dict[str, Any], name: str) -> None:
+    def _start_row(self, row: Dict[str, Any], name: str) -> None:
+        """행 시작 — 블록 행은 그 블록, v1 행은 기본 템플릿 블록(blocks.template_blocks)."""
+        ig_en, rfp_en = bool(self.cfg["IG_ENABLED"]), bool(self.cfg["RFPULSE_ENABLED"])
+        if "blocks" in row:
+            blocks = row["blocks"]
+            params = BK.params_summary(blocks, row.get("process_name") or "", self.cfg)
+        else:
+            params = row_to_params(row, self.cfg)
+            blocks = BK.template_blocks(params, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
+        steps, insts = BK.expand(blocks, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
         self.params, self.run_name, self.run_id = params, name, uuid.uuid4().hex[:12]
+        self.blocks, self.insts, self.uses = blocks, insts, BK.uses_of(blocks)
+        self.block_idx, self.overrides, self.cur_vals = -1, {}, {}
+        self.flow_on, self.rfp_target, self._end_stop_resume = {1: False, 2: False}, None, False
         self.end_kind = self.end_code = None
         self.row_is_process, self.comm_aborted, self.filament_by_process = True, False, False
         self.dc_on = self.rf_on = self.rfp_on = False
         self.power, self.base = {}, {}
-        steps = build_process_steps(params, self.cfg, ig_enabled=bool(self.cfg["IG_ENABLED"]),
-                                    rfpulse_present=bool(self.cfg["RFPULSE_ENABLED"]))
         h = {"DC_POWER_STOP": self._h_dc_stop, "RF_POWER_STOP": self._h_rf_stop, "RF_PULSE_STOP": self._h_rfp_stop,
              "HEATER_RAMP": self._h_heater_ramp, "HEATER_SET": self._h_heater_set, "HEATER_WAIT": self._h_heater_wait,
              "IG_FILAMENT_ON": self._h_ig_on, "IG_BASE_WAIT": self._h_ig_wait, "IG_FILAMENT_OFF": self._h_ig_off,
-             "POWER_WAIT": self._h_power_wait}
-        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, h, self._step_event, cfg=self.cfg)
+             "POWER_WAIT": self._h_power_wait, "POWER_START": self._h_power_wait, "RF_RAMP_OFF": self._h_rf_ramp_off,
+             "HEATER_OFF": self._h_heater_off, "END_STOP": self._h_end_stop}
+        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, h, self._step_event, cfg=self.cfg,
+                                 resolve=self._resolve, on_step_done=self._on_step_done)
         if self.safety is not None:
             self.safety.engine.new_run()
-        self._emit(ProcEvent("run_start", name, data={"name": name, "params": dict(params), "run_id": self.run_id}))
-        self._emit(ProcEvent("steps", name, data={"steps": [s.unit() for s in steps]}))
-        self._set_state(steps[0].state)
+        self._emit(ProcEvent("run_start", name, data={"name": name, "params": dict(params), "run_id": self.run_id,
+                                                       "blocks": [b.record() for b in insts]}))
+        self._emit(ProcEvent("steps", name, data={"steps": [s.unit() for s in steps if not s.internal]}))
+        self._set_state(steps[0].state if steps[0].state in ACT else "WAIT")
+
+    # ── 블록 기록 ──
+    def _block_start(self, idx: int) -> None:
+        if idx == self.block_idx:
+            return
+        self._block_end("ok")
+        self.block_idx, self.block_t0 = idx, self.clock.monotonic()
+        b = self.block
+        if b is not None:
+            self._emit(ProcEvent("block", f"{b.no} {b.type} {b.label}".strip(), data=dict(
+                b.record(), phase="start", index=b.index + 1, total=len(self.insts), t=self.clock.wall(), run_id=self.run_id)))
+
+    def _block_end(self, result: str, code: Optional[str] = None) -> None:
+        b = self.block
+        if b is None or b.ended:
+            return
+        b.ended = True
+        self._emit(ProcEvent("block", f"{b.no} {b.type} → {result}", code, data=dict(
+            b.record(), phase="end", result=result, reason=code, index=b.index + 1, total=len(self.insts),
+            elapsed_s=round(self.clock.monotonic() - self.block_t0, 1), t=self.clock.wall(), run_id=self.run_id)))
 
     def _step_event(self, e: StepEvent) -> None:
+        if e.kind in ("step", "istep") and self.runner is not None and 0 <= e.index < len(self.runner.steps):
+            self._block_start(self.runner.steps[e.index].block)
         if e.kind == "step":
             self._emit(ProcEvent("step", e.detail))
         elif e.kind == "warn":
             self._emit(ProcEvent("warn", e.detail, e.code))
+        elif e.kind == "failed":
+            self._block_end("failed", e.code)
+
+    # ── 값(공정 중 수정이 바꾼 값 → 그 항목을 쓰는 스텝) ──
+    def _resolve(self, s: ProcessStep, v: Any) -> Any:
+        if s.ref and s.ref in self.overrides and not s.ref.startswith("process."):
+            v = self.overrides[s.ref]
+        if s.ref:
+            self.cur_vals[s.ref] = v
+        return v
+
+    def _on_step_done(self, s: ProcessStep) -> None:
+        if s.action == "MFC_CMD" and s.params[0] in ("FLOW_ON", "FLOW_OFF"):
+            self.flow_on[int(s.params[1]["channel"])] = s.params[0] == "FLOW_ON"
 
     # ── tick ──
     def on_tick_start(self, tick) -> None:
@@ -464,16 +621,36 @@ class ProcessEngine:
                     self.safety.engine.abort(self.runner.failed, rule="process")
                 return
             if self.runner.finished and self.state in ACT:
-                if self.safety is not None and self.safety.engine.end_row():
-                    self._halt()                          # 제어 루프를 멈추고 정지 순서로(상태 STOPPING — 진행 상태 규칙 끔)
-                    self._set_state("STOPPING")
+                self._finish_without_stop()
                 return
             s = self.runner.step
             if s is not None and self.state in ACT:
                 st = s.state
                 if s.action == "HEATER_WAIT" and self.heater.process_phase == "HOLD_WAIT":
                     st = "HEATER_HOLD_WAIT"
-                self._set_state(st)
+                if st in ACT:
+                    self._set_state(st)
+
+    def _finish_without_stop(self) -> None:
+        """정상 끝 정지 블록 없이 목록이 끝남 — 켜진 출력은 끄지 않고 경고만(사용자 결정 2026-10-20). 제어 루프는 멈춘다
+        (출력은 마지막 설정 그대로)."""
+        on = []
+        if self.dc_on:
+            on.append("dc")
+        if self.rf_on or self.rfc.state != RfControl.IDLE:
+            on.append("rf")
+        if self.rfp_on:
+            on.append("rfpulse")
+        on += [g for ch, g in ((1, "ar"), (2, "o2")) if self.flow_on[ch]]
+        if self.uses_heater and self.heater.st.get("run"):
+            on.append("heater")
+        self.dcc.stop()
+        self.rfc.stop()
+        if on:
+            self._emit(ProcEvent("warn", f"정상 끝 정지 블록 없이 끝남 — 켜져 있는 출력 {', '.join(on)} (끄지 않음)",
+                                 "OUTPUTS_LEFT_ON", {"outputs": on, "level": "warn"}))
+        self.end_kind = self.end_kind or "done"
+        self.on_stop_done("blocks_end")
 
     # ── 스텝 처리기(StepRunner handlers) ──
     def _h_dc_stop(self, r, s, cur, view, now):
@@ -481,6 +658,7 @@ class ProcessEngine:
             cur.issued = True
             self.dcc.stop()
             self.dc.output_off_confirmed()
+            self.dc_on = False
         return "next" if now - cur.t0 >= POWER_STOP_SETTLE_S else "wait"
 
     def _h_rf_stop(self, r, s, cur, view, now):
@@ -488,13 +666,62 @@ class ProcessEngine:
             cur.issued = True
             self.rfc.stop()
             self.plc.rf_off()
+            self.rf_on = False
         return "next" if now - cur.t0 >= POWER_STOP_SETTLE_S else "wait"
 
     def _h_rfp_stop(self, r, s, cur, view, now):
         if not cur.issued:
             cur.issued = True
             self.rfp.rf_off_confirmed()
+            self.rfp_on, self.rfp_target = False, None
         return "next" if now - cur.t0 >= POWER_STOP_SETTLE_S else "wait"
+
+    def _h_rf_ramp_off(self, r, s, cur, view, now):
+        """파워 끄기 블록의 RF — 정지 순서와 같은 처리기(RF_RAMP_DOWN → RF_SAFE_OFF)를 따로 스레드에서(tick 을 막지 않음)."""
+        if not cur.issued:
+            cur.issued = True
+            self.rfc.stop()
+            hs = self.safety.engine.handlers if self.safety is not None else {}
+
+            def done(err=None):
+                cur.err, cur.done = err, True
+                self.clock.notify()
+
+            def run():
+                if "RF_RAMP_DOWN" in hs:
+                    hs["RF_RAMP_DOWN"]({}, lambda err=None: None)
+                if "RF_SAFE_OFF" in hs:
+                    hs["RF_SAFE_OFF"]({}, done)
+                else:
+                    self.plc.rf_off(on_done=lambda res: done(None))
+            self.clock.start_thread(run, "rf-rampdown")
+        if cur.done:
+            self.rf_on = False
+            if cur.err:
+                self._emit(ProcEvent("warn", f"RF OFF 결과 오류: {cur.err}", "RF_OFF_FAILED"))
+            return "next"
+        if now - cur.t0 > float(self.cfg["STOP_RF_RAMPDOWN_TIMEOUT_SEC"]) + 10.0:
+            return ("fail", "INTERNAL_ERROR")
+        return "wait"
+
+    def _h_heater_off(self, r, s, cur, view, now):
+        if not cur.issued:
+            cur.issued = True
+            self.heater.process_off()
+        return "next" if now - cur.t0 >= HEATER_RAMP_SETTLE_S else "wait"
+
+    def _h_end_stop(self, r, s, cur, view, now):
+        """정상 끝 정지 블록 — 지금 행 끝 정지 순서(SafetyEngine.end_row). 끝나면 on_stop_done 이 행을 끝내거나(마지막 블록)
+        다음 블록으로 넘긴다(중간 블록)."""
+        if not cur.issued:
+            cur.issued = True
+            skip = tuple((s.spec or {}).get("skip") or ())
+            if self.safety is not None and self.safety.engine.end_row(skip=skip):
+                self._end_stop_resume = r.idx + 1 < len(r.steps)
+                self._halt(cancel_runner=False)            # 제어 루프를 멈추고 정지 순서로(상태 STOPPING — 진행 상태 규칙 끔)
+                self._set_state("STOPPING")
+            return "wait"
+        return "next" if cur.done else "wait"
 
     def _h_heater_ramp(self, r, s, cur, view, now):
         if not cur.issued:
@@ -509,6 +736,9 @@ class ProcessEngine:
         return "next" if now - cur.t0 >= HEATER_SET_SETTLE_S else "wait"
 
     def _h_heater_wait(self, r, s, cur, view, now):
+        if not self.heater.proc.get("target"):
+            self._emit(ProcEvent("warn", "히터 목표가 없음(승온 블록 없음) — 도달 대기를 건너뜀", "HEATER_NO_TARGET"))
+            return "next"
         res = self.heater.process_wait_tick(now)
         if res == "reached":
             return "next"
@@ -612,29 +842,49 @@ class ProcessEngine:
         return min(max(float(c["POWER_WAIT_TIMEOUT_SEC"]), need), float(c["POWER_WAIT_TIMEOUT_MAX_SEC"]))
 
     def _h_power_wait(self, r, s, cur, view, now):
-        p = self.params
-        dc_w, rf_w = float(p.get("dc_power") or 0), float(p.get("rf_power") or 0)
-        rfp_w = float(p.get("rf_pulse_power") or 0) if self.uses_rfp else 0.0
-        pw = self.power
+        """파워 켜기 블록(POWER_WAIT = 도달 대기, POWER_START = 켜기만). 값은 블록(spec) — 공정 중 수정한 값이 있으면 그 값.
+        이미 켜진 장비는 다시 켜지 않고 목표만 바꾼다(DC 제어 목표·RF 1 W/s 램프)."""
+        sp = s.spec or {}
+        ov = self.overrides
+        dc_w = float(ov.get("dc.power", sp.get("dc") or 0)) if sp.get("dc") else 0.0
+        rf_w = float(ov.get("rf.power", sp.get("rf") or 0)) if sp.get("rf") else 0.0
+        rfp_w = float(ov.get("rfpulse.power", sp.get("rfp") or 0)) if sp.get("rfp") else 0.0
+        fhz = ov.get("rfpulse.freq_hz", sp.get("freq_hz")) if rfp_w else None
+        duty = ov.get("rfpulse.duty", sp.get("duty")) if rfp_w else None
+        pw = cur.extra
         if not cur.issued:
             cur.issued = True
             if not (dc_w or rf_w or rfp_w):
                 return "next"
-            pw.update(timeout=self.power_wait_timeout(dc_w, rf_w, rfp_w), rfp=None)
+            pw.update(timeout=sp.get("timeout") or self.power_wait_timeout(dc_w, rf_w, rfp_w), rfp=None)
+            self.power = pw
             nt = _NextTick(self._next_tick_mono)
+            p = self.params
             if dc_w > 0:
-                self.dc_on = True
-                self.dcc.start(dc_w, tick=nt)
+                self.cur_vals["dc.power"] = dc_w
+                if self.dc_on and self.dcc.state != DcControl.IDLE:
+                    self.dcc.retarget(dc_w)
+                else:
+                    self.dc_on = True
+                    self.dcc.start(dc_w, tick=nt)
             if rf_w > 0:
-                self.rf_on = True
-                self.rfc.start(rf_w, float(p.get("rf_offset") or 0.0), float(p.get("rf_param") or 1.0))
+                self.cur_vals["rf.power"] = rf_w
+                if self.rf_on and self.rfc.state != RfControl.IDLE:
+                    self.rfc.retarget(rf_w)
+                else:
+                    self.rf_on = True
+                    self.rfc.start(rf_w, float(p.get("rf_offset", self.cfg["RF_CAL_OFFSET"]) or 0.0),
+                                   float(p.get("rf_param", self.cfg["RF_CAL_GAIN"]) or 1.0))
             if rfp_w > 0:
-                self.rfp_on = True
+                self.rfp_on, self.rfp_target = True, rfp_w
+                self.cur_vals.update({"rfpulse.power": rfp_w, "rfpulse.freq_hz": fhz, "rfpulse.duty": duty})
                 def done(name, reason, results):
                     pw["rfp"] = reason is None
                     if self.safety is not None:
                         self.safety.on_rfp_start_done(name, reason, results)
-                self.rfp.start(rfp_w, freq_hz=p.get("rf_pulse_freq_hz"), duty=p.get("rf_pulse_duty"), on_done=done, tick=nt)
+                self.rfp.start(rfp_w, freq_hz=fhz, duty=duty, on_done=done, tick=nt)
+            if s.action == "POWER_START":
+                return "next"
         pend = []
         if dc_w > 0 and not self.dcc.reached:
             pend.append("dc")

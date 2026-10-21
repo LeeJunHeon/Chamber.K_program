@@ -60,10 +60,14 @@ class ChkCore:
             self._note_plc_manual("buzz_stop", True, source)
             return None
         if kind == "PROCESS_START":
+            if isinstance(a.get("blocks"), list) and "row" not in a:
+                return p.start_manual({"process_name": str(a.get("name") or ""), "blocks": a["blocks"]})
             if not isinstance(a.get("row"), dict):
                 return "BAD_ARGS"
             return p.start_manual(a["row"])
         if kind == "RECIPE_LOAD":
+            if isinstance(a.get("blocks"), list) and "rows" not in a:      # 블록 목록 하나 = 블록 행 하나
+                return p.load(str(a.get("name") or ""), [{"process_name": str(a.get("name") or ""), "blocks": a["blocks"]}])
             if not isinstance(a.get("rows"), list):
                 return "BAD_ARGS"
             return p.load(str(a.get("name") or ""), a["rows"])

@@ -426,6 +426,13 @@ class MfcDriver:
             self.sp_active = 0
         self._op(f"valve_{cmd}", gen(), on_done)
 
+    def valve_hold(self, on_done=None) -> None:
+        """H — 밸브를 그 자리에(압력 제어 멈춤) [MFC p.74]. 응답 규정이 없고 v1 은 쓰지 않았다 — 되읽기 없음(블록 공정 '밸브 정지')."""
+        def gen():
+            yield ("w", "H")
+            self.sp_active = 0
+        self._op("valve_H", gen(), on_done)
+
     def zero(self, cmd: str, on_done=None) -> None:
         """영점(L5~L8 1, Z1) — 되읽기 없음."""
         if not re.fullmatch(r"L[5-8] 1|Z1", cmd):

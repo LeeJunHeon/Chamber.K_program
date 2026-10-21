@@ -284,13 +284,14 @@ class SafetyEngine:
         self._start_seq("abort", self.stop_steps())
         return True
 
-    def end_row(self) -> bool:
-        """레시피 행 정상 끝 — 같은 정지 순서(가스·전원 정리)를 '정상 끝'으로 실행(v1: 모든 스텝 완료 → stop_process)."""
+    def end_row(self, skip=()) -> bool:
+        """레시피 행 정상 끝(정상 끝 정지 블록) — 같은 정지 순서(가스·전원 정리)를 '정상 끝'으로 실행
+        (v1: 모든 스텝 완료 → stop_process). skip = 이 블록에서 끈 단계 번호."""
         with self._lock:
             if not self.process.active or self.stopping is not None:
                 return False
             self.stopping = "row_end"
-        self._start_seq("row_end", self.stop_steps())
+        self._start_seq("row_end", self.stop_steps(skip) if skip else self.stop_steps())
         return True
 
     def stop(self) -> bool:
@@ -315,7 +316,7 @@ class SafetyEngine:
         self._start_seq("all_stop", self.all_stop_steps())
 
     # 장비 쪽이 덮어쓴다
-    def stop_steps(self) -> List[Step]:
+    def stop_steps(self, skip=()) -> List[Step]:
         return []
 
     def all_stop_steps(self) -> List[Step]:

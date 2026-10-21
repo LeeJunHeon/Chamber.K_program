@@ -11,6 +11,12 @@
 같은 모양으로 대신한다. 지금은 SimpleProcess(시험·시험대용).
 
 ALL STOP 은 v1 처럼 전부 끈다(사용자 결정 2026-10-20 — 펌프 유지 옵션 없음). on_hold(S46)는 실행하지 않는다.
+
+적용 구간(블록 공정, 사용자 결정 2026-10-20): 공정 상태 이름 대신 장비·블록 상태로 —
+무출력 S31A·S33A = 그 장비 램프 중(dc_ramping·rf_ramping), 두절·반사파 S30·S34C·S32 = 그 장비 출력 명령 뒤(dc_on·rfp_on·rf_on),
+이탈 감시 S31C·S33B·S34A·S38A·S38B = 지금 블록의 감시(watching), S39B = 베이스 압력 대기 블록, S34D = RF Pulse 를 쓰는 행(시작 실패 이벤트는 START 에서만 온다).
+기본 템플릿에서는 지금(5-3)과 같은 판정이다(SimpleProcess 는 상태 이름으로 같은 값을 낸다 — blocks.watch_for_state).
+STOP·이상 중단 정지 순서는 설정 STOP_SEQUENCE_ORDER(단계 번호 순서, 빠진 번호는 끔). ALL STOP 은 고정.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.safety_engine import LiveRule, SafetyEngine, SafetyEvent, Step
 from v2.common.worker import Status
+from v2.chk import blocks as BK
 from v2.chk import process_states as PS
 from v2.chk import safety_rules as SR
 from v2.chk.safety_rules import Act
@@ -121,11 +128,30 @@ class SimpleProcess:
     dc_comm_aborted: bool = False
     rfp_comm_aborted: bool = False
     heater_gas_state: str = "IDLE"
+    dc_ramp: Optional[bool] = None      # None 이면 상태 이름으로(POWER_WAIT 이고 유지 중이 아님)
+    rf_ramp: Optional[bool] = None
+    watch: Optional[Dict[str, bool]] = None   # None 이면 상태 이름으로(blocks.watch_for_state — 기본 템플릿과 같은 감시)
     log: List[tuple] = field(default_factory=list)
 
     @property
     def active(self) -> bool:
         return self.state in ACT
+
+    @property
+    def dc_ramping(self) -> bool:
+        return self.dc_ramp if self.dc_ramp is not None else (self.state == "POWER_WAIT" and not self.dc_holding)
+
+    @property
+    def rf_ramping(self) -> bool:
+        return self.rf_ramp if self.rf_ramp is not None else (self.state == "POWER_WAIT" and not self.rf_holding)
+
+    @property
+    def block_type(self) -> Optional[str]:
+        return BK.STAGE_TO_TYPE.get(self.state) if self.state in ACT else None
+
+    def watching(self, item: str) -> bool:
+        w = self.watch if self.watch is not None else BK.watch_for_state(self.state)
+        return bool(w.get(item, False))
 
     def on_stop(self) -> None:
         self.log.append(("stop",))
@@ -301,8 +327,8 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
         L("S31A", "abort", "tick",
           lambda v, c: None if _all(v.get("dc.i_set"), v.get("dc.p")) is None else
           (v.get("dc.i_set") >= C["DC_FAIL_ISET_A"] and v.get("dc.p") <= C["DC_FAIL_POWER_W"]),
-          _fixed(_abort("DC_NO_OUTPUT")), _p("DC_FAIL_SEC"), states=frozenset({"POWER_WAIT"}),
-          applies=lambda c: c.uses_dc, block="dc"),
+          _fixed(_abort("DC_NO_OUTPUT")), _p("DC_FAIL_SEC"), states=ACT,
+          applies=lambda c: c.uses_dc and c.dc_ramping, block="dc"),
         L("S31B", "abort", "tick",
           lambda v, c: None if v.get("dc.i") is None else v.get("dc.i") <= C["DC_MIN_CURRENT_ABORT"],
           _fixed(_abort("DC_LOW_CURRENT")), _p("DC_MIN_CURRENT_ABORT_SEC"), states=ACT,
@@ -310,8 +336,8 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
         L("S31C", "abort", "tick",
           lambda v, c: _dev(c.dc_set_w if c.dc_set_w is not None else v.get("dc.set_w"), v.get("dc.p"),
                             C["DC_TOLERANCE_W"], C["DC_POWER_ERROR_RATIO"]),
-          _fixed(_abort("DC_POWER_DEVIATION")), _p("DC_POWER_ERROR_SEC"), states=frozenset({"SHUTTER_DELAY", "MAIN"}),
-          applies=lambda c: c.uses_dc, block="dc"),
+          _fixed(_abort("DC_POWER_DEVIATION")), _p("DC_POWER_ERROR_SEC"), states=ACT,
+          applies=lambda c: c.uses_dc and c.watching("dc"), block="dc"),
         # RF(아날로그) 이상 중단은 v1 처럼 정지 순서의 램프다운(8 카운트/0.5 s) 뒤 OFF — 즉시 0 은 ALL STOP 만
         # (v1 RFpower.py:100-102·124-131·158-167·210-214). 반사파는 RF 를 켠 뒤만(RFpower.py:79-81),
         # 반사파 대기 중에는 무출력·이탈 판정을 멈춘다(RFpower.py:91-104).
@@ -322,19 +348,20 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
         L("S33A", "abort", "tick",
           lambda v, c: None if _all(v.get("rf.dac"), v.get("rf.fwd_w")) is None else
           (v.get("rf.dac") >= C["RF_FAIL_DAC_COUNTS"] and v.get("rf.fwd_w") <= C["RF_FAIL_FWD_W"]),
-          _fixed(_abort("RF_NO_OUTPUT")), _p("RF_FAIL_SEC"), states=frozenset({"POWER_WAIT"}),
-          applies=lambda c: c.uses_rf and not getattr(c, "rf_ref_waiting", False), block="rf"),
+          _fixed(_abort("RF_NO_OUTPUT")), _p("RF_FAIL_SEC"), states=ACT,
+          applies=lambda c: c.uses_rf and c.rf_ramping and not getattr(c, "rf_ref_waiting", False), block="rf"),
         L("S33B", "abort", "tick",
           lambda v, c: _dev(c.rf_set_w if c.rf_set_w is not None else v.get("rf.set_w"), v.get("rf.fwd_w"),
                             C["RF_TOLERANCE_W"], C["RF_POWER_ERROR_RATIO"]),
           _fixed(_abort("RF_POWER_DEVIATION")), _p("RF_POWER_ERROR_SEC"), states=ACT,
-          applies=lambda c: c.uses_rf and c.rf_holding and not getattr(c, "rf_ref_waiting", False), block="rf"),
+          applies=lambda c: c.uses_rf and c.rf_holding and not getattr(c, "rf_ref_waiting", False) and c.watching("rf"),
+          block="rf"),
         L("S34A", "abort", "tick",
           lambda v, c: None if v.get("rfp.out_on") is None else (bool(v.get("rfp.out_on")) and _dev_ge(
               c.rfp_set_w if c.rfp_set_w is not None else v.get("rfp.set_w"), v.get("rfp.fwd_w"),
               C["RFPULSE_FORP_TOLERANCE_PERCENT"] / 100.0) is True),
           _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_FORWARD_DEVIATION")), _p("RFPULSE_FORP_SEC"), states=ACT,
-          applies=lambda c: c.uses_rfp, block="rfp"),
+          applies=lambda c: c.uses_rfp and c.watching("rfp"), block="rfp"),
         L("S34B", "abort", "tick",
           lambda v, c: None if v.get("rfp.ref_w") is None else v.get("rfp.ref_w") >= C["RFPULSE_REFP_LIMIT_WATTS"],
           _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_REFLECTED_HIGH")), _p("RFPULSE_REFP_SEC"), states=ACT,
@@ -343,11 +370,11 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
         L("S34C", "abort", "tick", _age_ge(C, "rfp", "RFPULSE_COMM_LOSS_ABORT_SEC"), _s34c_acts, states=ACT,
           applies=lambda c: c.uses_rfp and bool(getattr(c, "rfp_on", False))),
         L("S38A", "notify", "tick", lambda v, c: _flow_dev(C, v, c), _fixed(_note("warn", "FLOW_DEVIATION")), _p("FLOW_ERROR_SEC"),
-          states=frozenset({"MAIN"}), block="mfc"),
+          states=ACT, applies=lambda c: c.watching("flow"), block="mfc"),
         L("S38B", "notify", "tick", lambda v, c: _pressure_dev(C, v, c), _fixed(_note("warn", "PRESSURE_DEVIATION")), _p("MFC_PRESSURE_WARN_SEC"),
-          states=frozenset({"MAIN"}), block="mfc"),
+          states=ACT, applies=lambda c: c.watching("pressure"), block="mfc"),
         L("S39B", "abort", "tick", _age_ge(C, "ig", "IG_COMM_LOSS_ABORT_SEC", skip_suppressed=True),
-          _fixed(_abort("IG_COMM_LOST")), states=frozenset({"BASE_WAIT"})),
+          _fixed(_abort("IG_COMM_LOST")), states=ACT, applies=lambda c: c.block_type == "base_wait"),
         L("S49", "abort", "tick", g("rfp.itl_open"), _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_FAULT")), states=ACT,
           applies=lambda c: c.uses_rfp, block="rfp"),
         # 이벤트
@@ -363,7 +390,7 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
         L("S27", "off", "heater_gas_failed", lambda v, c: True,
           _fixed(Act("GAS_FLOW_OFF"), Act("GAS_EXHAUST"), Act("GAS_VALVES_CLOSE"), _note("error", "HEATER_GAS_FAILED"))),
         L("S34D", "abort", "rfp_start_failed", lambda v, c: True, _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_START_FAILED")),
-          states=frozenset({"POWER_WAIT"})),
+          states=ACT, applies=lambda c: c.uses_rfp),
         L("S41", "maintain", "shutdown", lambda v, c: True, _fixed(Act("HEATER_FORCE_OFF"))),
     ]
     return rules
@@ -581,12 +608,20 @@ class ChkSafety:
                             s.nowait))
         return out
 
-    def stop_steps(self) -> List[Step]:
+    def stop_order(self) -> List[int]:
+        """STOP·이상 중단·행 끝 정지 순서 — 설정 STOP_SEQUENCE_ORDER(단계 번호, 빠진 번호는 끔). 비거나 없으면 표 순서."""
+        raw = str(self.cfg.get("STOP_SEQUENCE_ORDER") or "").strip()
+        nos = [s.no for s in SR.STOP_SEQUENCE]
+        return [int(x) for x in raw.split(",") if x.strip()] if raw else nos
+
+    def stop_steps(self, skip=()) -> List[Step]:
         p = self.process
         rf_on = lambda: p.uses_rf or bool(self.plc.last and (self.plc.last.values.get("rf.dac") or 0) > 0)
-        return self._steps(SR.STOP_SEQUENCE, {"1": lambda: p.filament_by_process, "3": lambda: p.uses_heater,
-                                              "4": lambda: bool(getattr(p, "dc_on", False)),
-                                              "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})
+        table = {s.no: s for s in SR.STOP_SEQUENCE}
+        order = [table[n] for n in self.stop_order() if n in table and n not in set(skip or ())]
+        return self._steps(order, {"1": lambda: p.filament_by_process, "3": lambda: p.uses_heater,
+                                   "4": lambda: bool(getattr(p, "dc_on", False)),
+                                   "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})
 
     def all_stop_steps(self) -> List[Step]:
         p = self.process

@@ -77,6 +77,15 @@ STATES: tuple = (
     S("SHUTTER_DELAY", "셔터 딜레이", A, skip_if="shutter_delay = 0", v1="pc:646-657",
       desc="레시피 시간만큼. DC ±이탈 감시 시작(arm)"),
     S("MAIN", "메인 공정", A, skip_if="process_time = 0", v1="pc:659-680", desc="Main 셔터 열기 → 레시피 시간"),
+    # 블록 공정(blocks.BLOCK_DEFS)의 기본 상태 이름 — 기본 템플릿은 위의 v1 이름(stage)을 쓴다
+    S("PRESSURE_SP4", "압력 설정(SP4)", A, v1="v2 블록", desc="압력 블록 sp=4"),
+    S("VALVE", "MFC 밸브", A, v1="v2 블록"),
+    S("SHUTTER", "셔터", A, v1="v2 블록"),
+    S("POWER_OFF", "파워 끄기", A, v1="v2 블록", desc="RF 는 램프다운 뒤 OFF"),
+    S("GAS_OFF", "가스 끄기", A, v1="v2 블록"),
+    S("HEATER_OFF", "히터 끄기", A, v1="v2 블록"),
+    S("WAIT", "대기", A, v1="v2 블록"),
+    S("COND_WAIT", "조건 대기", A, v1="v2 블록", desc="한도는 블록 값 timeout_sec(on_timeout abort → COND_WAIT_TIMEOUT)"),
     S("CSV_DELAY", "레시피 딜레이 행", A, v1="core/process_service.py 딜레이", desc="delay N 행 — 장비 조작 없이 시간만"),
     S("CSV_BETWEEN", "레시피 스텝 사이", A, v1="core/state.py Phase.CSV_BETWEEN"),
     S("STOPPING", "정지 순서 실행", ST, "formula", ("STOP_RF_RAMPDOWN_TIMEOUT_SEC", "STOP_RFPULSE_OFF_TIMEOUT_SEC",
@@ -86,7 +95,7 @@ STATES: tuple = (
     S("ABORTED", "중단 종료", E, v1="process_service.on_finished"),
 )
 
-# 한 레시피 행(스텝)의 진행 순서 — skip_if 가 맞으면 건너뛴다
+# 기본 템플릿(v1 행)의 진행 순서 — skip_if 가 맞으면 건너뛴다. 블록 레시피는 블록 순서대로(순서 규칙 없음)
 STEP_SEQUENCE: tuple = (
     "PRE_CLEAN", "GAS_PRE", "HEATER_RAMP", "HEATER_HOLD_WAIT", "BASE_WAIT", "GAS_INTRO", "GAS_STABILIZE",
     "GUN_SHUTTER", "POWER_WAIT", "PRESSURE_SP3", "PRESSURE_SP2", "PRESSURE_SP1", "DC_DELAY", "SHUTTER_DELAY",

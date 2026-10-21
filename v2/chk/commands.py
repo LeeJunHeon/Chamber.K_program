@@ -82,6 +82,8 @@ CHK_REASONS: tuple = (
     Reason("IG_FILAMENT_FAILED", "이온 게이지 필라멘트 켜기 실패", "abort"),
     Reason("CONNECTION_FAILED", "장비 연결 실패", "abort"),
     Reason("HEATER_GAS_FAILED", "히터 가스 준비 실패", "abort"),
+    Reason("COND_WAIT_TIMEOUT", "조건 대기 블록 한도 초과(on_timeout=abort)", "abort"),
+    Reason("PRESSURE_WAIT_TIMEOUT", "압력 블록(SP2~SP4) 도달 한도 초과(on_timeout=abort)", "abort"),
     # 경고·정보
     Reason("FLOW_DEVIATION", "가스 유량 이탈(경고만)", "info"),
     Reason("PRESSURE_DEVIATION", "압력 이탈(경고만)", "info"),
@@ -107,6 +109,9 @@ CHK_REASONS: tuple = (
     Reason("COMM_LONG_OUTAGE", "장비 장기 두절", "info"),
     Reason("LINK_STALE", "장비 값이 오래됨 — 화면 잠금", "info"),
     Reason("PLC_MANUAL_IN_PROCESS", "공정 중 PLC 버튼 실행(기록 — 대상·켬/끔·출처·시각)", "info"),
+    Reason("OUTPUTS_LEFT_ON", "정상 끝 정지 블록 없이 끝남 — 켜져 있는 출력(끄지 않음)", "info"),
+    Reason("HEATER_NO_TARGET", "히터 도달 대기 블록인데 히터 목표 없음 — 건너뜀", "info"),
+    Reason("RF_OFF_FAILED", "파워 끄기 블록의 RF OFF 결과 오류", "info"),
 )
 
 ALL_REASONS: tuple = COMMON_REASONS + CHK_REASONS
@@ -220,10 +225,14 @@ COMMANDS: tuple = (
     # 공정
     C("PROCESS_START", "수동 공정 시작", (WEB,), "operator", IDLE_STATES,
       ("NOT_RUNNING", "NO_RECIPE_LOADED", "PLC_FRESH", "MV_OPEN", "MV_ITL_ON", "NO_HEATER_GAS", "IG_FOR_BASE", "RECIPE_VALID"),
-      (_a("row", "obj", desc="recipe.PROCESS_COLUMNS 한 행(히터 열은 무시 — 수동 공정은 히터를 쓰지 않음)"),),
-      v1="PROCESS_START"),
+      (_a("row", "obj", False, desc="recipe.PROCESS_COLUMNS 한 행(히터 열은 무시 — 수동 공정은 히터를 쓰지 않음)"),
+       _a("blocks", "rows", False, desc="블록 목록(blocks.BLOCK_DEFS) — row 대신")),
+      desc="row 또는 blocks 하나", v1="PROCESS_START"),
     C("RECIPE_LOAD", "공정 레시피 적재", (WEB,), "operator", IDLE_STATES, ("RECIPE_VALID", "IG_FOR_BASE"),
-      (_a("name", "str"), _a("rows", "rows", desc="recipe.PROCESS_COLUMNS 행 목록")), v1="RECIPE_PROCESS_RUN"),
+      (_a("name", "str"), _a("rows", "rows", False, desc="행 목록 — v1 행(recipe.PROCESS_COLUMNS)·딜레이 행·"
+                                                         "블록 행 {process_name, blocks}"),
+       _a("blocks", "rows", False, desc="블록 목록 하나(= 블록 행 하나) — rows 대신")),
+      desc="rows 또는 blocks 하나. 블록 검사는 값 범위·꺼진 장비만(순서 규칙 없음)", v1="RECIPE_PROCESS_RUN"),
     C("RECIPE_CLEAR", "레시피 적재 해제", (WEB,), "operator", (ANY_STATE,),
       desc="적재가 없으면 아무것도 하지 않고 성공, 공정 중이면 PROCESS_RUNNING(v1 B5)", v1="RECIPE_CLEAR"),
     C("RECIPE_START", "적재 레시피 시작", (WEB,), "operator", IDLE_STATES,

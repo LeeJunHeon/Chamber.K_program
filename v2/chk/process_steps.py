@@ -1,5 +1,8 @@
 """공정 스텝 목록과 실행기 — v1 controller/process_controller.py 의 스텝 빌더(110-277, _build_steps 486-682)를 다시 쓴 것.
 
+공정 레시피는 블록 목록이다(blocks.py, 사용자 결정 2026-10-20). v1 행은 기본 템플릿 블록이 되고, 블록을 펼치면 이 모듈의
+ProcessStep 이 된다(build_process_steps = 기본 템플릿 펼치기). 스텝의 block·ref·internal·spec 은 블록 쪽 정보라
+골든 비교 단위(unit)에 넣지 않는다 — internal 스텝(END_STOP·NOP)은 스텝 목록 기록에서도 뺀다.
 스텝 목록은 v1 과 같은 순서·같은 동작·같은 인자로 만든다(골든 시험이 v1 기록과 비교한다). 바뀐 곳(의도된 차이):
 - WAIT_PRESSURE: v1 "stable_count 3회 연속"(1 s 간격 + 명령 간격 ≈ 6 s) → "stable_sec PRESSURE_WAIT_STABLE_SEC 동안"(횟수→시간, 4-3).
 - 숫자 상수는 파라미터로: SP3_MTORR·SP2_MTORR·PRESSURE_WAIT_TOL_RATIO·PRESSURE_STAGE_TIMEOUT_SEC·SP1_TIMEOUT_SEC·
@@ -14,12 +17,14 @@
   WAIT_PRESSURE 는 명령이 아니라 스냅샷 판정: |P − 목표| ≤ 목표×tol 이 stable_sec 이어지면 통과(judge.Persist, ok·late 값만),
   timeout_sec 를 넘으면 fail_on_timeout 이면 실패(SP1_TIMEOUT), 아니면 경고하고 진행.
 - PLC_CMD: 버튼 쓰기 뒤 0.8 s(v1 릴레이·실린더 여유) 지나면 다음.
-- DELAY: duration_sec 가 실제로 지나면 다음.
+- DELAY: duration_sec 가 실제로 지나면 다음(공정 중 수정: cur.extra["dur"] 가 있으면 그 길이, cur.extra["skip"] 이면 바로).
+- COND_WAIT: 조건 대기 블록 — 스냅샷 값 하나를 ≤·≥·값±허용 으로 stable_sec 동안(judge.Persist), timeout_sec 를 넘으면
+  on_timeout=abort 면 COND_WAIT_TIMEOUT, continue 면 경고 뒤 다음.
+- 값 고르기: resolve(스텝, 레시피 값) — 공정 중 수정(PROCESS_ADJUST)이 바꾼 값을 그 항목(ref)을 쓰는 스텝이 쓴다.
 - 그 밖의 동작은 실행기를 쓰는 쪽(handlers)이 처리한다.
 """
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
@@ -48,6 +53,10 @@ class ProcessStep:
     timer_purpose: Optional[str] = None
     polling: bool = False
     state: str = ""
+    block: int = -1                    # blocks.BlockInst 번호
+    ref: str = ""                      # 공정 중 수정 항목 키(mfc.ar_flow·mfc.wp·heater.target …)
+    internal: bool = False             # 블록 제어용(END_STOP·NOP) — 스텝 목록 기록·골든 비교에 넣지 않음
+    spec: Any = None                   # 처리기용 값(POWER_WAIT 의 장비별 목표 등) — 비교 단위 아님
 
     def unit(self) -> dict:
         """골든 비교 단위(문구·polling 빼고)."""
@@ -127,66 +136,11 @@ def heater_used(p: Dict[str, Any]) -> bool:
 
 def build_process_steps(p: Dict[str, Any], cfg: Dict[str, Any], *, ig_enabled: bool, rfpulse_present: bool = True
                         ) -> List[ProcessStep]:
-    """v1 _build_steps(486-682) — 같은 순서·조건."""
-    channels, buttons = channels_of(p)
-    default_flow = float(p.get("mfc_flow", 0.0) or 0.0)
-    flows = {}
-    if 1 in channels:
-        flows[1] = float(p.get("ar_flow", default_flow) or 0.0)
-    if 2 in channels:
-        flows[2] = float(p.get("o2_flow", default_flow) or 0.0)
-    sp1 = float(p.get("sp1_set", 0.0) or 0.0)
-    steps: List[ProcessStep] = [S("DC_POWER_STOP", "PRE: DC Power OFF", state="PRE_CLEAN"),
-                                S("RF_POWER_STOP", "PRE: RF Power OFF", state="PRE_CLEAN")]
-    if rfpulse_present:
-        steps.append(S("RF_PULSE_STOP", "PRE: RF Pulse OFF", state="PRE_CLEAN"))
-    steps.append(S("DELAY", "PRE: Power OFF settle", duration_sec=int(round(cfg["PRE_POWER_OFF_SETTLE_SEC"])),
-                   state="PRE_CLEAN"))
-    steps += build_gas_pre_steps(channels)
-    if heater_used(p):
-        temp = float(p["heater_temp"])
-        ramp = float(p.get("heater_ramp") or 0.0) or float(cfg["HEATER_RAMP_RATE_C_PER_MIN"])
-        steps.append(S("HEATER_RAMP", f"히터 램프 속도 {ramp:.0f}°C/min 설정", value=ramp, state="HEATER_RAMP"))
-        steps.append(S("HEATER_SET", f"히터 목표 {temp:.1f}°C 설정 — 승온 시작", value=temp, state="HEATER_RAMP"))
-        steps.append(S("HEATER_WAIT", f"히터 온도 도달 대기 (±{cfg['HEATER_SOAK_TOLERANCE']:.1f}°C, "
-                       f"{int(cfg['HEATER_SOAK_TIME_SEC'])}s 유지)", value=temp, state="HEATER_RAMP"))
-    bp = base_pressure_of(p)
-    if bp > 0 and ig_enabled:
-        steps += [S("IG_FILAMENT_ON", "이온 게이지 필라멘트 ON", state="BASE_WAIT"),
-                  S("IG_BASE_WAIT", f"베이스 압력 대기 (목표 {bp:.1E} Torr)", value=bp, state="BASE_WAIT"),
-                  S("IG_FILAMENT_OFF", "이온 게이지 필라멘트 OFF", state="BASE_WAIT")]
-    steps += build_gas_intro_steps(channels, flows, buttons)
-    stab = int(round(cfg["GAS_STABILIZE_SEC"]))
-    steps.append(S("MFC_CMD", "SP4 ON", ("SP4_ON", {}), state="GAS_STABILIZE"))
-    steps.append(S("DELAY", f"압력 안정화 대기({stab}초)", duration_sec=stab, state="GAS_STABILIZE"))
-    if p.get("use_g1"):
-        steps.append(S("PLC_CMD", "Gun Shutter 1 Open", ("S1_button", True), state="GUN_SHUTTER"))
-    if p.get("use_g2"):
-        steps.append(S("PLC_CMD", "Gun Shutter 2 Open", ("S2_button", True), state="GUN_SHUTTER"))
-    steps.append(S("POWER_WAIT", "파워 목표치 도달 대기", state="POWER_WAIT"))
-    sp3, sp2 = float(cfg["SP3_MTORR"]), float(cfg["SP2_MTORR"])
-    stage_to = float(cfg["PRESSURE_STAGE_TIMEOUT_SEC"])
-    if sp1 < sp3:
-        steps += build_pressure_stage_steps(3, sp3, "Stage1(SP3)", cfg, stage_to, state="PRESSURE_SP3")
-    if sp1 < sp2:
-        steps += build_pressure_stage_steps(2, sp2, "Stage2(SP2)", cfg, stage_to, state="PRESSURE_SP2")
-    steps += build_pressure_stage_steps(1, sp1, f"Stage3(SP1={sp1:.2f})", cfg, float(cfg["SP1_TIMEOUT_SEC"]),
-                                        fail_on_timeout=True, state="PRESSURE_SP1")
-    dc_power = float(p.get("dc_power", 0.0) or 0.0)
-    dcd = int(cfg["DC_POWER_DELAY_SEC"])
-    if p.get("use_dc_delay") and dc_power > 0.0 and dcd > 0:
-        steps.append(S("DELAY", f"DC Power 안정화 대기 {dcd}s", duration_sec=dcd, state="DC_DELAY"))
-    sd = max(0, int(math.ceil(float(p.get("shutter_delay", 0.0) or 0.0) * 60)))
-    if sd > 0:
-        steps.append(S("DELAY", f"Shutter Delay {sd}s", duration_sec=sd, timer_purpose="shutter", polling=True,
-                       state="SHUTTER_DELAY"))
-    if float(p.get("process_time", 0.0) or 0.0) > 0:
-        steps.append(S("PLC_CMD", "Main Shutter Open", ("MS_button", True), state="MAIN"))
-    pt = max(0, int(math.ceil(float(p.get("process_time", 0.0) or 0.0) * 60)))
-    if pt > 0:
-        steps.append(S("DELAY", f"메인 공정 {pt}s 진행", duration_sec=pt, timer_purpose="process", polling=True,
-                       state="MAIN"))
-    return steps
+    """v1 _build_steps(486-682) — 같은 순서·조건. 기본 템플릿 블록(blocks.template_blocks)을 펼친 것에서 블록 제어 스텝을 뺀 것."""
+    from v2.chk import blocks as BK
+    bl = BK.template_blocks(p, cfg, ig_enabled=ig_enabled, rfpulse_present=rfpulse_present)
+    steps, _ = BK.expand(bl, cfg, ig_enabled=ig_enabled, rfpulse_present=rfpulse_present)
+    return [s for s in steps if not s.internal]
 
 
 def base_pressure_of(p: Dict[str, Any]) -> float:
@@ -253,18 +207,28 @@ class StepRunner:
 
     def __init__(self, clock, steps: List[ProcessStep], mfc, plc, handlers: Optional[Dict[str, Callable]] = None,
                  on_event: Optional[Callable[[StepEvent], None]] = None, name: str = "process",
-                 continue_on_fail: bool = False, cfg: Optional[Dict[str, Any]] = None) -> None:
+                 continue_on_fail: bool = False, cfg: Optional[Dict[str, Any]] = None,
+                 resolve: Optional[Callable[[ProcessStep, Any], Any]] = None,
+                 on_step_done: Optional[Callable[[ProcessStep], None]] = None) -> None:
         self.clock, self.steps, self.mfc, self.plc = clock, list(steps), mfc, plc
         self.cfg = cfg                                  # FLOW_ON 유량 안정화 판정(없으면 R69 확인만)
         self.continue_on_fail = continue_on_fail       # 해제 시퀀스: 실패해도 남은 밸브를 마저 닫는다(v1 heater_atmosphere)
         self.handlers = dict(handlers or {})
         self.on_event = on_event
+        self.resolve = resolve or (lambda s, v: v)
+        self.on_step_done = on_step_done
         self.name = name
         self.idx = -1
         self.cur: Optional[_Cur] = None
         self.finished = False
         self.failed: Optional[str] = None
         self.cancelled = False
+        # 기록 번호는 블록 제어 스텝(internal)을 빼고 센다 — v1 과 같은 "[k/N]"
+        self._pos, n = [], 0
+        for s in self.steps:
+            n += 0 if s.internal else 1
+            self._pos.append(n)
+        self._total = n
 
     @property
     def step(self) -> Optional[ProcessStep]:
@@ -286,7 +250,13 @@ class StepRunner:
             return
         self.cur = _Cur(t0=now)
         s = self.steps[self.idx]
-        self._emit(StepEvent("step", f"[{self.idx + 1}/{len(self.steps)}] {s.message}", index=self.idx))
+        if s.internal:
+            self._emit(StepEvent("istep", s.message, index=self.idx))
+        else:
+            self._emit(StepEvent("step", f"[{self._pos[self.idx]}/{self._total}] {s.message}", index=self.idx))
+
+    def _tag(self) -> str:
+        return f"[{self._pos[self.idx]}/{self._total}]"
 
     def tick(self, view, now: float) -> None:
         """한 tick — 끝난 스텝은 넘기고, 같은 tick 안에 바로 끝나는 스텝(내보내기만 하는 명령)은 이어서 진행."""
@@ -302,11 +272,13 @@ class StepRunner:
             if r == "wait":
                 return
             if isinstance(r, tuple) and r[0] == "fail" and self.continue_on_fail:
-                self._emit(StepEvent("warn", f"[{self.idx + 1}/{len(self.steps)}] {s.message}: {r[1]} — 계속 진행", r[1], self.idx))
+                self._emit(StepEvent("warn", f"{self._tag()} {s.message}: {r[1]} — 계속 진행", r[1], self.idx))
             elif isinstance(r, tuple) and r[0] == "fail":
                 self.failed = r[1]
-                self._emit(StepEvent("failed", f"[{self.idx + 1}/{len(self.steps)}] {s.message}: {r[1]}", r[1], self.idx))
+                self._emit(StepEvent("failed", f"{self._tag()} {s.message}: {r[1]}", r[1], self.idx))
                 return
+            if self.on_step_done is not None:
+                self.on_step_done(s)
             self._advance(now)
 
     def _done_cb(self, cur: _Cur):
@@ -337,13 +309,49 @@ class StepRunner:
                 return ("fail", "PLC_CMD_FAILED")
             return "next" if now - cur.t0 >= PLC_SETTLE_S - 1e-9 else "wait"
         if s.action == "DELAY":
-            return "next" if now - cur.t0 >= float(s.duration_sec or 0) - 1e-9 else "wait"
+            if cur.extra.get("skip"):
+                return "next"
+            dur = cur.extra.get("dur", s.duration_sec)
+            return "next" if now - cur.t0 >= float(dur or 0) - 1e-9 else "wait"
+        if s.action == "COND_WAIT":
+            return self._cond(s, cur, view, now)
+        if s.action == "NOP":
+            return "next"
         return ("fail", "INTERNAL_ERROR")
+
+    def _cond(self, s: ProcessStep, cur: _Cur, view, now: float):
+        """조건 대기 블록 — 값 하나를 판정(값 모름 = 판정 유지, judge.Persist). 한도를 넘으면 중단 또는 경고 뒤 다음."""
+        a = s.params
+        if cur.extra.get("skip"):
+            return "next"
+        if cur.persist is None:
+            cur.persist = Persist(float(a.get("stable_sec") or 0.0))
+        col = a["field"]
+        x = view.get(col) if view is not None else None
+        t = view.t_of(col.split(".")[0]) if view is not None else now
+        v, op, tol = float(a["value"]), a["op"], float(a.get("tol") or 0.0)
+        if x is None:
+            cond = None
+        elif op == "le":
+            cond = float(x) <= v
+        elif op == "ge":
+            cond = float(x) >= v
+        else:
+            cond = abs(float(x) - v) <= tol
+        if cur.persist.update(t, cond):
+            return "next"
+        if now - cur.t0 >= float(a["timeout_sec"]) - 1e-9:
+            if a.get("on_timeout", "abort") == "abort":
+                return ("fail", "COND_WAIT_TIMEOUT")
+            self._emit(StepEvent("warn", f"조건 대기 {col} {op} {v:g} 시간 초과({float(a['timeout_sec']):.0f} s, 지금 {x}) — 다음 블록",
+                                 "COND_WAIT_TIMEOUT", self.idx))
+            return "next"
+        return "wait"
 
     def _mfc(self, s: ProcessStep, cur: _Cur, view, now: float):
         cmd, a = s.params
         if cmd == "WAIT_PRESSURE":
-            return self._wait_pressure(a, cur, view, now)
+            return self._wait_pressure(s, a, cur, view, now)
         if not cur.issued:
             cur.issued = True
             cb, m = self._done_cb(cur), self.mfc
@@ -353,14 +361,16 @@ class StepRunner:
                 m.valve(True, on_done=cb)
             elif cmd == "VALVE_CLOSE":
                 m.valve(False, on_done=cb)
+            elif cmd == "VALVE_HOLD":
+                m.valve_hold(on_done=cb)
             elif cmd == "MFC_ZEROING":
                 m.zero(f"L{4 + int(a['channel'])} 1", on_done=cb)
             elif cmd == "PS_ZEROING":
                 m.zero("Z1", on_done=cb)
             elif cmd == "FLOW_SET":
-                m.set_flow(int(a["channel"]), float(a["value"]), on_done=cb)
+                m.set_flow(int(a["channel"]), float(self.resolve(s, a["value"])), on_done=cb)
             elif cmd in ("SP1_SET", "SP2_SET", "SP3_SET", "SP4_SET"):
-                m.set_sp(int(cmd[2]), float(a["value"]), on_done=cb)
+                m.set_sp(int(cmd[2]), float(self.resolve(s, a["value"])), on_done=cb)
             elif cmd in ("SP1_ON", "SP2_ON", "SP3_ON", "SP4_ON"):
                 m.select_sp(int(cmd[2]), on_done=cb)
             else:
@@ -392,12 +402,13 @@ class StepRunner:
             return ("fail", "FLOW_STABILIZE_TIMEOUT")
         return "wait"
 
-    def _wait_pressure(self, a: Dict[str, Any], cur: _Cur, view, now: float):
-        target = float(a["target"])
+    def _wait_pressure(self, s: ProcessStep, a: Dict[str, Any], cur: _Cur, view, now: float):
+        target = float(self.resolve(s, a["target"]))
         if target <= 0:
             return "next"
-        if cur.persist is None:
-            cur.persist = Persist(float(a["stable_sec"]))
+        if cur.persist is None or cur.extra.get("target") != target:
+            cur.persist = Persist(float(a["stable_sec"]))       # 공정 중 수정으로 목표가 바뀌면 안정 시간을 처음부터
+            cur.extra["target"] = target
         p = view.get("mfc.pressure_mtorr") if view is not None else None
         t = view.t_of("mfc") if view is not None else now
         cond = None if p is None else abs(float(p) - target) <= target * float(a["tolerance_ratio"])
@@ -405,7 +416,7 @@ class StepRunner:
             return "next"
         if now - cur.t0 >= float(a["timeout_sec"]) - 1e-9:
             if a.get("fail_on_timeout"):
-                return ("fail", "SP1_TIMEOUT")
+                return ("fail", a.get("fail_code", "SP1_TIMEOUT"))
             self._emit(StepEvent("warn", f"압력 {target:.2f} mTorr 도달 시간 초과({a['timeout_sec']:.0f} s) — 다음 단계 진행",
                                  "PRESSURE_STAGE_TIMEOUT", self.idx))
             return "next"

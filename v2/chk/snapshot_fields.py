@@ -109,7 +109,10 @@ PROCESS_FIELDS: tuple = (
     FieldDef("proc.state", FType.STR, "", "공정 상태(process_states)"),
     FieldDef("proc.run_id", FType.STR, "", "공정 id"),
     FieldDef("proc.row", FType.INT, "", "레시피 행 번호"),
-    FieldDef("proc.remain_s", FType.INT, "s", "현재 상태 남은 초"),
+    FieldDef("proc.block", FType.STR, "", "지금 블록 번호/전체(블록 공정)"),
+    FieldDef("proc.block_type", FType.STR, "", "지금 블록 종류(blocks.BLOCK_DEFS)"),
+    FieldDef("proc.block_label", FType.STR, "", "지금 블록 라벨(없으면 블록 번호)"),
+    FieldDef("proc.remain_s", FType.INT, "s", "지금 대기(DELAY·조건·압력 대기)의 남은 초"),
     FieldDef("proc.alarms", FType.STR, "", "활성 알람 규칙 id(쉼표)"),
 )
 

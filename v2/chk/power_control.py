@@ -54,6 +54,14 @@ class DcControl:
                              on_on=self._output_on)
         self._emit("info", f"DC 프로세스 시작 (목표 {self.target:.1f} W)")
 
+    def retarget(self, target_w: float) -> None:
+        """켜진 채 목표만 바꾼다(파워 켜기 블록을 다시 만났을 때) — 지금 루프가 새 목표를 따라간다. 다시 도달하면 reached."""
+        with self._lock:
+            self.target = max(0.0, min(float(self.cfg["DC_MAX_POWER"]), float(target_w)))
+            self.reached, self.stall_since = False, None
+        self.dc.set_w = self.target
+        self._emit("info", f"DC 목표 변경 → {self.target:.1f} W")
+
     def _output_on(self) -> None:
         self.started_ok = True                          # v1: OUTP ON 을 보내면 확인 없이 제어 루프 시작(DCpower.py:438-440)
 
@@ -106,6 +114,7 @@ class DcControl:
                 self._apply(step, t0)
             else:
                 if abs(diff) <= tol:
+                    self.reached = True
                     return
                 if diff > 0 and v >= self.voltage_guard:
                     return
@@ -151,6 +160,15 @@ class RfControl:
         self.plc._rf_set_w = self.target
         self._emit("info", f"RF 시작 (목표 {self.target:.1f} W, offset {self.offset:g} / param {self.param:g})")
 
+    def retarget(self, target_w: float) -> None:
+        """켜진 채 목표만 바꾼다 — 지금 스텝 목표에서 RF_RAMP_STEP_W(1 W/s)씩 새 목표로(올리든 내리든), 도달하면 유지."""
+        self.target = min(float(target_w), float(self.cfg["RF_MAX_POWER"]))
+        self.reached = False
+        if self.state != self.IDLE:
+            self.state = self.RAMPING_UP
+        self.plc._rf_set_w = self.target
+        self._emit("info", f"RF 목표 변경 → {self.target:.1f} W (램프 {self.cfg['RF_RAMP_STEP_W']:g} W/s)")
+
     def stop(self) -> None:
         self.state = self.IDLE
         self.plc._rf_set_w = 0.0
@@ -179,7 +197,10 @@ class RfControl:
                 self.state, self.reached = self.MAINTAINING, True
                 self._emit("info", f"{self.target:g}W 도달. 파워 유지 시작")
                 return
-            if fwd >= self.step_w:
+            if self.step_w > self.target + 1e-9:                 # 목표를 낮춘 경우 — 같은 속도로 내린다
+                self.step_w = max(self.step_w - float(c["RF_RAMP_STEP_W"]), self.target)
+                self.pwm = self.power_to_dac(self.step_w)
+            elif fwd >= self.step_w:
                 self.step_w = min(self.step_w + float(c["RF_RAMP_STEP_W"]), self.target)
                 self.pwm = self.power_to_dac(self.step_w)
             else:
