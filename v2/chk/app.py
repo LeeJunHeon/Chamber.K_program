@@ -15,7 +15,8 @@
   정상 종료: 히터 레시피 정지 → S41(히터 RUN=0) → 결과를 짧게 기다림 → worker 정지·포트 닫기 → 기록 flush → 서버 정지.
 - 강제 종료(콘솔 창 닫기·로그오프·윈도우 종료 — SetConsoleCtrlHandler): 거부할 수 없으므로 결정 4(2026-10-20)대로 파워 출력만 끈다 —
   DC OFF, RF DAC 0·enable OFF, RF Pulse OFF, 히터 RUN=0(히터 레시피 중단). PLC 릴레이(펌프·밸브·가스 차단밸브·셔터)와 MFC 는 그대로.
-  공정 중이었으면 run_end error PROGRAM_EXIT. 창 닫기는 약 5초 안에 끝나야 하므로 확인을 기다리지 않는 명령을 먼저 보내고 기록 flush.
+  공정 중이었으면 먼저 공정을 멈추고(program_exit — runner 취소·제어 루프 멈춤·ABORTED, run_end error PROGRAM_EXIT) 그다음 끄기 명령.
+  창 닫기는 약 5초 안에 끝나야 하므로 확인을 기다리지 않는 명령을 먼저 보내고 기록 flush.
   로그오프·윈도우 종료: user32.dll 이 올라온 프로세스(이 파이썬은 처음부터 올라와 있다)에는 콘솔 신호가 오지 않으므로(Windows 규칙)
   숨은 최상위 창으로 WM_ENDSESSION 을 받아 같게 처리한다. 시작 때 user32 여부를 로그에 남긴다.
 - 다음 시작 때는 S51(남은 파워 OFF)·S15(남은 히터 RUN 정리)가 정리한다.
@@ -477,7 +478,11 @@ class App:
                 done[name] = True
                 clk.notify()
             return fin
-        for ctl in ("dcc", "rfc"):                         # 제어 루프가 다시 켜지 않게
+        # 공정을 먼저 멈춘다(runner 취소·제어 루프 멈춤·상태 ABORTED) — 끄기 명령 뒤에 하면 그 틈에 다음 블록(파워 켜기 등)이
+        # 다시 켜거나, 안전 규칙이 꺼짐을 보고 정지 순서를 낼 수 있다
+        if was and hasattr(p, "program_exit"):
+            p.program_exit()
+        for ctl in ("dcc", "rfc"):                         # 공정 밖(남긴 출력 유지 등)이어도 제어 루프가 다시 켜지 않게
             if hasattr(p, ctl):
                 getattr(p, ctl).stop()
         s.dc.output_off_confirmed(on_done=cb("DC OFF"))
@@ -489,8 +494,6 @@ class App:
             sent.append("히터 레시피 중단")
         s.plc.heater_run(False, on_done=cb("히터 RUN=0"))
         t_sent = clk.monotonic() - t0
-        if was and hasattr(p, "program_exit"):
-            p.program_exit()
         s.recorder.flush(1.0)
         clk.wait_until(t0 + FORCE_DEADLINE_S, lambda: all(done.values()))
         res = {"why": why, "sent": sent, "done": [k for k, v in done.items() if v],

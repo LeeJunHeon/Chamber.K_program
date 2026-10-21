@@ -244,7 +244,7 @@ def test_messages():
         names = [f.name for f in m.fields]
         assert len(names) == len(set(names)), m.type
         assert m.direction in ("up", "down")
-    assert [f.name for f in ENVELOPE] == ["id", "seq", "ts", "type", "data"]
+    assert [f.name for f in ENVELOPE] == ["id", "instance", "seq", "ts", "type", "data"]
 
 
 def test_common_reasons_not_shadowed():

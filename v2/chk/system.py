@@ -294,8 +294,9 @@ class ChkSystem:
         self.recorder.stop()
         self.hub.close()
 
-    def command(self, kind: str, args: Optional[dict] = None, source: Source = Source.WEB, cid: Any = None):
-        return self.core.command(kind, args, source=source, cid=cid)
+    def command(self, kind: str, args: Optional[dict] = None, source: Source = Source.WEB, cid: Any = None,
+                by: Optional[str] = None):
+        return self.core.command(kind, args, source=source, cid=cid, by=by)
 
 
 class _NullLock:

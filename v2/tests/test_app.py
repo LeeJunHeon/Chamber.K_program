@@ -8,6 +8,7 @@ COM 포트·외부 네트워크 없이(sim, 127.0.0.1 만). 기록·설정은 �
 """
 import json
 import socket
+import sys
 import threading
 import time
 import urllib.error
@@ -36,6 +37,18 @@ def _free_port() -> int:
     port = s.getsockname()[1]
     s.close()
     return port
+
+
+def _assert_port_free(port) -> None:
+    """서버가 닫은 포트를 다시 잡을 수 있다. 리눅스는 닫힌 연결이 TIME_WAIT 로 남아 SO_REUSEADDR 없이는 bind 가 실패한다
+    (윈도우 SO_REUSEADDR 는 쓰는 중인 포트도 겹쳐 잡으므로 윈도우에서는 켜지 않는다)."""
+    s = socket.socket()
+    if sys.platform != "win32":
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("127.0.0.1", port))
+    finally:
+        s.close()
 
 
 def _cfg_dir(tmp_path, port, **extra):
@@ -113,9 +126,7 @@ def test_app_sim_start_api_and_clean_shutdown(tmp_path):
     names = {t.name for t in threading.enumerate()}
     assert not {n for n in names if n.startswith(("worker-", "tick", "local-server", "plc-fast", "recorder"))}, names
     assert not any(w._thread.is_alive() for w in app.system.workers.values() if w._thread is not None)
-    s = socket.socket()                                           # 포트가 풀렸다
-    s.bind(("127.0.0.1", port))
-    s.close()
+    _assert_port_free(port)                                       # 포트가 풀렸다
     log = (tmp_path / "data" / "logs" / "chk_v2.log").read_text(encoding="utf-8")
     assert "히터 RUN=0 쓰기: " in log and "시간 초과" not in log
     assert "조치 실패" not in log and " ERROR " not in log            # S41 쓰기가 끝난 뒤 포트를 닫는다(CANCELLED 없음)
@@ -202,7 +213,8 @@ def test_hub_maps_events(tmp_path):
     assert all(d["ruleId"] is None or d["ruleId"].startswith("S") for d in ev)
     assert any(d["context"].get("seq") == "row_end" for d in ev)              # 정지 순서 이름은 context.seq
     for e in hub.recent:
-        assert set(e) == {"id", "seq", "ts", "type", "data"} and e["ts"].endswith("Z")
+        assert set(e) == {"id", "instance", "seq", "ts", "type", "data"} and e["ts"].endswith("Z")
+        assert e["instance"] == hub.instance
 
 
 # ───────────── 설정 적용(웹 경로 — ChkCore CONFIG_APPLY·CONFIG_ROLLBACK) ─────────────
@@ -353,6 +365,11 @@ def test_ctrl_c_refused_during_process_and_force_exit_turns_power_off(tmp_path):
         got["ctrl_c"] = app.on_ctrl_c()
         got["pumps"] = {k: r.plc.coils[A[k]] for k in ("mv", "turbo", "rotary", "fv", "ar_valve", "mfc_valve")
                         if k in A}
+        order = got["order"] = []
+        p, dc = r.rig.process, r.rig.dc
+        pe, off = p.program_exit, dc.output_off_confirmed
+        p.program_exit = lambda: (order.append(("program_exit", p.state)), pe())[1]
+        dc.output_off_confirmed = lambda **kw: (order.append(("DC OFF", p.state)), off(**kw))[1]
         got["res"] = app.force_exit("CTRL_CLOSE")
     r.when(lambda: r.rig.process.state == "WAIT" and r.rig.process.dcc.holding, at_wait)
     r.run(140)
@@ -360,6 +377,7 @@ def test_ctrl_c_refused_during_process_and_force_exit_turns_power_off(tmp_path):
     assert got["ctrl_c"] == "refused" and any(REFUSE_PROCESS in s for s in out)
     res = got["res"]
     assert res["sent"] == ["DC OFF", "RF DAC 0·enable OFF", "히터 RUN=0"] and res["process_was_running"]
+    assert got["order"] == [("program_exit", "WAIT"), ("DC OFF", "ABORTED")]   # 공정을 먼저 멈추고 그다음 끄기
     assert set(res["done"]) == set(res["sent"]) and res["elapsed_s"] < 3.5
     assert r.rig.sims["dc"].out is False and r.plc.regs[A["rf_dac"]] == 0 and not r.plc.coils[A["rf_dac_enable"]]
     assert r.plc.coils[A["heater_run"]] is False
@@ -483,3 +501,118 @@ def test_stream_connection_limit(tmp_path):
     finally:
         rig.hub.close()
         srv.stop()
+
+
+# ───────────── 5-7 ① — 5-6 검토 작은 수정 ─────────────
+def test_main_module_import_does_not_run(monkeypatch):
+    import importlib
+    import sys as _sys
+    import v2.chk.app as app_mod
+    called = []
+    monkeypatch.setattr(app_mod, "main", lambda *a: called.append(a) or 0)
+    _sys.modules.pop("v2.chk.__main__", None)
+    importlib.import_module("v2.chk.__main__")                       # 불러오기만 — 프로그램이 돌지 않는다
+    assert called == []
+    _sys.modules.pop("v2.chk.__main__", None)
+
+
+def test_old_last_event_id_restarts_from_hello(tmp_path):
+    from v2.chk.local_server import LocalServer
+    from v2.chk.sim.rig import ChkRig
+    from v2.common.clock import VirtualClock
+    rig = ChkRig(VirtualClock(), tmp_path)
+    hub = rig.hub
+    hub.hello()
+    for i in range(600):                                             # 링 버퍼(500)에서 hello 가 밀려남
+        hub.publish("event", {"level": "info", "code": "X", "ruleId": None, "message": str(i), "context": {}})
+    hub.on_row({})
+    old = hub.subscribe(last_seq=hub.seq + 1000)                     # 지난 실행의 번호
+    got = [old.get(0.1) for _ in range(3)]
+    assert [e["type"] for e in got] == ["hello", "state", "event"] and old.gap is None
+    assert len(old.backlog) == 499                                   # 최근 메시지 전부(큐 길이와 따로)
+    cur = hub.subscribe(last_seq=hub.seq - 3)                        # 이 실행의 번호 — 그 뒤부터
+    assert [cur.get(0.1)["type"] for _ in range(2)] == ["state", "event"]
+    gap = hub.subscribe(last_seq=5)                                  # 링 버퍼보다 많이 놓침
+    assert gap.gap == (6, hub.evicted_seq) and gap.get(0.1)["type"] == "state"
+    srv = LocalServer(_free_port(), str(tmp_path / "hmi"))
+    srv.bind()
+    srv.attach(rig)
+    srv.start()
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{srv.port}/api/v1/stream",
+                                     headers={"Last-Event-ID": str(hub.seq + 77)})
+        resp = urllib.request.urlopen(req, timeout=5)
+        got = _sse(resp, lambda o: len(o) >= 2, 3.0)
+        assert [e for e, _ in got] == ["hello", "state"] and got[0][1]["instance"] == hub.instance
+        resp.close()
+    finally:
+        hub.close()
+        srv.stop()
+
+
+def test_by_recorded_in_results_and_process_records(tmp_path):
+    r = R(tmp_path, FAST)
+    rig = r.rig
+    row = dict(SHORT, process_time=30.0)
+    r.on(3, lambda: rig.core.command("PROCESS_START", {"row": row}, cid="w1", by="op@test"))
+
+    def in_main():
+        rig.core.command("PLC_BUTTON", {"target": "vent", "on": False}, cid="w2", by="op@test")
+        rig.core.command("BUZZ_STOP", {}, source=Source.HMI, cid="h1")
+        rig.core.command("PROCESS_ADJUST", {"device": "mfc", "item": "ar_flow", "value": 22.0}, cid="w3",
+                         by="adj@test")
+        rig.core.command("PROCESS_STOP", {}, source=Source.HMI, cid="h2")
+    r.when(lambda: rig.process.state == "MAIN", in_main)
+    r.run(150)
+    res = {e["data"]["cmdId"]: e["data"] for e in rig.hub.recent if e["type"] == "cmd_result"}
+    assert (res["w1"]["by"], res["w2"]["by"], res["w3"]["by"]) == ("op@test", "op@test", "adj@test")
+    assert res["h1"]["by"] == res["h2"]["by"] == "local" and res["h1"]["source"] == "hmi"
+    assert "op@test" in res["w1"]["detail"]
+    pm = [e.data for e in r.ev("plc_manual")]
+    assert [(d["target"], d["source"], d["by"]) for d in pm] == [("vent", "web", "op@test"), ("buzz_stop", "hmi", "local")]
+    adj = [e.data for e in r.ev("adjust")]
+    assert adj and adj[0]["by"] == "adj@test" and adj[0]["source"] == "web"
+    rs = next(e["data"] for e in rig.hub.recent if e["type"] == "run_start")
+    assert rs["by"] == "op@test"
+
+
+def test_core_commands_from_threads_are_serialized_and_all_stop_does_not_wait(tmp_path):
+    from v2.chk.sim.rig import ChkRig
+    from v2.common.clock import VirtualClock
+    rig = ChkRig(VirtualClock(), tmp_path)
+    core = rig.core
+    inside, overlap = [0], []
+    real_run = core._run
+
+    def run(*a, **kw):
+        inside[0] += 1
+        overlap.append(inside[0])
+        try:
+            time.sleep(0.001)
+            return real_run(*a, **kw)
+        finally:
+            inside[0] -= 1
+    core._run = run
+    blocks = [{"type": "wait", "params": {"sec": 1}}]
+    errs = []
+
+    def worker(n):
+        for i in range(40):
+            k = ("RECIPE_LOAD", {"name": f"t{n}", "blocks": blocks}) if i % 2 == 0 else ("RECIPE_CLEAR", {})
+            res = core.command(k[0], k[1], source=Source.WEB)
+            if res.reason == "INTERNAL_ERROR":
+                errs.append(res)
+    ths = [threading.Thread(target=worker, args=(n,)) for n in range(6)]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join(30)
+    assert not errs and max(overlap) == 1                             # 한 번에 하나씩
+    core._run = real_run
+    with core._lock:                                                  # 다른 명령이 잠금을 잡고 있어도
+        box = []
+        t = threading.Thread(target=lambda: box.append(core.command("ALL_STOP", {}, source=Source.HMI)))
+        t0 = time.monotonic()
+        t.start()
+        t.join(2.0)
+        assert box and time.monotonic() - t0 < 1.0                     # ALL STOP 은 기다리지 않는다

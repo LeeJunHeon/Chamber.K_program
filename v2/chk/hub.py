@@ -1,4 +1,5 @@
-"""장비 메시지(MessageHub, 사용자 지시 5-6 ③) — 내부 이벤트를 messages.py 형식(envelope id·seq·ts(UTC)·type·data)으로 바꾸는 곳 하나.
+"""장비 메시지(MessageHub, 사용자 지시 5-6 ③) — 내부 이벤트를 messages.py 형식(envelope id·instance·seq·ts(UTC)·type·data)으로
+바꾸는 곳 하나. instance = 이 실행의 id(프로그램을 켤 때마다 새로) — seq 는 실행 안에서만 이어진다.
 
 type
 - run_start · run_end · cmd_result · config_ack · hello 는 그 type 으로.
@@ -8,6 +9,8 @@ type
 
 소비자(로컬 서버 — 이번, uplink — 5-7)는 subscribe() 로 받는다. 소비자마다 길이 제한 큐 — 넘치면 그 소비자만 끊는다
 (tick·worker 를 막지 않는다: 넣기는 put_nowait 뿐). 연결 때 최신 state 하나 + 최근 메시지(링 버퍼, last_seq 뒤부터).
+last_seq 가 없거나 지금 seq 보다 크면(지난 실행의 번호 — 프로그램을 다시 켠 뒤 브라우저가 옛 번호로 이어 붙음) 처음부터:
+마지막 hello + 최신 state + 최근 메시지 전부. 링 버퍼에서 이미 밀려난 메시지가 last_seq 뒤에 있으면 sub.gap = (첫 seq, 끝 seq).
 """
 from __future__ import annotations
 
@@ -37,8 +40,10 @@ class Subscriber:
     def __init__(self, hub: "MessageHub", maxsize: int, name: str) -> None:
         self.hub, self.name = hub, name
         self.q: "queue.Queue" = queue.Queue(maxsize=maxsize)
+        self.backlog: "collections.deque[dict]" = collections.deque()   # 연결 때 다시 보내는 것(링 버퍼 길이까지 — 큐와 따로)
         self.closed = False
         self.reason = ""
+        self.gap: Optional[tuple] = None          # (놓친 첫 seq, 놓친 끝 seq) — 링 버퍼보다 많이 놓쳤을 때
 
     def put(self, env: dict) -> bool:
         if self.closed:
@@ -51,7 +56,9 @@ class Subscriber:
             return False
 
     def get(self, timeout: float):
-        """다음 메시지, 시간 안에 없으면 None, 끊겼으면 CLOSED."""
+        """다음 메시지(다시 보내기 먼저), 시간 안에 없으면 None, 끊겼으면 CLOSED."""
+        if self.backlog:
+            return self.backlog.popleft()
         if self.closed and self.q.empty():
             return CLOSED
         try:
@@ -77,6 +84,8 @@ class MessageHub:
         self.instance = uuid.uuid4().hex
         self.recent: "collections.deque[dict]" = collections.deque(maxlen=recent_keep)
         self.last_state: Optional[dict] = None
+        self.last_hello: Optional[dict] = None
+        self.evicted_seq = 0                         # 링 버퍼에서 밀려난 마지막 seq
         self.subs: List[Subscriber] = []
         self.dropped_subs = 0
         self.alarm_codes: Dict[str, dict] = {}       # 규칙 id → 마지막 발동(code·since)
@@ -89,10 +98,15 @@ class MessageHub:
     def publish(self, type_: str, data: Dict[str, Any]) -> dict:
         with self._lock:
             self.seq += 1
-            env = {"id": uuid.uuid4().hex, "seq": self.seq, "ts": utc_iso(self._wall()), "type": type_, "data": data}
+            env = {"id": uuid.uuid4().hex, "instance": self.instance, "seq": self.seq, "ts": utc_iso(self._wall()),
+                   "type": type_, "data": data}
             if type_ == "state":
                 self.last_state = env
             else:
+                if type_ == "hello":
+                    self.last_hello = env
+                if len(self.recent) == self.recent.maxlen:
+                    self.evicted_seq = self.recent[0]["seq"]
                 self.recent.append(env)
             subs = list(self.subs)
         for s in subs:
@@ -100,13 +114,21 @@ class MessageHub:
         return env
 
     def subscribe(self, last_seq: Optional[int] = None, maxsize: int = SUB_QUEUE, name: str = "") -> Subscriber:
-        """새 소비자 — 최신 state 하나 + 최근 메시지(last_seq 가 있으면 그 뒤부터)를 먼저 넣는다."""
+        """새 소비자 — 최신 state 하나 + 최근 메시지(last_seq 가 있으면 그 뒤부터)를 먼저 넣는다.
+        last_seq 가 지금 seq 보다 크면(지난 실행의 번호) 없는 것으로 — 마지막 hello 부터 처음부터 보낸다."""
         sub = Subscriber(self, maxsize, name)
         with self._lock:
-            first = [self.last_state] if self.last_state is not None else []
-            first += [e for e in self.recent if last_seq is None or e["seq"] > last_seq]
-            for e in first[-maxsize:]:
-                sub.q.put_nowait(e)
+            if last_seq is not None and last_seq > self.seq:
+                last_seq = None
+            first = []
+            if last_seq is None and self.last_hello is not None:
+                first.append(self.last_hello)                     # 링 버퍼에서 밀려났어도 hello 는 맨 앞에
+            if self.last_state is not None:
+                first.append(self.last_state)
+            first += [e for e in self.recent if (last_seq is None or e["seq"] > last_seq) and e is not self.last_hello]
+            if last_seq is not None and self.evicted_seq > last_seq:
+                sub.gap = (last_seq + 1, self.evicted_seq)
+            sub.backlog.extend(first)
             self.subs.append(sub)
         return sub
 
@@ -143,11 +165,15 @@ class MessageHub:
         return self.publish("hello", self.hello_data())
 
     # ── 명령·설정 결과 ──
-    def cmd_result(self, cid: Any, kind: str, res, source: Any = None) -> None:
+    @staticmethod
+    def cmd_result_data(cid: Any, kind: str, res, source: Any = None, by: Optional[str] = None) -> dict:
         src = getattr(source, "value", source)
-        self.publish("cmd_result", {"cmdId": None if cid is None else str(cid), "kind": kind,
-                                    "status": "accepted" if res.ok else "rejected", "reasonCode": res.reason,
-                                    "source": src, "detail": f"{kind} ({src}) → {'ok' if res.ok else res.reason}"[:300]})
+        return {"cmdId": None if cid is None else str(cid), "kind": kind, "status": "accepted" if res.ok else "rejected",
+                "reasonCode": res.reason, "source": src, "by": by,
+                "detail": f"{kind} ({src}{', ' + by if by else ''}) → {'ok' if res.ok else res.reason}"[:300]}
+
+    def cmd_result(self, cid: Any, kind: str, res, source: Any = None, by: Optional[str] = None) -> dict:
+        return self.publish("cmd_result", self.cmd_result_data(cid, kind, res, source, by))
 
     def config_ack(self, d: dict) -> None:
         self.publish("config_ack", dict(d))
@@ -182,6 +208,7 @@ class MessageHub:
         p, d = self.sys.process, dict(e.data or {})
         if e.kind == "run_start":
             self.publish("run_start", {"runId": d.get("run_id"), "recipeName": getattr(p, "recipe_name", "") or None,
+                                       "by": getattr(p, "started_by", None),
                                        "name": d.get("name"), "stepNo": (p.csv_index + 1) if getattr(p, "list_active", False) else 1,
                                        "params": d.get("params"), "blocks": d.get("blocks"),
                                        "configVersion": self.sys.config_version})

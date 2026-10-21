@@ -246,10 +246,11 @@ class ProcessEngine:
             except Exception:
                 pass
 
-    def note_plc_manual(self, target: str, on: bool, source: str) -> None:
-        """공정 중 PLC 버튼 실행 기록(PLC_MANUAL_IN_PROCESS, info) — 대상·켬/끔·출처·시각(사용자 결정 2026-10-20)."""
-        self._emit(ProcEvent("plc_manual", f"{target} {'ON' if on else 'OFF'} ({source})", "PLC_MANUAL_IN_PROCESS",
-                             {"target": target, "on": bool(on), "source": source, "t": self.clock.wall(),
+    def note_plc_manual(self, target: str, on: bool, source: str, by: Optional[str] = None) -> None:
+        """공정 중 PLC 버튼 실행 기록(PLC_MANUAL_IN_PROCESS, info) — 대상·켬/끔·출처·요청자·시각(사용자 결정 2026-10-20)."""
+        self._emit(ProcEvent("plc_manual", f"{target} {'ON' if on else 'OFF'} ({source}{', ' + by if by else ''})",
+                             "PLC_MANUAL_IN_PROCESS",
+                             {"target": target, "on": bool(on), "source": source, "by": by, "t": self.clock.wall(),
                               "run_id": self.run_id or None, "state": self.state, "level": "info"}))
 
     def _dev_msg(self, level: str, text: str) -> None:
@@ -625,7 +626,8 @@ class ProcessEngine:
 
     def program_exit(self) -> bool:
         """프로그램 강제 종료(콘솔 창 닫기 등, app.force_exit) — 공정 중이면 run_end error PROGRAM_EXIT 기록.
-        파워 출력 끄기는 app 이 이미 보냈다(결정 4 — PLC 릴레이는 그대로이므로 정지 순서는 내지 않는다)."""
+        app 은 이것을 먼저 부르고(다음 블록이 파워를 다시 켜지 않게) 그다음 파워 출력 끄기를 보낸다
+        (결정 4 — PLC 릴레이는 그대로이므로 정지 순서는 내지 않는다)."""
         with self._lock:
             if not self.row_is_process or not (self.state in ACT or self.state == "STOPPING"):
                 return False
@@ -979,6 +981,7 @@ class ProcessEngine:
     def _adjust_rec(self, device: str, item: str, old: Any, new: Any, source: str, result: str, reason: Optional[str]) -> None:
         self._emit(ProcEvent("adjust", f"{device}.{item} {old} → {new} ({source}) {result}{' ' + reason if reason else ''}",
                              "PROCESS_ADJUST", {"device": device, "item": item, "old": old, "new": new, "source": source,
+                                                "by": getattr(self, "_adjust_by", None),
                                                 "result": result, "reason": reason, "t": self.clock.wall(),
                                                 "run_id": self.run_id or None, "state": self.state,
                                                 "block": self.block.no if self.block is not None else None,
@@ -1000,9 +1003,10 @@ class ProcessEngine:
             return self.overrides.get(ai.key)
         return self.overrides.get(ai.key, self.cur_vals.get(ai.key))
 
-    def adjust(self, device: str, item: str, value: Any, source: str = "web") -> Optional[str]:
-        """PROCESS_ADJUST — 돌려주는 값은 거부 사유 코드 또는 None. 결과는 ProcEvent("adjust")."""
+    def adjust(self, device: str, item: str, value: Any, source: str = "web", by: Optional[str] = None) -> Optional[str]:
+        """PROCESS_ADJUST — 돌려주는 값은 거부 사유 코드 또는 None. 결과는 ProcEvent("adjust")(by = 요청자)."""
         with self._lock:
+            self._adjust_by = by
             ai = BK.adjust_item(str(device), str(item))
             if ai is None:
                 self._adjust_rec(str(device), str(item), None, value, source, "rejected", "BAD_ARGS")

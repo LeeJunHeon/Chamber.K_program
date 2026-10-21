@@ -6,10 +6,15 @@
   공정 기록에 PLC_MANUAL_IN_PROCESS(info: 대상·켬/끔·출처·시각).
 - ALL_STOP: 공정 여부와 무관 — SafetyEngine.all_stop.
 - CONFIG_APPLY·CONFIG_ROLLBACK(웹만): system.ConfigApply → ConfigStore.apply/rollback. 결과는 config_ack 메시지.
-- 결과는 on_result(cid, kind, 결과, 출처) — MessageHub 가 cmd_result 메시지로(어느 화면이든 누가 무엇을 했는지 보게).
+- 결과는 on_result(cid, kind, 결과, 출처, 요청자) — MessageHub 가 cmd_result 메시지로(어느 화면이든 누가 무엇을 했는지 보게).
+- by(요청자): 웹은 명령의 requestedBy, 로컬 화면은 "local". cmd_result·config_ack·공정 기록(공정 중 수정·PLC 버튼·run_start)에 남는다.
+- 여러 스레드(로컬 서버·웹 연결·시험)가 동시에 불러도 명령은 잠금 하나로 하나씩(검사와 실행 사이에 다른 명령이 끼지 않게).
+  처리는 큐에 넣기·상태 바꾸기뿐이라 짧다. ALL_STOP 은 잠금을 기다리지 않는다(SafetyEngine.all_stop 이 자기 잠금으로 안전).
+- bench(장비 쓰기 금지)에서는 장비에 쓰는 명령을 BENCH_READ_ONLY 로 거부한다 — worker 도 막지만 결과가 accepted 로 보이지 않게.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
@@ -17,6 +22,9 @@ from v2.common.commands import Source
 from v2.chk import commands as C
 from v2.chk.heater_engine import parse_recipe_steps
 from v2.chk import recipe as RC
+
+
+NO_DEVICE_WRITE = ("RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK")   # bench 에서도 받는 명령
 
 
 @dataclass
@@ -27,35 +35,51 @@ class CmdResult:
 
 class ChkCore:
     def __init__(self, cfg: Dict[str, Any], process, heater, safety, plc, ig, links: Dict[str, Callable[[], bool]],
-                 on_result: Optional[Callable[[Any, str, CmdResult, Source], None]] = None, config=None) -> None:
+                 on_result: Optional[Callable[..., None]] = None, config=None, writes_allowed: bool = True) -> None:
         self.cfg, self.process, self.heater, self.safety, self.plc, self.ig = cfg, process, heater, safety, plc, ig
         self.links = links
         self.on_result = on_result
         self.config = config                    # system.ConfigApply(없으면 설정 명령은 UNKNOWN_COMMAND)
+        self.writes_allowed = writes_allowed
+        self._lock = threading.Lock()
 
     def _plc_up(self) -> bool:
         return self.links.get("plc", lambda: False)()
 
-    def command(self, kind: str, args: Optional[dict] = None, source: Source = Source.WEB, cid: Any = None) -> CmdResult:
+    @staticmethod
+    def default_by(source: Source, args: dict) -> str:
+        if source == Source.HMI:
+            return "local"
+        return str(args.get("requestedBy") or args.get("by") or getattr(source, "value", source))
+
+    def command(self, kind: str, args: Optional[dict] = None, source: Source = Source.WEB, cid: Any = None,
+                by: Optional[str] = None) -> CmdResult:
         args = dict(args or {})
+        by = str(by) if by else self.default_by(source, args)
         try:
-            r = self._run(kind, args, source)
+            if kind == "ALL_STOP":
+                r = self._run(kind, args, source, by)
+            else:
+                with self._lock:
+                    r = self._run(kind, args, source, by)
         except Exception:
             r = "INTERNAL_ERROR"
         res = CmdResult(r is None, r)
         if self.on_result:
             try:
-                self.on_result(cid, kind, res, source)
+                self.on_result(cid, kind, res, source, by)
             except Exception:
                 pass
         return res
 
-    def _run(self, kind: str, a: dict, source: Source) -> Optional[str]:
+    def _run(self, kind: str, a: dict, source: Source, by: str = "") -> Optional[str]:
         p, h = self.process, self.heater
         state = p.state
         why = C.check_command(kind, source, state, a)
         if why:
             return why
+        if not self.writes_allowed and kind not in NO_DEVICE_WRITE:
+            return "BENCH_READ_ONLY"
         if kind == "PROCESS_STOP":
             p.stop()
             return None
@@ -65,14 +89,15 @@ class ChkCore:
         if kind in ("CONFIG_APPLY", "CONFIG_ROLLBACK"):
             if self.config is None:
                 return "UNKNOWN_COMMAND"
-            by = str(a.get("requestedBy") or a.get("by") or getattr(source, "value", source))
             return self.config.apply(a, by) if kind == "CONFIG_APPLY" else self.config.rollback(by)
         if kind == "BUZZ_STOP":
             if not self._plc_up():
                 return "LINK_DOWN"
             self.plc.set_button("buzz_stop", True)
-            self._note_plc_manual("buzz_stop", True, source)
+            self._note_plc_manual("buzz_stop", True, source, by)
             return None
+        if kind in ("PROCESS_START", "RECIPE_START"):
+            p.started_by = by                     # run_start 에 남는다(hub)
         if kind == "PROCESS_START":
             if isinstance(a.get("blocks"), list) and "row" not in a:
                 return p.start_manual({"process_name": str(a.get("name") or ""), "blocks": a["blocks"]})
@@ -91,7 +116,7 @@ class ChkCore:
             src = a.get("source") or ("local" if source == Source.HMI else "web")
             if src not in ("web", "local") or "value" not in a:
                 return "BAD_ARGS"
-            return p.adjust(str(a.get("device") or ""), str(a.get("item") or ""), a["value"], src)
+            return p.adjust(str(a.get("device") or ""), str(a.get("item") or ""), a["value"], src, by=by)
         if kind == "RECIPE_START":
             return p.start_recipe()
         if kind == "PLC_BUTTON":
@@ -99,7 +124,7 @@ class ChkCore:
                 return "LINK_DOWN"
             btn = {b.target: b for b in C.PLC_BUTTONS}[a["target"]]
             self.plc.set_button(btn.addr, bool(a["on"]))
-            self._note_plc_manual(btn.target, bool(a["on"]), source)
+            self._note_plc_manual(btn.target, bool(a["on"]), source, by)
             return None
         if kind in ("HEATER_ON", "HEATER_OFF", "HEATER_SV", "HEATER_RESET", "HEATER_STOP", "HEATER_GAS_RELEASE",
                     "HEATER_RECIPE_RUN", "HEATER_RECIPE_STOP", "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP"):
@@ -114,11 +139,11 @@ class ChkCore:
             return None
         return "UNKNOWN_COMMAND"
 
-    def _note_plc_manual(self, target: str, on: bool, source: Source) -> None:
+    def _note_plc_manual(self, target: str, on: bool, source: Source, by: str = "") -> None:
         """공정 중(진행·정지 순서) 실행한 PLC 버튼 — 공정 기록에 이벤트(info)."""
         p = self.process
         if (p.active or p.state == "STOPPING") and hasattr(p, "note_plc_manual"):
-            p.note_plc_manual(target, on, getattr(source, "value", str(source)))
+            p.note_plc_manual(target, on, getattr(source, "value", str(source)), by=by or None)
 
     def _heater(self, kind: str, a: dict) -> Optional[str]:
         h, p, c = self.heater, self.process, self.cfg
