@@ -106,3 +106,18 @@ def test_anchor_fixed_at_first_tick_not_construction():
     c.advance(2.7)                                  # 만든 뒤 준비 시간
     t = s.next_tick()
     assert t.t_wall == 103.0 and t.jitter_ms == 0 and t.skipped == 0 and t.seq == 0
+
+
+def test_close_ends_waiting_threads_quietly():
+    """5-4 ⑤ — 시험이 worker 를 멈추지 못하고 끝나도 시계를 닫으면 남은 스레드가 조용히 끝난다(ClockDeadlock 경고 없음)."""
+    import threading
+    from v2.common.clock import ClockClosed
+    c = VirtualClock()
+    c.register()
+    t = c.start_thread(lambda: c.wait_until(None, lambda: False), "waiter")
+    c.close()
+    t.join(2.0)
+    assert not t.is_alive()
+    with pytest.raises(ClockClosed):
+        c.wait_until(c.monotonic() + 1.0)
+    assert threading.active_count() >= 1

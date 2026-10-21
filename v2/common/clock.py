@@ -6,6 +6,10 @@
 두 시계는 같은 조건 변수(cond)를 공유 상태 보호에 쓴다(ClockQueue·스냅샷 묶기). wait_until(target, predicate) 가
 유일한 대기 방법이다 — 상태를 바꾼 쪽은 clock.notify() 를 부른다.
 
+VirtualClock.close(): 시험이 끝날 때(conftest) 남은 참가자 스레드를 끝낸다 — 기다리던 스레드는 ClockClosed 로 빠져나와
+start_thread 의 감싸개가 조용히 끝낸다. 실패한 시험이 worker 를 멈추지 못하고 끝나면 그 worker 가 다음 시험 중에
+"진행 없음"(ClockDeadlock, 10 s)으로 경고를 남기던 문제(5-3 중간 실행) — 시험 정리의 문제이고 운전 코드의 잠금 문제가 아니다.
+
 TickScheduler: t_n = anchor + n·period (anchor = 시작 뒤 첫 정각 초). 매 tick 의 목표 monotonic 시각을
 그때의 (wall − monotonic) 차이로 다시 계산한다 — 상대 sleep 을 누적하지 않으므로 밀림이 쌓이지 않는다.
 처리가 밀려 목표를 한 period 이상 지나면 놓친 tick 을 건너뛰고 skipped 로 기록한다.
@@ -23,6 +27,10 @@ from typing import Any, Callable, Iterator, Optional
 
 class ClockDeadlock(RuntimeError):
     """가상 시계에서 모든 스레드가 기한 없이 기다림 — 시험 설계 오류."""
+
+
+class ClockClosed(BaseException):
+    """close() 한 가상 시계에서 기다림 — 참가자 스레드를 끝내는 신호(Exception 이 아니라 일반 except 에 잡히지 않는다)."""
 
 
 class RealClock:
@@ -90,6 +98,7 @@ class VirtualClock:
         self._waiting: dict = {}
         self._pending = 0          # start_thread 로 시작했지만 아직 등록 전인 스레드
         self._deadlock_real_sec = deadlock_real_sec
+        self._closed = False
 
     def monotonic(self) -> float:
         return self._now
@@ -124,6 +133,8 @@ class VirtualClock:
                 self._parts.add(threading.get_ident())
             try:
                 target()
+            except ClockClosed:
+                pass                       # 시험이 끝나 시계를 닫음 — 조용히 끝
             finally:
                 self.unregister()
 
@@ -149,6 +160,12 @@ class VirtualClock:
 
         return _Hold()
 
+    def close(self) -> None:
+        """기다리는 참가자 스레드를 모두 끝낸다(시험 정리용). 닫힌 뒤의 wait_until 은 ClockClosed."""
+        with self.cond:
+            self._closed = True
+            self.cond.notify_all()
+
     def advance(self, dt: float) -> None:
         """등록 안 된 시험 코드가 직접 시각을 옮길 때."""
         with self.cond:
@@ -165,6 +182,8 @@ class VirtualClock:
                 raise RuntimeError("VirtualClock: register() 하지 않은 스레드가 기다림")
             try:
                 while True:
+                    if self._closed:
+                        raise ClockClosed()
                     if predicate is not None and predicate():
                         return True
                     if target is not None and self._now >= target:
@@ -175,7 +194,7 @@ class VirtualClock:
                         return True
                     if target is not None and self._now >= target:
                         return False
-                    if not self.cond.wait(self._deadlock_real_sec):
+                    if not self.cond.wait(self._deadlock_real_sec) and not self._closed:
                         raise ClockDeadlock(f"가상 시계 {self._now:.3f}s 에서 {self._deadlock_real_sec}s 동안 진행 없음")
                     self._waiting.pop(ident, None)
             finally:
