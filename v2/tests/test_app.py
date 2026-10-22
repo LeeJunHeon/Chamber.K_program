@@ -84,6 +84,30 @@ def _sse(resp, until, limit_s):
     return out
 
 
+def test_hmi_static_dir_empty_means_repo_v2_hmi(tmp_path):
+    """LOCAL_HMI_STATIC_DIR 이 비면 이 저장소의 v2/hmi(사용자 결정 2026-10-22) — .gitkeep 만 있으면 안내 페이지."""
+    from pathlib import Path
+    from v2.chk.app import REPO_HMI_DIR
+    assert REPO_HMI_DIR == Path(__file__).resolve().parents[1] / "hmi" and (REPO_HMI_DIR / ".gitkeep").is_file()
+    assert P.by_key()["LOCAL_HMI_STATIC_DIR"].default == ""
+    port = _free_port()
+    lines = []
+    app = App(str(_cfg_dir(tmp_path, port, LOCAL_HMI_STATIC_DIR="")), print_fn=lines.append)
+    assert app.start() == EXIT_OK
+    try:
+        assert app.hmi_dir == REPO_HMI_DIR and app.server.static_dir == REPO_HMI_DIR
+        assert any(f"화면 파일 {REPO_HMI_DIR}" in ln for ln in lines), lines
+        page = urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=5).read().decode("utf-8")
+        assert "로컬 화면 파일 없음" in page
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/.gitkeep/../../app.py", timeout=5)
+    finally:
+        app.shutdown()
+    (tmp_path / "b").mkdir()
+    app2 = App(str(_cfg_dir(tmp_path / "b", _free_port(), LOCAL_HMI_STATIC_DIR=str(tmp_path / "mine"))), print_fn=lambda s: None)
+    assert app2.load_config() and app2.hmi_dir == tmp_path / "mine"      # 값이 있으면 그 폴더
+
+
 # ───────────── 실제 시계 — 조립 sim 시작·로컬 서버·정상 종료 ─────────────
 def test_app_sim_start_api_and_clean_shutdown(tmp_path):
     port = _free_port()

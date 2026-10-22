@@ -2,6 +2,7 @@
 
 127.0.0.1:LOCAL_HMI_PORT 에만 연다(로그인이 없으므로 다른 PC 에서 못 들어오게). ThreadingHTTPServer, 표준 라이브러리만.
 같은 포트에 두 번째로 열 수 없게(Windows SO_EXCLUSIVEADDRUSE — 포트 바인드 실패 = 이미 실행 중).
+리눅스·맥은 SO_REUSEADDR(닫은 포트를 TIME_WAIT 중에도 바로 다시 잡게 — 그쪽에서는 두 번 바인드를 허용하지 않는다).
 
   GET  /api/v1/hello    장비 ID·프로그램·버전·runMode·설정 버전·webSchemaHash·스냅샷 열·이 경로(HMI)에서 받는 명령 목록
   GET  /api/v1/schema   web_schema.bundle(현재값·대기값·설정 버전)
@@ -9,7 +10,8 @@
                         연결 때 최신 state 하나 + 최근 메시지(state 제외 — Last-Event-ID 가 있으면 그 뒤부터).
                         15 s 마다 keep-alive 주석. 동시 연결 상한 SSE_MAX(넘으면 503).
   POST /api/v1/command  {id?, kind, args} → ChkCore.command(source=HMI) → {id, ok, reason}. 결과는 cmd_result 메시지로도.
-  GET  / · 정적 파일    LOCAL_HMI_STATIC_DIR(폴더 밖 경로 404). 폴더가 비면 안내 페이지(화면 UI 는 웹 단계에서).
+  GET  / · 정적 파일    LOCAL_HMI_STATIC_DIR — 비면 이 저장소의 v2/hmi(폴더 밖 경로 404). 폴더가 비면(.gitkeep 만) 안내 페이지
+                        (화면 파일은 웹 W-7 에서 넣는다).
 bench 에서는 쓰기 명령이 BENCH_READ_ONLY — hello 의 runMode·writesAllowed 로 알 수 있다.
 """
 from __future__ import annotations
@@ -25,6 +27,7 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlsplit
 
 from v2.common.commands import Source
+from v2.common.messages import dumps_json
 from v2.chk.hub import CLOSED
 
 HOST = "127.0.0.1"
@@ -42,12 +45,12 @@ EMPTY_PAGE = """<!doctype html>
 
 
 def _dumps(obj: Any) -> bytes:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    return dumps_json(obj)
 
 
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False                     # Windows SO_REUSEADDR 는 같은 포트 두 번 바인드를 허용한다 — 끔
+    allow_reuse_address = sys.platform != "win32"   # Windows SO_REUSEADDR 는 같은 포트 두 번 바인드를 허용한다 — 끔
 
     def server_bind(self) -> None:
         if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
@@ -127,8 +130,9 @@ class LocalServer:
         return f if f.is_file() else None
 
     def static_empty(self) -> bool:
+        """화면 파일 없음 — 점으로 시작하는 파일(저장소의 v2/hmi/.gitkeep)만 있어도 비었다고 본다."""
         root = self.static_dir
-        return root is None or not root.is_dir() or not any(root.iterdir())
+        return root is None or not root.is_dir() or not any(not p.name.startswith(".") for p in root.iterdir())
 
 
 def _handler(srv: LocalServer):

@@ -11,9 +11,9 @@ from v2.chk import params as P
 from v2.chk import safety_rules as SR
 from v2.chk import web_schema as W
 
-PINNED = (5, "c5ab76cc2ee457d2b02fb6bdfdfa7c32e526296697b98623af5536eb4ff2cc04")
+PINNED = (6, "c44487973866f1545311625c2e2f4afe822c7cd4b5ae60b51cd7cefd6ebe0c98")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "params", "crossRules", "dropped", "commands", "preconditions",
-       "reasons", "plcButtons", "recipe", "blocks", "adjust", "stopSequence", "allStopSequence", "states", "events"]
+       "reasons", "plcButtons", "recipe", "blocks", "adjust", "stopSequence", "allStopSequence", "states", "events", "snapshot"]
 
 
 def test_version_and_hash_pinned():
@@ -82,3 +82,33 @@ def test_every_param_reference_resolves_from_bundle_alone():
             assert (lo, hi) == p.bounds(vals), (d.type, p.name)
     for ev in b["events"]:
         assert ev["kind"] and isinstance(ev["data"], list)
+
+
+def test_snapshot_definitions_match_hello_columns(tmp_path):
+    """묶음 snapshot 의 열 집합 = hello.snapshotColumns(같은 순서) — 웹이 라벨·단위·형식·그래프를 열 이름으로 찾는다."""
+    from v2.common.clock import VirtualClock
+    from v2.chk import snapshot_fields as SF
+    from v2.chk.sim.rig import ChkRig
+    sn = W.bundle(defaults(P.PARAMS))["snapshot"]
+    cols = [f["column"] for f in sn["tick"]] + [f["column"] for f in sn["process"]]
+    for b in sn["blocks"]:
+        cols += b["quality"]
+        for f in b["fields"]:
+            cols.append(f["column"])
+            if f["ownQuality"]:
+                cols += [f["column"] + ".q", f["column"] + ".age_s"]
+    rig = ChkRig(VirtualClock(start_wall=1_760_000_000.0), tmp_path)
+    assert cols == sn["columns"] == rig.hub.hello_data()["snapshotColumns"]
+    by = {f["column"]: f for b in sn["blocks"] for f in b["fields"]}
+    assert by["ig.ion_torr"]["fmt"] == ".2E" and by["heater.pv"]["unit"] == "°C" and by["heater.pv"]["fmt"] == ".1f"
+    assert by["heater.mv"]["fmt"] == "d" and by["mfc.ar_sccm"]["ownQuality"] and by["rf.ref_w"]["summary"] == "max"
+    assert {b["name"]: b["worker"] for b in sn["blocks"]} == SF.BLOCK_WORKER
+    assert all("source" not in f for b in sn["blocks"] for f in b["fields"])
+    assert {f["type"] for f in by.values()} <= {"float", "int", "bool", "str"}
+
+
+def test_plc_button_role_operator():
+    """PLC 버튼은 장비 담당자도(사용자 결정 2026-10-22) — 웹은 묶음의 role 로 권한을 정한다(관리자 + 그 장비 담당자)."""
+    b = W.bundle()
+    roles = {c["kind"]: c["role"] for c in b["commands"]}
+    assert roles["PLC_BUTTON"] == "operator" and roles["CONFIG_APPLY"] == roles["CONFIG_ROLLBACK"] == "admin"

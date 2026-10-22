@@ -5,6 +5,7 @@
   params        파라미터 정의(키·이름·묶음·단위·형식·범위·허용값·기본값·현재값·안전 등급·적용 시점·역할·v1 근거·설명·
                 웹 잠금 webLocked — 웹에서 못 바꾸는 키, 버전 4)
                 버전 5: uplink 설정(UPLINK_CLOCK_SKEW_SEC·UPLINK_DOWN_SEC·UPLINK_IN_SIM), 공정 기록 by(요청자), COMMAND_EXPIRED
+                버전 6: snapshot(1초 스냅샷 열 정의), PLC_BUTTON role operator, UPLINK_SUMMARY_PERIOD_SEC 설명(공정 중만)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
   recipe        행 레시피 열(rf_pulse_freq 는 kHz) · 히터 레시피 열
@@ -12,6 +13,9 @@
   adjust        공정 중 수정 항목(장비 → 세부, 형식·범위·적용 방식·판정)
   stopSequence  STOP·이상 중단·행 끝 정지 단계(고정 — 정상 끝 정지만 end_stop skip, 파워 단계 제외) · allStopSequence(고정)
   states        공정 상태 이름 · events 웹이 받는 공정 기록 이벤트(종류·data 키)
+  snapshot      1초 스냅샷 열 정의(웹 화면 라벨·단위·형식·그래프) — tick·process 필드, 장비 블록(이름·라벨·worker·
+                품질 열 <블록>.q·<블록>.age_s) → 필드(column 전체 이름·형식 fmt 는 파이썬 format spec 그대로 .1f·.2E·d).
+                ownQuality 필드는 <column>.q·<column>.age_s 품질 열을 더 갖는다. 열 집합 = hello.snapshotColumns
 범위가 파라미터 값에 묶인 항목(paramMin·paramMax·paramScale)은 웹이 params 의 현재값으로 계산한다.
 hash 는 정의만으로 계산한다(현재값·대기값 제외) — 내용이 바뀌면 시험(test_web_schema)이 알고 EXPORT_VERSION 을 올리게 한다.
 """
@@ -22,14 +26,16 @@ import json
 from typing import Any, Dict, Mapping, Optional
 
 from v2.common.paramdef import Scope, schema_hash
+from v2.common.snapshot import TICK_COLUMNS
 from v2.chk import blocks as BK
 from v2.chk import commands as C
 from v2.chk import params as P
 from v2.chk import process_states as PS
 from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
+from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 5
+EXPORT_VERSION = 6
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -79,6 +85,20 @@ def _seq(s) -> dict:
             "must": s.must, "when": s.when, "desc": s.desc, "nowait": s.nowait}
 
 
+def _field(f, column: str) -> dict:
+    return {"column": column, "name": f.name, "type": f.type.value, "unit": f.unit, "label": f.label, "fmt": f.fmt,
+            "summary": f.summary, "ownQuality": f.own_quality}
+
+
+def snapshot() -> Dict[str, Any]:
+    return {"tick": [_field(f, f.name) for f in TICK_COLUMNS],
+            "process": [_field(f, f.name) for f in SF.PROCESS_FIELDS],
+            "blocks": [{"name": b.name, "label": b.label, "worker": SF.BLOCK_WORKER[b.name],
+                        "quality": [f"{b.name}.q", f"{b.name}.age_s"],
+                        "fields": [_field(f, f"{b.name}.{f.name}") for f in b.fields]} for b in SF.BLOCKS],
+            "columns": SF.columns()}
+
+
 def definitions() -> Dict[str, Any]:
     """현재값을 뺀 정의 전부(hash 대상)."""
     return {
@@ -116,6 +136,7 @@ def definitions() -> Dict[str, Any]:
         "allStopSequence": {"fixed": True, "steps": [_seq(s) for s in SR.ALL_STOP_SEQUENCE]},
         "states": [{"name": s.name, "label": s.label, "kind": s.kind.value} for s in PS.STATES],
         "events": [{"kind": k, "label": lab, "data": list(keys)} for k, lab, keys in EVENTS],
+        "snapshot": snapshot(),
     }
 
 

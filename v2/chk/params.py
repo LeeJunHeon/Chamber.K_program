@@ -120,8 +120,9 @@ PARAMS: tuple = (
           desc="127.0.0.1 에서만 연다"),
     _inst("LOCAL_DATA_DIR", "로컬 기록 폴더", S, r"C:\ChamberK_v2\data", pattern=r".+", safety=L,
           src=_V2, desc="1초 스냅샷 SQLite·일별 CSV·이벤트·블랙박스"),
-    _inst("LOCAL_HMI_STATIC_DIR", "로컬 화면 파일 폴더", S, r"C:\ChamberK_v2\hmi", pattern=r".+", safety=L, src=_V2,
-          desc="로컬 서버(127.0.0.1:LOCAL_HMI_PORT)가 / 와 정적 파일로 내주는 폴더(폴더 밖 경로는 막음). 화면 파일은 웹 단계에서 넣는다"),
+    _inst("LOCAL_HMI_STATIC_DIR", "로컬 화면 파일 폴더", S, "", pattern=r".*", safety=L, src=_V2,
+          desc="로컬 서버(127.0.0.1:LOCAL_HMI_PORT)가 / 와 정적 파일로 내주는 폴더(폴더 밖 경로는 막음). "
+               "비면 이 저장소의 v2\\hmi(프로그램 위치 기준 — 사용자 결정 2026-10-22). 화면 파일은 웹 W-7 에서 넣는다"),
     _inst("NAS_COPY_DIR", "NAS 사본 폴더", S, r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK2",
           pattern=r".*", safety=L, src=_V2, desc="빈 값이면 NAS 복사 안 함. 제어 흐름과 분리된 스레드가 복사"),
     _inst("UPLINK_IN_SIM", "sim 에서도 웹 연결(웹 개발용)", B, False, safety=H, src=_V2, locked=True,
@@ -492,7 +493,9 @@ PARAMS: tuple = (
        src="reporter.py (_post timeout=15)"),
     _p("UPLINK_SPOOL_MAX_MB", "uplink", "미전송 보관 상한", "MB", I, 5, 1, 500, safety=L, src="reporter.py"),
     _p("UPLINK_SUMMARY_PERIOD_SEC", "uplink", "웹으로 보내는 스냅샷 요약 주기", "s", I, 60, 10, 600, safety=L,
-       apply=LIVE, src=_V2, desc="정각에 맞춘 구간마다 숫자 열의 last·mean·min·max, 장비별 ok 비율·최대 나이, 행 수(snapshot_summary)"),
+       apply=LIVE, src=_V2, desc="정각에 맞춘 구간마다 숫자 열의 last·mean·min·max, 장비별 ok 비율·최대 나이, 행 수(snapshot_summary). "
+            "공정 중에만 — 구간 안 행에 proc.run_id 가 하나라도 있을 때만 내고 runId(구간의 마지막 run id)를 싣는다"
+            "(공정 밖 요약은 내지 않음, 사용자 결정 2026-10-22)"),
     _p("UPLINK_CLOCK_SKEW_SEC", "uplink", "웹 명령 만료 판정 허용 시계 차", "s", F, 5.0, 0.0, 60.0, safety=L, apply=LIVE,
        src=_V2, desc="명령의 expiresAt 이 장비 시계로 이 시간보다 더 지났으면 실행하지 않고 COMMAND_EXPIRED"),
     _p("UPLINK_DOWN_SEC", "uplink", "웹 연결 끊김 알림 기준", "s", I, 30, 5, 600, safety=L, apply=LIVE, src=_V2,

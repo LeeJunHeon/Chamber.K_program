@@ -1,8 +1,8 @@
 """웹 상시 연결(uplink, 사용자 지시 5-7 · 결정 8 2026-10-20) — 계약(경로·헤더·JSON·응답 코드·명령·보관함)은 v2.common.messages 독스트링.
 
 스레드 셋(데몬, 실제 시간 — 시스템 시계는 envelope 시각·명령 만료 판정에만):
-  uplink-in   MessageHub 소비자. state 는 최신 하나만(+ snapshot_summary 계산), hello 는 건너뜀(연결마다 새로 만든다),
-              나머지는 받자마자 보관함(Spool)에. 느린 소비자로 끊기면 마지막 seq 로 다시 붙어 링 버퍼에서 이어 받는다
+  uplink-in   MessageHub 소비자. state 는 최신 하나만(+ snapshot_summary 계산 — 공정 중 구간만), hello 는 건너뜀(연결마다 새로 만든다),
+              나머지는 받자마자 보관함(Spool)에 — HIGH 면 uplink-out 을 깨운다(직전 POST 성공·200 ms 지남이면 바로 POST). 느린 소비자로 끊기면 마지막 seq 로 다시 붙어 링 버퍼에서 이어 받는다
               (링 버퍼보다 많이 놓쳤으면 UPLINK_GAP).
   uplink-out  POST {URL}/ingest — UPLINK_INTERVAL_MS 마다 [hello(연결 뒤 첫 POST)] + 보관함(오래된 것부터, 개수·바이트 상한) + 최신 state.
               acked id 만 보관함에서 지운다. 응답 commands 는 SSE 와 같게 처리. needWebSchema 면 webSchema 를 실은 hello 를 한 번 더.
@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlencode, urlsplit
 
 from v2.common.commands import Source
+from v2.common.messages import dumps_json
 from v2.common.snapshot_bus import iso_local
 from v2.chk.core import CmdResult
 from v2.chk.hub import CLOSED, SUB_QUEUE, utc_iso
@@ -42,6 +43,7 @@ SSE_IDLE_S = 45.0                      # 웹 keep-alive 15 s — 세 번 못 받
 CMD_KEEP = 2000                        # 기억하는 명령 id(같은 id 는 한 번만 실행)
 SPOOL_FULL_WARN_S = 60.0               # UPLINK_SPOOL_FULL 경고 간격(그동안 버린 수를 모아서)
 SEG_BYTES = 256 * 1024                 # 보관함 조각 파일 크기
+WAKE_GAP_S = 0.2                       # HIGH 메시지로 주기 밖 POST — 직전 POST 끝에서 이만큼은 띄운다
 HIGH, LOW = 1, 0
 
 
@@ -249,7 +251,7 @@ class Spool:
     # ── 쓰기·읽기 ──
     def put(self, env: dict) -> int:
         """넣기 — 상한을 넘으면 낮은 것부터(같으면 오래된 것부터) 버린다. 버린 수를 돌려준다."""
-        line = json.dumps(env, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+        line = dumps_json(env)
         prio = priority(env)
         dropped = 0
         with self._lock:
@@ -321,7 +323,8 @@ class Spool:
 
 # ───────────── snapshot_summary ─────────────
 class Summary:
-    """정각에 맞춘 구간(UPLINK_SUMMARY_PERIOD_SEC)마다 숫자 열의 last·mean·min·max, 장비별 ok 비율·최대 나이, 행 수."""
+    """정각에 맞춘 구간(UPLINK_SUMMARY_PERIOD_SEC)마다 숫자 열의 last·mean·min·max, 장비별 ok 비율·최대 나이, 행 수.
+    공정 중에만 — 구간 안 행에 proc.run_id 가 하나라도 있을 때만 낸다(runId = 구간의 마지막 run id, 사용자 결정 2026-10-22)."""
 
     SKIP = ("seq",)
 
@@ -332,6 +335,7 @@ class Summary:
 
     def _reset(self) -> None:
         self.rows = 0
+        self.run_id: Optional[str] = None
         self.vals: Dict[str, list] = {}           # 열 → [last, sum, n, min, max]
         self.q: Dict[str, list] = {}              # 장비 → [ok, n, max_age]
 
@@ -343,6 +347,9 @@ class Summary:
         if self.start is None or out is not None:
             self.start, self.period = start, period
         self.rows += 1
+        rid = row.get("proc.run_id")
+        if rid:
+            self.run_id = str(rid)
         for k, v in row.items():
             if k.endswith(".q"):
                 dev = k[:-2]
@@ -366,10 +373,12 @@ class Summary:
         return out
 
     def finish(self) -> Optional[dict]:
-        if self.start is None or not self.rows:
+        if self.start is None or not self.rows or self.run_id is None:
+            self.start = None
+            self._reset()
             return None
         r = lambda x: round(x, 6) if isinstance(x, float) else x
-        d = {"from": utc_iso(self.start), "to": utc_iso(self.start + self.period), "rows": self.rows,
+        d = {"runId": self.run_id, "from": utc_iso(self.start), "to": utc_iso(self.start + self.period), "rows": self.rows,
              "values": {k: {"last": r(a[0]), "mean": r(a[1] / a[2]), "min": r(a[3]), "max": r(a[4])}
                         for k, a in self.vals.items()},
              "quality": {k: {"okRatio": round(q[0] / q[1], 4) if q[1] else None, "maxAge": q[2]}
@@ -399,6 +408,9 @@ class Uplink:
         self.summary = Summary()
         self.latest_state: Optional[dict] = None
         self._stop = threading.Event()
+        self._wake = threading.Event()                      # HIGH 메시지 → 주기 밖 POST(stop 도 깨운다)
+        self._last_post_end: Optional[float] = None
+        self.early_posts = 0
         self._threads: List[threading.Thread] = []
         self._sse_sock = None
         self._ssl = ssl.create_default_context() if self.scheme == "https" else None
@@ -446,6 +458,7 @@ class Uplink:
 
     def stop(self, timeout: float = 5.0) -> None:
         self._stop.set()
+        self._wake.set()
         sk = self._sse_sock
         if sk is not None:
             try:
@@ -519,6 +532,8 @@ class Uplink:
         if t == "hello":
             return                                              # 연결마다 새로 만든다(uplink-out)
         n = self.spool.put(env)
+        if priority(env) == HIGH:
+            self._wake.set()
         if n:
             self._full_pending += n
             self._maybe_full_warn()
@@ -580,8 +595,21 @@ class Uplink:
             now = time.monotonic()
             if now < next_at:
                 self._check_down(now)
-                self._stop.wait(min(0.5, next_at - now))
+                wait = min(0.5, next_at - now)
+                if self.fails or self._last_post_end is None:
+                    self._stop.wait(wait)                       # 실패 뒤 대기(401·409·백오프)는 깨우지 않는다
+                    continue
+                if self._wake.is_set():                         # HIGH 메시지 — 직전 POST 성공, 200 ms 지나면 바로
+                    early = self._last_post_end + WAKE_GAP_S
+                    if now >= early:
+                        next_at = now
+                        self.early_posts += 1
+                    else:
+                        self._stop.wait(min(wait, early - now))
+                    continue
+                self._wake.wait(wait)
                 continue
+            self._wake.clear()                                  # 이 POST 에 실린다 — 이 뒤에 온 것만 다시 깨운다
             try:
                 more = self.send_once()
                 next_at = time.monotonic() + (0.05 if more else float(self.cfg["UPLINK_INTERVAL_MS"]) / 1000.0)
@@ -606,10 +634,12 @@ class Uplink:
         try:
             out = self.post_ingest(body)
         except HttpError as e:
+            self._last_post_end = time.monotonic()
             if e.status == 413:
                 return self._too_large(items, with_schema)
             raise
         self.posts += 1
+        self._last_post_end = time.monotonic()
         acked = out.get("acked") or []
         if isinstance(acked, list):
             self.spool.ack(acked)
@@ -771,4 +801,4 @@ class Uplink:
 
 
 def _dumps(obj: Any) -> bytes:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str).encode("utf-8")
+    return dumps_json(obj)

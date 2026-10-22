@@ -143,7 +143,7 @@ def test_snapshot_summary_aligned_periods():
     t0 = 1_760_000_040.0                                              # 정각(60 의 배수)
     for k in range(125):
         row = {"ts": "x", "seq": k, "dc.p": float(k), "plc.mv": True, "plc.q": "ok" if k % 4 else "stale",
-               "plc.age_s": 0.1 * (k % 5), "mfc.q": "ok", "mfc.age_s": 0.0, "proc.state": "IDLE"}
+               "plc.age_s": 0.1 * (k % 5), "mfc.q": "ok", "mfc.age_s": 0.0, "proc.state": "RUNNING", "proc.run_id": "r1"}
         r = s.add(t0 + 30 + k, row, 60)
         if r:
             out.append(r)
@@ -153,6 +153,25 @@ def test_snapshot_summary_aligned_periods():
     assert b["values"]["dc.p"] == {"last": 89.0, "mean": 59.5, "min": 30.0, "max": 89.0}
     assert "plc.mv" not in b["values"] and "seq" not in b["values"] and "proc.state" not in b["values"]
     assert b["quality"]["plc"] == {"okRatio": 0.75, "maxAge": 0.4} and b["quality"]["mfc"]["okRatio"] == 1.0
+    assert a["runId"] == b["runId"] == "r1"
+
+
+def test_snapshot_summary_only_while_process_runs():
+    """공정 밖 구간은 요약 없음 — 구간 안 행에 proc.run_id 가 하나라도 있으면 내고 runId 는 구간의 마지막 run id(사용자 결정 2026-10-22)."""
+    s = U.Summary()
+    t0 = 1_760_000_040.0
+    plan = ([None] * 60                                              # 구간 1: 공정 없음
+            + [None] * 20 + ["ra"] * 30 + [None] * 10                # 구간 2: 중간에 공정 ra
+            + ["ra"] * 25 + [None] * 5 + ["rb"] * 30                 # 구간 3: ra 끝 → rb
+            + [None] * 60                                            # 구간 4: 공정 없음
+            + [None])                                                # 구간 4 를 닫는 행
+    out = []
+    for k, rid in enumerate(plan):
+        r = s.add(t0 + k, {"dc.p": 1.0, "dc.q": "ok", "dc.age_s": 0.0, "proc.run_id": rid}, 60)
+        if r:
+            out.append(r)
+    assert [(o["runId"], o["rows"], o["from"]) for o in out] == [
+        ("ra", 60, U.utc_iso(t0 + 60)), ("rb", 60, U.utc_iso(t0 + 120))]
 
 
 # ───────────── 실제 시계 — 조립 sim + 가짜 웹 ─────────────
@@ -462,6 +481,85 @@ def test_bench_uploads_but_write_commands_read_only(tmp_path):
         assert web.wait(lambda: _web_cmd_results(web, "b-stop") and _web_cmd_results(web, "b-load"), 5)
         assert _web_cmd_results(web, "b-stop")[0]["reasonCode"] == "BENCH_READ_ONLY"
         assert _web_cmd_results(web, "b-load")[0]["status"] == "accepted"       # 장비에 쓰지 않는 명령은 받는다
+    finally:
+        up.stop()
+        web.down()
+
+
+def _result_delays(web, up, n, prefix):
+    out = []
+    for i in range(n):
+        time.sleep(0.13 * (i % 7) + 0.05)                               # POST 주기 안 여러 자리에서
+        cid = f"{prefix}{i}"
+        t0 = time.monotonic()
+        assert web.push(_cmd(cid, "PROCESS_STOP"))
+        assert web.wait(lambda: _web_cmd_results(web, cid), 3), cid
+        out.append(time.monotonic() - t0)
+    return out
+
+
+def test_high_message_posts_right_away_but_not_during_backoff(tmp_path):
+    """HIGH 메시지(cmd_result) → 직전 POST 성공·200 ms 지남이면 1 s 주기를 기다리지 않고 바로 POST. 실패 대기 중에는 깨우지 않는다."""
+    web = FakeWeb(keepalive_s=0.5).up()
+    rig, up = _rig_uplink(tmp_path, web, UPLINK_INTERVAL_MS=1000)
+    up.start()
+    try:
+        assert web.wait(lambda: web.sse_connects and any(p["code"] == 200 for p in web.posts), 5)
+        e0 = up.early_posts
+        d = _result_delays(web, up, 8, "fast-")
+        assert max(d) < 0.6 and sum(d) / len(d) < 0.4, d                 # 1 s 주기면 평균 0.5 s·최대 1 s
+        assert up.early_posts - e0 >= 6
+        # 정보 사건(LOW)은 깨우지 않는다 — 다음 주기에
+        web.wait(lambda: False, 0.3)
+        n0 = len(web.posts)
+        _info(rig, 1)
+        time.sleep(0.15)
+        assert len(web.posts) == n0 or web.posts[-1]["t"] - web.posts[n0 - 1]["t"] > 0.8
+        # 실패 대기 중(500 백오프 1→2 s)에는 HIGH 가 와도 POST 하지 않는다
+        web.status = 500
+        assert web.wait(lambda: sum(1 for p in web.posts if p["code"] == 500) >= 2, 5)
+        t_fail = [p["t"] for p in web.posts if p["code"] == 500][-1]
+        for i in range(3):
+            assert web.push(_cmd(f"bo-{i}", "PROCESS_STOP"))
+        time.sleep(1.2)                                                  # 두 번째 실패 뒤 대기 2 s(±20 %) ≥ 1.6 s
+        assert not [p for p in web.posts if p["t"] > t_fail], "백오프 중에 POST 함"
+        web.status = None
+        assert web.wait(lambda: all(_web_cmd_results(web, f"bo-{i}") for i in range(3)), 8)
+    finally:
+        up.stop()
+        web.down()
+    t0 = time.monotonic()
+    rig2, up2 = _rig_uplink(tmp_path / "s", web)                         # 멈출 때는 바로 끝난다(웹 없음)
+    up2.start()
+    rig2.hub._event("warn", "T", None, "w", {"source": "test"})
+    up2.stop()
+    assert time.monotonic() - t0 < 3.0 and not any(t.is_alive() for t in up2._threads)
+
+
+def test_nan_and_inf_become_null_in_spool_and_post(tmp_path):
+    """NaN·inf → 보관함 줄·POST 본문 모두 표준 JSON(null). 웹 JSON.parse 는 NaN 을 못 읽어 400 → 보관함이 멈추기 때문."""
+    from v2.chk import local_server as LS
+    from v2.common.messages import dumps_json
+    strict = lambda b: json.loads(b, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
+    bad = {"a": float("nan"), "b": [float("inf"), -float("inf"), 1.5], "c": {"d": float("nan")}, "e": "NaN"}
+    for raw in (dumps_json(bad), LS._dumps(bad), U._dumps(bad)):
+        assert strict(raw) == {"a": None, "b": [None, None, 1.5], "c": {"d": None}, "e": "NaN"}
+    sp = U.Spool(tmp_path / "sp", 1_000_000)
+    sp.put(dict(_env(1), data={"level": "warn", "v": float("nan")}))
+    (seg,) = (tmp_path / "sp").glob("seg-*.jsonl")
+    assert strict(seg.read_bytes().strip())["data"]["v"] is None
+    sp.close()
+    web = FakeWeb(keepalive_s=0.5).up()
+    rig, up = _rig_uplink(tmp_path / "w", web)
+    up.start()
+    try:
+        rig.hub._event("warn", "NAN_TEST", None, "nan", {"source": "test", "v": float("nan"), "w": float("inf")})
+        eid = rig.hub.recent[-1]["id"]
+        rig.hub.publish("state", {"snapshot": {"dc.p": float("nan"), "ig.ion_torr": float("inf"), "proc.run_id": None}})
+        assert web.wait(lambda: eid in {m["id"] for m in web.messages()} and web.states >= 1, 5)
+        ctx = web.messages("event")[-1]["data"]["context"]
+        assert ctx["v"] is None and ctx["w"] is None
+        assert web.posts and all(p["code"] == 200 for p in web.posts)       # 400 없음
     finally:
         up.stop()
         web.down()

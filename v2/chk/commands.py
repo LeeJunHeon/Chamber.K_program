@@ -277,8 +277,8 @@ COMMANDS: tuple = (
       (_a("on", "bool"),), v1="HEATER_RECIPE_HOLD"),
     C("HEATER_RECIPE_SKIP", "히터 레시피 스텝 건너뛰기", (WEB,), "operator", (ANY_STATE,), ("HEATER_RECIPE_ACTIVE",),
       v1="HEATER_RECIPE_STEP"),
-    # PLC 조작 — admin
-    C("PLC_BUTTON", "PLC 버튼", (WEB,), "admin", (ANY_STATE,), ("PLC_LINK_UP",),
+    # PLC 조작 — operator(관리자 + 그 장비 담당자, 사용자 결정 2026-10-22 — 웹이 role 로 정한다)
+    C("PLC_BUTTON", "PLC 버튼", (WEB,), "operator", (ANY_STATE,), ("PLC_LINK_UP",),
       (_a("target", "enum", enum=tuple(b.target for b in PLC_BUTTONS)), _a("on", "bool")),
       desc="공정 중에도 모두 허용(v1 과 같게) — 공정 중 실행은 공정 기록에 PLC_MANUAL_IN_PROCESS(info)", v1="PLC 버튼 15종"),
     C("IG_FILAMENT", "이온 게이지 필라멘트", (WEB,), "operator", IDLE_STATES, ("IG_ON_NOT_ATM",), (_a("on", "bool"),),

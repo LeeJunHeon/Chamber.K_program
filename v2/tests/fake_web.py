@@ -1,6 +1,6 @@
 """가짜 웹(시험용, 127.0.0.1 만) — uplink 계약(v2.common.messages)의 웹 쪽을 흉내 내고 실패를 조절한다.
 
-- POST /ingest: 토큰 확인 → envelope 을 id 로 한 번만 저장 → {acked, commands?, needWebSchema?}
+- POST /ingest: 토큰 확인 → 표준 JSON 만(NaN·Infinity 는 웹 JSON.parse 처럼 400) → envelope 을 id 로 한 번만 저장 → {acked, commands?, needWebSchema?}
 - GET /stream: SSE — push() 한 명령을 event: command 로, keepalive_s 마다 ": ka"
 - 조절: status(다음 응답 코드 — 함수 또는 값), delay_s(응답 지연), max_messages(넘으면 413), need_schema(한 번), post_commands,
   down()/up()(같은 포트로 내렸다 올림 — 열린 SSE 도 끊음)
@@ -124,6 +124,10 @@ class FakeWeb:
         return 200, out
 
 
+def _no_nan(name: str):
+    raise ValueError(f"표준 JSON 아님: {name}")
+
+
 def _handler(web: FakeWeb):
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -157,7 +161,11 @@ def _handler(web: FakeWeb):
             if not self._authed():
                 web.posts.append({"t": time.monotonic(), "code": 401})
                 return self._json(401, {"error": "auth"})
-            body = json.loads(raw)
+            try:
+                body = json.loads(raw, parse_constant=_no_nan)
+            except ValueError:
+                web.posts.append({"t": time.monotonic(), "code": 400})
+                return self._json(400, {"error": "bad_json"})
             code, out = web.ingest(body)
             web.posts.append({"t": time.monotonic(), "code": code, "n": len(body.get("messages") or []),
                               "types": [e["type"] for e in body.get("messages") or []], "bytes": len(raw),

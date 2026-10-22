@@ -9,6 +9,9 @@
     응답 200 {"acked": ["<웹이 저장한 envelope id>", ...], "commands": [Command, ...]?, "needWebSchema": true?}
     - messages 순서: (연결·다시 연결 뒤 첫 POST 면) hello → 보관함의 메시지(오래된 것부터) → 최신 state 하나.
       보관함에는 지난 실행이 남긴 메시지도 있다 — 각 envelope 의 instance 로 구분(seq 는 실행 안에서만 이어진다).
+    - 주기 밖 POST: HIGH 메시지(cmd_result·config_ack·run_*·warn/error event)가 생기면 직전 POST 가 성공한 상태이고 그 뒤 200 ms 이상
+      지났을 때 바로 POST 한다(명령 결과가 1 s 주기를 기다리지 않게). 실패 뒤 대기(401·409·백오프) 중에는 하지 않는다.
+    - 본문은 표준 JSON — NaN·Infinity 는 null 로 바꿔 보낸다(보관함 줄·로컬 서버도 같음).
     - 웹은 id 로 한 번만 저장하고(같은 id 가 다시 와도 저장하지 않되 acked 에는 넣는다), 저장한 id 를 acked 로 돌려준다.
       장비는 acked 에 있는 id 만 보관함에서 지운다 — 끊겨도·프로그램을 다시 켜도 잃지 않는다. state·hello 는 보관하지 않는다.
     - needWebSchema: 웹에 이 장비의 webSchemaHash 묶음이 없으면 true — 장비는 다음 POST 에 webSchema 를 실은 hello 를 한 번 더.
@@ -46,7 +49,10 @@ Envelope: {"id"(uuid hex), "instance"(실행 id), "seq"(실행 안 증가), "ts"
 """
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -110,7 +116,9 @@ MESSAGES: tuple = (
         _f("stopping", "str", False, "진행 중 정지 순서"),
         _f("uplink", "obj", True, "웹 연결 {enabled, connected(SSE), lastOkAt, lastError, queued, spoolBytes, dropped}"),
     )),
-    MessageDef("snapshot_summary", "up", "UPLINK_SUMMARY_PERIOD_SEC(정각 맞춤) 요약", (
+    MessageDef("snapshot_summary", "up", "UPLINK_SUMMARY_PERIOD_SEC(정각 맞춤) 요약 — 공정 중에만(구간 안 행에 proc.run_id 가 하나라도 "
+               "있을 때만 낸다, 공정 밖 구간은 내지 않음)", (
+        _f("runId", "str", True, "구간의 마지막 공정 id(proc.run_id)"),
         _f("from", "iso", True, "구간 시작(정각, UTC)"),
         _f("to", "iso", True, "구간 끝"),
         _f("rows", "int", True, "구간 행 수(누락 확인용)"),
@@ -141,7 +149,7 @@ MESSAGES: tuple = (
         _f("summary", "obj", True, "공정 요약"),
     )),
     MessageDef("cmd_result", "up", "명령 결과(accepted/rejected) — 같은 명령 id 가 다시 오면 같은 내용으로 다시", (
-        _f("cmdId", "str", True, "명령 id"),
+        _f("cmdId", "str", False, "명령 id(웹 명령은 늘 있음 — id 없이 보낸 로컬 화면 명령은 null)"),
         _f("kind", "str", True, "명령 종류"),
         _f("status", "str", True, "accepted / rejected"),
         _f("reasonCode", "str", False, "사유 코드(COMMAND_EXPIRED·BENCH_READ_ONLY …)"),
@@ -171,3 +179,23 @@ MESSAGES: tuple = (
         _f("expiresAt", "iso", True, "유효 시간(장비 시계 기준, 허용 차 UPLINK_CLOCK_SKEW_SEC)"),
     )),
 )
+
+
+def _finite(o: Any) -> Any:
+    if isinstance(o, float):
+        return o if math.isfinite(o) else None
+    if isinstance(o, dict):
+        return {k: _finite(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_finite(v) for v in o]
+    return o
+
+
+def dumps_json(obj: Any) -> bytes:
+    """표준 JSON(UTF-8, 공백 없음) — NaN·Infinity 는 null 로(웹 JSON.parse 는 NaN 을 못 읽어 400 → 보관함이 멈춘다)."""
+    try:
+        raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str, allow_nan=False)
+    except ValueError:
+        raw = json.dumps(_finite(json.loads(json.dumps(obj, default=str))), ensure_ascii=False,
+                         separators=(",", ":"), allow_nan=False)
+    return raw.encode("utf-8")

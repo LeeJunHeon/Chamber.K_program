@@ -1,5 +1,5 @@
 {
-  "_설명": "챔버K v2 노트북 덮어쓰기 예시 — C:\\ChamberK_v2\\config\\local_override.json 으로 복사해 값을 맞춘다. 설치(install)·비밀(secret) 키만 받는다. RUN_MODE 는 여기서만 정한다(없으면 sim) — 실제 운전은 prod 로 바꾸고 UPLINK_URL·UPLINK_TOKEN 을 채운다(prod 에서 비어 있으면 X23 으로 시작 거부). 비밀값은 이 파일에만 두고 웹에서 받지 않는다. UPLINK_IN_SIM 은 웹 개발용(sim 도 웹 연결 — EQUIPMENT_ID 가 -SIM 으로 끝나야 한다). values 밖의 키(이 설명)는 읽지 않는다.",
+  "_설명": "챔버K v2 노트북 덮어쓰기 예시 — C:\\ChamberK_v2\\config\\local_override.json 으로 복사해 값을 맞춘다. 설치(install)·비밀(secret) 키만 받는다. RUN_MODE 는 여기서만 정한다(없으면 sim) — 실제 운전은 prod 로 바꾸고 UPLINK_URL·UPLINK_TOKEN 을 채운다(prod 에서 비어 있으면 X23 으로 시작 거부). 비밀값은 이 파일에만 두고 웹에서 받지 않는다. UPLINK_IN_SIM 은 웹 개발용(sim 도 웹 연결 — EQUIPMENT_ID 가 -SIM 으로 끝나야 한다). LOCAL_HMI_STATIC_DIR 이 비면 이 저장소의 v2\\hmi 를 쓴다. values 밖의 키(이 설명)는 읽지 않는다.",
   "values": {
     "RUN_MODE": "sim",
     "EQUIPMENT_ID": "CHK2",
@@ -11,7 +11,7 @@
     "RFPULSE_ENABLED": false,
     "LOCAL_HMI_PORT": 8710,
     "LOCAL_DATA_DIR": "C:\\ChamberK_v2\\data",
-    "LOCAL_HMI_STATIC_DIR": "C:\\ChamberK_v2\\hmi",
+    "LOCAL_HMI_STATIC_DIR": "",
     "NAS_COPY_DIR": "\\\\VanaM_NAS\\VanaM_toShare\\JH_Lee\\Logs\\CHK2",
     "UPLINK_URL": "",
     "UPLINK_TOKEN": "",

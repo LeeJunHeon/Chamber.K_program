@@ -58,6 +58,7 @@ CTRL_NAMES = {CTRL_CLOSE: "CTRL_CLOSE", CTRL_LOGOFF: "CTRL_LOGOFF", CTRL_SHUTDOW
 WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
 WM_DESTROY, WM_CLOSE = 0x0002, 0x0010
 SIM_ID_SUFFIX = "-SIM"               # UPLINK_IN_SIM 일 때 장비 ID 끝
+REPO_HMI_DIR = Path(__file__).resolve().parents[1] / "hmi"   # LOCAL_HMI_STATIC_DIR 이 비면 — 이 저장소의 v2\hmi
 REFUSE_PROCESS = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
 REFUSE_GAS = "히터 가스 사용 중 — 히터 가스를 해제한 뒤 종료"
 CONFIRM_HEATER = "종료하면 히터가 꺼집니다 — 5초 안에 Ctrl+C 를 한 번 더"
@@ -152,7 +153,7 @@ class App:
 
     # ───────── 2 포트 바인드 ─────────
     def bind_server(self) -> bool:
-        self.server = LocalServer(int(self.cfg["LOCAL_HMI_PORT"]), self.cfg.get("LOCAL_HMI_STATIC_DIR"))
+        self.server = LocalServer(int(self.cfg["LOCAL_HMI_PORT"]), str(self.hmi_dir))
         try:
             self.server.bind()
         except OSError as e:
@@ -161,6 +162,12 @@ class App:
             self.server = None
             return False
         return True
+
+    @property
+    def hmi_dir(self) -> Path:
+        """로컬 화면 파일 폴더 — LOCAL_HMI_STATIC_DIR, 비면 이 저장소의 v2/hmi(사용자 결정 2026-10-22)."""
+        v = str(self.cfg.get("LOCAL_HMI_STATIC_DIR") or "")
+        return Path(v) if v else REPO_HMI_DIR
 
     # ───────── 3 로그 ─────────
     @property
@@ -197,7 +204,7 @@ class App:
         return [f"챔버K v2 — 모드 {mode.value} · 장비 {c['EQUIPMENT_ID']} · 버전 {self.version}",
                 f"설정 버전 {st.version}({st.source}) · 설정 폴더 {self.config_dir}",
                 f"로컬 화면 http://127.0.0.1:{self.server.port if self.server else c['LOCAL_HMI_PORT']}/ · "
-                f"화면 파일 {c['LOCAL_HMI_STATIC_DIR']}",
+                f"화면 파일 {self.hmi_dir}",
                 f"기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · NAS 사본 {nas}",
                 f"웹 연결 {self._uplink_line()}"]
 
