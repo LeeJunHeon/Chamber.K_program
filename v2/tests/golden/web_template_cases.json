@@ -1,0 +1,5642 @@
+{
+ "_설명": "기본 템플릿 골든(v2.tools.make_web_template_golden 이 만든다 — 손으로 고치지 않음). 웹 W-4 TS 계산 확인용",
+ "cases": [
+  {
+   "name": "dc_ar_gun1",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "o2_only_gun2",
+   "row": {
+    "process_name": "base",
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "o2": true,
+    "o2_flow": 8.5,
+    "gun2": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": false,
+    "use_o2_gas": true,
+    "ar_flow": 0.0,
+    "o2_flow": 8.5,
+    "selected_gas": "O2",
+    "mfc_flow": 8.5,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": false,
+    "use_g2": true,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": false,
+      "o2": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": false,
+      "ar_flow": null,
+      "o2": true,
+      "o2_flow": 8.5,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g2"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "ar_o2_both_guns",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "o2": true,
+    "o2_flow": 2.0,
+    "gun2": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": true,
+    "ar_flow": 20.0,
+    "o2_flow": 2.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": true,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": true,
+      "o2_flow": 2.0,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1",
+       "g2"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "no_gun",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": false,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "heater_on",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_heater": true,
+    "heater_temp": 300.0,
+    "heater_ramp": 20.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": true,
+    "heater_temp": 300.0,
+    "heater_ramp": 20.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 300.0,
+      "ramp_c_per_min": 20.0
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_wait",
+     "params": {},
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "heater_ramp_default",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_heater": true,
+    "heater_temp": 250.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": true,
+    "heater_temp": 250.0,
+    "heater_ramp": 12.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 250.0,
+      "ramp_c_per_min": 12.0
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_wait",
+     "params": {},
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "heater_ramp_below_6",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_heater": true,
+    "heater_temp": 250.0,
+    "heater_ramp": 3.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [
+    "heater_ramp 3.0 < 6 → 6 (래더 분해능)"
+   ],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": true,
+    "heater_temp": 250.0,
+    "heater_ramp": 6.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 250.0,
+      "ramp_c_per_min": 6.0
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_wait",
+     "params": {},
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "base_pressure_ig_on",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "base_pressure": 5e-06
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 5e-06,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "base_wait",
+     "params": {
+      "target_torr": 5e-06
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "base_pressure_ig_off",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "base_pressure": 5e-06
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": false,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": false,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "base_pressure: 이온 게이지가 꺼져 있음(IG_ENABLED=false)"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "no_base_pressure_ig_off",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": false,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": false,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "err_base_pressure_zero",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "base_pressure": 0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "base_pressure: 0 < 1e-09"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "rf_only",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "gun1": true,
+    "use_rf": true,
+    "rf_power": 150.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 0.0,
+    "rf_power": 150.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": null,
+      "rf_power": 150.0,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "dc_rf",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_rf": true,
+    "rf_power": 80.0,
+    "gun2": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 80.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": true,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1",
+       "g2"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": 80.0,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "rf_pulse_freq_duty",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "gun1": true,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 200.0,
+    "rf_pulse_freq": 10.5,
+    "rf_pulse_duty": 40
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": true,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": true,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 0.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 200.0,
+    "rf_pulse_freq_hz": 10500,
+    "rf_pulse_duty": 40,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": true,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": null,
+      "rf_power": null,
+      "rfp_power": 200.0,
+      "rfp_freq_khz": 10.5,
+      "rfp_duty": 40,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "rf_pulse_no_freq",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "gun1": true,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 120.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": true,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": true,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 0.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 120.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": true,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": null,
+      "rf_power": null,
+      "rfp_power": 120.0,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "dc_rf_pulse",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 50.0,
+    "rf_pulse_freq": 5,
+    "rf_pulse_duty": 50
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": true,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": true,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 50.0,
+    "rf_pulse_freq_hz": 5000,
+    "rf_pulse_duty": 50,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": true,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": 50.0,
+      "rfp_freq_khz": 5.0,
+      "rfp_duty": 50,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "wp_below_sp2",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 2.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 2.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 2.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=2.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "wp_between_sp2_sp3",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 8.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 8.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 8.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=8.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "wp_above_sp3",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 20.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 20.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 20.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=20.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "dc_delay",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_dc_delay": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": true,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 300,
+      "watch": null
+     },
+     "label": "DC Power 안정화 대기 300s",
+     "stage": "DC_DELAY"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "dc_delay_zero_cfg",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_dc_delay": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 0
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": true,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "shutter_delay",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "shutter_delay": 1.5
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 1.5,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 90,
+      "watch": {
+       "dc": true
+      }
+     },
+     "label": "Shutter Delay 90s",
+     "stage": "SHUTTER_DELAY"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "process_time_zero_shutter_only",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 0.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "shutter_delay": 2.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 2.0,
+    "process_time": 0.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 120,
+      "watch": {
+       "dc": true
+      }
+     },
+     "label": "Shutter Delay 120s",
+     "stage": "SHUTTER_DELAY"
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "fractional_minutes",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 0.25,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "shutter_delay": 0.01
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.01,
+    "process_time": 0.25,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 1,
+      "watch": {
+       "dc": true
+      }
+     },
+     "label": "Shutter Delay 1s",
+     "stage": "SHUTTER_DELAY"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 15,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "err_no_gas",
+   "row": {
+    "process_name": "base",
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "가스: Ar 또는 O2 중 하나 이상"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "err_no_power",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "파워: DC·RF·RF Pulse 중 하나 이상"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "err_time_zero",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 0.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "시간: process_time 또는 shutter_delay 중 하나는 0 보다 커야 함"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "err_dc_over_max",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 900.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "dc_power: 900.0 > 500.0"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "err_rf_pulse_disabled",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 50.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "RF Pulse: RFPULSE_ENABLED=false"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "err_rf_pulse_edge",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "gun1": true,
+    "use_rf_pulse": true,
+    "rf_pulse_power": 100.0,
+    "rf_pulse_freq": 25,
+    "rf_pulse_duty": 10
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": true,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": true,
+   "checkErrors": [
+    "RF Pulse: 25000 Hz·10% → ON 4.0 µs / OFF 36.0 µs < 16 µs"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "err_heater_disabled",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_heater": true,
+    "heater_temp": 200.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": false,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "히터: HEATER_ENABLED=false"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "err_missing_working_pressure",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [
+    "working_pressure: 값 필요"
+   ],
+   "checkWarnings": [],
+   "params": null,
+   "blocks": null
+  },
+  {
+   "name": "warn_dc_delay_without_dc",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "gun1": true,
+    "use_rf": true,
+    "rf_power": 100.0,
+    "use_dc_delay": true
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [
+    "use_dc_delay 는 DC 를 쓸 때만 — 무시"
+   ],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 0.0,
+    "rf_power": 100.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": false,
+    "heater_temp": 0.0,
+    "heater_ramp": 0.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": null,
+      "rf_power": 100.0,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  }
+ ]
+}
