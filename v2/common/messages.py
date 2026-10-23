@@ -105,7 +105,8 @@ MESSAGES: tuple = (
         _f("runId", "str", False, "진행 중 공정 id"),
         _f("step", "obj", False, "현재 블록(번호·총수·종류·이름·남은 초)"),
         _f("recipe", "obj", False, "적재된 레시피(이름·행)"),
-        _f("heaterRecipe", "obj", False, "히터 레시피 진행"),
+        _f("heaterRecipe", "obj", False, "히터 레시피 진행 {name, state(RAMPING·SOAKING), step(1부터), steps, "
+           "held(일시정지 중 — HEATER_RECIPE_HOLD on=true 뒤 true, on=false 뒤 false)} — 돌고 있지 않으면 null"),
         _f("heater", "obj", True, "히터 소유·넘김·가스 상태"),
         _f("snapshot", "obj", True, "가장 최근 1초 행(열 이름 → 값)"),
         _f("alarms", "list", True, "활성 알람(규칙 id·사유 코드·시작 시각)"),

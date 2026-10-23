@@ -52,7 +52,8 @@ CASES: List[tuple] = [
     ("no_gun", _row(gun1=None), {}),
     ("heater_on", _row(use_heater=True, heater_temp=300.0, heater_ramp=20.0), {}),
     ("heater_ramp_default", _row(use_heater=True, heater_temp=250.0), {}),
-    ("heater_ramp_below_6", _row(use_heater=True, heater_temp=250.0, heater_ramp=3.0), {}),
+    ("heater_ramp_zero_default", _row(use_heater=True, heater_temp=250.0, heater_ramp=0.0), {}),   # 0 = HEATER_RAMP_RATE_C_PER_MIN
+    ("heater_ramp_below_6",_row(use_heater=True, heater_temp=250.0, heater_ramp=3.0), {}),
     ("base_pressure_ig_on", _row(base_pressure=5e-6), {}),
     ("base_pressure_ig_off", _row(base_pressure=5e-6), {"IG_ENABLED": False}),
     ("no_base_pressure_ig_off", _row(), {"IG_ENABLED": False}),

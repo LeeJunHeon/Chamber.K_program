@@ -243,7 +243,7 @@ class MessageHub:
         recipe = ({"name": p.recipe_name, "rows": len(rows), "row": f.get("proc.row"), "listActive": bool(p.list_active)}
                   if rows else None)
         rr = h.recipe
-        hr = ({"name": rr.name, "state": rr.state, "step": rr.idx + 1, "steps": len(rr.steps)}
+        hr = ({"name": rr.name, "state": rr.state, "step": rr.idx + 1, "steps": len(rr.steps), "held": bool(rr.held)}
               if h.recipe_running else None)
         fired = [r for r, on in getattr(s.safety.engine, "_fired", {}).items() if on]
         alarms = [dict({"ruleId": r}, **self.alarm_codes.get(r, {})) for r in sorted(fired)]

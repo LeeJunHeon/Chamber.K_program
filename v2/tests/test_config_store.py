@@ -272,3 +272,78 @@ def test_removed_stop_sequence_order_in_saved_file(tmp_path):
     assert any("STOP_SEQUENCE_ORDER" in n for n in s2.notes)
     assert s2.apply(2, _web_values(STOP_SEQUENCE_ORDER="2,1"), "5-4", busy=False).reason == "CONFIG_HASH_MISMATCH"
     assert s2.apply(2, _web_values(STOP_SEQUENCE_ORDER="2,1"), SH, busy=False).reason == "CONFIG_INVALID"
+
+
+# ───────── float 형식 키는 늘 float(사용자 지시 5-10 ②) ─────────
+def _int_float_key():
+    from v2.common.paramdef import PType
+    return next(p.key for p in P.PARAMS if p.type is PType.INT and p.scope.value == "process")
+
+
+def test_float_keys_become_float_on_apply_save_and_reject_text(tmp_path):
+    from v2.chk import recipe as RC
+    ik = _int_float_key()
+    s = _store(tmp_path)
+    s.load()
+    r = s.apply(1, _web_values(HEATER_MAX_TEMP=650), SH, busy=False)          # 웹 JSON 은 650.0 을 650 으로 보낸다
+    assert r.status == "applied"
+    assert type(s.values["HEATER_MAX_TEMP"]) is float and type(s.persisted["HEATER_MAX_TEMP"]) is float
+    assert type(s.values[ik]) is int                                          # int 형식 키는 그대로
+    saved = json.loads((tmp_path / ACTIVE).read_text(encoding="utf-8"))["values"]
+    assert type(saved["HEATER_MAX_TEMP"]) is float
+    assert [c for c in r.changes if c["key"] == "HEATER_MAX_TEMP"] == [{"key": "HEATER_MAX_TEMP", "old": 700.0, "new": 650.0}]
+    assert type(r.changes[0]["new"]) is float
+    row = {"process_name": "x", "ar": True, "ar_flow": 20.0, "working_pressure": 3.0, "process_time": 1.0,
+           "use_dc": True, "dc_power": 100.0, "use_heater": True, "heater_temp": 900.0}
+    _, errs, _ = RC.check_process_row(row, s.values)
+    assert "heater_temp: 900.0 > 650.0" in errs                               # "650" 이 아니라 묶음 형식대로
+
+
+def test_float_keys_from_old_int_file_and_override(tmp_path):
+    from v2.common.config_store import _content_hash
+    vals = _web_values(HEATER_MAX_TEMP=600)
+    assert type(vals["HEATER_MAX_TEMP"]) is int
+    (tmp_path / ACTIVE).write_text(json.dumps({"version": 3, "schemaHash": SH, "savedAt": "x", "values": vals,
+                                               "contentHash": _content_hash(3, SH, vals)}), encoding="utf-8")
+    fs = int(defaults(P.PARAMS)["MFC_AR_FS_SCCM"])
+    (tmp_path / OVERRIDE).write_text(json.dumps({"values": {"MFC_AR_FS_SCCM": fs}}), encoding="utf-8")
+    s = _store(tmp_path)
+    v = s.load()
+    assert s.source == "active" and v["HEATER_MAX_TEMP"] == 600.0 and type(v["HEATER_MAX_TEMP"]) is float
+    assert type(s.persisted["HEATER_MAX_TEMP"]) is float
+    assert type(v["MFC_AR_FS_SCCM"]) is float and type(s.override["MFC_AR_FS_SCCM"]) is float
+
+
+def test_float_keys_on_rollback_and_bool_is_not_number(tmp_path):
+    from v2.common.paramdef import as_float
+    s = _store(tmp_path)
+    s.load()
+    assert s.apply(1, _web_values(HEATER_MAX_TEMP=650), SH, busy=False).status == "applied"
+    assert s.apply(2, _web_values(HEATER_MAX_TEMP=640), SH, busy=False).status == "applied"
+    r = s.rollback(busy=False)
+    assert r.status == "applied" and type(r.values["HEATER_MAX_TEMP"]) is float and r.values["HEATER_MAX_TEMP"] == 650.0
+    assert type(s.values["HEATER_MAX_TEMP"]) is float
+    assert as_float(P.PARAMS, {"HEATER_MAX_TEMP": True}) == {"HEATER_MAX_TEMP": True}
+    r = s.apply(9, _web_values(HEATER_MAX_TEMP=True), SH, busy=False)
+    assert r.reason == "CONFIG_INVALID"
+    assert all(type(v) is float for k, v in defaults(P.PARAMS).items()
+               if next(p for p in P.PARAMS if p.key == k).type.value == "float")
+
+
+def test_float_keys_in_config_ack_cfg_and_bundle(tmp_path):
+    import threading
+    from v2.chk import web_schema as W
+    from v2.chk.system import ConfigApply
+    s = _store(tmp_path)
+    cfg = dict(s.load())
+    acks = []
+    ca = ConfigApply(s, cfg, lambda: False, threading.Lock(), acks.append)
+    assert ca.apply({"version": 1, "values": _web_values(HEATER_MAX_TEMP=650), "schemaHash": SH}, "web") is None
+    assert type(cfg["HEATER_MAX_TEMP"]) is float                              # 실행 설정(hello·묶음 current 의 원본)
+    assert '"new": 650.0' in json.dumps(acks[0]["changes"])
+    cur = {p["key"]: p["current"] for p in W.bundle(cfg)["params"]}
+    assert type(cur["HEATER_MAX_TEMP"]) is float and '"current":650.0' in W.to_json(W.bundle(cfg))
+    assert ca.apply({"version": 2, "values": _web_values(HEATER_MAX_TEMP=640), "schemaHash": SH}, "web") is None
+    assert ca.rollback("web") is None
+    assert acks[-1]["kind"] == "rollback" and '"HEATER_MAX_TEMP": 650.0' in json.dumps(acks[-1]["values"])
+    assert type(cfg["HEATER_MAX_TEMP"]) is float and cfg["HEATER_MAX_TEMP"] == 650.0

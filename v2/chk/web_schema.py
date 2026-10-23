@@ -8,10 +8,13 @@
                 버전 6: snapshot(1초 스냅샷 열 정의), PLC_BUTTON role operator, UPLINK_SUMMARY_PERIOD_SEC 설명(공정 중만)
                 버전 7: recipe 열 zeroIsEmpty(숫자 0 = 빈 값 — base_pressure 0 은 베이스 대기 안 함, 범위 검사 안 함),
                 cmd_result.detail = 거부 이유 문구(명령 인자는 commands.check_args — 형식·범위 밖은 BAD_ARGS)
+                버전 8: blocks 에 웹 블록 검사 계산용 blockKeys·empty·valueRules(값 사이·꺼진 장비 규칙 표)·spDefaultKey·
+                pressureStage·heaterRampMin·pulseEdge·autoEndStopLabel(골든 tests/golden/web_block_cases.json).
+                float 형식 설정값은 늘 float(current·hello·config_ack 가 700.0). state.heaterRecipe.held(일시정지 중)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
   recipe        행 레시피 열(rf_pulse_freq 는 kHz, zeroIsEmpty 열은 0 = 빈 값) · 히터 레시피 열
-  blocks        블록 정의(종류·값·단위·범위·기본값·설명) + 감시 항목·조건 값·한도
+  blocks        블록 정의(종류·값·단위·범위·기본값·설명) + 감시 항목·조건 값·한도·값 사이 규칙(valueRules)
   adjust        공정 중 수정 항목(장비 → 세부, 형식·범위·적용 방식·판정)
   stopSequence  STOP·이상 중단·행 끝 정지 단계(고정 — 정상 끝 정지만 end_stop skip, 파워 단계 제외) · allStopSequence(고정)
   states        공정 상태 이름 · events 웹이 받는 공정 기록 이벤트(종류·data 키)
@@ -37,7 +40,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 7
+EXPORT_VERSION = 8
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -128,7 +131,17 @@ def definitions() -> Dict[str, Any]:
                    "shutters": [{"target": t, "label": lab} for t, _, lab in BK.SHUTTERS],
                    "limits": {"repeatMax": BK.REPEAT_MAX, "maxDepth": BK.MAX_DEPTH, "maxExpandedSteps": BK.MAX_EXPANDED_STEPS,
                               "labelMax": BK.LABEL_MAX},
-                   "rules": "값 범위·꺼진 장비만 검사 — 순서·조합 규칙 없음(사용자 결정 2026-10-20)"},
+                   "rules": "값 범위·꺼진 장비만 검사 — 순서·조합 규칙 없음(사용자 결정 2026-10-20)",
+                   "blockKeys": list(BK.BLOCK_KEYS),
+                   "empty": "빈 값 = null 또는 공백뿐인 문자열(숫자 0 은 빈 값 아님). params 가 없거나 거짓 값([]·\"\")이면 {}",
+                   "valueRules": [r.public() for r in BK.VALUE_RULES],
+                   "spDefaultKey": {str(n): k for n, k in BK.SP_DEFAULT_KEY.items()},
+                   "pressureStage": "stage 를 비우면 PRESSURE_SP{sp}",
+                   "heaterRampMin": BK.HEATER_RAMP_MIN,
+                   "pulseEdge": {"param": "RFPULSE_PULSE_MIN_EDGE_US", "freqHz": "round(rfp_freq_khz × 1000)",
+                                 "rule": "ON = duty/100/Hz×1e6 µs, OFF = (100−duty)/100/Hz×1e6 µs — 둘 다 ≥ 최소 − 1e-6. "
+                                         "최소 ≤ 0 이거나 Hz ≤ 0 이면 검사 안 함"},
+                   "autoEndStopLabel": BK.AUTO_END_STOP_LABEL},
         "adjust": {"command": "PROCESS_ADJUST", "items": [a.public() for a in BK.ADJUST_ITEMS],
                    "settleParam": "ADJUST_SETTLE_MAX_SEC"},
         "stopSequence": {"stopFixed": True, "steps": [_seq(s) for s in SR.STOP_SEQUENCE],

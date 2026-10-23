@@ -283,3 +283,31 @@ def test_adjust_reject_reasons_become_detail(tmp_path):
     assert (got["item"].reason, got["item"].detail) == ("BAD_ARGS", "dc.volts — 모르는 항목")
     assert got["range"].reason == "ADJUST_OUT_OF_RANGE" and got["range"].detail
     assert got["used"].reason == "ADJUST_NOT_USED" and got["used"].detail == ""
+
+
+# ───────────── 히터 레시피 일시정지를 state 에(사용자 지시 5-10 ③) ─────────────
+def test_state_heater_recipe_held(tmp_path):
+    r = R(tmp_path, FAST)
+    got = {}
+
+    def run():
+        r.rig.heater.st = dict(r.rig.heater.st, itl=True, fault=False)
+        got["run"] = r.rig.core.command("HEATER_RECIPE_RUN", {"name": "h", "steps": [
+            {"target_c": 40, "ramp_c_per_min": 6, "soak_min": 600}]})
+        got["s0"] = r.rig.hub.state_data({})["heaterRecipe"]
+
+    def hold(on, key):
+        def f():
+            got[f"cmd_{key}"] = r.rig.core.command("HEATER_RECIPE_HOLD", {"on": on})
+            got[key] = r.rig.hub.state_data({})["heaterRecipe"]
+        return f
+    r.on(3, run)
+    r.on(6, hold(True, "on"))
+    r.on(8, hold(False, "off"))
+    r.on(10, r.cmd("HEATER_RECIPE_STOP"))
+    r.run(12)
+    assert got["run"].ok, got["run"]
+    assert got["s0"]["held"] is False and got["s0"]["name"] == "h"
+    assert got["cmd_on"].ok and got["on"]["held"] is True
+    assert got["cmd_off"].ok and got["off"]["held"] is False
+    assert r.rig.hub.state_data({})["heaterRecipe"] is None

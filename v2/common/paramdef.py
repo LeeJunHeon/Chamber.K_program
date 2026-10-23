@@ -168,8 +168,16 @@ def check_config(defs: Sequence[ParamDef], rules: Sequence[CrossRule],
     return errs
 
 
+def as_float(defs: Iterable[ParamDef], values: Mapping[str, Any]) -> dict:
+    """float 형식 키의 정수 값을 float 로(bool 은 숫자로 치지 않아 그대로 — 검사가 거부). 문구·JSON 이 늘 700.0 모양 —
+    웹 TS 는 묶음 형식대로 쓰고, 웹 JSON 은 700.0 을 700 으로 보낸다."""
+    fl = {p.key for p in defs if p.type is PType.FLOAT}
+    return {k: (float(v) if k in fl and isinstance(v, int) and not isinstance(v, bool) else v) for k, v in values.items()}
+
+
 def defaults(defs: Iterable[ParamDef]) -> dict:
-    return {p.key: p.default for p in defs}
+    defs = tuple(defs)
+    return as_float(defs, {p.key: p.default for p in defs})
 
 
 def schema_dict(defs: Sequence[ParamDef], rules: Sequence[CrossRule]) -> dict:

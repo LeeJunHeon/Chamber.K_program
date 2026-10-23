@@ -60,6 +60,8 @@ SHUTTERS: tuple = (("g1", "S1_button", "Gun Shutter 1"), ("g2", "S2_button", "Gu
 SP_DEFAULT_KEY = {2: "SP2_MTORR", 3: "SP3_MTORR", 4: "SP4_MTORR"}
 
 AUTO_END_STOP_LABEL = "자동 끝 정지"
+HEATER_RAMP_MIN = 6.0                  # °C/min — 래더 분해능(0 < 값 < 6 은 6 으로, 경고)
+BLOCK_KEYS: tuple = ("type", "params", "label", "stage", "blocks")
 REPEAT_MAX = 100
 MAX_DEPTH = 4
 MAX_EXPANDED_STEPS = 3000
@@ -223,6 +225,40 @@ def by_type() -> Dict[str, BlockDef]:
     return {b.type: b for b in BLOCK_DEFS}
 
 
+# 블록 안 값 사이 규칙·꺼진 장비 — _check_one 이 이 표 순서대로 본다(묶음 blocks.valueRules). 순서 규칙이 아니라 값의 짝.
+@dataclass(frozen=True)
+class BRule:
+    id: str
+    blocks: tuple                      # 적용 블록 종류
+    kind: str                          # need(조건이면 key 값 필요) / device(설정 key 가 false 면 오류) / pulse_edge / warn
+    when: str                          # 조건 — "·" 로 이은 것이 모두 참: "<값>=true" · "<값>:num"(숫자) · "<값>^=<접두>" ·
+                                       #   "sp∉spDefaultKey" · "0<<값><heaterRampMin". 빈 문자열 = 늘
+    key: str                           # need = 값 이름, device·pulse_edge = 설정 키
+    msg: str                           # 문구(앞에 "블록 <번호>(<종류>): ") — {값 이름}·{edge}(펄스 위반 문구)를 채운다
+
+    def public(self) -> dict:
+        return {"id": self.id, "blocks": list(self.blocks), "kind": self.kind, "when": self.when, "key": self.key,
+                "msg": self.msg}
+
+
+VALUE_RULES: tuple = (
+    BRule("need_ar_flow", ("gas_intro",), "need", "ar=true", "ar_flow", "ar_flow: ar 이면 값 필요"),
+    BRule("need_o2_flow", ("gas_intro",), "need", "o2=true", "o2_flow", "o2_flow: o2 이면 값 필요"),
+    BRule("need_sp_value", ("pressure",), "need", "set=true·sp∉spDefaultKey", "value", "value: SP{sp} 는 값 필요"),
+    BRule("heater_disabled", ("heater_ramp", "heater_wait", "heater_off"), "device", "", "HEATER_ENABLED",
+          "히터: HEATER_ENABLED=false"),
+    BRule("ig_disabled_base", ("base_wait",), "device", "", "IG_ENABLED",
+          "base_pressure: 이온 게이지가 꺼져 있음(IG_ENABLED=false)"),
+    BRule("ig_disabled_cond", ("cond_wait",), "device", "field^=ig.", "IG_ENABLED",
+          "조건 값 {field}: 이온 게이지가 꺼져 있음(IG_ENABLED=false)"),
+    BRule("rfpulse_disabled", ("power_on",), "device", "rfp_power:num", "RFPULSE_ENABLED", "RF Pulse: RFPULSE_ENABLED=false"),
+    BRule("pulse_edge", ("power_on",), "pulse_edge", "rfp_freq_khz:num·rfp_duty:num", "RFPULSE_PULSE_MIN_EDGE_US",
+          "RF Pulse: {edge}"),
+    BRule("ramp_below_min", ("heater_ramp",), "warn", "0<ramp_c_per_min<heaterRampMin", "",
+          "ramp_c_per_min {ramp_c_per_min} < 6 → 6 (래더 분해능)"),
+)
+
+
 # 안전 규칙이 블록 종류를 모를 때(SimpleProcess — 상태 이름만 정하는 시험) 상태 이름 → 블록 종류
 STAGE_TO_TYPE: Dict[str, str] = {
     "PRE_CLEAN": "pre_clean", "GAS_PRE": "gas_prep", "HEATER_RAMP": "heater_wait", "HEATER_HOLD_WAIT": "heater_wait",
@@ -251,6 +287,38 @@ def _empty(v: Any) -> bool:
 
 def _num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and not (isinstance(v, float) and math.isnan(v))
+
+
+def _as_type(p: BParam, v: Any) -> Any:
+    """숫자 값을 정의 형식대로 — float 는 float, int 는 정수값이면 int. 웹 JSON 은 1.0 과 1 을 가르지 못하므로
+    문구·정리된 블록이 들어온 모양과 상관없이 같게(5.0 → "5.0", 정수 5 → "5")."""
+    if p.type == "float" and _num(v):
+        return float(v)
+    if p.type == "int" and _num(v) and float(v).is_integer():
+        return int(v)
+    return v
+
+
+def _when(when: str, out: Mapping[str, Any]) -> bool:
+    """BRule.when — "·" 로 이은 조건이 모두 참."""
+    for c in filter(None, when.split("·")):
+        if c == "sp∉spDefaultKey":
+            ok = out["sp"] not in tuple(SP_DEFAULT_KEY)
+        elif c.startswith("0<") and c.endswith("<heaterRampMin"):
+            v = out[c[2:-len("<heaterRampMin")]]
+            ok = _num(v) and 0 < v < HEATER_RAMP_MIN
+        elif c.endswith("=true"):
+            ok = out[c[:-5]] is True
+        elif c.endswith(":num"):
+            ok = _num(out[c[:-4]])
+        elif "^=" in c:
+            k, pre = c.split("^=", 1)
+            ok = str(out.get(k) or "").startswith(pre)
+        else:
+            raise ValueError(f"모르는 조건 {c!r}")
+        if not ok:
+            return False
+    return True
 
 
 def _check_param(p: BParam, v: Any, cfg: Mapping[str, Any], stop_nos: tuple) -> Optional[str]:
@@ -299,7 +367,7 @@ def _check_one(b: Any, path: str, cfg: Mapping[str, Any], depth: int, errs: list
         errs.append(f"블록 {path}: 모르는 종류 {b.get('type')!r}")
         return None
     pre = f"블록 {path}({d.type})"
-    extra = set(b) - {"type", "params", "label", "stage", "blocks"}
+    extra = set(b) - set(BLOCK_KEYS)
     if extra:
         errs.append(f"{pre}: 모르는 키 {sorted(extra)}")
     params = b.get("params") or {}
@@ -318,6 +386,7 @@ def _check_one(b: Any, path: str, cfg: Mapping[str, Any], depth: int, errs: list
                 errs.append(f"{pre}: {p.name}: 값 필요")
             out[p.name] = p.default
             continue
+        v = _as_type(p, v)
         e = _check_param(p, v, cfg, stop_nos)
         if e:
             errs.append(f"{pre}: {p.name}: {e}")
@@ -329,33 +398,19 @@ def _check_one(b: Any, path: str, cfg: Mapping[str, Any], depth: int, errs: list
     if stage is not None and stage not in (d.stage,) + d.stages:
         errs.append(f"{pre}: stage 는 {[d.stage] + list(d.stages)} 중 하나")
     nb = {"type": d.type, "params": out, "label": label or "", "stage": stage or ""}
-    # 값 사이(같은 블록 안) — 순서 규칙이 아니라 값의 짝
-    t = d.type
-    if t == "gas_intro":
-        for g in ("ar", "o2"):
-            if out[g] is True and _empty(out[f"{g}_flow"]):
-                errs.append(f"{pre}: {g}_flow: {g} 이면 값 필요")
-    if t == "pressure" and out["set"] is True and _empty(out["value"]) and out["sp"] not in SP_DEFAULT_KEY:
-        errs.append(f"{pre}: value: SP{out['sp']} 는 값 필요")
-    if t == "heater_ramp" or t == "heater_wait" or t == "heater_off":
-        if not cfg["HEATER_ENABLED"]:
-            errs.append(f"{pre}: 히터: HEATER_ENABLED=false")
-    if t == "heater_ramp":
-        r = out["ramp_c_per_min"]
-        if _num(r) and 0 < r < 6.0:
-            warns.append(f"{pre}: ramp_c_per_min {r} < 6 → 6 (래더 분해능)")
-    if t == "base_wait" and not cfg["IG_ENABLED"]:
-        errs.append(f"{pre}: base_pressure: 이온 게이지가 꺼져 있음(IG_ENABLED=false)")
-    if t == "cond_wait" and str(out.get("field") or "").startswith("ig.") and not cfg["IG_ENABLED"]:
-        errs.append(f"{pre}: 조건 값 {out['field']}: 이온 게이지가 꺼져 있음(IG_ENABLED=false)")
-    if t == "power_on":
-        if _num(out["rfp_power"]) and not cfg.get("RFPULSE_ENABLED", True):
-            errs.append(f"{pre}: RF Pulse: RFPULSE_ENABLED=false")
-        f, du = out["rfp_freq_khz"], out["rfp_duty"]
-        if _num(f) and _num(du):
-            e = pulse_edge_violation(float(round(float(f) * 1000.0)), float(du), cfg["RFPULSE_PULSE_MIN_EDGE_US"])
+    for r in VALUE_RULES:                                # 값 사이(같은 블록 안) — 순서 규칙이 아니라 값의 짝
+        if d.type not in r.blocks or not _when(r.when, out):
+            continue
+        if r.kind == "need" and _empty(out[r.key]):
+            errs.append(f"{pre}: {r.msg.format(**out)}")
+        elif r.kind == "device" and not cfg.get(r.key, True):
+            errs.append(f"{pre}: {r.msg.format(**out)}")
+        elif r.kind == "pulse_edge":
+            e = pulse_edge_violation(float(round(float(out["rfp_freq_khz"]) * 1000.0)), float(out["rfp_duty"]), cfg[r.key])
             if e:
-                errs.append(f"{pre}: RF Pulse: {e}")
+                errs.append(f"{pre}: {r.msg.format(edge=e)}")
+        elif r.kind == "warn":
+            warns.append(f"{pre}: {r.msg.format(**out)}")
     if d.container:
         kids = b.get("blocks")
         if depth >= MAX_DEPTH:
@@ -560,7 +615,7 @@ def _expand_block(ctx: _Ctx, b: dict, no: str) -> None:
     elif t == "heater_ramp":
         temp = float(p["target_c"])
         ramp = float(p["ramp_c_per_min"] or 0.0) or float(c["HEATER_RAMP_RATE_C_PER_MIN"])
-        ramp = max(ramp, 6.0) if ramp > 0 else ramp
+        ramp = max(ramp, HEATER_RAMP_MIN) if ramp > 0 else ramp
         ctx.heater_target = temp
         out.append(S("HEATER_RAMP", f"히터 램프 속도 {ramp:.0f}°C/min 설정", value=ramp, ref="heater.ramp"))
         out.append(S("HEATER_SET", f"히터 목표 {temp:.1f}°C 설정 — 승온 시작", value=temp, ref="heater.target"))

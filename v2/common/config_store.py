@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from v2.common.paramdef import Apply, CrossRule, ParamDef, Safety, Scope, check_config, check_value, defaults
+from v2.common.paramdef import Apply, CrossRule, ParamDef, Safety, Scope, as_float, check_config, check_value, defaults
 
 ACTIVE = "config_active.json"
 PREV = "config_prev.json"
@@ -125,7 +125,7 @@ class ConfigStore:
                     errs.append(e)
         if errs:
             raise ConfigError(f"{OVERRIDE} 오류: {errs}")
-        return dict(vals)
+        return as_float(self.defs, vals)
 
     def _effective(self, persisted: Mapping[str, Any]) -> dict:
         base = defaults(self.defs)
@@ -142,6 +142,7 @@ class ConfigStore:
             raise ValueError("형식 오류")
         if _content_hash(version, sh, vals) != ch:
             raise ValueError("파일 해시 불일치(손상)")
+        vals = as_float(self.defs, vals)                # 정수로 저장된 float 키(예전 파일·웹 JSON 700)도 float
         notes = []
         if sh != self.schema_hash:
             base = defaults(self.defs)
@@ -189,7 +190,8 @@ class ConfigStore:
     # ───────── 적용 ─────────
     def apply(self, version: int, values: Mapping[str, Any], schema_hash: str, busy: bool, by: str = "",
               kind: str = "apply") -> ApplyResult:
-        """CONFIG_APPLY — 결과와 함께 이력 한 줄(누가·언제·이전 → 새 값)."""
+        """CONFIG_APPLY — 결과와 함께 이력 한 줄(누가·언제·이전 → 새 값). float 형식 키는 float 로 바꿔 검사·저장."""
+        values = as_float(self.defs, values) if isinstance(values, Mapping) else values
         before = dict(self.persisted)
         res = self._apply(version, values, schema_hash, busy)
         keys = sorted((set(before) | set(values)) - self.secret_keys)
