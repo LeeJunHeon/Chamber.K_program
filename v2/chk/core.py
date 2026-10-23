@@ -1,6 +1,6 @@
 """챔버K 명령 처리 — 웹·로컬 화면 명령을 검사(commands.check_command + 장비 값 조건)하고 엔진에 넘긴다.
 
-결과는 (성공, 사유 코드). 다음 단계(로컬 HMI·웹 연동)가 이 함수 하나를 부른다. 골든 하니스도 이것으로 v1 원격 명령을 흉내 낸다.
+결과는 (성공, 사유 코드, 이유 문구 detail). 다음 단계(로컬 HMI·웹 연동)가 이 함수 하나를 부른다. 골든 하니스도 이것으로 v1 원격 명령을 흉내 낸다.
 - PROCESS_STOP: 공정이 없으면 지난 공정이 남긴 출력만 정리(OUTPUTS_CLEANUP), 남은 게 없으면 아무것도 하지 않고 성공(v1). RECIPE_CLEAR: 적재가 없으면 성공, 공정 중이면 PROCESS_RUNNING(v1 B5).
 - PLC_BUTTON: PLC 링크가 없으면 LINK_DOWN(v1 B6). 공정 중에도 모두 허용(v1, 사용자 결정 2026-10-20) — 공정 중 실행은
   공정 기록에 PLC_MANUAL_IN_PROCESS(info: 대상·켬/끔·출처·시각).
@@ -10,6 +10,10 @@
 - by(요청자): 웹은 명령의 requestedBy, 로컬 화면은 "local". cmd_result·config_ack·공정 기록(공정 중 수정·PLC 버튼·run_start)에 남는다.
 - 여러 스레드(로컬 서버·웹 연결·시험)가 동시에 불러도 명령은 잠금 하나로 하나씩(검사와 실행 사이에 다른 명령이 끼지 않게).
   처리는 큐에 넣기·상태 바꾸기뿐이라 짧다. ALL_STOP 은 잠금을 기다리지 않는다(SafetyEngine.all_stop 이 자기 잠금으로 안전).
+- 인자는 check_command(경로·상태) 다음에 commands.check_args(명령 표 ArgDef — 형식·범위)로 — 웹·로컬 화면이 같은 길.
+  틀리면 BAD_ARGS + detail(예: "value 5000 — 범위 0 ~ 700 °C (HEATER_MAX_TEMP)"). 이유 문구가 없는 결과는 detail 이 빈 문자열.
+  엔진이 문구와 함께 거부하면(행 검사 RECIPE_INVALID·IG_DISABLED·DEVICE_DISABLED 의 첫 오류, 히터 가스 준비 거부, 공정 중 수정 형식·범위,
+  히터 레시피 검사) 그 첫 문구도 detail 로(300자) — 엔진의 reject_detail.
 - bench(장비 쓰기 금지)에서는 장비에 쓰는 명령을 BENCH_READ_ONLY 로 거부한다 — worker 도 막지만 결과가 accepted 로 보이지 않게.
 """
 from __future__ import annotations
@@ -31,6 +35,15 @@ NO_DEVICE_WRITE = ("RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBA
 class CmdResult:
     ok: bool
     reason: Optional[str] = None
+    detail: str = ""                # 사람이 읽는 거부 이유(없으면 "") — cmd_result.detail·로컬 /api/v1/command
+
+
+class Rejected(Exception):
+    """_run 안에서 사유 코드와 이유 문구를 함께 돌려줄 때."""
+
+    def __init__(self, reason: str, detail: str = "") -> None:
+        super().__init__(reason)
+        self.reason, self.detail = reason, detail
 
 
 class ChkCore:
@@ -56,15 +69,18 @@ class ChkCore:
                 by: Optional[str] = None) -> CmdResult:
         args = dict(args or {})
         by = str(by) if by else self.default_by(source, args)
+        detail = ""
         try:
             if kind == "ALL_STOP":
                 r = self._run(kind, args, source, by)
             else:
                 with self._lock:
                     r = self._run(kind, args, source, by)
+        except Rejected as e:
+            r, detail = e.reason, e.detail
         except Exception:
             r = "INTERNAL_ERROR"
-        res = CmdResult(r is None, r)
+        res = CmdResult(r is None, r, detail)
         if self.on_result:
             try:
                 self.on_result(cid, kind, res, source, by)
@@ -78,6 +94,9 @@ class ChkCore:
         why = C.check_command(kind, source, state, a)
         if why:
             return why
+        bad = C.check_args(C.by_kind()[kind], a, self.cfg, self._sv_limit() if kind in C.SV_LIMIT_KINDS else None)
+        if bad:
+            raise Rejected("BAD_ARGS", bad)
         if not self.writes_allowed and kind not in NO_DEVICE_WRITE:
             return "BENCH_READ_ONLY"
         if kind == "PROCESS_STOP":
@@ -100,23 +119,22 @@ class ChkCore:
             p.started_by = by                     # run_start 에 남는다(hub)
         if kind == "PROCESS_START":
             if isinstance(a.get("blocks"), list) and "row" not in a:
-                return p.start_manual({"process_name": str(a.get("name") or ""), "blocks": a["blocks"]})
+                return self._why(p, lambda: p.start_manual({"process_name": str(a.get("name") or ""), "blocks": a["blocks"]}))
             if not isinstance(a.get("row"), dict):
-                return "BAD_ARGS"
-            return p.start_manual(a["row"])
+                raise Rejected("BAD_ARGS", "row 또는 blocks 하나 필요")
+            return self._why(p, lambda: p.start_manual(a["row"]))
         if kind == "RECIPE_LOAD":
             if isinstance(a.get("blocks"), list) and "rows" not in a:      # 블록 목록 하나 = 블록 행 하나
-                return p.load(str(a.get("name") or ""), [{"process_name": str(a.get("name") or ""), "blocks": a["blocks"]}])
+                return self._why(p, lambda: p.load(str(a.get("name") or ""),
+                                                   [{"process_name": str(a.get("name") or ""), "blocks": a["blocks"]}]))
             if not isinstance(a.get("rows"), list):
-                return "BAD_ARGS"
-            return p.load(str(a.get("name") or ""), a["rows"])
+                raise Rejected("BAD_ARGS", "rows 또는 blocks 하나 필요")
+            return self._why(p, lambda: p.load(str(a.get("name") or ""), a["rows"]))
         if kind == "RECIPE_CLEAR":
             return p.clear()
         if kind == "PROCESS_ADJUST":
             src = a.get("source") or ("local" if source == Source.HMI else "web")
-            if src not in ("web", "local") or "value" not in a:
-                return "BAD_ARGS"
-            return p.adjust(str(a.get("device") or ""), str(a.get("item") or ""), a["value"], src, by=by)
+            return self._why(p, lambda: p.adjust(str(a.get("device") or ""), str(a.get("item") or ""), a["value"], src, by=by))
         if kind == "RECIPE_START":
             return p.start_recipe()
         if kind == "PLC_BUTTON":
@@ -138,6 +156,21 @@ class ChkCore:
             (self.ig.filament_on if a.get("on") else self.ig.filament_off)()
             return None
         return "UNKNOWN_COMMAND"
+
+    @staticmethod
+    def _why(engine, call: Callable[[], Optional[str]]) -> Optional[str]:
+        """엔진 호출 — 거부하면서 이유 문구(engine.reject_detail)를 남겼으면 detail 과 함께."""
+        if hasattr(engine, "reject_detail"):
+            engine.reject_detail = ""
+        r = call()
+        detail = str(getattr(engine, "reject_detail", "") or "") if r else ""
+        if detail:
+            raise Rejected(r, detail[:300])
+        return r
+
+    def _sv_limit(self) -> Optional[float]:
+        """PLC 가 보고한 히터 목표 상한(heater.sv_limit, D00013 °C) — 모르면 None."""
+        return (getattr(self.heater, "st", None) or {}).get("sv_limit")
 
     def _note_plc_manual(self, target: str, on: bool, source: Source, by: str = "") -> None:
         """공정 중(진행·정지 순서) 실행한 PLC 버튼 — 공정 기록에 이벤트(info)."""
@@ -178,7 +211,7 @@ class ChkCore:
                 why = self.safety.check_mv(self.safety.plc_view())       # 히터 가스도 MV 열림·인터록(v1 main.py:3158·1692)
                 if why:
                     return why
-            return h.manual_on(float(a["value"]), gas if (gas["use_ar"] or gas["use_o2"]) else None)
+            return self._why(h, lambda: h.manual_on(float(a["value"]), gas if (gas["use_ar"] or gas["use_o2"]) else None))
         if kind == "HEATER_OFF":
             h.manual_off()
             return None
@@ -201,7 +234,7 @@ class ChkCore:
             gas = a.get("gas") or None
             errs, _ = RC.check_heater_recipe(a.get("steps") or [], gas, c)
             if errs:
-                return "RECIPE_INVALID"
+                raise Rejected("RECIPE_INVALID", errs[0][:300])
             if gas and (gas.get("use_ar") or gas.get("use_o2")) and (p.active or p.state == "STOPPING"):
                 return "PROCESS_RUNNING"
             if gas and (gas.get("use_ar") or gas.get("use_o2")) and h.atm.state != "READY":
@@ -210,9 +243,9 @@ class ChkCore:
                     return why
             try:
                 steps = parse_recipe_steps(a["steps"], c)
-            except ValueError:
-                return "RECIPE_INVALID"
-            return h.recipe_run(str(a.get("name") or ""), steps, gas)
+            except ValueError as e:
+                raise Rejected("RECIPE_INVALID", str(e)[:300])
+            return self._why(h, lambda: h.recipe_run(str(a.get("name") or ""), steps, gas))
         if kind == "HEATER_RECIPE_STOP":
             # 레시피가 없어도 v1 처럼 안전 종료(RUN=0·램프 복구·SV=PV). 공정이 히터를 쓰는 중이어도 v1 은 그대로 끄고
             # 공정은 중단하지 않는다(main.py:1952-1953 — 소유 검사 없음)

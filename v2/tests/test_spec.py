@@ -91,7 +91,7 @@ def test_plc_buttons_map_to_addrs():
     ("PLC_BUTTON", Source.WEB, "STOPPING", {"target": "door_up", "on": True}, None),
     ("PLC_BUTTON", Source.WEB, "IDLE", {"target": "mv", "on": True}, None),
     ("PLC_BUTTON", Source.WEB, "MAIN", {"target": "s1", "on": False}, None),
-    ("PLC_BUTTON", Source.WEB, "IDLE", {"target": "nope", "on": True}, "BAD_ARGS"),
+    ("PLC_BUTTON", Source.WEB, "IDLE", {"target": "nope", "on": True}, None),       # 인자는 check_args(test_command_args)
     ("PLC_BUTTON", Source.HMI, "IDLE", {"target": "mv", "on": True}, "SOURCE_NOT_ALLOWED"),
     ("ALL_STOP", Source.HMI, "MAIN", {}, None),
     ("ALL_STOP", Source.HMI, "IDLE", {}, None),

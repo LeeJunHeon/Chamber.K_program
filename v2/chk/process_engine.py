@@ -134,6 +134,7 @@ class ProcessEngine:
         self.left: Dict[str, Any] = {}          # 남긴 출력(행이 끝난 뒤 — 항목 → 기록 값)
         self.end_skip: tuple = ()               # 이번 정상 끝 정지에서 뺀 단계
         self.cleaning = False                   # 공정 밖 STOP 정리 중
+        self.reject_detail = ""                 # 마지막 적재·시작·수정 거부의 이유 문구(첫 오류 — core 가 cmd_result.detail 로)
         self.last_view = None
         self._end_stop_resume = False
 
@@ -298,6 +299,7 @@ class ProcessEngine:
     # ── 명령(core 가 부른다) — 돌려주는 값은 거부 사유 코드 또는 None ──
     def load(self, name: str, rows: List[Dict[str, Any]]) -> Optional[str]:
         with self._lock:
+            self.reject_detail = ""
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
             checked, err = self._check_rows(rows)
@@ -309,36 +311,41 @@ class ProcessEngine:
             self._set_state("LOADED")
             return None
 
+    def _reject(self, code: str, detail: str) -> tuple:
+        self.reject_detail = detail[:300]
+        return None, code
+
     def _check_rows(self, rows) -> tuple:
         if not isinstance(rows, list) or not rows:
-            return None, "RECIPE_INVALID"
+            return self._reject("RECIPE_INVALID", "행 목록이 비어 있음")
         out = []
-        for r in rows:
+        for i, r in enumerate(rows, 1):
             if not isinstance(r, dict):
-                return None, "RECIPE_INVALID"
+                return self._reject("RECIPE_INVALID", f"{i}행: 객체가 아님")
             if not any(v not in (None, "", False) for v in r.values()):
                 continue                                # 빈 행(v1 row_has_content)
             ok, err = self._check_row(r)
             if err:
+                self.reject_detail = f"{i}행: {self.reject_detail}"[:300] if self.reject_detail else ""
                 return None, err
             out.append(ok)
         if not out:
-            return None, "RECIPE_INVALID"
+            return self._reject("RECIPE_INVALID", "내용 있는 행이 없음")
         return out, None
 
     def _check_row(self, r: Dict[str, Any]) -> tuple:
         """행 하나 → (정리된 행, 사유). 블록 행 {"process_name"(선택), "blocks": [...]} 또는 v1 행·딜레이 행."""
         if "blocks" in r:
             if set(r) - {"process_name", "blocks"} or not isinstance(r.get("process_name", ""), (str, type(None))):
-                return None, "RECIPE_INVALID"
+                return self._reject("RECIPE_INVALID", "블록 행은 process_name(문자열)·blocks 만")
             bl, errs, warns = BK.check_blocks(r["blocks"], self.cfg)
             if errs:
                 self._emit(ProcEvent("reject", "; ".join(errs[:5]), _row_error_code(errs), {"errors": errs}))
-                return None, _row_error_code(errs)
+                return self._reject(_row_error_code(errs), errs[0])
             return {"process_name": r.get("process_name") or "", "blocks": bl}, None
         ok, errs, _ = RC.check_process_row(r, self.cfg)
         if errs:
-            return None, _row_error_code(errs)
+            return self._reject(_row_error_code(errs), errs[0])
         return ok, None
 
     def _row_uses(self, r: Dict[str, Any]) -> Dict[str, Any]:
@@ -372,6 +379,7 @@ class ProcessEngine:
                 return "CLEANUP_RUNNING"
             if self.rows:
                 return "RECIPE_LOADED"
+            self.reject_detail = ""
             row = dict(row or {})
             if "blocks" not in row:                     # v1 수동 공정은 히터를 쓰지 않는다(히터 열 무시)
                 row = {k: v for k, v in row.items() if k not in ("use_heater", "heater_temp", "heater_ramp")}
@@ -379,7 +387,7 @@ class ProcessEngine:
             if why:
                 return why
             if ok.get("delay_s") is not None:
-                return "RECIPE_INVALID"
+                return self._reject("RECIPE_INVALID", "수동 시작은 딜레이 행을 받지 않음")[1]
             u = self._row_uses(ok)
             if u["heater"] and self.heater.recipe_running:
                 return "HEATER_RECIPE_CONFLICT"
@@ -1007,8 +1015,10 @@ class ProcessEngine:
         """PROCESS_ADJUST — 돌려주는 값은 거부 사유 코드 또는 None. 결과는 ProcEvent("adjust")(by = 요청자)."""
         with self._lock:
             self._adjust_by = by
+            self.reject_detail = ""
             ai = BK.adjust_item(str(device), str(item))
             if ai is None:
+                self.reject_detail = f"{device}.{item} — 모르는 항목"
                 self._adjust_rec(str(device), str(item), None, value, source, "rejected", "BAD_ARGS")
                 return "BAD_ARGS"
             old = self._adjust_old(ai)
@@ -1025,6 +1035,7 @@ class ProcessEngine:
             return "PROCESS_NOT_RUNNING"                                  # 공정 밖·정지 순서 중·딜레이 행
         e = BK._check_param(ai.param, value, self.cfg, ())
         if e:
+            self.reject_detail = str(e)[:300]
             return "BAD_ARGS" if ("숫자" in e or "정수" in e or "true/false" in e) else "ADJUST_OUT_OF_RANGE"
         r = self.runner
         if ai.key == "process.skip_wait":

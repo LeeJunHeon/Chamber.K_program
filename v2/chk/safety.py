@@ -52,7 +52,7 @@ IMPLEMENTED_IN: Dict[str, str] = {
     "S16": "engine", "S17": "engine", "S18A": "engine", "S18B": "engine", "S18C": "engine",
     "S18D": "HeaterEngine(레시피 스텝) — 비정상 끝은 ChkSafety.heater_recipe_failed 로 공정도 중단", "S18E": "next:ProcessEngine(state:HEATER_RAMP 한도)",
     "S19": "check_start·check_heater_start", "S20": "commands.check_command(Pre HEATER_RUN_OFF)",
-    "S21": "commands.check_command(param_max HEATER_MAX_TEMP)", "S22": "next:HeaterEngine(유지 모드)",
+    "S21": "commands.check_args(param_max HEATER_MAX_TEMP·PLC 상한 heater.sv_limit)", "S22": "next:HeaterEngine(유지 모드)",
     "S23": "next:ProcessEngine(state:HEATER_HOLD_WAIT)", "S24": "next:HeaterEngine(포화 — 앞창·폴백)",
     "S25": "next:HeaterEngine(감속 접근)", "S26": "engine(event heater_run_falling)",
     "S27": "engine(event heater_gas_failed)", "S28": "locks", "S29": "drivers/dc.py output_off_confirmed",

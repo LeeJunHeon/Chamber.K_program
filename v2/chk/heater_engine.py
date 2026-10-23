@@ -1070,8 +1070,12 @@ class Atmosphere:
             return f"이미 동작 중({self.state})"
         if not (use_ar or use_o2):
             return "가스를 하나 이상 선택"
-        if (use_ar and ar_flow <= 0) or (use_o2 and o2_flow <= 0) or sp1 <= 0:
-            return "유량·압력은 0 보다 커야 함"
+        if use_ar and ar_flow <= 0:
+            return "Ar 유량이 필요합니다(0 보다 커야 함)"
+        if use_o2 and o2_flow <= 0:
+            return "O2 유량이 필요합니다(0 보다 커야 함)"
+        if sp1 <= 0:
+            return "압력(wp_mtorr)이 필요합니다(0 보다 커야 함)"
         for on, f, key in ((use_ar, ar_flow, "MFC_AR_FS_SCCM"), (use_o2, o2_flow, "MFC_O2_FS_SCCM")):
             if on and f > float(self.cfg[key]):
                 return f"유량 {f:g} sccm > 상한 {float(self.cfg[key]):g} sccm({key} = 100 %FS)"
@@ -1142,6 +1146,7 @@ class HeaterEngine:
         self.owner: Optional[str] = None           # None / manual / recipe / process
         self.handed_over = False                    # 정상 끝 정지에서 히터 단계를 빼 공정이 넘긴 히터(그대로인 동안만 참)
         self.pending: Optional[tuple] = None        # 가스 준비 뒤 할 일 ("manual_on", v) / ("recipe",)
+        self.reject_detail = ""                      # 마지막 BAD_ARGS 의 이유 문구(가스 준비 거부 — core 가 cmd_result.detail 로)
         self.atm_hold = False                       # 냉각 보호 가스 유지 중
         self._prev_run: Optional[bool] = None
         self.proc: Dict[str, Any] = {}              # 공정 도달·유지 대기 상태
@@ -1281,6 +1286,7 @@ class HeaterEngine:
     def manual_on(self, value: float, gas: Optional[dict] = None) -> Optional[str]:
         """HEATER_ON. 가스를 고르면 가스 준비 뒤 켠다(v1 _on_heater_onoff_toggled). 거부면 사유 코드."""
         with self._lock:
+            self.reject_detail = ""
             if self.recipe.is_running():
                 return "HEATER_RECIPE_RUNNING"
             if self.st.get("run") or self.pending is not None:
@@ -1291,6 +1297,7 @@ class HeaterEngine:
                 why = self.atm.start(bool(gas.get("use_ar")), bool(gas.get("use_o2")), float(gas.get("ar_flow") or 0),
                                      float(gas.get("o2_flow") or 0), float(gas.get("wp_mtorr") or 0))
                 if why:
+                    self.reject_detail = why
                     return "BAD_ARGS"
                 self.owner, self.pending = "manual", ("manual_on", float(value))
                 return None
@@ -1333,6 +1340,7 @@ class HeaterEngine:
     # ── 히터 레시피 ──
     def recipe_run(self, name: str, steps: List[RecipeStep], gas: Optional[dict] = None) -> Optional[str]:
         with self._lock:
+            self.reject_detail = ""
             if self.recipe.is_running():
                 return "HEATER_RECIPE_RUNNING"
             self.ramp.stop()
@@ -1343,6 +1351,7 @@ class HeaterEngine:
                 why = self.atm.start(bool(gas.get("use_ar")), bool(gas.get("use_o2")), float(gas.get("ar_flow") or 0),
                                      float(gas.get("o2_flow") or 0), float(gas.get("wp_mtorr") or 0))
                 if why:
+                    self.reject_detail = why
                     return "BAD_ARGS"
                 self.pending = ("recipe",)
                 return None

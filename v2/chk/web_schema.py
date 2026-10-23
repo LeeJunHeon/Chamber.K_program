@@ -6,9 +6,11 @@
                 웹 잠금 webLocked — 웹에서 못 바꾸는 키, 버전 4)
                 버전 5: uplink 설정(UPLINK_CLOCK_SKEW_SEC·UPLINK_DOWN_SEC·UPLINK_IN_SIM), 공정 기록 by(요청자), COMMAND_EXPIRED
                 버전 6: snapshot(1초 스냅샷 열 정의), PLC_BUTTON role operator, UPLINK_SUMMARY_PERIOD_SEC 설명(공정 중만)
+                버전 7: recipe 열 zeroIsEmpty(숫자 0 = 빈 값 — base_pressure 0 은 베이스 대기 안 함, 범위 검사 안 함),
+                cmd_result.detail = 거부 이유 문구(명령 인자는 commands.check_args — 형식·범위 밖은 BAD_ARGS)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
-  recipe        행 레시피 열(rf_pulse_freq 는 kHz) · 히터 레시피 열
+  recipe        행 레시피 열(rf_pulse_freq 는 kHz, zeroIsEmpty 열은 0 = 빈 값) · 히터 레시피 열
   blocks        블록 정의(종류·값·단위·범위·기본값·설명) + 감시 항목·조건 값·한도
   adjust        공정 중 수정 항목(장비 → 세부, 형식·범위·적용 방식·판정)
   stopSequence  STOP·이상 중단·행 끝 정지 단계(고정 — 정상 끝 정지만 end_stop skip, 파워 단계 제외) · allStopSequence(고정)
@@ -35,7 +37,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 6
+EXPORT_VERSION = 7
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -76,7 +78,8 @@ def _arg(a) -> dict:
 
 def _col(c) -> dict:
     return {"name": c.name, "type": c.type, "unit": c.unit, "required": c.required, "min": c.min, "max": c.max,
-            "paramMin": c.param_min, "paramMax": c.param_max, "minExclusive": c.min_exclusive, "v1Name": c.v1_name,
+            "paramMin": c.param_min, "paramMax": c.param_max, "minExclusive": c.min_exclusive,
+            "zeroIsEmpty": c.zero_is_empty, "v1Name": c.v1_name,
             "desc": c.desc}
 
 

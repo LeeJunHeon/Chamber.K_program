@@ -721,7 +721,7 @@ class Uplink:
             by = str(cmd.get("requestedBy") or "web")
             exp = parse_iso(cmd.get("expiresAt"))
             if not isinstance(kind, str) or not isinstance(args, dict) or exp is None:
-                res = CmdResult(False, "BAD_ARGS")
+                res = CmdResult(False, "BAD_ARGS", "kind 는 문자열, args 는 객체, expiresAt 은 ISO 시각")
                 self.hub.cmd_result(cid, str(kind), res, Source.WEB, by)
             elif self.sys.clock.wall() > exp + float(self.cfg["UPLINK_CLOCK_SKEW_SEC"]):
                 res = CmdResult(False, "COMMAND_EXPIRED")

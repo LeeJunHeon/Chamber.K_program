@@ -4,6 +4,8 @@
   v1 CSV/xlsx 의 문자열 bool("1", "yes", "o" …)은 웹 가져오기에서 바꾼다 — 장비는 받지 않는다.
 히터 레시피: 스텝 목록 + 첫 행 가스 설정.
 범위는 ParamDef 키(param_min/param_max)나 숫자로 정한다. 검사 함수는 설정 한 벌(cfg)을 받는다.
+zero_is_empty 열(묶음 zeroIsEmpty)은 숫자 0 을 빈 값과 같이 본다 — 범위 검사를 건너뛰고 정리된 행에서 빠진다(base_pressure 0 =
+베이스 대기 안 함, v1 controller/process_controller.py base_pressure_of 와 같게).
 
 v1 근거: core/params.py build_csv_params(257)·build_manual_params(112), core/recipe.py, controller/heater_recipe.py load(551).
 """
@@ -26,6 +28,7 @@ class Col:
     param_min: Optional[str] = None
     param_max: Optional[str] = None
     min_exclusive: bool = False
+    zero_is_empty: bool = False   # 숫자 0 = 빈 값(범위 검사 안 함, 정리된 행에서 빠짐)
     v1_name: str = ""
     desc: str = ""
 
@@ -39,7 +42,8 @@ PROCESS_COLUMNS: tuple = (
     Col("o2_flow", "float", "sccm", "if:o2", min=0.0, min_exclusive=True, param_max="MFC_O2_FS_SCCM", v1_name="O2_flow",
         desc="상한 = O2 채널 풀스케일"),
     Col("base_pressure", "float", "Torr", "optional", param_min="BASE_PRESSURE_MIN_TORR",
-        param_max="BASE_PRESSURE_MAX_TORR", v1_name="base_pressure", desc="0·빈 값이면 베이스 대기 안 함"),
+        param_max="BASE_PRESSURE_MAX_TORR", zero_is_empty=True, v1_name="base_pressure",
+        desc="0·빈 값이면 베이스 대기 안 함(0 은 빈 값과 같음 — 범위 검사 안 함). 음수·범위 밖은 거부"),
     Col("working_pressure", "float", "mTorr", "always", min=0.0, max=1000.0, min_exclusive=True,
         v1_name="working_pressure", desc="상한 1000 mTorr = GPC3000 FS 1 Torr 가정(bench 확인)"),
     Col("process_time", "float", "min", "always", min=0.0, v1_name="process_time"),
@@ -126,6 +130,11 @@ def _empty(v: Any) -> bool:
     return v is None or (isinstance(v, str) and not v.strip())
 
 
+def _empty_col(c: Col, v: Any) -> bool:
+    """빈 값 — zero_is_empty 열이면 숫자 0 도."""
+    return _empty(v) or (c.zero_is_empty and isinstance(v, (int, float)) and not isinstance(v, bool) and v == 0)
+
+
 def _check_cols(cols: tuple, row: Mapping[str, Any], cfg: Mapping[str, Any]) -> list:
     errs = []
     known = {c.name for c in cols}
@@ -135,7 +144,7 @@ def _check_cols(cols: tuple, row: Mapping[str, Any], cfg: Mapping[str, Any]) -> 
     for c in cols:
         v = row.get(c.name)
         need = c.required == "always" or (c.required.startswith("if:") and row.get(c.required[3:]) is True)
-        if _empty(v):
+        if _empty_col(c, v):
             if need:
                 errs.append(f"{c.name}: 값 필요")
             continue
@@ -176,6 +185,9 @@ def check_process_row(row: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple:
     if errs:
         return None, errs, warns
     r = dict(row)
+    for c in PROCESS_COLUMNS:
+        if c.zero_is_empty and c.name in r and _empty_col(c, r[c.name]):
+            del r[c.name]                               # 0·""·None·없음 → 같은 정리 결과
     if not (r.get("ar") is True or r.get("o2") is True):
         errs.append("가스: Ar 또는 O2 중 하나 이상")
     pt, sd = float(r.get("process_time") or 0), float(r.get("shutter_delay") or 0)
@@ -186,8 +198,7 @@ def check_process_row(row: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple:
     if r.get("use_dc_delay") is True and r.get("use_dc") is not True:
         warns.append("use_dc_delay 는 DC 를 쓸 때만 — 무시")
         r["use_dc_delay"] = False
-    bp = r.get("base_pressure")
-    if not _empty(bp) and bp != 0 and not cfg["IG_ENABLED"]:
+    if r.get("base_pressure") is not None and not cfg["IG_ENABLED"]:
         errs.append("base_pressure: 이온 게이지가 꺼져 있음(IG_ENABLED=false)")
     if r.get("use_rf_pulse") is True and not cfg.get("RFPULSE_ENABLED", True):
         errs.append("RF Pulse: RFPULSE_ENABLED=false")

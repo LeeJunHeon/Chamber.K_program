@@ -155,7 +155,8 @@ MESSAGES: tuple = (
         _f("reasonCode", "str", False, "사유 코드(COMMAND_EXPIRED·BENCH_READ_ONLY …)"),
         _f("source", "str", True, "web / hmi"),
         _f("by", "str", False, "요청자(requestedBy / local)"),
-        _f("detail", "str", False, "문구(300자)"),
+        _f("detail", "str", False, "거부 이유 문구(300자, 예: \"value 5000 — 범위 0 ~ 700 °C (HEATER_MAX_TEMP)\") — 없으면 빈 "
+                                    "문자열(kind·source·by·reasonCode 는 각 칸에)"),
     )),
     MessageDef("config_ack", "up", "CONFIG_APPLY·CONFIG_ROLLBACK·idle 적용 결과", (
         _f("version", "int", True, "요청 버전"),

@@ -9,7 +9,7 @@
   GET  /api/v1/stream   text/event-stream — 메시지 하나 = "id: seq / event: type / data: envelope JSON".
                         연결 때 최신 state 하나 + 최근 메시지(state 제외 — Last-Event-ID 가 있으면 그 뒤부터).
                         15 s 마다 keep-alive 주석. 동시 연결 상한 SSE_MAX(넘으면 503).
-  POST /api/v1/command  {id?, kind, args} → ChkCore.command(source=HMI) → {id, ok, reason}. 결과는 cmd_result 메시지로도.
+  POST /api/v1/command  {id?, kind, args} → ChkCore.command(source=HMI) → {id, ok, reason, detail(거부 이유 문구, 없으면 "")}. 결과는 cmd_result 메시지로도.
   GET  / · 정적 파일    LOCAL_HMI_STATIC_DIR — 비면 이 저장소의 v2/hmi(폴더 밖 경로 404). 폴더가 비면(.gitkeep 만) 안내 페이지
                         (화면 파일은 웹 W-7 에서 넣는다).
 bench 에서는 쓰기 명령이 BENCH_READ_ONLY — hello 의 runMode·writesAllowed 로 알 수 있다.
@@ -109,9 +109,9 @@ class LocalServer:
         cid = body.get("id")
         kind, args = body.get("kind"), body.get("args") or {}
         if not isinstance(kind, str) or not isinstance(args, dict):
-            return {"id": cid, "ok": False, "reason": "BAD_ARGS"}
+            return {"id": cid, "ok": False, "reason": "BAD_ARGS", "detail": "kind 는 문자열, args 는 객체"}
         r = self.system.core.command(kind, args, source=Source.HMI, cid=cid)
-        return {"id": cid, "ok": r.ok, "reason": r.reason}
+        return {"id": cid, "ok": r.ok, "reason": r.reason, "detail": r.detail}
 
     def static_file(self, path: str) -> Optional[Path]:
         """요청 경로 → 폴더 안 파일(폴더 밖·없음 = None)."""
@@ -194,7 +194,7 @@ def _handler(srv: LocalServer):
                 if not isinstance(body, dict):
                     raise ValueError
             except ValueError:
-                return self._json(400, {"id": None, "ok": False, "reason": "BAD_ARGS"})
+                return self._json(400, {"id": None, "ok": False, "reason": "BAD_ARGS", "detail": "본문은 JSON 객체"})
             return self._json(200, srv.command(body))
 
         def _stream(self):

@@ -56,7 +56,12 @@ CASES: List[tuple] = [
     ("base_pressure_ig_on", _row(base_pressure=5e-6), {}),
     ("base_pressure_ig_off", _row(base_pressure=5e-6), {"IG_ENABLED": False}),
     ("no_base_pressure_ig_off", _row(), {"IG_ENABLED": False}),
-    ("err_base_pressure_zero", _row(base_pressure=0), {}),          # 열 범위(BASE_PRESSURE_MIN_TORR)가 0 을 막는다 — 지금 동작 그대로
+    ("base_pressure_zero", _row(base_pressure=0), {}),              # 0 = 빈 값(zeroIsEmpty) — 블록이 no_base_pressure 와 같음
+    ("base_pressure_zero_ig_off", _row(base_pressure=0.0), {"IG_ENABLED": False}),
+    ("base_pressure_empty_str", _row(base_pressure=""), {}),
+    ("err_base_pressure_negative", _row(base_pressure=-1e-6), {}),
+    ("err_base_pressure_below_min", _row(base_pressure=1e-10), {}),
+    ("err_base_pressure_over_max", _row(base_pressure=5e-3), {}),
     ("rf_only", _row(use_dc=None, dc_power=None, use_rf=True, rf_power=150.0), {}),
     ("dc_rf", _row(use_rf=True, rf_power=80.0, gun2=True), {}),
     ("rf_pulse_freq_duty", _row(use_dc=None, dc_power=None, use_rf_pulse=True, rf_pulse_power=200.0,

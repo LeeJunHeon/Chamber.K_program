@@ -134,9 +134,9 @@ def test_app_sim_start_api_and_clean_shutdown(tmp_path):
         assert st, "2 s 안에 state 없음"
         assert st[0]["data"]["procState"] == "IDLE" and "plc" in st[0]["data"]["links"]
         r = _post(base, {"id": "c-stop", "kind": "PROCESS_STOP", "args": {}})
-        assert r == {"id": "c-stop", "ok": True, "reason": None}
+        assert r == {"id": "c-stop", "ok": True, "reason": None, "detail": ""}
         r2 = _post(base, {"id": "c-cfg", "kind": "CONFIG_APPLY", "args": {"version": 1, "values": {}, "schemaHash": "x"}})
-        assert r2 == {"id": "c-cfg", "ok": False, "reason": "SOURCE_NOT_ALLOWED"}
+        assert r2 == {"id": "c-cfg", "ok": False, "reason": "SOURCE_NOT_ALLOWED", "detail": ""}
         got = _sse(stream, lambda o: sum(1 for e, _ in o if e == "cmd_result") >= 2, 3.0)
         res = {d["data"]["cmdId"]: d["data"] for e, d in got if e == "cmd_result"}
         assert res["c-stop"]["status"] == "accepted" and res["c-stop"]["source"] == "hmi"
@@ -591,7 +591,7 @@ def test_by_recorded_in_results_and_process_records(tmp_path):
     res = {e["data"]["cmdId"]: e["data"] for e in rig.hub.recent if e["type"] == "cmd_result"}
     assert (res["w1"]["by"], res["w2"]["by"], res["w3"]["by"]) == ("op@test", "op@test", "adj@test")
     assert res["h1"]["by"] == res["h2"]["by"] == "local" and res["h1"]["source"] == "hmi"
-    assert "op@test" in res["w1"]["detail"]
+    assert res["w1"]["detail"] == ""                     # 거부 이유 문구만(누가·무엇은 by·kind 칸에)
     pm = [e.data for e in r.ev("plc_manual")]
     assert [(d["target"], d["source"], d["by"]) for d in pm] == [("vent", "web", "op@test"), ("buzz_stop", "hmi", "local")]
     adj = [e.data for e in r.ev("adjust")]

@@ -11,10 +11,12 @@ PLC_MANUAL_IN_PROCESS(info)로 남긴다. "정말 하시겠습니까?" 확인은
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from v2.common.commands import ArgDef, COMMON_REASONS, Reason, Source
+from v2.chk import params as P
 from v2.chk.process_states import ACTIVE_STATES
 
 WEB, HMI, INT = Source.WEB, Source.HMI, Source.INTERNAL
@@ -329,7 +331,7 @@ def by_kind() -> dict:
 
 
 def check_command(kind: str, source: Source, state: str, args: Optional[dict] = None) -> Optional[str]:
-    """표만으로 판정할 수 있는 거부 사유(경로·상태·인자). 통과면 None.
+    """표만으로 판정할 수 있는 거부 사유(경로·상태). 통과면 None. 인자는 check_args(설정값 필요),
     PRECONDITIONS(장비 값 필요)는 core 가 따로 평가한다."""
     c = by_kind().get(kind)
     if c is None:
@@ -338,11 +340,69 @@ def check_command(kind: str, source: Source, state: str, args: Optional[dict] = 
         return "SOURCE_NOT_ALLOWED"
     if ANY_STATE not in c.states and state not in c.states:
         return "STATE_NOT_ALLOWED"
-    if kind == "PLC_BUTTON":
-        args = args or {}
-        btn = {b.target: b for b in PLC_BUTTONS}.get(args.get("target"))
-        if btn is None or not isinstance(args.get("on"), bool):
-            return "BAD_ARGS"
+    return None
+
+
+SV_LIMIT_KINDS = ("HEATER_SV", "HEATER_ON")      # value 상한 = min(HEATER_MAX_TEMP, PLC 보고 상한 D00013 — 0 보다 클 때)(v1)
+
+
+def _num(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _unit(key: Optional[str]) -> str:
+    if not key:
+        return ""
+    d = next((p for p in P.PARAMS if p.key == key), None)
+    return d.unit if d is not None else ""
+
+
+def check_args(c: CommandDef, args: Mapping[str, Any], cfg: Mapping[str, Any],
+               sv_limit: Optional[float] = None) -> Optional[str]:
+    """명령 표(ArgDef)로 인자 검사 — 틀리면 사람이 읽는 이유 문구(core 가 BAD_ARGS + detail), 통과면 None.
+    required(값 없음·null 은 빠진 것), type(float·int = bool 이 아닌 유한한 숫자, int 는 정수값 / bool / str / enum /
+    obj = dict / rows = list / any 는 통과), min·max, paramMin·paramMax(그 설정의 지금 값). 모르는 인자는 무시.
+    HEATER_SV·HEATER_ON 의 value 는 PLC 가 보고한 상한(sv_limit, 0 보다 크면)과 HEATER_MAX_TEMP 중 작은 것까지(v1 main.py
+    _read_heater_sv_input). 형식 밖 값의 뜻(PROCESS_ADJUST value·"둘 중 하나")은 core·엔진이 본다."""
+    for a in c.args:
+        v = args.get(a.name)
+        if v is None:
+            if a.required:
+                return f"{a.name} — 값 필요"
+            continue
+        t = a.type
+        if t in ("float", "int"):
+            if not _num(v):
+                return f"{a.name} {v!r} — 숫자여야 함"
+            if t == "int" and not float(v).is_integer():
+                return f"{a.name} {v!r} — 정수여야 함"
+        elif t == "bool" and not isinstance(v, bool):
+            return f"{a.name} {v!r} — true/false 여야 함"
+        elif t == "str" and not isinstance(v, str):
+            return f"{a.name} {v!r} — 문자열이어야 함"
+        elif t == "enum" and not (isinstance(v, str) and v in (a.enum or ())):
+            return f"{a.name} {v!r} — {'·'.join(a.enum or ())} 중 하나"
+        elif t == "obj" and not isinstance(v, dict):
+            return f"{a.name} — 객체(dict)여야 함"
+        elif t == "rows" and not isinstance(v, list):
+            return f"{a.name} — 목록이어야 함"
+        if t not in ("float", "int"):
+            continue
+        lo = float(cfg[a.param_min]) if a.param_min else a.min
+        hi = float(cfg[a.param_max]) if a.param_max else a.max
+        src = [k for k in (a.param_min, a.param_max) if k]
+        if c.kind in SV_LIMIT_KINDS and a.name == "value" and _num(sv_limit) and sv_limit > 0 \
+                and (hi is None or sv_limit < hi):
+            hi, src = float(sv_limit), ["PLC 상한 D00013"]
+        if (lo is None or v >= lo) and (hi is None or v <= hi):
+            continue
+        unit = _unit(a.param_max or a.param_min)
+        why = f" ({'·'.join(src)})" if src else ""
+        if hi is None:
+            return f"{a.name} {v:g} — {lo:g}{' ' + unit if unit else ''} 이상{why}"
+        if lo is None:
+            return f"{a.name} {v:g} — {hi:g}{' ' + unit if unit else ''} 이하{why}"
+        return f"{a.name} {v:g} — 범위 {lo:g} ~ {hi:g}{' ' + unit if unit else ''}{why}"
     return None
 
 

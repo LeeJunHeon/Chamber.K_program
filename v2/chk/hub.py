@@ -177,7 +177,7 @@ class MessageHub:
         src = getattr(source, "value", source)
         return {"cmdId": None if cid is None else str(cid), "kind": kind, "status": "accepted" if res.ok else "rejected",
                 "reasonCode": res.reason, "source": src, "by": by,
-                "detail": f"{kind} ({src}{', ' + by if by else ''}) → {'ok' if res.ok else res.reason}"[:300]}
+                "detail": (getattr(res, "detail", "") or "")[:300]}
 
     def cmd_result(self, cid: Any, kind: str, res, source: Any = None, by: Optional[str] = None) -> dict:
         return self.publish("cmd_result", self.cmd_result_data(cid, kind, res, source, by))
