@@ -371,7 +371,8 @@ class ProcessEngine:
         if self.state == "LOADED":
             self._set_state("IDLE")
 
-    def start_manual(self, row: Dict[str, Any]) -> Optional[str]:
+    def start_manual(self, row: Dict[str, Any], name: str = "") -> Optional[str]:
+        """수동 시작. run 이름 = name → 행의 process_name → "Single CHK"(v1 기본)."""
         with self._lock:
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
@@ -395,7 +396,7 @@ class ProcessEngine:
             if why:
                 return why
             self.list_active, self.csv_index = False, -1
-            self._start_row(ok, "Single CHK")
+            self._start_row(ok, name.strip() or str(ok.get("process_name") or "").strip() or "Single CHK")
             return None
 
     def start_recipe(self) -> Optional[str]:

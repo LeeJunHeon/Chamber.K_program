@@ -11,6 +11,10 @@
                 버전 8: blocks 에 웹 블록 검사 계산용 blockKeys·empty·valueRules(값 사이·꺼진 장비 규칙 표)·spDefaultKey·
                 pressureStage·heaterRampMin·pulseEdge·autoEndStopLabel(골든 tests/golden/web_block_cases.json).
                 float 형식 설정값은 늘 float(current·hello·config_ack 가 700.0). state.heaterRecipe.held(일시정지 중)
+                버전 9: 블록 label·stage 의 빈 글·공백만 = 값 없음(template_blocks 블록을 그대로 다시 검사해도 통과).
+                valueRules.uses(조건·문구가 쓰는 값 — 하나라도 빠졌거나 틀리면 규칙을 건너뜀), need_sp_value 문구
+                "value: SP{sp} 이면 값 필요", type 이 비면 "type 필요". PROCESS_START name(run 이름 — 비우면 process_name·Single CHK).
+                행 검사: 공백만 있는 선택 값도 없는 값(예전에는 shutter_delay "  " 등이 예외)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
   recipe        행 레시피 열(rf_pulse_freq 는 kHz, zeroIsEmpty 열은 0 = 빈 값) · 히터 레시피 열
@@ -40,7 +44,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 8
+EXPORT_VERSION = 9
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -133,7 +137,8 @@ def definitions() -> Dict[str, Any]:
                               "labelMax": BK.LABEL_MAX},
                    "rules": "값 범위·꺼진 장비만 검사 — 순서·조합 규칙 없음(사용자 결정 2026-10-20)",
                    "blockKeys": list(BK.BLOCK_KEYS),
-                   "empty": "빈 값 = null 또는 공백뿐인 문자열(숫자 0 은 빈 값 아님). params 가 없거나 거짓 값([]·\"\")이면 {}",
+                   "empty": "빈 값 = null 또는 공백뿐인 문자열(숫자 0 은 빈 값 아님). params 가 없거나 거짓 값([]·\"\")이면 {}. "
+                            "label·stage 도 빈 값이면 없는 것과 같다(정리된 블록은 \"\")",
                    "valueRules": [r.public() for r in BK.VALUE_RULES],
                    "spDefaultKey": {str(n): k for n, k in BK.SP_DEFAULT_KEY.items()},
                    "pressureStage": "stage 를 비우면 PRESSURE_SP{sp}",

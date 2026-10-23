@@ -119,10 +119,11 @@ class ChkCore:
             p.started_by = by                     # run_start 에 남는다(hub)
         if kind == "PROCESS_START":
             if isinstance(a.get("blocks"), list) and "row" not in a:
-                return self._why(p, lambda: p.start_manual({"process_name": str(a.get("name") or ""), "blocks": a["blocks"]}))
+                return self._why(p, lambda: p.start_manual({"process_name": str(a.get("name") or ""), "blocks": a["blocks"]},
+                                                           str(a.get("name") or "")))
             if not isinstance(a.get("row"), dict):
                 raise Rejected("BAD_ARGS", "row 또는 blocks 하나 필요")
-            return self._why(p, lambda: p.start_manual(a["row"]))
+            return self._why(p, lambda: p.start_manual(a["row"], str(a.get("name") or "")))
         if kind == "RECIPE_LOAD":
             if isinstance(a.get("blocks"), list) and "rows" not in a:      # 블록 목록 하나 = 블록 행 하나
                 return self._why(p, lambda: p.load(str(a.get("name") or ""),

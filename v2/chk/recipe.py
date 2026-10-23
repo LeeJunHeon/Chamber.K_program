@@ -186,8 +186,8 @@ def check_process_row(row: Mapping[str, Any], cfg: Mapping[str, Any]) -> tuple:
         return None, errs, warns
     r = dict(row)
     for c in PROCESS_COLUMNS:
-        if c.zero_is_empty and c.name in r and _empty_col(c, r[c.name]):
-            del r[c.name]                               # 0·""·None·없음 → 같은 정리 결과
+        if c.name in r and c.name != "process_name" and _empty_col(c, r[c.name]):
+            del r[c.name]                               # 0(zero_is_empty)·""·공백만·None·없음 → 같은 정리 결과
     if not (r.get("ar") is True or r.get("o2") is True):
         errs.append("가스: Ar 또는 O2 중 하나 이상")
     pt, sd = float(r.get("process_time") or 0), float(r.get("shutter_delay") or 0)

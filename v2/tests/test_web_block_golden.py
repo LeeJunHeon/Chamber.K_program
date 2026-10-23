@@ -101,3 +101,27 @@ def test_bundle_has_what_block_check_needs():
     for r in b["valueRules"]:
         assert r["kind"] in ("need", "warn") or r["key"] in params
     assert set(G.CFG_KEYS) <= params
+
+
+def test_blank_label_stage_is_no_value():
+    """5-11 ① — label·stage 의 빈 글·공백만 = 값 없음. 정리된 블록·펼친 것이 키가 없을 때와 같다."""
+    by = {c["name"]: c for c in G.build()["cases"]}
+    c = by["label_stage_blank"]
+    assert not c["errors"] and all(b["label"] == "" and b["stage"] == "" for b in c["clean"])
+    cfg = dict(G.defaults(G.P.PARAMS))
+    strip = lambda bs: [dict({k: v for k, v in b.items() if k not in ("label", "stage")},
+                             **({"blocks": strip(b["blocks"])} if "blocks" in b else {})) for b in bs]
+    src = next(bl for n, bl, _, _ in G.CASES if n == "label_stage_blank")
+    assert BK.check_blocks(strip(src), cfg)[0] == c["clean"]
+    assert c["expanded"][1]["stage"] == "PRESSURE_SP2" and c["expanded"][0]["label"] == ""
+
+
+def test_no_none_in_messages():
+    """5-11 ③ — 빠진 값이 문구에 None 으로 찍히지 않는다(빠진 값을 쓰는 값 사이 규칙은 건너뛴다)."""
+    by = {c["name"]: c for c in G.build()["cases"]}
+    assert not any("None" in m for c in by.values() for m in c["errors"] + c["warnings"])
+    assert "블록 8(pressure): sp: 값 필요" in by["err_required_missing"]["errors"]
+    assert not any(m.startswith("블록 8(pressure): value") for m in by["err_required_missing"]["errors"])
+    assert "블록 1(pressure): value: SP1 이면 값 필요" in by["err_need_sp1_value"]["errors"]
+    assert by["err_unknown_type"]["errors"][1:] == ["블록 2: type 필요", "블록 3: type 필요", "블록 4: 모르는 종류 ['wait']"]
+    assert {r.id: r.uses for r in BK.VALUE_RULES}["need_sp_value"] == ("sp", "set")

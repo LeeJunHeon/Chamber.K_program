@@ -169,6 +169,14 @@ def test_good_row():
     assert errs == [] and row["heater_ramp"] == CFG["HEATER_RAMP_RATE_C_PER_MIN"]
 
 
+def test_blank_strings_are_missing_values():
+    """5-11 ③ — 공백만 있는 선택 값 = 없는 값(예전에는 shutter_delay " " 가 float 변환에서 ValueError)."""
+    for k in ("shutter_delay", "g1_target", "heater_ramp", "base_pressure", "rf_pulse_duty"):
+        a, ea, _ = R.check_process_row(dict(GOOD, **{k: "  "}), CFG)
+        b, eb, _ = R.check_process_row({x: v for x, v in GOOD.items() if x != k}, CFG)
+        assert ea == eb == [] and a == b, k
+
+
 def test_delay_row():
     row, errs, _ = R.check_process_row({"process_name": "delay 10m"}, CFG)
     assert errs == [] and row["delay_s"] == 600

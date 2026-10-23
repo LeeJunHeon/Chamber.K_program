@@ -369,6 +369,25 @@ def test_cond_wait_timeout_abort_and_continue(tmp_path):
             assert [e.code for e in r.ev("warn")].count("COND_WAIT_TIMEOUT") == 1
 
 
+@pytest.mark.parametrize("args, want", [
+    ({"blocks": [{"type": "wait", "params": {"sec": 1}}], "name": "블록 시험"}, "블록 시험"),
+    ({"blocks": [{"type": "wait", "params": {"sec": 1}}]}, "Single CHK"),
+    ({"blocks": [{"type": "wait", "params": {"sec": 1}}], "name": "  "}, "Single CHK"),
+    ({"row": dict(SHORT, process_name="행 이름")}, "행 이름"),
+    ({"row": dict(SHORT, process_name="행 이름"), "name": "인자 이름"}, "인자 이름"),
+    ({"row": dict(SHORT, process_name="")}, "Single CHK"),
+])
+def test_manual_start_run_name(tmp_path, args, want):
+    """5-11 ② — 수동 시작 run 이름 = args name → 행의 process_name → Single CHK(v1 기본)."""
+    r = R(tmp_path, FAST)
+    r.on(3, r.cmd("PROCESS_START", args))
+    r.on(6, r.cmd("PROCESS_STOP"))
+    r.run(40)
+    assert all(x.ok for x in r.results), r.results
+    assert [(e.detail, e.data["name"]) for e in r.ev("run_start")] == [(want, want)]
+    assert [e.data["name"] for e in r.ev("run_end")] == [want]
+
+
 def test_load_mixed_list_rows_delay_and_blocks(tmp_path):
     r = R(tmp_path, FAST)
     rows = [SHORT, {"process_name": "delay 3s"}, {"process_name": "B", "blocks": [{"type": "wait", "params": {"sec": 2}}]}]

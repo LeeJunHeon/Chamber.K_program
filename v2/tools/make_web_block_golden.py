@@ -52,7 +52,7 @@ TAGS: tuple = (
     "repeat.inner", "repeat.nested", "repeat.count", "repeat.empty", "stop.skip", "limits.repeatMax", "limits.maxDepth",
     "limits.maxExpandedSteps", "limits.labelMax", "rules.orderFree", "list.empty", "format.strNumber", "format.boolNumber", "format.notBool",
     "format.notInt", "format.notObject", "format.unknownKey", "format.stage", "format.list", "format.watch", "defaults",
-    "autoEndStop", "warning",
+    "autoEndStop", "warning", "format.blankLabelStage",
 )
 
 
@@ -128,6 +128,9 @@ CASES: List[tuple] = [
      ["rules.orderFree"]),
     ("label_stage_given", [B("shutter", action="open", targets=["g2"], label="L" * BK.LABEL_MAX, stage="MAIN")], {},
      ["limits.labelMax", "format.stage"]),
+    ("label_stage_blank", [B("wait", sec=1, label="", stage=""), B("pressure", sp=2, label="  ", stage=" "),
+                           B("repeat", count=1, label="", stage="", blocks=[B("valve", action="open", label="	", stage="")]),
+                           B("end_stop", label="", stage="")], {}, ["format.blankLabelStage"]),   # = 없는 것과 같다
     ("empty_values_are_defaults", [B("wait", sec=4, watch=None), B("pre_clean", settle_sec="  "),
                                    B("pressure", sp=2, value="", on_timeout=None)], {}, ["defaults"]),
     ("params_falsy_is_empty", [{"type": "heater_wait", "params": []}, {"type": "valve", "params": {"action": "open"}}], {},
@@ -136,7 +139,7 @@ CASES: List[tuple] = [
     ("err_empty_list", [], {}, ["list.empty"]),
     ("err_not_list", {"type": "wait"}, {}, ["list.empty"]),
     ("err_block_not_object", [5, B("wait", sec=1)], {}, ["format.notObject"]),
-    ("err_unknown_type", [B("nope"), {"params": {}}], {}, ["format.unknownKey"]),
+    ("err_unknown_type", [B("nope"), {"params": {}}, B(" "), {"type": ["wait"]}], {}, ["format.unknownKey"]),
     ("err_unknown_block_key", [dict(B("wait", sec=1), foo=1)], {}, ["format.unknownKey"]),
     ("err_params_not_object", [{"type": "wait", "params": "sec=1"}, B("wait", sec=1, label=5)], {},
      ["format.notObject", "limits.labelMax"]),

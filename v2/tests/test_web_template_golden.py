@@ -34,3 +34,26 @@ def test_golden_cases_cover_and_cfg_keys_exact():
     assert any("main" not in types(c) for c in ok)                       # 공정 시간 0
     sp = [sum(1 for b in c["blocks"] if b["type"] == "pressure") for c in ok]
     assert {2, 3, 4} <= set(sp)                                          # SP4 + (SP3·SP2 중 0~2) + SP1
+
+
+def test_template_blocks_pass_block_check_as_is():
+    """5-11 ① — 장비가 만든 템플릿 블록(label·stage "")을 그대로 다시 검사·펼쳐도 오류 0, 펼친 단계 = v1 행으로 돌린 것."""
+    from v2.common.paramdef import defaults
+    from v2.chk import blocks as BK
+    from v2.chk import process_steps as PSt
+    n = 0
+    for (name, _, over), c in zip(G.CASES, G.build()["cases"]):
+        if c["checkErrors"]:
+            continue
+        cfg = dict(defaults(G.P.PARAMS), **over)
+        ig, rfp = c["igEnabled"], c["rfpulsePresent"]
+        clean, errs, _ = BK.check_blocks(c["blocks"], cfg)
+        assert errs == [], (name, errs)
+        bare = [{k: v for k, v in b.items() if k not in ("label", "stage") or v} for b in c["blocks"]]
+        assert BK.check_blocks(bare, cfg)[0] == clean, name                # "" = 값 없음 — 정리된 모양이 같다
+        got, _ = BK.expand(clean, cfg, ig_enabled=ig, rfpulse_present=rfp)
+        assert [s for s in got if not s.internal] == PSt.build_process_steps(c["params"], cfg, ig_enabled=ig,
+                                                                             rfpulse_present=rfp), name
+        assert got == BK.expand(c["blocks"], cfg, ig_enabled=ig, rfpulse_present=rfp)[0], name
+        n += 1
+    assert n >= 25

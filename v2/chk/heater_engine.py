@@ -757,7 +757,8 @@ class SaturationGuard:
                 else f" — 클램프 없음(유지 모드가 D00018 {limit} 을 소유)")
         if st.get('pv2') is None:
             tail += " · TC2 없음 · OT2 과온 보호 없음 — 즉시 확인 필요"
-        self._msg("warn", f"DAC 출력 포화 — {sec:.0f}초째 상한({limit})에 물려 있음: TC1 {st.get('pv')} / MV {st.get('mv')}{tail}")
+        na = lambda v: "없음" if v is None else v                        # TC1 읽기 실패 중이면 None
+        self._msg("warn", f"DAC 출력 포화 — {sec:.0f}초째 상한({limit})에 물려 있음: TC1 {na(st.get('pv'))} / MV {na(st.get('mv'))}{tail}")
         self._emit(HeaterEvent("saturated", "warn", tail, "HEATER_SATURATED",
                                {"pv": st.get('pv'), "pv2": st.get('pv2'), "mv": st.get('mv'), "sec": sec, "clamp": clamp,
                                 "owner": owner, "limit": limit}))

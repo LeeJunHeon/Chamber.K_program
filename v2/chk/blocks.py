@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -236,15 +237,22 @@ class BRule:
     key: str                           # need = 값 이름, device·pulse_edge = 설정 키
     msg: str                           # 문구(앞에 "블록 <번호>(<종류>): ") — {값 이름}·{edge}(펄스 위반 문구)를 채운다
 
+    @property
+    def uses(self) -> tuple:
+        """조건·문구가 쓰는 블록 값 이름 — 이 중 하나라도 빠졌거나(필수) 틀리면 규칙을 건너뛴다(그 값의 오류만 낸다)."""
+        names = re.findall(r"\{(\w+)\}", self.msg) + [re.split(r"=true|:num|\^=|∉|<heaterRampMin", c)[0].removeprefix("0<")
+                                                       for c in filter(None, self.when.split("·"))]
+        return tuple(dict.fromkeys(n for n in names if n != "edge"))
+
     def public(self) -> dict:
         return {"id": self.id, "blocks": list(self.blocks), "kind": self.kind, "when": self.when, "key": self.key,
-                "msg": self.msg}
+                "msg": self.msg, "uses": list(self.uses)}
 
 
 VALUE_RULES: tuple = (
     BRule("need_ar_flow", ("gas_intro",), "need", "ar=true", "ar_flow", "ar_flow: ar 이면 값 필요"),
     BRule("need_o2_flow", ("gas_intro",), "need", "o2=true", "o2_flow", "o2_flow: o2 이면 값 필요"),
-    BRule("need_sp_value", ("pressure",), "need", "set=true·sp∉spDefaultKey", "value", "value: SP{sp} 는 값 필요"),
+    BRule("need_sp_value", ("pressure",), "need", "set=true·sp∉spDefaultKey", "value", "value: SP{sp} 이면 값 필요"),
     BRule("heater_disabled", ("heater_ramp", "heater_wait", "heater_off"), "device", "", "HEATER_ENABLED",
           "히터: HEATER_ENABLED=false"),
     BRule("ig_disabled_base", ("base_wait",), "device", "", "IG_ENABLED",
@@ -362,9 +370,10 @@ def _check_one(b: Any, path: str, cfg: Mapping[str, Any], depth: int, errs: list
     if not isinstance(b, dict):
         errs.append(f"블록 {path}: 객체여야 함")
         return None
-    d = defs.get(b.get("type"))
+    t = b.get("type")
+    d = defs.get(t) if isinstance(t, str) else None
     if d is None:
-        errs.append(f"블록 {path}: 모르는 종류 {b.get('type')!r}")
+        errs.append(f"블록 {path}: type 필요" if _empty(t) else f"블록 {path}: 모르는 종류 {t!r}")
         return None
     pre = f"블록 {path}({d.type})"
     extra = set(b) - set(BLOCK_KEYS)
@@ -379,27 +388,30 @@ def _check_one(b: Any, path: str, cfg: Mapping[str, Any], depth: int, errs: list
         if k not in known:
             errs.append(f"{pre}: {k}: 모르는 값")
     out: Dict[str, Any] = {}
+    bad: set = set()                                     # 빠졌거나(필수) 틀린 값 — 이 값을 쓰는 값 사이 규칙은 건너뛴다
     for p in d.params:
         v = params.get(p.name)
         if _empty(v):
             if p.required:
                 errs.append(f"{pre}: {p.name}: 값 필요")
+                bad.add(p.name)
             out[p.name] = p.default
             continue
         v = _as_type(p, v)
         e = _check_param(p, v, cfg, stop_nos)
         if e:
             errs.append(f"{pre}: {p.name}: {e}")
+            bad.add(p.name)
         out[p.name] = v
-    label = b.get("label")
+    label = None if _empty(b.get("label")) else b.get("label")     # 빈 글·공백만 = 값 없음(template_blocks 가 "" 를 낸다)
     if label is not None and (not isinstance(label, str) or len(label) > LABEL_MAX):
         errs.append(f"{pre}: label 은 {LABEL_MAX}자 이하 문자열")
-    stage = b.get("stage")
+    stage = None if _empty(b.get("stage")) else b.get("stage")
     if stage is not None and stage not in (d.stage,) + d.stages:
         errs.append(f"{pre}: stage 는 {[d.stage] + list(d.stages)} 중 하나")
     nb = {"type": d.type, "params": out, "label": label or "", "stage": stage or ""}
     for r in VALUE_RULES:                                # 값 사이(같은 블록 안) — 순서 규칙이 아니라 값의 짝
-        if d.type not in r.blocks or not _when(r.when, out):
+        if d.type not in r.blocks or bad & set(r.uses) or not _when(r.when, out):
             continue
         if r.kind == "need" and _empty(out[r.key]):
             errs.append(f"{pre}: {r.msg.format(**out)}")

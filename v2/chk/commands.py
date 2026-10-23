@@ -241,7 +241,8 @@ COMMANDS: tuple = (
     C("PROCESS_START", "수동 공정 시작", (WEB,), "operator", IDLE_STATES,
       ("NOT_RUNNING", "NO_RECIPE_LOADED", "PLC_FRESH", "MV_OPEN", "MV_ITL_ON", "NO_HEATER_GAS", "IG_FOR_BASE", "RECIPE_VALID"),
       (_a("row", "obj", False, desc="recipe.PROCESS_COLUMNS 한 행(히터 열은 무시 — 수동 공정은 히터를 쓰지 않음)"),
-       _a("blocks", "rows", False, desc="블록 목록(blocks.BLOCK_DEFS) — row 대신")),
+       _a("blocks", "rows", False, desc="블록 목록(blocks.BLOCK_DEFS) — row 대신"),
+       _a("name", "str", False, desc="run 이름(run_start·공정 기록) — 비우면 행의 process_name, 그것도 없으면 Single CHK")),
       desc="row 또는 blocks 하나", v1="PROCESS_START"),
     C("RECIPE_LOAD", "공정 레시피 적재", (WEB,), "operator", IDLE_STATES, ("RECIPE_VALID", "IG_FOR_BASE"),
       (_a("name", "str"), _a("rows", "rows", False, desc="행 목록 — v1 행(recipe.PROCESS_COLUMNS)·딜레이 행·"

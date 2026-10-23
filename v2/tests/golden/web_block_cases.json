@@ -8432,6 +8432,276 @@
    ]
   },
   {
+   "name": "label_stage_blank",
+   "covers": [
+    "format.blankLabelStage"
+   ],
+   "blocks": [
+    {
+     "type": "wait",
+     "params": {
+      "sec": 1
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2
+     },
+     "label": "  ",
+     "stage": " "
+    },
+    {
+     "type": "repeat",
+     "params": {
+      "count": 1
+     },
+     "label": "",
+     "stage": "",
+     "blocks": [
+      {
+       "type": "valve",
+       "params": {
+        "action": "open"
+       },
+       "label": "\t",
+       "stage": ""
+      }
+     ]
+    },
+    {
+     "type": "end_stop",
+     "params": {},
+     "label": "",
+     "stage": ""
+    }
+   ],
+   "cfg": {
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "DC_MAX_POWER": 500.0,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_SOAK_TIME_SEC": 60,
+    "HEATER_SOAK_TOLERANCE": 2.0,
+    "IG_ENABLED": true,
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "PRESSURE_STAGE_TIMEOUT_SEC": 180.0,
+    "PRESSURE_WAIT_STABLE_SEC": 6.0,
+    "PRESSURE_WAIT_TOL_RATIO": 0.1,
+    "PRE_POWER_OFF_SETTLE_SEC": 1.0,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_ENABLED": false,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RF_MAX_POWER": 600.0,
+    "SP1_TIMEOUT_SEC": 300.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "SP4_MTORR": 30.0
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "clean": [
+    {
+     "type": "wait",
+     "params": {
+      "sec": 1.0,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": "cfg:PRESSURE_WAIT_TOL_RATIO",
+      "stable_sec": "cfg:PRESSURE_WAIT_STABLE_SEC",
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "repeat",
+     "params": {
+      "count": 1
+     },
+     "label": "",
+     "stage": "",
+     "blocks": [
+      {
+       "type": "valve",
+       "params": {
+        "action": "open"
+       },
+       "label": "",
+       "stage": ""
+      }
+     ]
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ],
+   "errors": [],
+   "warnings": [],
+   "uses": {
+    "dc": false,
+    "rf": false,
+    "rfp": false,
+    "heater": false,
+    "ig": false,
+    "ar": false,
+    "o2": false
+   },
+   "expanded": [
+    {
+     "no": "1",
+     "type": "wait",
+     "label": "",
+     "stage": "WAIT",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "sec": 1.0,
+      "watch": null
+     },
+     "watch": {
+      "dc": false,
+      "rf": true,
+      "rfp": true,
+      "flow": false,
+      "pressure": false
+     },
+     "steps": [
+      {
+       "action": "DELAY",
+       "message": "대기 1s",
+       "sec": 1,
+       "spec": {
+        "skippable": true
+       }
+      }
+     ]
+    },
+    {
+     "no": "2",
+     "type": "pressure",
+     "label": "",
+     "stage": "PRESSURE_SP2",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "sp": 2,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": 0.1,
+      "stable_sec": 6.0,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "steps": [
+      {
+       "action": "MFC_CMD",
+       "message": "SP2: SP2_SET=5.00 설정",
+       "params": [
+        "SP2_SET",
+        {
+         "value": 5.0
+        }
+       ]
+      },
+      {
+       "action": "MFC_CMD",
+       "message": "SP2: SP2_ON",
+       "params": [
+        "SP2_ON",
+        {}
+       ]
+      },
+      {
+       "action": "MFC_CMD",
+       "message": "SP2: 압력 도달 대기 (target=5.00, ±10%, timeout=180s)",
+       "params": [
+        "WAIT_PRESSURE",
+        {
+         "target": 5.0,
+         "tolerance_ratio": 0.1,
+         "stable_sec": 6.0,
+         "timeout_sec": 180.0,
+         "fail_on_timeout": false
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "no": "3.1#1",
+     "type": "valve",
+     "label": "",
+     "stage": "VALVE",
+     "iter": "1",
+     "auto": false,
+     "params": {
+      "action": "open"
+     },
+     "steps": [
+      {
+       "action": "MFC_CMD",
+       "message": "MFC Valve Open",
+       "params": [
+        "VALVE_OPEN",
+        {}
+       ]
+      }
+     ]
+    },
+    {
+     "no": "4",
+     "type": "end_stop",
+     "label": "",
+     "stage": "STOPPING",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "skip": null
+     },
+     "steps": [
+      {
+       "action": "END_STOP",
+       "message": "정상 끝 정지 순서",
+       "internal": true,
+       "spec": {
+        "skip": []
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
    "name": "empty_values_are_defaults",
    "covers": [
     "defaults"
@@ -8972,6 +9242,15 @@
     },
     {
      "params": {}
+    },
+    {
+     "type": " ",
+     "params": {}
+    },
+    {
+     "type": [
+      "wait"
+     ]
     }
    ],
    "cfg": {
@@ -9009,7 +9288,9 @@
    "clean": null,
    "errors": [
     "블록 1: 모르는 종류 'nope'",
-    "블록 2: 모르는 종류 None"
+    "블록 2: type 필요",
+    "블록 3: type 필요",
+    "블록 4: 모르는 종류 ['wait']"
    ],
    "warnings": [],
    "uses": null,
@@ -9273,8 +9554,7 @@
     "블록 5(shutter): targets: 값 필요",
     "블록 6(main): sec: 값 필요",
     "블록 7(repeat): count: 값 필요",
-    "블록 8(pressure): sp: 값 필요",
-    "블록 8(pressure): value: SPNone 는 값 필요"
+    "블록 8(pressure): sp: 값 필요"
    ],
    "warnings": [],
    "uses": null,
@@ -10786,7 +11066,7 @@
    "rfpulsePresent": false,
    "clean": null,
    "errors": [
-    "블록 1(pressure): value: SP1 는 값 필요"
+    "블록 1(pressure): value: SP1 이면 값 필요"
    ],
    "warnings": [],
    "uses": null,

@@ -140,6 +140,19 @@ def test_saturation_clamps_to_pre_window_mean_and_releases():
     assert g.clamped is None and port.ev[-1] == ("mv", 1200)
 
 
+def test_saturation_message_without_tc1_says_none_in_korean():
+    """5-11 ③ — TC1 읽기 실패 중 포화면 문구가 "TC1 None" 이 아니라 "TC1 없음"."""
+    t = [0.0]
+    port, msgs = Port(), []
+    g = SaturationGuard(dict(CFG, HEATER_MV_LIMIT=1200, HEATER_MV_SAT_SEC=120), port, lambda l, m: msgs.append(m),
+                        lambda e: None, lambda: t[0])
+    for k in range(182):
+        t[0] = k
+        g.tick(dict(run=True, fault=False, sv=600.0, pv=None, pv2=None, mv_limit=1200, mv=1200), False)
+    sat = [m for m in msgs if m.startswith("DAC 출력 포화")]
+    assert sat and "TC1 없음 / MV 1200" in sat[0] and "None" not in sat[0]
+
+
 # ───────── 레시피 단계 ─────────
 def _runner(status):
     t = [0.0]
