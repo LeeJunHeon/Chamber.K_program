@@ -32,7 +32,10 @@ COLUMNS = [
     "hold", "hold_mv",        # 유지 모드 holding(0/1, dac·tc2 공통) / dac 고정값(그 외 빈칸)
     "pv2_c", "pv_ctrl_c", "hold_kind", "sv2_c",   # TC2 / PID 가 보는 PV / 유지 종류(dac·tc2) / TC2 목표
     "WD age[s]",              # 행을 쓸 때 마지막 워치독 하트비트 성공 뒤 경과 초(래더는 10초에 트립). 운전마다 새 파일이라 맨 끝에 붙인다
+    # 캐스케이드(controller/heater_cascade) — 기존 열 뒤에만 붙인다. ctrl_mode 는 cascade / tc1
+    "ctrl_mode", "r1_c", "r1_lag_c", "tc1_ema_c", "sv2_map_c", "bias_c", "casc_state", "shutter_open",
 ]
+CASC_COLUMNS = ("r1_c", "r1_lag_c", "tc1_ema_c", "sv2_map_c", "bias_c", "casc_state", "shutter_open")
 
 
 class HeaterCsvLogger:
@@ -101,9 +104,13 @@ class HeaterCsvLogger:
         self._warned = False
         return path
 
-    def write_row(self, st: dict, note: str = "", hold=None, hold_kind=None, wd_age=None):
+    def write_row(self, st: dict, note: str = "", hold=None, hold_kind=None, wd_age=None,
+                  ctrl_mode: str = "", casc: Optional[dict] = None):
         """한 행 기록 후 즉시 flush. 프로그램이 죽어도 데이터는 남는다.
-        hold=(holding 0/1, dac 고정값|None), hold_kind="dac"|"tc2"|None, wd_age=워치독 하트비트 나이(초)."""
+        hold=(holding 0/1, dac 고정값|None), hold_kind="dac"|"tc2"|"cascade"|None, wd_age=워치독 하트비트 나이(초).
+        casc = HeaterCascade.log_fields() + {"engaged": bool}. 캐스케이드가 PID 를 TC2 로 돌리는 동안(engaged)
+        D00019(sv_ramp)·D00016(cur_sv)은 TC1 이 아니라 SV2 다 — ramp_sv_c / cur_sv_c 열의 의미(TC1 램프 목표)를
+        지키려고 그 두 열에는 r1 을 넣는다(SV2 는 sv2_c 열에 그대로 있다)."""
         if self._fp is None or self._writer is None:
             return
 
@@ -114,6 +121,8 @@ class HeaterCsvLogger:
         def _b(key):
             return 1 if st.get(key) else 0
 
+        casc = casc or {}
+        _r1 = casc.get("r1_c") if casc.get("engaged") else None
         try:
             pv = st.get('pv')
             self._writer.writerow([
@@ -121,12 +130,12 @@ class HeaterCsvLogger:
                 f"{time.monotonic() - self._t0:.1f}",
                 "" if pv is None else f"{float(pv):.1f}",
                 f"{float(_f('sv')):.1f}",
-                f"{float(_f('sv_ramp')):.1f}",
+                (_r1 if _r1 else f"{float(_f('sv_ramp')):.1f}"),
                 int(_f('mv', 0)),
                 int(_f('mv_limit', 0)),
                 f"{float(_f('mv_pct')):.1f}",
                 int(_f('pid_err', 0)),
-                f"{float(_f('cur_sv')):.1f}",
+                (_r1 if _r1 else f"{float(_f('cur_sv')):.1f}"),
                 f"{float(_f('est_current')):.2f}",
                 f"{float(_f('ramp_rate')):.0f}",
                 f"{float(_f('holdback')):.1f}",
@@ -140,6 +149,8 @@ class HeaterCsvLogger:
                 ("" if not (hold and hold[0]) else (hold_kind or "")),
                 "" if st.get('sv2') is None else f"{float(st['sv2']):.1f}",
                 "" if wd_age is None else f"{float(wd_age):.1f}",
+                ctrl_mode or "",
+                *[casc.get(k, "") for k in CASC_COLUMNS],
             ])
             self._fp.flush()
         except Exception as e:

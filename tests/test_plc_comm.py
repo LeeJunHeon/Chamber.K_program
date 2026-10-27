@@ -580,3 +580,47 @@ def test_T111_ramp_rate_message_names_register(plc):
     plc.set_heater_ramp_rate(2)
     assert plc.instrument.calls[-1] == ("write_register", CFG.HEATER_REG_RAMP_RATE, 2)
     assert any(m.startswith("래더 램프 속도(D00020) 12°C/min (raw=2)") for _, m in plc._msgs)
+
+
+# ───────────────────────── 2단(캐스케이드) 제어: D00035 / M0004A / M0004B 핸드셰이크 ─────────────────────────
+def test_T120_cascade_handshake_and_release_order(plc, tmp_path):
+    """캐스케이드가 PLC 슬롯을 통해: D00012 ← r1 출발점 → D00035 ← SV2 → (되읽기 일치) M0004A ON → (M0004B) TC2 제어.
+    해제는 반드시 M0004A OFF 먼저, 그다음 D00035 = 0. r1·SV2 쓰기는 로그를 남기지 않는다(캐스케이드가 10초 단위로 남긴다).
+    메인 셔터 상태는 같은 폴링의 M00009 코일에서 온다."""
+    from controller.heater_cascade import HeaterCascade
+    inst = plc.instrument
+    t = [0.0]
+    c = HeaterCascade(map_points=CFG.HEATER_TC2_MAP, ti_sec=600, lag_sec=90, bias_rate_max=3.0, bias_limit_c=150.0,
+                      bias_alarm_c=100.0, alarm_action="abort", holdback_c=10.0, tc2_margin_c=50.0,
+                      mv_limit=1200, mv_min=400, soak_tol_c=2.0, soak_sec=60,
+                      learned_path=str(tmp_path / "learned.json"), clock=lambda: t[0])
+    c.request_target.connect(plc.set_heater_target_quiet)
+    c.request_sv2.connect(plc.set_heater_sv2_quiet)
+    c.request_pv_sel.connect(plc.set_heater_pv_sel)
+    ms = CFG.PLC_COIL_MAP["MS_button"]
+    FakeInstrument.scenario.update(run_bit=0, pv_raw=1000, pv2_raw=1400, sv2_max_raw=11000, ot2_raw=11500,
+                                   coils={ms: 1})
+    st = _last_heater_st(plc)
+    assert st["shutter_open"] is True
+    FakeInstrument.scenario["coils"] = {ms: 0}
+    st = _last_heater_st(plc)
+    assert st["shutter_open"] is False
+    c.tick(st)
+    n_msgs = len(plc._msgs)
+    c.start(300.0, 6.0)
+    assert inst.calls[-1] == ("write_register", CFG.HEATER_REG_SV, 1000)          # 출발점 = 현재 TC1 100.0
+    FakeInstrument.scenario["run_bit"] = 1
+    c.tick(_last_heater_st(plc))
+    sv2_w = [x for x in inst.calls if x[0] == "write_register" and x[1] == CFG.HEATER_REG_SV2]
+    assert sv2_w and c.state == "engaging_sv2"
+    FakeInstrument.scenario["sv2_raw"] = sv2_w[-1][2]                               # 래더: D00035 되읽기
+    c.tick(_last_heater_st(plc))
+    assert inst.calls[-1] == ("write_bit", CFG.HEATER_COIL_PV_SEL, 1) and c.state == "engaging_sel"
+    FakeInstrument.scenario["pv_sel_eff_bit"] = 1                                   # 래더: M0004B
+    c.tick(_last_heater_st(plc))
+    assert c.state == "running" and c.engaged()
+    assert not any("TC2 목표 D00035" in m or "목표 온도" in m for _, m in plc._msgs[n_msgs:])
+    n = len(inst.calls)
+    c.stop("테스트")
+    writes = [x for x in inst.calls[n:] if x[0].startswith("write")]
+    assert writes == [("write_bit", CFG.HEATER_COIL_PV_SEL, 0), ("write_register", CFG.HEATER_REG_SV2, 0)]

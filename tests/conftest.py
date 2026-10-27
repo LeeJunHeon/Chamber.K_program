@@ -75,6 +75,25 @@ def qapp():
     yield app
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "cascade: HEATER_CTRL_MODE=cascade(2단 제어) 경로로 돌린다 — 표시가 없으면 tc1(롤백 경로)")
+
+
+@pytest.fixture(autouse=True)
+def heater_ctrl_mode(request, monkeypatch):
+    """기존 테스트는 롤백 경로(HEATER_CTRL_MODE="tc1", RampProfiler + HeaterHold)를 그대로 검증한다.
+    캐스케이드 경로 테스트는 @pytest.mark.cascade 로 연다. main 은 import 시점에 모드를 상수로 잡으므로 둘 다 덮어쓴다."""
+    import importlib
+    cascade = request.node.get_closest_marker("cascade") is not None
+    mode = "cascade" if cascade else "tc1"
+    PC = importlib.import_module("controller.process_controller")
+    monkeypatch.setattr(PC, "HEATER_CTRL_MODE", mode)
+    M = importlib.import_module("main")
+    monkeypatch.setattr(M, "HEATER_CTRL_MODE", mode)
+    monkeypatch.setattr(M, "_CASCADE", cascade)
+    yield mode
+
+
 def make_heater_st(run=False, fault=False, itl=True, pv=275.0, sv=275.0, ok=True, **kw):
     st = dict(ok=ok, pv=pv, sv=sv, sv_limit=630.0, cur_sv=sv, pid_err=0, mv=400, mv_pct=0.0,
               mv_limit=1200, limit_pct=100.0, sv_ramp=sv, ramp_rate=12, holdback=10.0,

@@ -14,6 +14,7 @@ from PyQt6.QtCore import (
 from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
                         HEATER_HOLD_MODE, HEATER_HOLD_WAIT_SEC, HEATER_HOLD_FAIL_ACTION,
+                        HEATER_CTRL_MODE, HEATER_CASCADE_TI_SEC,
                         HEATER_WAIT_TIMEOUT_SEC, POWER_WAIT_TIMEOUT_SEC,
                         POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
                         DC_RAMP_STEP_A,
@@ -1327,6 +1328,11 @@ class SputterProcessController(QObject):
             except Exception:
                 _timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)
                 _to_why = "계산 실패 → 기본값 HEATER_WAIT_TIMEOUT_SEC"
+        # 2단(캐스케이드) 제어: r1 이 목표에 닿은 뒤 바깥 루프(bias, 적분 시간 TI)가 매핑 오차를 걷어 낼 여유를 더한다
+        _casc = self._casc_mode()
+        if _casc:
+            _timeout_sec += 2.0 * float(HEATER_CASCADE_TI_SEC)
+            _to_why += f" + 바깥 루프 수렴 여유 {2.0 * float(HEATER_CASCADE_TI_SEC) / 60:.0f}분(TI×2)"
         timeout_ms = int(_timeout_sec * 1000)
 
         loop = QEventLoop()
@@ -1362,11 +1368,17 @@ class SputterProcessController(QObject):
 
             # 램프가 아직 최종 목표에 닿지 않았으면 도달로 보지 않는다.
             #  (허용오차만으로 판정하면 유지 구간이 목표보다 낮은 온도에서 시작된다)
+            #  캐스케이드면 D00019 는 SV2(TC2 목표)라 쓸 수 없다 — 캐스케이드의 r1(TC1 기준값)이 최종 목표에 닿았는지를 본다.
             _ramp_done = True
+            _c = (self._hold_snapshot().get("casc") or {}) if _casc else {}
             try:
-                _svr = st.get('sv_ramp')
-                if _svr is not None:
-                    _ramp_done = abs(float(_svr) - float(target_c)) <= RAMP_DONE_TOL_C
+                if _c.get("active"):
+                    _ramp_done = (bool(_c.get("r1_done")) and _c.get("final") is not None
+                                  and abs(float(_c["final"]) - float(target_c)) <= RAMP_DONE_TOL_C)
+                else:
+                    _svr = st.get('sv_ramp')
+                    if _svr is not None:
+                        _ramp_done = abs(float(_svr) - float(target_c)) <= RAMP_DONE_TOL_C
             except Exception:
                 _ramp_done = True      # 값을 못 읽으면 기존 동작(온도만으로 판정)
 
@@ -1445,6 +1457,8 @@ class SputterProcessController(QObject):
         """온도 조건 통과 뒤, 유지 모드(HeaterHold)가 holding 이 될 때까지 최대 HEATER_HOLD_WAIT_SEC 기다린다.
         True 면 다음으로 진행, False 면 이미 중단(_abort_with_error) 했거나 stop 중이다.
         mode "off" / WAIT 0 / 주입 없음 → 즉시 통과(이전 동작). 어떤 경우에도 무알림 진행은 없다."""
+        if self._casc_mode():
+            return self._casc_hold_wait(target_c)
         wait_sec = float(HEATER_HOLD_WAIT_SEC)
         snap = self._hold_snapshot()
         mode = str(snap.get("mode") or HEATER_HOLD_MODE or "off")
@@ -1537,6 +1551,71 @@ class SputterProcessController(QObject):
             return True
         self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 공정 중단: {reason2}")
         self._abort_with_error(f"{self._step_tag()} | 유지 모드 진입 실패 — {reason2}")
+        return False
+
+    def _casc_mode(self) -> bool:
+        """2단(캐스케이드) 제어로 도는가 — main 이 스냅샷 제공자를 주입한 경우에만(단독 테스트는 기존 경로)."""
+        return HEATER_CTRL_MODE == "cascade" and self._hold_state is not None
+
+    def _casc_hold_wait(self, target_c: float) -> bool:
+        """캐스케이드: PID 가 이미 TC2 를 보고 있으면(M0004B 확인) 즉시 통과. HeaterHold 의 완화 tc2 / dac 폴백은 타지 않는다.
+        TC2 제어가 아니면(TC2 상실·래더 미지원) HEATER_HOLD_WAIT_SEC 동안 기다리고, 그래도 아니면 HEATER_HOLD_FAIL_ACTION."""
+        def _c():
+            return self._hold_snapshot().get("casc") or {}
+
+        def _desc(c):
+            return (f"SV2 {float(c['sv2']):.1f}°C, bias {float(c.get('bias') or 0.0):+.1f}°C"
+                    if c.get("sv2") is not None else f"상태 {c.get('state')}")
+        c = _c()
+        if c.get("engaged"):
+            self.status_message.emit("히터", f"캐스케이드 TC2 제어 확인 ({_desc(c)})")
+            return True
+        wait_sec = float(HEATER_HOLD_WAIT_SEC)
+        res = {'engaged': None, 'fault': False}
+        if wait_sec > 0:
+            loop = QEventLoop()
+            clock = QElapsedTimer(); clock.start()
+
+            def _on_status(st: dict):
+                if not self._running or self._stop_pending:
+                    loop.quit(); return
+                if st.get('fault'):
+                    res['fault'] = True; loop.quit(); return
+                cc = _c()
+                if cc.get("engaged"):
+                    res['engaged'] = cc; loop.quit()
+
+            self.plc.update_heater_status.connect(_on_status)
+            self._active_loops = [("heater_casc", loop)]
+            self.status_message.emit("히터", f"목표 도달 — 캐스케이드 TC2 제어 대기 (상태 {c.get('state')}, 상한 {wait_sec:.0f}s)")
+            self._exec_loop_with_timeout(loop, int(wait_sec * 1000))
+            try:
+                self.plc.update_heater_status.disconnect(_on_status)
+            except Exception:
+                pass
+            self._active_loops = []
+            if not self._running or self._stop_pending:
+                return False
+            if res['fault']:
+                self._abort_with_error(f"{self._step_tag()} | 히터 이상 발생(TC2 제어 대기 중)")
+                return False
+            if res['engaged']:
+                self.status_message.emit("히터", f"캐스케이드 TC2 제어 확인 ({_desc(res['engaged'])})")
+                return True
+        c = _c()
+        reason = f"캐스케이드가 TC2 제어가 아님(상태 {c.get('state')}) — TC1 제어(래더 기본 경로)로 도달"
+        if wait_sec <= 0:
+            self.status_message.emit("히터(경고)", f"{reason} — HEATER_HOLD_WAIT_SEC=0 이라 그대로 진행")
+            return True
+        action = str(HEATER_HOLD_FAIL_ACTION)
+        info = {"reason": reason, "elapsed": int(wait_sec), "target": float(target_c), "action": action,
+                "state": c.get("state"), "forced": False, "tc2_why": "TC2 제어 아님", "dac_why": "캐스케이드 모드"}
+        self.heater_hold_failed.emit(info)
+        if action == "proceed":
+            self.status_message.emit("히터(경고)", f"{reason} — 경고만 내고 진행(HEATER_HOLD_FAIL_ACTION=proceed)")
+            return True
+        self.status_message.emit("히터(경고)", f"{reason} — 공정 중단")
+        self._abort_with_error(f"{self._step_tag()} | {reason}")
         return False
 
     def _hold_force(self, mode: str, mv, wait_holding_sec: float):

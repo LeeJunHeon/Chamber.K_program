@@ -188,6 +188,10 @@ class HeaterRecipeRunner(QObject):
         self._ramp.request_target.connect(self.request_target)
         self._ramp.request_ramp.connect(self.request_ramp)
         self._ramp.status_message.connect(self.status_message)
+        # 2단(캐스케이드) 제어 — main 이 set_cascade 로 넘겨 준다(HEATER_CTRL_MODE=cascade). None 이면 위 RampProfiler 경로.
+        #  캐스케이드는 main 의 PLC 폴링이 tick 한다 — 러너는 start/hold/resume/stop 만 부른다(시계는 하나).
+        #  캐스케이드가 D00012 를 r1 로 쥐고 있으므로 러너는 운전 중에 D00012 를 직접 쓰지 않는다.
+        self._casc_src = None
 
         # 1초 틱 — 상태 시그널이 끊겨도 타임아웃은 돌아야 한다
         self._tick = QTimer(self)
@@ -199,6 +203,20 @@ class HeaterRecipeRunner(QObject):
         except Exception:
             # PLC가 없는 환경(단위 테스트)에서도 load()는 되어야 한다
             pass
+
+    def set_cascade(self, casc) -> None:
+        """HeaterCascade, 또는 그것을 돌려주는 콜러블(그때그때 None 이면 기존 RampProfiler 경로)."""
+        self._casc_src = casc
+
+    @property
+    def _casc(self):
+        src = self._casc_src
+        return src() if callable(src) else src
+
+    def abort_by_fault(self, reason: str) -> None:
+        """설비 이상으로 레시피를 중단한다(히터 OFF). 실행 중이 아니면 아무것도 하지 않는다."""
+        if self.is_running():
+            self._abort(reason)
 
     # ==================== 시계 ====================
     def _now(self) -> float:
@@ -423,10 +441,13 @@ class HeaterRecipeRunner(QObject):
                 rate = float(getattr(s, '_resolved_rate', 0.0) or 0.0)
                 if rate <= 0:
                     return -1.0
-                try:
-                    svr = (self._plc.get_heater_status() or {}).get('sv_ramp')
-                except Exception:
-                    svr = None
+                if self._casc is not None:
+                    svr = self._casc.r1              # 캐스케이드: D00019 는 SV2 다 — TC1 기준값 r1 로 잰다
+                else:
+                    try:
+                        svr = (self._plc.get_heater_status() or {}).get('sv_ramp')
+                    except Exception:
+                        svr = None
                 if svr is None:
                     return -1.0
                 # 부호 있는 거리. abs() 를 쓰면 오버슈트에서 거리가 다시
@@ -879,7 +900,10 @@ class HeaterRecipeRunner(QObject):
         pv = self._plc_pv()
         pv_txt = f"{pv:.1f}" if pv is not None else "--.-"
 
-        if self._state == RAMPING:
+        if self._state == RAMPING and self._casc is not None:
+            self._held_target = None
+            self._casc.hold()                       # r1 을 그 자리에 세운다(거리 기준 — 재개 때 보정 없음)
+        elif self._state == RAMPING:
             if self._ramp.is_active():
                 # 프로파일러가 SV 를 쥐고 있다. 그쪽이 지금 자리에 세운다.
                 #  거리 기준이라 재개할 때 되돌릴 목표를 보관할 필요가 없다.
@@ -914,7 +938,9 @@ class HeaterRecipeRunner(QObject):
         # 시계 보정은 _clear_hold() 가 한다. 타이머를 손으로 밀지 않는다.
         self._clear_hold()
 
-        if self._state == RAMPING:
+        if self._state == RAMPING and self._casc is not None:
+            self._casc.resume()
+        elif self._state == RAMPING:
             if self._ramp.is_active():
                 # 거리 기준이라 멈춰 있던 시간을 보정할 것이 없다.
                 self._ramp.resume()
@@ -939,6 +965,8 @@ class HeaterRecipeRunner(QObject):
     def _safe_shutdown(self, keep_running: bool = False):
         """히터 정지 + 램프 속도 기본값 원복. 예외를 밖으로 내보내지 않는다."""
         self._ramp.stop(restore_rate=False)   # 램프 속도는 아래에서 원복한다
+        if self._casc is not None and not keep_running:
+            self._casc.stop("레시피 종료")        # M0004A OFF → D00035=0 을 RUN OFF 보다 먼저
         try:
             if not keep_running:
                 self.request_run.emit(False)
@@ -1061,7 +1089,12 @@ class HeaterRecipeRunner(QObject):
             f"스텝 {self._idx + 1}: RAMP 타임아웃 {self._step_timeout_sec / 60:.0f}분")
 
         rate = s._resolved_rate
-        if s.is_cooldown or rate <= 0:
+        if self._casc is not None:
+            # 캐스케이드: 승온·하강·냉각 모두 같은 경로 — 하강/냉각은 r1 을 바로 내리고, 승온은 r1 을 감속 접근으로 올린다
+            self._casc.resume()                      # HOLD 중 skip 이면 r1 정지를 풀고 새 스텝으로(아니면 아무것도 안 함)
+            self._casc.start(float(s.target_c), float(rate if rate > 0 else HEATER_RAMP_RATE_C_PER_MIN),
+                             f"레시피 스텝 {self._idx + 1}")
+        elif s.is_cooldown or rate <= 0:
             # 냉각/속도 없음 — 램프를 만들 것이 없다. 목표만 내려 둔다.
             self.request_ramp.emit(_ramp_raw(rate or HEATER_RAMP_RATE_C_PER_MIN))
             self.request_target.emit(float(s.target_c))
@@ -1095,6 +1128,18 @@ class HeaterRecipeRunner(QObject):
     def _enter_soak(self, s: HeaterRecipeStep):
         self._ramp.stop(restore_rate=False)
         self._state = SOAKING
+        if self._casc is not None:
+            # 캐스케이드는 목표를 그대로 유지한다(SOAK 중에도 bias 보정은 계속). D00012 는 캐스케이드가 쥔다
+            t = self._casc.target()
+            if t is None or abs(float(t) - float(s.target_c)) > 0.05:
+                self._casc.start(float(s.target_c), float(getattr(s, '_resolved_rate', 0.0) or HEATER_RAMP_RATE_C_PER_MIN),
+                                 f"레시피 스텝 {self._idx + 1}")
+            self._soak_deadline = self._now() + s.soak_min * 60.0
+            self._soak_last_report = 0.0
+            self.status_message.emit(
+                "히터", f"스텝 {self._idx + 1}: {s.target_c:g}°C "
+                       + ("RAMP 완료 (SOAK 없음)" if s.soak_min <= 0 else f"SOAK {s.soak_min:g}분 시작"))
+            return
         # 파이썬이 SV를 밀어 올리는 방식이라, 여기서 밀어올림이 멈추면
         # SV가 중간값에 그대로 남는다(실제로 45°C 스텝이 43.8°C로 유지된 적이 있다).
         # 그래서 SOAK 진입 때 최종 목표를 한 번 확실히 써 준다.
@@ -1124,7 +1169,10 @@ class HeaterRecipeRunner(QObject):
             # 히터를 켠 채 끝낸다면 SV가 마지막 목표여야 한다. 램프 도중에
             # skip_step 으로 빠져나오면 중간값이 남아 그 온도로 유지된다.
             try:
-                self.request_target.emit(float(last.target_c))
+                if self._casc is not None:
+                    self._casc.start(float(last.target_c), float(HEATER_RAMP_RATE_C_PER_MIN), "레시피 종료 후 유지")
+                else:
+                    self.request_target.emit(float(last.target_c))
             except Exception:
                 pass
         self._safe_shutdown(keep_running=hold)
@@ -1193,11 +1241,14 @@ class HeaterRecipeRunner(QObject):
         #  래더 홀드백(D00021)이 램프 목표를 항상 PV 근처로 묶어 두므로,
         #  sv_ramp 가 최종 목표에 닿았다는 것은 PV 도 그 부근이라는 뜻이다.
         #  허용오차를 한 번 더 보면 레시피에 없는 대기 구간이 생긴다.
+        #  캐스케이드면 D00019 는 SV2 다 — r1(TC1 기준값)이 이 스텝 목표에 닿았는지를 본다
         try:
             _svr = st.get('sv_ramp')
         except Exception:
             _svr = None
-        if _svr is not None:
+        if self._casc is not None and self._casc.is_active():
+            arrived = self._casc.r1_done(float(s.target_c))
+        elif _svr is not None:
             arrived = abs(float(_svr) - float(s.target_c)) <= RAMP_DONE_TOL_C
         else:
             # sv_ramp 를 못 읽을 때만 온도로 폴백한다
@@ -1217,7 +1268,8 @@ class HeaterRecipeRunner(QObject):
             return
 
         if self._state == RAMPING:
-            self._ramp.tick()
+            if self._casc is None:
+                self._ramp.tick()                   # 캐스케이드는 main 의 PLC 폴링이 tick 한다
             _to = float(getattr(self, "_step_timeout_sec", HEATER_WAIT_TIMEOUT_SEC))
             if now - self._step_started > _to:
                 self._abort(
