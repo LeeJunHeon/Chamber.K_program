@@ -201,6 +201,69 @@ def _validate_heater_hold_config() -> None:
 
 _validate_heater_hold_config()
 
+# ── 히터 제어 구조(controller/heater_cascade.HeaterCascade) ──
+#  "cascade": 2단 제어. 히터 RUN 동안 처음부터 끝까지 PLC PID 는 TC2 를 본다(M0004A, SV2=D00035).
+#             파이썬이 TC1 기준값 r1 을 램프로 만들고 SV2 = map(r1) + bias 로 내려 준다. bias 는 TC1 이 r1 을
+#             따라가도록 느린 적분으로만 보정한다(비례항 없음). 메인 셔터가 열려 있는 동안은 bias·SV2 고정.
+#             2026-10-27 300°C 런 2건: TC1 직접 제어(Kp 3 / Ti 300)가 TC1 288↔311°C(주기 약 260 s)로 진동해
+#             HEATER_WAIT 90분 타임아웃. 히터→TC2 약 40 s, TC2→TC1 약 65 s 지연이라 고정 Kp 하나로는 전 온도 범위를
+#             안정시킬 수 없다. TC2 루프는 유지 모드 실측 표준편차 0.15~0.2°C 로 안정하다.
+#  "tc1"    : 기존 TC1 직접 제어(RampProfiler + HeaterHold) 그대로 — 롤백용.
+HEATER_CTRL_MODE = get('HEATER_CTRL_MODE', "cascade")
+# TC1→TC2 기본 매핑 [[TC1, TC2], ...]. 600°C 런 36개 램프 구간 실측 중앙값 기반(100≈150, 150≈220, 250≈380 과도 대략 맞음).
+#  점 사이 선형 보간, 범위 밖은 양 끝 구간 기울기로 외삽. 300°C 이하는 과거 진동 때문에 실측이 흩어져 있어 출발점일 뿐이다.
+HEATER_TC2_MAP = get('HEATER_TC2_MAP', [[25, 25], [300, 445], [400, 570], [500, 695], [600, 825]])
+HEATER_CASCADE_TI_SEC        = get('HEATER_CASCADE_TI_SEC',        600)    # 바깥 루프 적분 시간 [s]
+HEATER_CASCADE_LAG_SEC       = get('HEATER_CASCADE_LAG_SEC',       90)     # TC1 비교 기준 지연 [s] — e = r1(t−LAG) − TC1_ema
+HEATER_CASCADE_BIAS_RATE_MAX = get('HEATER_CASCADE_BIAS_RATE_MAX', 3.0)    # bias 최대 변화율 [°C/min, TC2 기준]
+HEATER_CASCADE_BIAS_LIMIT_C  = get('HEATER_CASCADE_BIAS_LIMIT_C',  150.0)  # |bias| 상한 [°C]
+HEATER_CASCADE_BIAS_ALARM_C  = get('HEATER_CASCADE_BIAS_ALARM_C',  100.0)  # |bias| 가 이 이상 60 s 지속 → TC1 탈락 의심
+# TC1 탈락 의심 시: "abort"(공정 소유면 공정 중단, 히터 레시피면 레시피 중단, 수동이면 경고) | "warn"(경고만)
+HEATER_CASCADE_ALARM_ACTION  = get('HEATER_CASCADE_ALARM_ACTION',  "abort")
+
+
+def _validate_heater_cascade_config() -> None:
+    """설정이 틀려도 프로그램은 떠야 한다 — 클램프/기본값 복귀만 하고 예외는 던지지 않는다."""
+    global HEATER_CTRL_MODE, HEATER_TC2_MAP, HEATER_CASCADE_ALARM_ACTION
+    _m = str(HEATER_CTRL_MODE or "").strip().lower()
+    if _m not in ("cascade", "tc1"):
+        print(f"[Config] HEATER_CTRL_MODE {HEATER_CTRL_MODE!r} → \"cascade\" (허용: cascade / tc1)")
+        _m = "cascade"
+    HEATER_CTRL_MODE = _m
+    _def_map = [[25.0, 25.0], [300.0, 445.0], [400.0, 570.0], [500.0, 695.0], [600.0, 825.0]]
+    try:
+        pts = [[float(a), float(b)] for a, b in HEATER_TC2_MAP]
+        ok = len(pts) >= 2 and all(pts[i + 1][0] > pts[i][0] and pts[i + 1][1] > pts[i][1]
+                                   for i in range(len(pts) - 1))
+    except Exception:
+        pts, ok = None, False
+    if not ok:
+        print(f"[Config] HEATER_TC2_MAP {HEATER_TC2_MAP!r} → 기본값 (점 2개 이상, TC1·TC2 모두 증가해야 함)")
+        pts = _def_map
+    HEATER_TC2_MAP = pts
+    for _name, _lo, _hi, _def in (("HEATER_CASCADE_TI_SEC", 60.0, 7200.0, 600.0),
+                                  ("HEATER_CASCADE_LAG_SEC", 0.0, 600.0, 90.0),
+                                  ("HEATER_CASCADE_BIAS_RATE_MAX", 0.1, 60.0, 3.0),
+                                  ("HEATER_CASCADE_BIAS_LIMIT_C", 10.0, 500.0, 150.0),
+                                  ("HEATER_CASCADE_BIAS_ALARM_C", 10.0, 500.0, 100.0)):
+        _raw = globals()[_name]
+        try:
+            _v = float(_raw)
+        except Exception:
+            print(f"[Config] {_name} {_raw!r} → {_def:g}"); _v = _def
+        _c = min(max(_v, _lo), _hi)
+        if _c != _v:
+            print(f"[Config] {_name} {_v:g} → {_c:g} 로 클램프 (허용 {_lo:g}~{_hi:g})")
+        globals()[_name] = _c
+    _a = str(HEATER_CASCADE_ALARM_ACTION or "").strip().lower()
+    if _a not in ("abort", "warn"):
+        print(f"[Config] HEATER_CASCADE_ALARM_ACTION {HEATER_CASCADE_ALARM_ACTION!r} → \"abort\" (허용: abort / warn)")
+        _a = "abort"
+    HEATER_CASCADE_ALARM_ACTION = _a
+
+
+_validate_heater_cascade_config()
+
 # 인터락 기준값/공정 파라미터 등
 INTERLOCK_CHECK_INTERVAL = 0.2  # sec
 

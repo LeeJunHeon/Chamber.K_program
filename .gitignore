@@ -228,3 +228,7 @@ reporter_spool.jsonl
 
 ### 개발 모드 기록 (lib/config_local.py 의 DEV_MODE = True) ###
 _dev_logs/
+
+### 히터 캐스케이드 학습 매핑 (controller/heater_cascade — 장비마다 다르다) ###
+heater_tc2_map_learned.json
+heater_tc2_map_learned.json.tmp
