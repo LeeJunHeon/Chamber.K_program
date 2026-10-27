@@ -93,7 +93,8 @@ class ConfigApply:
 
     busy = 공정 진행·정지 순서·CSV 리스트·공정 밖 정리·히터 레시피·히터 가스 중(S48 H 등급 거부·idle 키 대기).
     설치·비밀 키: 비밀값은 웹에서 받지 않고(CONFIG_SECRET_FROM_WEB), RUN_MODE·EQUIPMENT_ID 는 지금 값과 다르면 거부
-    (CONFIG_LOCKED_KEY — 덮어쓰기에 없어도), local_override 가 정한 키는 웹 값보다 덮어쓰기가 이긴다(overriddenKeys).
+    (CONFIG_LOCKED_KEY — 덮어쓰기에 없어도, 저장 값과 비교), local_override 가 정한 키는 웹 값보다 덮어쓰기가 이긴다(overriddenKeys).
+    CONFIG_ROLLBACK version = 웹이 정한 새 버전 번호(없으면 지금 + 1).
     install 키는 restart 대기.
     """
 
@@ -124,8 +125,11 @@ class ConfigApply:
         self._ack(res, by)
         return res.reason
 
-    def rollback(self, by: str) -> Optional[str]:
-        res = self.store.rollback(self.busy(), by=by)
+    def rollback(self, a: dict, by: str) -> Optional[str]:
+        v = a.get("version")
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool)):
+            return "BAD_ARGS"
+        res = self.store.rollback(self.busy(), by=by, version=v)
         if res.status != "rejected":
             self._push(res.applied_keys)
         self._ack(res, by)

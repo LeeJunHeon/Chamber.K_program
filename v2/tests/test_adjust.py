@@ -166,9 +166,14 @@ def test_rfpulse_freq_duty_power_live(tmp_path):
                     c("PROCESS_ADJUST", {"device": "rfpulse", "item": "power", "value": 120.0}),
                     c("PROCESS_ADJUST", {"device": "rfpulse", "item": "duty", "value": 99})]   # 5 kHz·99 % → OFF 2 µs < 16 µs
     r.when(lambda: r.rig.process.state == "MAIN", go)
-    r.when(lambda: "r" in got and len([d for d in recs(r) if d["result"] == "confirmed"]) == 3, r.cmd("PROCESS_STOP"))
+    r.when(lambda: "r" in got and len([d for d in recs(r) if d["result"] == "confirmed"]) == 3,
+           lambda: got.setdefault("st", {a["item"]: a for a in r.rig.hub.state_data({})["adjust"] if a["device"] == "rfpulse"}))
+    r.when(lambda: "st" in got, r.cmd("PROCESS_STOP"))
     r.run(240)
     assert [x.reason for x in got["r"]] == [None, None, None, "ADJUST_OUT_OF_RANGE"]
+    st = got["st"]                                                         # state.adjust — 주파수는 kHz
+    assert {k: (a["scope"], a["value"], a["recipe"], a["busy"]) for k, a in st.items()} == {
+        "power": ("live", 120.0, 100.0, False), "freq": ("live", 5.0, 10.0, False), "duty": ("live", 40, 50, False)}
     sim = r.rig.sims["rfpulse"]
     assert (sim.freq, sim.duty, sim.setpoint) == (5000, 40, 120)
     conf = [d for d in recs(r) if d["result"] == "confirmed"]
@@ -185,7 +190,15 @@ def test_heater_target_during_wait(tmp_path):
     r.on(3, r.cmd("PROCESS_START", {"blocks": bl}))
     r.on(20, adj(r, "heater", "target", 45.0))
     r.on(21, adj(r, "heater", "ramp", 12.0))
+    got = {}
+    r.on(19, lambda: got.setdefault("before", {a["item"]: a for a in r.rig.hub.state_data({})["adjust"] if a["device"] == "heater"}))
+    r.on(22, lambda: got.setdefault("after", {a["item"]: a for a in r.rig.hub.state_data({})["adjust"] if a["device"] == "heater"}))
     r.run(900)
+    b, a = got["before"], got["after"]                                     # state.adjust — 히터 목표·램프
+    assert {k: (x["scope"], x["value"], x["recipe"]) for k, x in b.items()} == {"target": ("live", 60.0, 60.0),
+                                                                               "ramp": ("live", 30.0, 30.0)}
+    assert {k: (x["scope"], x["value"], x["recipe"], x["adjusted"] is not None) for k, x in a.items()} == {
+        "target": ("live", 45.0, 60.0, True), "ramp": ("live", 12.0, 30.0, True)}
     d = [x for x in recs(r) if x["device"] == "heater"]
     assert [(x["item"], x["result"]) for x in d] == [("target", "applied"), ("ramp", "applied")]
     assert d[0]["old"] == 60.0
@@ -214,3 +227,53 @@ def test_flow_upper_limit_is_full_scale(tmp_path):
     errs = [e.data["errors"] for e in r.ev("reject")][0]
     assert any("> 100" in e for e in errs)                                # 오류 문구에 상한
     assert r.rig.heater.atm.state == "IDLE"
+
+
+def test_state_adjust_values_before_and_after(tmp_path):
+    """5-12 ② — 공정 중 state.adjust: 항목마다 지금 값·레시피 값·마지막 수정·scope(adjust 와 같은 기준). 공정 밖 null."""
+    from v2.chk.process_engine import ADJUST_SCOPES
+    r = R(tmp_path, FAST)
+    snap = {}
+    st = lambda: {(a["device"], a["item"]): a for a in r.rig.hub.state_data({})["adjust"]}
+    take = lambda name: lambda: snap.setdefault(name, st())
+    r.on(2, lambda: snap.setdefault("idle", r.rig.hub.state_data({})["adjust"]))
+    r.on(3, r.cmd("PROCESS_START", {"row": LONG}))
+    r.when(lambda: r.rig.process.state == "GAS_STABILIZE", take("gs0"))
+    r.when(lambda: "gs0" in snap, lambda: r.rig.core.command(
+        "PROCESS_ADJUST", {"device": "mfc", "item": "wp", "value": 7.0, "requestedBy": "kim@test"}))
+    r.when(lambda: "gs0" in snap, take("gs1"))
+    main_on = lambda: (r.rig.process.runner.step.spec or {}).get("main") and r.rig.process.runner.cur is not None
+    r.when(lambda: r.rig.process.state == "MAIN" and r.rig.process.dcc.holding and main_on(), take("m0"))
+    r.when(lambda: "m0" in snap, lambda: r.rig.core.command(
+        "PROCESS_ADJUST", {"device": "mfc", "item": "ar_flow", "value": 25.0, "requestedBy": "lee@test"}))
+    r.when(lambda: "m0" in snap, take("m1"))
+    r.when(lambda: "m1" in snap, r.cmd("PROCESS_STOP"))
+    r.when(lambda: "m1" in snap and r.rig.process.state == "IDLE",
+           lambda: snap.setdefault("end", r.rig.hub.state_data({})["adjust"]))
+    r.run(220)
+    assert snap["idle"] is None and snap["end"] is None
+    g0, g1, m0, m1 = snap["gs0"], snap["gs1"], snap["m0"], snap["m1"]
+    assert list(g0) == [(a.device, a.item) for a in BK.ADJUST_ITEMS]
+    assert all(set(a) == {"device", "item", "value", "recipe", "adjusted", "scope", "busy"} and a["scope"] in ADJUST_SCOPES
+               for a in g0.values())
+    wp = ("mfc", "wp")
+    assert (g0[wp]["scope"], g0[wp]["value"], g0[wp]["recipe"], g0[wp]["adjusted"]) == ("future", 5.0, 5.0, None)
+    assert (g1[wp]["scope"], g1[wp]["value"], g1[wp]["recipe"]) == ("future", 7.0, 5.0)      # 예약(scheduled)
+    assert g1[wp]["adjusted"]["by"] == "kim@test" and g1[wp]["adjusted"]["source"] == "web" and g1[wp]["adjusted"]["t"]
+    ar = ("mfc", "ar_flow")
+    assert (g0[ar]["scope"], g0[ar]["value"]) == ("live", 20.0)                              # 가스 블록이 이미 씀
+    assert (m0[ar]["value"], m0[ar]["recipe"], m0[ar]["adjusted"]) == (20.0, 20.0, None)
+    assert (m1[ar]["scope"], m1[ar]["value"], m1[ar]["recipe"], m1[ar]["adjusted"]["by"]) == ("live", 25.0, 20.0, "lee@test")
+    assert (m0[wp]["scope"], m0[wp]["value"], m0[wp]["recipe"]) == ("live", 7.0, 5.0)        # SP1 블록이 새 값으로 씀
+    dc = ("dc", "power")
+    assert (g0[dc]["scope"], g0[dc]["value"], g0[dc]["recipe"]) == ("future", 100.0, 100.0)
+    assert (m0[dc]["scope"], m0[dc]["value"], m0[dc]["recipe"]) == ("live", 100.0, 100.0)
+    mr = ("process", "main_remaining")
+    assert g0[mr]["scope"] == "future" and g0[mr]["recipe"] == g0[mr]["value"] == 120                 # process_time 2 분
+    assert m0[mr]["scope"] == "live" and m0[mr]["recipe"] == 120 and 0 <= m0[mr]["value"] <= 120
+    for k in (("mfc", "o2_flow"), ("rf", "power"), ("rfpulse", "power"), ("rfpulse", "freq"), ("rfpulse", "duty"),
+              ("heater", "target"), ("heater", "ramp")):                                 # 이번 공정에서 안 쓰는 장비
+        assert (m0[k]["scope"], m0[k]["value"], m0[k]["recipe"], m0[k]["busy"]) == ("unused", None, None, False), k
+    assert m0[("process", "skip_wait")]["value"] is None
+    # 거부된 수정은 adjusted 에 남지 않는다
+    assert m1[dc]["adjusted"] is None

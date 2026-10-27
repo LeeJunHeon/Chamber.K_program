@@ -2,7 +2,8 @@
 
 묶음(JSON 하나, bundle()):
   version · hash(정의 내용의 sha256 — 현재값 제외) · paramSchemaHash(paramdef.schema_hash — CONFIG_APPLY 의 schemaHash)
-  params        파라미터 정의(키·이름·묶음·단위·형식·범위·허용값·기본값·현재값·안전 등급·적용 시점·역할·v1 근거·설명·
+  params        파라미터 정의(키·이름·묶음·단위·형식·범위·허용값·기본값·현재값(current 실행 값·stored 저장 값·overridden)·
+                안전 등급·적용 시점·역할·v1 근거·설명·
                 웹 잠금 webLocked — 웹에서 못 바꾸는 키, 버전 4)
                 버전 5: uplink 설정(UPLINK_CLOCK_SKEW_SEC·UPLINK_DOWN_SEC·UPLINK_IN_SIM), 공정 기록 by(요청자), COMMAND_EXPIRED
                 버전 6: snapshot(1초 스냅샷 열 정의), PLC_BUTTON role operator, UPLINK_SUMMARY_PERIOD_SEC 설명(공정 중만)
@@ -15,6 +16,10 @@
                 valueRules.uses(조건·문구가 쓰는 값 — 하나라도 빠졌거나 틀리면 규칙을 건너뜀), need_sp_value 문구
                 "value: SP{sp} 이면 값 필요", type 이 비면 "type 필요". PROCESS_START name(run 이름 — 비우면 process_name·Single CHK).
                 행 검사: 공백만 있는 선택 값도 없는 값(예전에는 shutter_delay "  " 등이 예외)
+                버전 10: params[].stored(저장 값 — config_active 의 값, 없으면 기본값 — 웹이 첫 설정 버전·CONFIG_APPLY 에
+                쓰는 값)·overridden(노트북 덮어쓰기가 정한 키), current 는 실행 값(덮어쓰기 반영) 그대로. 묶음 머리·hello 에
+                overriddenKeys. CONFIG_ROLLBACK version(새 버전 번호를 웹이 정함). state.adjust(공정 중 수정 항목의 지금 값·
+                레시피 값·수정 여부·scope) — 이벤트 adjust 와 같은 항목(adjust.items)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
   recipe        행 레시피 열(rf_pulse_freq 는 kHz, zeroIsEmpty 열은 0 = 빈 값) · 히터 레시피 열
@@ -44,7 +49,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 9
+EXPORT_VERSION = 10
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -65,12 +70,19 @@ EVENTS: tuple = (
 )
 
 
-def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any]) -> dict:
+def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any],
+           stored: Optional[Mapping[str, Any]] = None, overridden: frozenset = frozenset()) -> dict:
     secret = p.scope is Scope.SECRET
+    if secret or values is None:
+        st = ov = None
+    else:
+        st = stored.get(p.key, p.default) if stored is not None else values.get(p.key)
+        ov = p.key in overridden
     return {"key": p.key, "label": p.label, "group": p.group, "unit": p.unit, "type": p.type.value,
             "min": p.min, "max": p.max, "enum": list(p.enum) if p.enum else None, "pattern": p.pattern,
             "default": None if secret else p.default,
             "current": None if (secret or values is None) else values.get(p.key),
+            "stored": st, "overridden": ov,
             "pending": None if secret else pending.get(p.key),
             "safety": p.safety.value, "apply": p.apply.value, "scope": p.scope.value, "role": p.role.value,
             "v1Key": p.v1_key, "v1Source": p.v1_source, "v1Default": p.v1_default, "pendingConfirm": p.pending_confirm,
@@ -167,13 +179,24 @@ def content_hash(defs: Optional[Dict[str, Any]] = None) -> str:
 
 
 def bundle(values: Optional[Mapping[str, Any]] = None, pending: Optional[Mapping[str, Any]] = None,
-           config_version: Optional[int] = None) -> Dict[str, Any]:
-    """웹으로 보내는 묶음. values = 지금 실행 값(ConfigStore.values), pending = 대기 중 값(idle·restart)."""
+           config_version: Optional[int] = None, stored: Optional[Mapping[str, Any]] = None,
+           overridden=()) -> Dict[str, Any]:
+    """웹으로 보내는 묶음. values = 지금 실행 값(ConfigStore.values), pending = 대기 중 값(idle·restart),
+    stored = 저장 값(ConfigStore.stored — 없으면 실행 값과 같다고 봄), overridden = 덮어쓰기가 정한 키."""
     d = definitions()
     h = content_hash(d)
-    d["params"] = [_param(p, values, dict(pending or {})) for p in P.PARAMS]
+    ov = frozenset(overridden or ())
+    d["params"] = [_param(p, values, dict(pending or {}), stored, ov) for p in P.PARAMS]
     return dict({"version": EXPORT_VERSION, "hash": h, "paramSchemaHash": schema_hash(P.PARAMS, P.CROSS_RULES),
-                 "configVersion": config_version}, **d)
+                 "configVersion": config_version, "overriddenKeys": sorted(ov)}, **d)
+
+
+def bundle_for(values: Mapping[str, Any], store, config_version: Optional[int]) -> Dict[str, Any]:
+    """실행 값 + ConfigStore(대기 값·저장 값·덮어쓰기 키)로 묶음 — 로컬 /api/v1/schema·hello webSchema 가 같이 쓴다."""
+    if store is None:
+        return bundle(values, {}, config_version)
+    return bundle(values, dict(store.pending_idle, **store.pending_restart), config_version, store.stored(),
+                  store.overridden())
 
 
 def to_json(b: Dict[str, Any]) -> str:

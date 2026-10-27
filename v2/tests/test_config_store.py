@@ -169,11 +169,43 @@ def test_override_install_and_secret(tmp_path):
     s = _store(tmp_path)
     vals = s.load()
     assert vals["RUN_MODE"] == "bench" and vals["MFC_PORT"] == "COM21" and vals["UPLINK_TOKEN"] == "t"
-    r = s.apply(1, _web_values(MFC_PORT="COM22"), SH, busy=False)
-    assert r.reason == "CONFIG_LOCKED_KEY" and "RUN_MODE" in r.errors[0]     # 웹의 RUN_MODE=sim ≠ 지금 bench — 잠금
-    r = s.apply(1, _web_values(MFC_PORT="COM22", RUN_MODE="bench"), SH, busy=False)
-    assert r.status == "applied" and r.overridden_keys == ["MFC_PORT"]
+    r = s.apply(1, _web_values(MFC_PORT="COM22", RUN_MODE="prod"), SH, busy=False)
+    assert r.reason == "CONFIG_LOCKED_KEY" and "RUN_MODE" in r.errors[0]     # 저장 sim·실행 bench 어느 쪽도 아님 — 잠금
+    r = s.apply(1, _web_values(MFC_PORT="COM22"), SH, busy=False)           # 웹은 저장 값(RUN_MODE=sim)을 보낸다
+    assert r.status == "applied" and r.overridden_keys == ["MFC_PORT", "RUN_MODE"] and not s.pending_restart
     assert _store(tmp_path).load()["MFC_PORT"] == "COM21"        # 덮어쓰기가 이긴다
+    assert s.stored()["MFC_PORT"] == "COM22" and s.stored()["RUN_MODE"] == "sim"
+
+
+def test_web_sends_stored_values_no_pending_restart(tmp_path):
+    """5-12 ① — 웹은 묶음 params[].stored 를 첫 설정 버전으로 두고 그대로 보낸다: 덮어쓰기 키는 overriddenKeys 로 알리고
+    pending_restart 없음(실행 값은 덮어쓰기 그대로). 예전 웹처럼 current(덮어쓰기 값)를 보내도 잠금 키는 저장 값을 그대로 둔다."""
+    from v2.chk import web_schema as W
+    (tmp_path / OVERRIDE).write_text(json.dumps({"values": {
+        "RUN_MODE": "bench", "MFC_PORT": "COM21", "LOCAL_HMI_PORT": 18000, "UPLINK_TOKEN": "t"}}), encoding="utf-8")
+    s = _store(tmp_path)
+    cfg = s.load()
+    b = W.bundle_for(cfg, s, s.version)
+    by = {p["key"]: p for p in b["params"]}
+    assert b["overriddenKeys"] == ["LOCAL_HMI_PORT", "MFC_PORT", "RUN_MODE"]                  # 비밀값은 빼고
+    assert (by["MFC_PORT"]["current"], by["MFC_PORT"]["stored"], by["MFC_PORT"]["overridden"]) == \
+        ("COM21", defaults(P.PARAMS)["MFC_PORT"], True)
+    assert (by["RUN_MODE"]["current"], by["RUN_MODE"]["stored"]) == ("bench", "sim")
+    assert (by["FLOW_ERROR_SEC"]["stored"], by["FLOW_ERROR_SEC"]["overridden"]) == (by["FLOW_ERROR_SEC"]["current"], False)
+    assert all(by[k]["current"] is None and by[k]["stored"] is None and by[k]["overridden"] is None for k in SECRETS)
+    web = {k: p["stored"] for k, p in by.items() if k not in SECRETS}                         # 웹 import = stored
+    r = s.apply(1, web, SH, busy=False)
+    assert r.status == "applied" and r.pending_keys == [] and not s.pending_restart and not r.changes
+    assert r.overridden_keys == ["LOCAL_HMI_PORT", "MFC_PORT", "RUN_MODE"]
+    r = s.apply(2, dict(web, FLOW_ERROR_SEC=7, LOCAL_HMI_PORT=8711), SH, busy=False)         # 덮어쓴 install 키를 바꿔도
+    assert r.status == "applied" and not s.pending_restart and s.values["LOCAL_HMI_PORT"] == 18000
+    assert s.stored()["LOCAL_HMI_PORT"] == 8711 and "LOCAL_HMI_PORT" in r.overridden_keys
+    old_web = {k: p["current"] for k, p in by.items() if k not in SECRETS}                    # 예전 웹(current = 덮어쓰기 값)
+    r = s.apply(3, old_web, SH, busy=False)
+    assert r.status == "applied" and not s.pending_restart and s.stored()["RUN_MODE"] == "sim"   # 잠금 키는 저장 값 유지
+    assert json.loads((tmp_path / ACTIVE).read_text(encoding="utf-8"))["values"]["RUN_MODE"] == "sim"
+    assert "RUN_MODE" not in {c["key"] for c in r.changes}
+    assert W.bundle_for(s.values, s, s.version)["params"][0]["key"]                         # 묶음은 그대로 만들어진다
 
 
 @pytest.mark.parametrize("patch", [{"RUN_MODE": "prod"},
@@ -251,6 +283,26 @@ def test_rollback_to_previous_version(tmp_path):
     s2 = _store(tmp_path)
     assert s2.load()["FLOW_ERROR_SEC"] == 7 and s2.version == 3
     assert [x["kind"] for x in s.history()] == ["apply", "apply", "rollback:1", "rollback:1"]
+
+
+def test_rollback_version_from_web(tmp_path):
+    """5-12 ③ — 새 버전 번호를 웹이 정한다(version). 지금 버전보다 작거나 같으면 CONFIG_VERSION_STALE, 없으면 지금 + 1."""
+    s = _store(tmp_path)
+    s.load()
+    s.apply(1, _web_values(FLOW_ERROR_SEC=7), SH, busy=False)
+    s.apply(2, _web_values(FLOW_ERROR_SEC=9), SH, busy=False)
+    for v in (2, 1):
+        r = s.rollback(busy=False, by="w", version=v)
+        assert (r.status, r.reason, r.version, r.kind) == ("rejected", "CONFIG_VERSION_STALE", v, "rollback")
+    assert s.version == 2 and s.values["FLOW_ERROR_SEC"] == 9
+    r = s.rollback(busy=False, by="w", version=7)                    # 웹에 거부·무응답 버전 3~6 이 있어도 겹치지 않게
+    assert r.status == "applied" and r.version == 7 and s.version == 7 and s.values["FLOW_ERROR_SEC"] == 7
+    r = s.rollback(busy=False, by="w")                               # 없으면 지금 + 1
+    assert r.status == "applied" and r.version == 8 and s.values["FLOW_ERROR_SEC"] == 9
+    assert _store(tmp_path).load()["FLOW_ERROR_SEC"] == 9
+    assert [(x["version"], x["status"], x["reason"]) for x in s.history()][2:] == [
+        (2, "rejected", "CONFIG_VERSION_STALE"), (1, "rejected", "CONFIG_VERSION_STALE"),
+        (7, "applied", None), (8, "applied", None)]
 
 
 def test_removed_stop_sequence_order_in_saved_file(tmp_path):
@@ -344,6 +396,6 @@ def test_float_keys_in_config_ack_cfg_and_bundle(tmp_path):
     cur = {p["key"]: p["current"] for p in W.bundle(cfg)["params"]}
     assert type(cur["HEATER_MAX_TEMP"]) is float and '"current":650.0' in W.to_json(W.bundle(cfg))
     assert ca.apply({"version": 2, "values": _web_values(HEATER_MAX_TEMP=640), "schemaHash": SH}, "web") is None
-    assert ca.rollback("web") is None
+    assert ca.rollback({}, "web") is None
     assert acks[-1]["kind"] == "rollback" and '"HEATER_MAX_TEMP": 650.0' in json.dumps(acks[-1]["values"])
     assert type(cfg["HEATER_MAX_TEMP"]) is float and cfg["HEATER_MAX_TEMP"] == 650.0

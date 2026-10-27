@@ -124,6 +124,9 @@ def test_app_sim_start_api_and_clean_shutdown(tmp_path):
         sch = _get(base, "/api/v1/schema")
         assert sch["hash"] == h["webSchemaHash"] and sch["configVersion"] == 0
         assert any(p["key"] == "LOCAL_HMI_STATIC_DIR" for p in sch["params"])
+        assert h["overriddenKeys"] == sch["overriddenKeys"] == ["LOCAL_DATA_DIR", "LOCAL_HMI_PORT", "LOCAL_HMI_STATIC_DIR"]
+        hp = next(p for p in sch["params"] if p["key"] == "LOCAL_HMI_PORT")      # 실행 값 = 덮어쓰기, 저장 값 = 기본값
+        assert (hp["current"], hp["stored"], hp["overridden"]) == (port, defaults(P.PARAMS)["LOCAL_HMI_PORT"], True)
         page = urllib.request.urlopen(base + "/", timeout=5).read().decode("utf-8")
         assert "로컬 화면 파일 없음" in page and "/api/v1/hello" in page
         with pytest.raises(urllib.error.HTTPError):
@@ -314,10 +317,19 @@ def test_config_idle_restart_h_rollback_history(tmp_path):
     ack = _acks(rig)[-1]
     assert ack["kind"] == "rollback" and ack["version"] == 3 and ack["values"]["HEATER_HOLD_REAPPLY_SEC"] == 9.0
     assert rig.cfg["HEATER_HOLD_REAPPLY_SEC"] == 9.0 and rig.store.version == 3
+    # 새 버전 번호를 웹이 정함(version) — 작으면 CONFIG_VERSION_STALE, 형식이 틀리면 BAD_ARGS
+    assert rig.core.command("CONFIG_ROLLBACK", {"version": 3}, source=Source.WEB).reason == "CONFIG_VERSION_STALE"
+    assert _acks(rig)[-1]["reasonCode"] == "CONFIG_VERSION_STALE" and _acks(rig)[-1]["kind"] == "rollback"
+    assert rig.core.command("CONFIG_ROLLBACK", {"version": "5"}, source=Source.WEB).reason == "BAD_ARGS"
+    assert rig.core.command("CONFIG_ROLLBACK", {"version": 5}, source=Source.WEB).ok and rig.store.version == 5
+    assert _acks(rig)[-1]["version"] == 5 and rig.cfg["HEATER_HOLD_REAPPLY_SEC"] == 7.0
+    assert rig.core.command("CONFIG_ROLLBACK", {}, source=Source.WEB).ok and rig.store.version == 6
+    assert rig.cfg["HEATER_HOLD_REAPPLY_SEC"] == 9.0
     hist = [json.loads(x) for x in (tmp_path / "config" / HISTORY).read_text(encoding="utf-8").splitlines()]
     assert [(h["version"], h["status"], h["kind"]) for h in hist] == [
         (1, "pending_restart", "apply"), (2, "rejected", "apply"), (2, "pending_restart", "apply"),
-        (3, "pending_restart", "rollback:1")]
+        (3, "pending_restart", "rollback:1"), (3, "rejected", "rollback"), (5, "pending_restart", "rollback:2"),
+        (6, "pending_restart", "rollback:3")]
     assert hist[0]["by"] == "admin@test" and {"key": "LOCAL_HMI_PORT", "old": 8710, "new": 8711} in hist[0]["changes"]
     # HMI(로컬 화면)·비밀값은 받지 않는다
     assert rig.core.command("CONFIG_APPLY", {"version": 9, "values": {}, "schemaHash": ""}, source=Source.HMI).reason \
@@ -331,7 +343,7 @@ def test_config_idle_restart_h_rollback_history(tmp_path):
     assert _apply(rig, 9, EQUIPMENT_ID="CHK9").reason == "CONFIG_LOCKED_KEY"
     ack = _acks(rig)[-1]
     assert ack["status"] == "rejected" and ack["reasonCode"] == "CONFIG_LOCKED_KEY" and "EQUIPMENT_ID" in ack["errors"][0]
-    assert rig.cfg["RUN_MODE"] == "sim" and rig.cfg["EQUIPMENT_ID"] == "CHK2" and rig.store.version == 3
+    assert rig.cfg["RUN_MODE"] == "sim" and rig.cfg["EQUIPMENT_ID"] == "CHK2" and rig.store.version == 6
 
 
 def test_sims_start_at_clock_time():

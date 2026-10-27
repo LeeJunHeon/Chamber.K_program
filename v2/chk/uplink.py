@@ -584,9 +584,7 @@ class Uplink:
         d = self.hub.hello_data()
         if self.want_schema:
             from v2.chk import web_schema as WS
-            st = self.sys.store
-            pend = dict(st.pending_idle, **st.pending_restart) if st is not None else {}
-            d["webSchema"] = WS.bundle(dict(self.cfg), pend, self.sys.config_version)
+            d["webSchema"] = WS.bundle_for(dict(self.cfg), self.sys.store, self.sys.config_version)
         return self.hub.envelope("hello", d)
 
     def _send_loop(self) -> None:

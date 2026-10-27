@@ -36,6 +36,8 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
 검사(공정 중·범위·이번 공정에서 쓰는 항목) → 드라이버 쓰기(지금 쓰는 중이면 — 되읽기 확인 포함) → 판정 기준 갱신
 (overrides·cur_vals → 아직 안 온 블록이 새 값, 이탈 판정 지속 시간 처음부터, 파워는 다시 도달할 때까지 이탈 판정 쉼) → 기록
 (ProcEvent "adjust" PROCESS_ADJUST: 장비·항목·이전 → 새 값·출처·결과(rejected/scheduled/applied → confirmed/failed)·사유).
+지금 값(adjust_state → state.adjust): 항목마다 이번 공정이 지금 쓰는 값·레시피 원래 값·마지막 수정(by·시각)·scope —
+adjust 와 같은 기준(공정 중 = 진행 상태·공정 행, 지금 쓰는 중 = _adjust_apply 가 바로 쓰는 조건, 안 씀 = ADJUST_NOT_USED).
 """
 from __future__ import annotations
 
@@ -56,6 +58,11 @@ from v2.chk.process_steps import (HEATER_RAMP_SETTLE_S, HEATER_SET_SETTLE_S, POW
                                   row_to_params)
 
 ACT = frozenset(PS.ACTIVE_STATES)
+# state.adjust scope — live 지금 블록이 쓰는 중(수정하면 바로) · future 앞으로 올 블록이 씀(그 블록이 새 값으로) ·
+# done 쓰던 블록이 지났고 남은 블록도 안 씀(수정은 받지만 쓸 블록 없음) · unused 이번 공정에서 안 씀(ADJUST_NOT_USED)
+ADJUST_SCOPES = ("live", "future", "done", "unused")
+_POWER_SPEC = {"dc.power": ("dc", "dc"), "rf.power": ("rf", "rf"), "rfpulse.power": ("rfp", "rfp"),
+               "rfpulse.freq_hz": ("rfp", "freq_hz"), "rfpulse.duty": ("rfp", "duty")}
 DC_EST_VOLTAGE_V = 300.0          # v1 process_controller.DC_EST_VOLTAGE_V
 RFPULSE_EST_SEC = 20.0            # v1 RFPULSE_EST_SEC
 EVENTS_KEEP = 20000               # 최근 기록(길이 제한 링 버퍼 — 운전 중 끝없이 쌓이지 않게)
@@ -127,6 +134,7 @@ class ProcessEngine:
         self.block_t0 = 0.0
         self.overrides: Dict[str, Any] = {}     # 공정 중 수정 — 항목 키 → 이번 공정의 새 값
         self.cur_vals: Dict[str, Any] = {}      # 스텝이 장비에 쓴 값(항목 키 → 값)
+        self.adjusted: Dict[str, Any] = {}      # 받아들인 공정 중 수정 — 항목 키 → 마지막 {by, t, source}
         self.flow_on = {1: False, 2: False}
         self.rfp_target: Optional[float] = None
         self.rfp_started = False                # RF Pulse START 가 끝났다(공정 중 수정은 그 뒤에만)
@@ -695,7 +703,7 @@ class ProcessEngine:
         steps, insts = BK.expand(blocks, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
         self.params, self.run_name, self.run_id = params, name, uuid.uuid4().hex[:12]
         self.blocks, self.insts, self.uses = blocks, insts, BK.uses_of(blocks)
-        self.block_idx, self.overrides, self.cur_vals = -1, {}, {}
+        self.block_idx, self.overrides, self.cur_vals, self.adjusted = -1, {}, {}, {}
         self.flow_on, self.rfp_target, self._end_stop_resume = {1: False, 2: False}, None, False
         self.rfp_started, self.settle, self.end_skip = False, {}, ()
         self.end_kind = self.end_code = None
@@ -988,6 +996,9 @@ class ProcessEngine:
 
     # ── 공정 중 값 수정(PROCESS_ADJUST) ──
     def _adjust_rec(self, device: str, item: str, old: Any, new: Any, source: str, result: str, reason: Optional[str]) -> None:
+        ai = BK.adjust_item(device, item)
+        if ai is not None and result in ("scheduled", "applied") and source != "scheduled":   # 받아들인 수정(예약 값 적용은 빼고)
+            self.adjusted[ai.key] = {"by": getattr(self, "_adjust_by", None), "t": self.clock.wall(), "source": source}
         self._emit(ProcEvent("adjust", f"{device}.{item} {old} → {new} ({source}) {result}{' ' + reason if reason else ''}",
                              "PROCESS_ADJUST", {"device": device, "item": item, "old": old, "new": new, "source": source,
                                                 "by": getattr(self, "_adjust_by", None),
@@ -1030,6 +1041,90 @@ class ProcessEngine:
             result = self._adjust_apply(ai, value, source, old)
             self._adjust_rec(device, item, old, value, source, result, None)
             return None
+
+    def _adjust_live(self, ai: BK.AdjustItem) -> bool:
+        """지금 블록이 쓰는 중 — _adjust_apply 가 드라이버에 바로 쓰는 조건과 같다(RF Pulse 는 START 중도 포함, busy)."""
+        key, r = ai.key, self.runner
+        s = r.step if r is not None else None
+        if key == "process.skip_wait":
+            return s is not None and bool((s.spec or {}).get("skippable"))
+        if key == "process.main_remaining":
+            return s is not None and bool((s.spec or {}).get("main")) and r.cur is not None
+        if ai.device == "mfc":
+            return key in self.cur_vals
+        if key == "dc.power":
+            return self.dc_on and self.dcc.state != DcControl.IDLE
+        if key == "rf.power":
+            return self.rf_on and self.rfc.state != RfControl.IDLE
+        if ai.device == "rfpulse":
+            return self.rfp_on
+        if ai.device == "heater":
+            return self.heater is not None and bool(self.heater.process_adjust_live(ai.item))
+        return False
+
+    @staticmethod
+    def _step_recipe(ai: BK.AdjustItem, s: ProcessStep):
+        """(이 스텝이 그 항목을 쓰는지, 레시피 값) — 값은 항목 단위(RF Pulse 주파수 kHz)."""
+        key, sp = ai.key, s.spec or {}
+        if key in _POWER_SPEC:
+            dev, fld = _POWER_SPEC[key]
+            if s.action not in ("POWER_WAIT", "POWER_START") or not sp.get(dev):
+                return False, None
+            v = sp.get(fld)
+            return True, (v / 1000.0 if key == "rfpulse.freq_hz" and v is not None else v)
+        if key == "process.skip_wait":
+            return bool(sp.get("skippable")), None
+        if s.ref != key:
+            return False, None
+        if key == "process.main_remaining":
+            return True, s.duration_sec
+        if s.action == "MFC_CMD":
+            a = s.params[1]
+            v = a.get("value", a.get("target"))
+            return v is not None, v
+        return s.value is not None, s.value
+
+    def adjust_state(self) -> Optional[list]:
+        """state.adjust — 공정 중(adjust 가 받는 상태)이면 ADJUST_ITEMS 마다 {device, item, value(이번 공정이 지금 쓰는 값),
+        recipe(레시피 원래 값 — 쓰는 중·지난 블록이면 그 블록, 아니면 다음 블록), adjusted(마지막 수정 {by, t, source} 또는 null),
+        scope(ADJUST_SCOPES), busy(RF Pulse START 중 — 수정은 ADJUST_BUSY)}. 공정 밖이면 None."""
+        with self._lock:
+            r = self.runner
+            if not self.row_is_process or self.state not in ACT or r is None:
+                return None
+            out = []
+            for ai in BK.ADJUST_ITEMS:
+                past = nxt = None
+                for i, s in enumerate(r.steps):
+                    hit, v = self._step_recipe(ai, s)
+                    if not hit:
+                        continue
+                    if i <= r.idx:
+                        past = (v,)
+                    elif nxt is None:
+                        nxt = (v,)
+                live = self._adjust_live(ai)
+                if not (ai.key == "process.skip_wait" or self._uses_item(ai)):
+                    scope = "unused"
+                elif live:
+                    scope = "live"
+                elif nxt is not None:
+                    scope = "future"
+                else:
+                    scope = "done" if past is not None else "unused"
+                recipe = ((past if live or nxt is None else nxt) or (None,))[0]
+                if ai.key == "process.skip_wait":
+                    value = None
+                elif ai.key == "process.main_remaining":
+                    value = self.remain_s() if live else self.overrides.get(ai.key, recipe)
+                else:
+                    value = self._adjust_old(ai) if scope != "unused" else None
+                    if value is None:
+                        value = recipe
+                out.append({"device": ai.device, "item": ai.item, "value": value, "recipe": recipe,
+                            "adjusted": dict(self.adjusted[ai.key]) if ai.key in self.adjusted else None,
+                            "scope": scope, "busy": ai.device == "rfpulse" and self.rfp_on and not self.rfp_started})
+            return out
 
     def _adjust_check(self, ai: BK.AdjustItem, value: Any) -> Optional[str]:
         if not self.row_is_process or self.state not in ACT or self.runner is None:

@@ -299,7 +299,9 @@ COMMANDS: tuple = (
       desc="검사 실패면 버전 전체 거부. idle/restart 키는 대기로 두고 config_ack 로 알림. 이력(누가·언제·이전 → 새 값)은 "
            "config_history.jsonl + config_ack changes"),
     C("CONFIG_ROLLBACK", "이전 설정으로 되돌리기", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),
-      desc="ConfigStore.rollback — 직전 버전(config_prev.json) 값을 새 버전으로 적용. 결과 config_ack(kind rollback, values)"),
+      (_a("version", "int", False, min=1, desc="새 버전 번호(웹이 정함 — 지금 버전보다 커야 함, 아니면 CONFIG_VERSION_STALE). "
+                                                "비우면 지금 버전 + 1"),),
+      desc="ConfigStore.rollback — 직전 버전(config_prev.json) 값을 새 버전으로 적용. 결과 config_ack(kind rollback, version, values)"),
     # 내부(안전·공정 엔진) 조치 — safety_rules 의 action 이 이것들을 쓴다
     C("PROCESS_ABORT", "공정 중단", (INT,), "system", STOPPABLE, (), (_a("reason", "str"),)),
     C("START_REJECT", "시작 거부", (INT,), "system", (ANY_STATE,), (), (_a("reason", "str"),)),

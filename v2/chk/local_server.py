@@ -101,9 +101,7 @@ class LocalServer:
 
     def schema(self) -> dict:
         from v2.chk import web_schema as WS
-        st = self.system.store
-        pend = dict(st.pending_idle, **st.pending_restart) if st is not None else {}
-        return WS.bundle(dict(self.system.cfg), pend, self.system.config_version)
+        return WS.bundle_for(dict(self.system.cfg), self.system.store, self.system.config_version)
 
     def command(self, body: dict) -> dict:
         cid = body.get("id")

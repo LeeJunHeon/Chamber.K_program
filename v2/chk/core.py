@@ -108,7 +108,7 @@ class ChkCore:
         if kind in ("CONFIG_APPLY", "CONFIG_ROLLBACK"):
             if self.config is None:
                 return "UNKNOWN_COMMAND"
-            return self.config.apply(a, by) if kind == "CONFIG_APPLY" else self.config.rollback(by)
+            return self.config.apply(a, by) if kind == "CONFIG_APPLY" else self.config.rollback(a, by)
         if kind == "BUZZ_STOP":
             if not self._plc_up():
                 return "LINK_DOWN"

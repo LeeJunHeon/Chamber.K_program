@@ -164,6 +164,7 @@ class MessageHub:
         return {"equipment": s.cfg.get("EQUIPMENT_ID"), "instance": self.instance, "program": s.program,
                 "version": s.version, "runMode": s.mode, "schemaHash": _param_hash(),
                 "configVersion": s.config_version, "webSchemaHash": self.web_schema_hash,
+                "overriddenKeys": s.store.overridden() if s.store is not None else [],
                 "snapshotColumns": list(s.bus.columns),
                 "commandKinds": [c.kind for c in C.COMMANDS if Source.HMI in c.sources],
                 "writesAllowed": bool(s.policy.device_writes), "deviceUtc": utc_iso(self._wall())}
@@ -251,6 +252,7 @@ class MessageHub:
         st = s.store
         return {"procState": p.state, "runId": f.get("proc.run_id"), "step": blk, "remainS": f.get("proc.remain_s"),
                 "recipe": recipe, "heaterRecipe": hr,
+                "adjust": p.adjust_state() if hasattr(p, "adjust_state") else None,
                 "heater": {"owner": h.owner, "handedOver": bool(h.handed_over), "gas": h.gas_state},
                 "alarms": alarms, "links": links, "configVersion": s.config_version,
                 "configPending": ({"idle": dict(st.pending_idle), "restart": dict(st.pending_restart)}

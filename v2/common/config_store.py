@@ -11,9 +11,13 @@
   기본값으로 조용히 돌지 않는다. 단, 두 파일이 모두 없으면(새 설치) 기본값 버전 0 — RUN_MODE 기본값이 sim 이다.
 - 코드의 파라미터 정의가 바뀌어 schemaHash 가 다르면: 새 키는 기본값으로 채우고 없어진 키는 버리며 notes 에 남긴다.
 - 덮어쓰기 파일이 깨졌거나 허용되지 않는 키가 있으면 ConfigError.
+- 저장 값(stored) = config_active 의 값(없으면 기본값), 실행 값(values) = 저장 값 + 덮어쓰기(+ 대기 중 키는 이전 값).
+  웹은 저장 값을 원본으로 두고 CONFIG_APPLY 에 저장 값을 보낸다(묶음 params[].stored·overridden).
 
 적용(apply) — CONFIG_APPLY
 - 스키마 해시·버전·비밀값 포함 여부 → 전체 검사 → 하나라도 실패면 버전 전체 거부(부분 적용 없음).
+- 웹 잠금 키(RUN_MODE·EQUIPMENT_ID …)는 받은 값이 저장 값과 같아야 한다. 덮어쓰기가 정한 잠금 키는 실행 값(덮어쓰기 값)도
+  받아 주되 저장은 저장 값 그대로(예전 웹이 묶음 current 를 보내던 것) — 그 밖의 값은 CONFIG_LOCKED_KEY.
 - 공정·히터 운전 중(busy)이면 H 등급 변경이 하나라도 있으면 거부(CONFIG_H_IN_PROCESS, 안전 규칙 S48).
 - 통과하면 파일에 원자적으로 저장(임시 파일 → fsync → 바꿔치기, 이전 active 는 prev 로).
 - 적용 시점: live 는 즉시, idle 은 busy 면 대기(on_idle 에서 적용), restart 는 재시작까지 대기.
@@ -22,7 +26,8 @@
 이력·되돌리기(사용자 지시 5-4 ④)
 - config_history.jsonl : 적용 요청마다 한 줄 {at, by, kind(apply·rollback), version, status, reason, changes[{key, old, new}]}
   (old = 그때까지 저장된 웹 값, 비밀값은 원래 저장하지 않으므로 이력에도 없다). 거부된 요청도 사유와 함께 남긴다.
-- rollback(busy, by): config_prev.json(직전 버전)의 값을 새 버전(지금 버전 + 1)으로 다시 적용 — 같은 검사·S48·적용 시점 규칙.
+- rollback(busy, by, version): config_prev.json(직전 버전)의 값을 새 버전으로 다시 적용 — 같은 검사·S48·적용 시점 규칙.
+  새 버전 번호는 웹이 정한다(version — 지금 버전보다 커야 함, 아니면 CONFIG_VERSION_STALE). 없으면 지금 버전 + 1.
   웹은 config_ack(kind=rollback, values)로 받아 자기 DB 를 맞춘다(값의 원본은 계속 웹). 이전 버전이 없으면 CONFIG_NO_PREVIOUS.
 """
 from __future__ import annotations
@@ -134,6 +139,15 @@ class ConfigStore:
         eff.update(self.override)
         return eff
 
+    def stored(self) -> dict:
+        """저장 값(config_active 의 값, 없는 키는 기본값) — 비밀값 제외."""
+        base = defaults(self.defs)
+        return {p.key: self.persisted.get(p.key, base[p.key]) for p in self.defs if p.key not in self.secret_keys}
+
+    def overridden(self) -> list:
+        """덮어쓰기(local_override.json)가 정한 키 — 비밀값 제외."""
+        return sorted(k for k in self.override if k not in self.secret_keys)
+
     def _read_file(self, path: Path) -> tuple:
         """(version, persisted 값, notes). 실패하면 예외."""
         obj = json.loads(path.read_text(encoding="utf-8"))
@@ -192,6 +206,8 @@ class ConfigStore:
               kind: str = "apply") -> ApplyResult:
         """CONFIG_APPLY — 결과와 함께 이력 한 줄(누가·언제·이전 → 새 값). float 형식 키는 float 로 바꿔 검사·저장."""
         values = as_float(self.defs, values) if isinstance(values, Mapping) else values
+        if isinstance(values, Mapping):
+            values = self._keep_locked(values)
         before = dict(self.persisted)
         res = self._apply(version, values, schema_hash, busy)
         keys = sorted((set(before) | set(values)) - self.secret_keys)
@@ -201,15 +217,32 @@ class ConfigStore:
                    "version": version, "status": res.status, "reason": res.reason, "changes": res.changes})
         return res
 
-    def rollback(self, busy: bool, by: str = "") -> ApplyResult:
-        """이전 버전으로 되돌리기 — config_prev.json 의 값을 새 버전(지금 + 1)으로 적용(검사·S48·적용 시점은 CONFIG_APPLY 와 같다)."""
+    def _keep_locked(self, values: Mapping[str, Any]) -> dict:
+        """덮어쓰기가 정한 웹 잠금 키에 실행 값(덮어쓰기 값)이 왔으면 저장 값으로 — 덮어쓰기 값이 config_active 에 들어가지 않게."""
+        out, st = dict(values), self.stored()
+        for k in self.override:
+            p = self.by_key.get(k)
+            if p is not None and p.web_locked and k in out and out[k] != st.get(k) and out[k] == self.values.get(k):
+                out[k] = st.get(k)
+        return out
+
+    def rollback(self, busy: bool, by: str = "", version: Optional[int] = None) -> ApplyResult:
+        """이전 버전으로 되돌리기 — config_prev.json 의 값을 새 버전으로 적용(검사·S48·적용 시점은 CONFIG_APPLY 와 같다).
+        version = 웹이 정한 새 버전 번호(지금 버전보다 커야 함 — 아니면 CONFIG_VERSION_STALE). 없으면 지금 + 1."""
+        if version is not None and (not isinstance(version, int) or isinstance(version, bool) or version <= self.version):
+            res = ApplyResult("rejected", "CONFIG_VERSION_STALE", [f"버전 {version} ≤ 저장된 {self.version}"],
+                              version=version, kind="rollback")
+            self._log({"at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"), "by": by, "kind": "rollback",
+                       "version": version, "status": res.status, "reason": res.reason, "changes": []})
+            return res
         if not self.prev_path.exists():
             return ApplyResult("rejected", "CONFIG_NO_PREVIOUS", ["이전 버전 없음"], kind="rollback")
         try:
             prev_version, vals, _ = self._read_file(self.prev_path)
         except Exception as e:
             return ApplyResult("rejected", "CONFIG_NO_PREVIOUS", [f"이전 버전을 쓸 수 없음: {e}"], kind="rollback")
-        res = self.apply(self.version + 1, vals, self.schema_hash, busy, by=by, kind=f"rollback:{prev_version}")
+        res = self.apply(self.version + 1 if version is None else version, vals, self.schema_hash, busy, by=by,
+                         kind=f"rollback:{prev_version}")
         res.kind = "rollback"
         if res.status != "rejected":
             res.values = dict(vals)
@@ -246,8 +279,9 @@ class ConfigStore:
         if secrets:
             return ApplyResult("rejected", "CONFIG_SECRET_FROM_WEB", [f"비밀값 포함: {secrets}"])
         cand = self._effective(values)
-        locked = [f"{k}: 지금 {self.values.get(k)!r} ≠ 받은 {values.get(k, cand.get(k))!r}" for k in sorted(self.by_key)
-                  if self.by_key[k].web_locked and self.values.get(k) != values.get(k, cand.get(k))]
+        st = self.stored()
+        locked = [f"{k}: 저장 {st.get(k)!r} ≠ 받은 {values.get(k, cand.get(k))!r}" for k in sorted(self.by_key)
+                  if self.by_key[k].web_locked and st.get(k) != values.get(k, cand.get(k))]
         if locked:                                  # 실행 모드·장비 ID — 덮어쓰기 파일에 없어도 웹에서는 못 바꾼다
             return ApplyResult("rejected", "CONFIG_LOCKED_KEY", [f"웹에서 바꿀 수 없는 키: {'; '.join(locked)}"])
         errs = check_config(self.defs, self.rules, cand)

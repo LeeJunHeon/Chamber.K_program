@@ -98,6 +98,8 @@ MESSAGES: tuple = (
         _f("writesAllowed", "bool", True, "장비 쓰기 허용(bench 는 false)"),
         _f("deviceUtc", "iso", True, "장비 UTC 시각 — 웹이 시계 차를 본다"),
         _f("webSchemaHash", "str", True, "웹 설정 내보내기 묶음 해시"),
+        _f("overriddenKeys", "list", True, "노트북 덮어쓰기(local_override.json)가 정한 키(비밀값 제외) — 그 키의 실행 값은 "
+           "덮어쓰기 값, 저장 값은 묶음 params[].stored"),
         _f("webSchema", "obj", False, "묶음(chk.web_schema.bundle) — 웹이 needWebSchema 로 달라고 할 때만"),
     )),
     MessageDef("state", "up", "현재 상태 1개 — POST 마다 최신 하나(보관하지 않음)", (
@@ -107,6 +109,12 @@ MESSAGES: tuple = (
         _f("recipe", "obj", False, "적재된 레시피(이름·행)"),
         _f("heaterRecipe", "obj", False, "히터 레시피 진행 {name, state(RAMPING·SOAKING), step(1부터), steps, "
            "held(일시정지 중 — HEATER_RECIPE_HOLD on=true 뒤 true, on=false 뒤 false)} — 돌고 있지 않으면 null"),
+        _f("adjust", "list", False, "공정 중 수정 항목의 지금 값 — 공정 중(PROCESS_ADJUST 를 받는 상태)이면 blocks.ADJUST_ITEMS 마다 "
+           "{device, item, value(이번 공정이 지금 쓰는 값 — 항목 단위, RF Pulse 주파수 kHz, main_remaining 은 남은 초), "
+           "recipe(레시피 원래 값 — 쓰는 중·지난 블록이면 그 블록, 아니면 다음 블록), adjusted(마지막으로 받아들인 수정 "
+           "{by, t(장비 시계 epoch 초), source} 또는 null), scope(live 지금 블록이 쓰는 중 · future 앞으로 올 블록 · "
+           "done 쓰던 블록이 지났고 남은 블록도 안 씀 · unused 이번 공정에서 안 씀), busy(RF Pulse START 중 — ADJUST_BUSY)}. "
+           "skip_wait 는 value·recipe 가 null. 공정 밖이면 null"),
         _f("heater", "obj", True, "히터 소유·넘김·가스 상태"),
         _f("snapshot", "obj", True, "가장 최근 1초 행(열 이름 → 값)"),
         _f("alarms", "list", True, "활성 알람(규칙 id·사유 코드·시작 시각)"),

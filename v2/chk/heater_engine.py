@@ -1439,6 +1439,15 @@ class HeaterEngine:
                 p.update(phase="RAMP", t0=None)
             return True
 
+    def process_adjust_live(self, item: str) -> bool:
+        """process_adjust 가 지금 바로 적용하는지(값은 바꾸지 않음) — ramp 는 공정 히터 블록이 시작됐으면, target 은 공정이
+        목표를 낸 뒤(소유 process)면. state.adjust scope 용."""
+        with self._lock:
+            p = self.proc
+            if not p:
+                return False
+            return item == "ramp" or (self.owner == "process" and p.get("target") is not None)
+
     def process_wait_tick(self, now: float):
         """HEATER_WAIT — v1 _heater_wait + _heater_hold_wait. 'wait' | 'reached' | ('fail', 코드).
         phase: RAMP(목표 ±tol 밖·램프 중) → SOAK(±tol 을 HEATER_SOAK_TIME_SEC 유지 확인) → HOLD_WAIT(유지 모드 진입 대기·폴백)."""
