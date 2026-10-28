@@ -287,21 +287,27 @@ def _hold_tc2(w, sv2=1052.3):
 
 
 def test_T34_tc2_label_and_status_text(fresh):
+    """TC2 칸: 숫자(없으면 빈 칸 → placeholder --.-) + TC2 제어 중일 때만 아래 "→ SV2". ERP 문구는 예전 한 줄 그대로."""
     w = fresh; ui = w.ui
-    assert ui.heater_pv_title.text() == "TC1"
+    assert ui.heater_pv_title.text() == "TC1" and ui.heater_pv2_title.text() == "TC2"
+    assert ui.heater_pv2_unit.text() == ui.heater_pv_unit.text() == "°C"
+    assert ui.heater_pv2_edit.styleSheet() == ui.heater_pv_edit.styleSheet()          # 같은 글꼴·크기·굵기
     feed(w, make_heater_st(run=False, pv2=None))
-    assert ui.heater_pv2_label.text() == "TC2 --.-"
+    assert ui.heater_pv2_edit.text() == "" and ui.heater_pv2_edit.placeholderText() == "--.-"
+    assert ui.heater_sv2_label.text() == "" and w._heater_tc2_text == "TC2 --.-"
     feed(w, make_heater_st(run=True, pv2=1052.3))
-    assert ui.heater_pv2_label.text() == "TC2 1052.3 °C"
-    assert "#6b7280" in ui.heater_pv2_label.styleSheet()
+    assert ui.heater_pv2_edit.text() == "1052.3" and ui.heater_sv2_label.text() == ""
+    assert w._heater_tc2_text == "TC2 1052.3 °C"
+    assert "#6b7280" in ui.heater_sv2_label.styleSheet()
     # TC2 추종 중: 목표 표시 + 운전색, 상태 문구, SV 는 D00012(TC1 목표), 편차는 TC1 − 최종 목표
     w.heater_hold.mode = "off"                       # tick 이 상태를 건드리지 않게
     _hold_tc2(w)
     w.heater_hold.tick = lambda st, f=None: None
     try:
         feed(w, make_heater_st(run=True, pv=600.0, sv=600.0, cur_sv=1052.3, pv2=1052.3, pv_sel_eff=True))
-        assert ui.heater_pv2_label.text() == "TC2 1052.3 → 1052.3"
-        assert "#2e7d32" in ui.heater_pv2_label.styleSheet()
+        assert ui.heater_pv2_edit.text() == "1052.3" and ui.heater_sv2_label.text() == "→ 1052.3"
+        assert w._heater_tc2_text == "TC2 1052.3 → 1052.3"
+        assert "#2e7d32" in ui.heater_sv2_label.styleSheet()
         assert ui.heater_status_label.text() == "운전 중 · TC2 추종"
         assert ui.heater_sv_big.text() == "600.0"
         assert ui.heater_dev_label.text() == "Δ+0.0"
@@ -310,19 +316,21 @@ def test_T34_tc2_label_and_status_text(fresh):
         w.heater_hold._h = w.heater_hold._fresh()
         w.heater_hold.mode = "dac"
     feed(w, make_heater_st(run=True, pv2=1052.3))
-    assert "#6b7280" in ui.heater_pv2_label.styleSheet()
+    assert "#6b7280" in ui.heater_sv2_label.styleSheet() and ui.heater_sv2_label.text() == ""
     assert ui.heater_status_label.text() == "운전 중"
 
 
 def test_T35_stale_includes_pv2_label_and_restores(fresh):
+    """stale 회색은 TC1 숫자와 같게 TC2 숫자·SV2 줄에도."""
     w = fresh; ui = w.ui
     feed(w, make_heater_st(run=False, pv2=1052.3))
-    orig = ui.heater_pv2_label.styleSheet()
+    orig = {n: getattr(ui, n).styleSheet() for n in ("heater_pv_edit", "heater_pv2_edit", "heater_sv2_label")}
     w._heater_status_t = time.monotonic() - 6.0
     w._refresh_heater_progress()
-    assert w._heater_stale and MAIN.HEATER_STALE_FG in ui.heater_pv2_label.styleSheet()
+    assert w._heater_stale
+    assert all(MAIN.HEATER_STALE_FG in getattr(ui, n).styleSheet() for n in orig)
     feed(w, make_heater_st(run=False, pv2=1052.3))
-    assert ui.heater_pv2_label.styleSheet() == orig
+    assert {n: getattr(ui, n).styleSheet() for n in orig} == orig
 
 
 def test_T36_lcd_children_no_overlap_and_inside(win):
@@ -331,7 +339,8 @@ def test_T36_lcd_children_no_overlap_and_inside(win):
     kids = [c for c in lcd.children() if hasattr(c, "geometry") and c.parent() is lcd]
     box = QRect(0, 0, lcd.width(), lcd.height())
     names = [k.objectName() for k in kids]
-    assert "heater_pv2_label" in names and lcd.width() == 200 and lcd.height() == 156
+    assert {"heater_pv2_title", "heater_pv2_edit", "heater_pv2_unit", "heater_sv2_label"} <= set(names)
+    assert "heater_pv2_label" not in names and lcd.width() == 200 and lcd.height() == 156
     for k in kids:
         assert box.contains(k.geometry()), (k.objectName(), k.geometry().getRect())
     for i, a in enumerate(kids):

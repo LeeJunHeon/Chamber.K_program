@@ -80,9 +80,10 @@ def test_casc_manual_on_off_routes_and_release_order(fresh, monkeypatch, tmp_pat
     st = _engage(w, c, clock)
     assert c.engaged() and not w.heater_ramp.is_active()          # RampProfiler 는 쓰지 않는다
     assert ("RUN", True) in order and ("M0004A", True) in order
-    # 화면: SV 칸은 r1(TC1 기준), TC2 줄은 TC2 → SV2, 상태는 TC2 제어
+    # 화면: SV 칸은 r1(TC1 기준), TC2 칸은 숫자 + 아래 → SV2(ERP 문구는 한 줄 그대로), 상태는 TC2 제어
     assert w.ui.heater_sv_big.text() == f"{c.r1:.1f}"
-    assert w.ui.heater_pv2_label.text() == f"TC2 140.0 → {c.sv2:.1f}"
+    assert w.ui.heater_pv2_edit.text() == "140.0" and w.ui.heater_sv2_label.text() == f"→ {c.sv2:.1f}"
+    assert w._heater_tc2_text == f"TC2 140.0 → {c.sv2:.1f}"
     assert w.ui.heater_status_label.text().startswith("운전 중 · TC2 제어 · bias")
     assert w._erp_heater["hold_kind"] == "cascade" and w._erp_heater["cur_sv"] == round(c.r1, 1)
     # 운전 중 목표 변경 — 끊지 않고 목표만

@@ -562,44 +562,61 @@ class Ui_Dialog(object):
             u"border: 1px solid #dfe3e8; border-radius: 6px;}"
         )
 
-        # --- PV (현재 온도) ---
+        # --- 첫 줄: 왼쪽 칸 TC1(D00010) · 오른쪽 칸 TC2(D00011) — 같은 글꼴·크기의 큰 숫자 ---
+        #  칸 = LCD 안쪽 99px 씩(1~100, 100~199). 숫자 칸 88px(QLineEdit 안쪽 여백 4 → 글자 84) + °C 11px(8pt).
+        #  세로: 라벨 1~12 · 숫자 13~36(19pt 숫자 글자 높이 18px) · 작은 줄 37~49 — SV 행(50~)과 겹치지 않게.
+        #  19pt 굵게 "1052.4"·"1150.0" 이 82px(맑은 고딕) — 20pt(87px)는 두 칸에 들어가지 않아 두 숫자를 함께 19pt 로.
+        #  숫자 아래 작은 줄: TC2 칸은 TC2 제어 중일 때 "→ SV2", TC1 칸은 비워 둔다(높이 맞춤).
+        _num_css = (u"QLineEdit {background: transparent; border: none; "
+                    u"color: #1f2937; font-size: 19pt; font-weight: bold;}")
+        _cap_css = (u"QLabel {border: none; background: transparent; "
+                    u"color: #6b7280; font-size: 8pt;}")
+        _unit_css = (u"QLabel {border: none; background: transparent; "
+                     u"color: #6b7280; font-size: 8pt;}")
+
         self.heater_pv_title = QLabel(self.heater_lcd)
         self.heater_pv_title.setObjectName(u"heater_pv_title")
-        self.heater_pv_title.setGeometry(QRect(8, 6, 22, 14))
-        self.heater_pv_title.setStyleSheet(
-            u"QLabel {border: none; background: transparent; "
-            u"color: #6b7280; font-size: 8pt;}"
-        )
+        self.heater_pv_title.setGeometry(QRect(6, 1, 22, 12))
+        self.heater_pv_title.setStyleSheet(_cap_css)
 
         self.heater_pv_edit = QLineEdit(self.heater_lcd)
         self.heater_pv_edit.setObjectName(u"heater_pv_edit")
-        self.heater_pv_edit.setGeometry(QRect(30, 2, 140, 32))
+        self.heater_pv_edit.setGeometry(QRect(1, 13, 88, 24))
         self.heater_pv_edit.setReadOnly(True)                       # PLC 값만 표시
         self.heater_pv_edit.setAlignment(Qt.AlignmentFlag.AlignRight
                                          | Qt.AlignmentFlag.AlignVCenter)
-        self.heater_pv_edit.setStyleSheet(
-            u"QLineEdit {background: transparent; border: none; "
-            u"color: #1f2937; font-size: 20pt; font-weight: bold;}"
-        )
+        self.heater_pv_edit.setStyleSheet(_num_css)
 
         self.heater_pv_unit = QLabel(self.heater_lcd)
         self.heater_pv_unit.setObjectName(u"heater_pv_unit")
-        self.heater_pv_unit.setGeometry(QRect(172, 10, 22, 18))
-        self.heater_pv_unit.setStyleSheet(
-            u"QLabel {border: none; background: transparent; "
-            u"color: #6b7280; font-size: 9pt;}"
-        )
+        self.heater_pv_unit.setGeometry(QRect(89, 19, 11, 16))
+        self.heater_pv_unit.setStyleSheet(_unit_css)
 
-        # --- TC2 (D00011) — TC1 아래 한 줄. TC2 추종 중이면 "TC2 1052.3 → 1052.3" 로 목표를 같이 보인다 ---
-        self.heater_pv2_label = QLabel(self.heater_lcd)
-        self.heater_pv2_label.setObjectName(u"heater_pv2_label")
-        self.heater_pv2_label.setGeometry(QRect(8, 35, 186, 14))
-        self.heater_pv2_label.setAlignment(Qt.AlignmentFlag.AlignRight
+        self.heater_pv2_title = QLabel(self.heater_lcd)
+        self.heater_pv2_title.setObjectName(u"heater_pv2_title")
+        self.heater_pv2_title.setGeometry(QRect(105, 1, 22, 12))
+        self.heater_pv2_title.setStyleSheet(_cap_css)
+
+        self.heater_pv2_edit = QLineEdit(self.heater_lcd)
+        self.heater_pv2_edit.setObjectName(u"heater_pv2_edit")
+        self.heater_pv2_edit.setGeometry(QRect(100, 13, 88, 24))
+        self.heater_pv2_edit.setReadOnly(True)                      # PLC 값만 표시
+        self.heater_pv2_edit.setAlignment(Qt.AlignmentFlag.AlignRight
+                                          | Qt.AlignmentFlag.AlignVCenter)
+        self.heater_pv2_edit.setStyleSheet(_num_css)
+
+        self.heater_pv2_unit = QLabel(self.heater_lcd)
+        self.heater_pv2_unit.setObjectName(u"heater_pv2_unit")
+        self.heater_pv2_unit.setGeometry(QRect(188, 19, 11, 16))
+        self.heater_pv2_unit.setStyleSheet(_unit_css)
+
+        # TC2 목표(SV2) — TC2 제어 중(캐스케이드·tc2 추종)일 때만 "→ 1050.0", 그 밖에는 빈 문자열(자리는 그대로)
+        self.heater_sv2_label = QLabel(self.heater_lcd)
+        self.heater_sv2_label.setObjectName(u"heater_sv2_label")
+        self.heater_sv2_label.setGeometry(QRect(100, 37, 88, 13))
+        self.heater_sv2_label.setAlignment(Qt.AlignmentFlag.AlignRight
                                            | Qt.AlignmentFlag.AlignVCenter)
-        self.heater_pv2_label.setStyleSheet(
-            u"QLabel {border: none; background: transparent; "
-            u"color: #6b7280; font-size: 8pt;}"
-        )
+        self.heater_sv2_label.setStyleSheet(_cap_css)
 
         # --- SV (PLC 가 지금 쫓는 목표. 램프 중간 목표 포함) ---
         self.heater_sv_small = QLabel(self.heater_lcd)
@@ -1069,7 +1086,9 @@ class Ui_Dialog(object):
         # 단위를 제목에 명시 → 각 입력창에서 단위 표기를 생략할 수 있음
         self.heater_title_label.setText(QCoreApplication.translate("Dialog", u"Heater [\u00b0C]", None))
         self.heater_pv_title.setText(QCoreApplication.translate("Dialog", u"TC1", None))
-        self.heater_pv2_label.setText(QCoreApplication.translate("Dialog", u"TC2 --.-", None))
+        self.heater_pv2_title.setText(QCoreApplication.translate("Dialog", u"TC2", None))
+        self.heater_pv2_unit.setText(QCoreApplication.translate("Dialog", u"°C", None))
+        self.heater_sv2_label.setText("")
         self.heater_sv_title.setText(QCoreApplication.translate("Dialog", u"\ubaa9\ud45c", None))
         # --- 가스·압력 ---
         self.heater_ar_check.setText(QCoreApplication.translate("Dialog", u"Ar", None))
@@ -1103,11 +1122,14 @@ class Ui_Dialog(object):
         self.heater_prog_label.setText("")
         # QLineEdit은 placeholderText를 지원 → 빈 칸에 안내 문구 표시
         self.heater_pv_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"--.-", None))
+        self.heater_pv2_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"--.-", None))
         self.heater_sv_edit.setPlaceholderText(QCoreApplication.translate("Dialog", u"\uc628\ub3c4", None))
 
         # 툴팁: 조작 의미를 명확히 (수동 제어 시 오조작 방지)
         self.heater_pv_edit.setToolTip(QCoreApplication.translate("Dialog",
             u"PLC 열전대(TC ch0)가 읽는 현재 온도입니다. 표시 전용입니다.", None))
+        self.heater_pv2_edit.setToolTip(QCoreApplication.translate("Dialog",
+            u"TC2(D00011) 현재 온도입니다. 표시 전용입니다. 센서 이상이면 --.-", None))
         self.heater_sv_edit.setToolTip(QCoreApplication.translate("Dialog",
             u"목표 온도(\u00b0C). PLC 내부 상한(HEATER_SV_LIMIT)으로 한 번 더 제한됩니다.", None))
         self.heater_apply_button.setToolTip(QCoreApplication.translate("Dialog",

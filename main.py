@@ -500,6 +500,9 @@ class _MainErpStateSource:
     def heater_badge(self):
         return getattr(self.w, "_heater_badge", None)
 
+    def heater_tc2_text(self):
+        return getattr(self.w, "_heater_tc2_text", "")
+
     def heater_recipe(self):
         return getattr(self.w, "heater_recipe", None)
 
@@ -701,6 +704,7 @@ class MainDialog(QDialog):
         self._heater_status_t = 0.0
         self._heater_stale = False
         self._heater_style_orig: dict = {}      # stale 진입 시 원본 styleSheet 보관 → 해제 시 그대로 복원
+        self._heater_tc2_text = "TC2 --.-"       # ERP lcd.tc2 — 예전 TC2 한 줄 문구(_update_heater_pv2_label 이 갱신)
         # 목표 도달 후 유지 모드 상태기(dac / tc2) — 결정은 전부 controller/heater_hold 가 한다
         self.heater_hold = HeaterHold(
             _hold_mode_eff(), mv_limit=HEATER_MV_LIMIT, mv_min=HEATER_MV_MIN,
@@ -2926,22 +2930,26 @@ class MainDialog(QDialog):
         return "정지", "#616161"
 
     def _update_heater_pv2_label(self, st: dict) -> None:
-        """TC2 한 줄: "TC2 1052.3 °C" / 없으면 "TC2 --.-" / TC2 추종 중 "TC2 1052.3 → 1052.3"(운전색)."""
+        """TC2 칸: 큰 숫자(없으면 빈 칸 → placeholder "--.-", TC1 과 같은 규칙) + 아래 작은 줄 "→ SV2"
+        (TC2 제어 중 — 캐스케이드·tc2 추종 — 일 때만, 운전색. 그 밖에는 빈 문자열).
+        ERP lcd.tc2 는 예전 한 줄 문구 그대로("TC2 1052.3 °C" / "TC2 --.-" / "TC2 1052.3 → 1052.3") — 웹은 해석하지 않는다."""
         ui = self.ui
         pv2 = st.get('pv2')
         hv = self._hold_view()
         tc2_hold = hv.is_holding() and hv.kind in ('tc2', 'cascade')
+        show_sv2 = tc2_hold and hv.sv2 is not None
+        ui.heater_pv2_edit.setText("" if pv2 is None else f"{float(pv2):.1f}")
+        ui.heater_sv2_label.setText(f"→ {float(hv.sv2):.1f}" if show_sv2 else "")
         if pv2 is None:
-            txt = "TC2 --.-"
-        elif tc2_hold and hv.sv2 is not None:
-            txt = f"TC2 {float(pv2):.1f} → {float(hv.sv2):.1f}"
+            self._heater_tc2_text = "TC2 --.-"
+        elif show_sv2:
+            self._heater_tc2_text = f"TC2 {float(pv2):.1f} → {float(hv.sv2):.1f}"
         else:
-            txt = f"TC2 {float(pv2):.1f} °C"
-        ui.heater_pv2_label.setText(txt)
+            self._heater_tc2_text = f"TC2 {float(pv2):.1f} °C"
         col = "#2e7d32" if tc2_hold else "#6b7280"
         if getattr(self, "_heater_pv2_col", None) != col and not self._heater_stale:
             self._heater_pv2_col = col
-            ui.heater_pv2_label.setStyleSheet(
+            ui.heater_sv2_label.setStyleSheet(
                 f"QLabel {{border: none; background: transparent; color: {col}; font-size: 8pt;}}")
 
     def _update_heater_lcd(self, st: dict):
@@ -3142,7 +3150,7 @@ class MainDialog(QDialog):
             if stale:
                 ui.heater_status_label.setText(f"PLC 응답 없음 · {n}초 전 값")
                 ui.heater_status_label.setStyleSheet("border: none; color:#c62828; font-weight:bold;")
-                for _w in ("heater_pv_edit", "heater_sv_big", "heater_pv2_label"):
+                for _w in ("heater_pv_edit", "heater_pv2_edit", "heater_sv_big", "heater_sv2_label"):
                     wdg = getattr(ui, _w)
                     orig = wdg.styleSheet()
                     if _w in self._heater_style_orig:      # 이미 stale(링크 다운 → 5초 tick 재호출) — 원본을 덮지 않는다
@@ -3647,7 +3655,7 @@ class MainDialog(QDialog):
         else:
             # 단선/모듈이상 시 PLC가 hFFFF를 쓰고 파이썬은 -1로 읽는다
             self.ui.heater_pv_edit.setText("")      # 빈 칸 → placeholder "--.-" 노출
-        # --- TC2 한 줄 ---
+        # --- TC2 칸(숫자 + TC2 제어 중 SV2) ---
         self._update_heater_pv2_label(st)
 
         # --- 상태 문구 ---
