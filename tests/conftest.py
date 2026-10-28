@@ -94,6 +94,21 @@ def heater_ctrl_mode(request, monkeypatch):
     yield mode
 
 
+# 테스트의 기본 램프 속도 — 골든은 12°C/min 으로 만들었다. config_user.json 값(장비와 맞춤)이 바뀌어도 테스트는 이 값을 쓴다.
+# 각 모듈이 import 시점에 상수로 잡으므로 모두 덮어쓴다.
+TEST_HEATER_RAMP_RATE_C_PER_MIN = 12.0
+_RAMP_RATE_MODULES = ("lib.config", "controller.heater_ramp", "controller.heater_recipe", "controller.process_controller",
+                      "core.params", "device.PLC", "main")
+
+
+@pytest.fixture(autouse=True)
+def heater_ramp_rate(monkeypatch):
+    import importlib
+    for name in _RAMP_RATE_MODULES:
+        monkeypatch.setattr(importlib.import_module(name), "HEATER_RAMP_RATE_C_PER_MIN", TEST_HEATER_RAMP_RATE_C_PER_MIN)
+    yield TEST_HEATER_RAMP_RATE_C_PER_MIN
+
+
 def make_heater_st(run=False, fault=False, itl=True, pv=275.0, sv=275.0, ok=True, **kw):
     st = dict(ok=ok, pv=pv, sv=sv, sv_limit=630.0, cur_sv=sv, pid_err=0, mv=400, mv_pct=0.0,
               mv_limit=1200, limit_pct=100.0, sv_ramp=sv, ramp_rate=12, holdback=10.0,
