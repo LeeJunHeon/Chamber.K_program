@@ -84,7 +84,11 @@ class BParam:
     param_scale: float = 1.0
     min_exclusive: bool = False
     enum: Optional[tuple] = None
-    desc: str = ""
+    desc: str = ""                     # 개발용 설명(설정 키·레지스터 등) — 화면은 '상세'에서만
+    label: str = ""                    # 화면용 이름(5-13 — 웹·노트북 화면이 같은 말을 쓴다)
+    help: str = ""                     # 화면용 도움말
+    advanced: bool = False             # 화면에서 '고급'으로 접어 둘 값
+    enum_labels: Optional[tuple] = None   # enum·list 값 → 화면용 이름 ((값, 이름), ...)
 
     def bounds(self, cfg: Mapping[str, Any]) -> Tuple[Optional[float], Optional[float]]:
         lo = float(cfg[self.param_min]) * self.param_scale if self.param_min else self.min
@@ -95,7 +99,9 @@ class BParam:
         return {"name": self.name, "type": self.type, "unit": self.unit, "default": self.default,
                 "required": self.required, "min": self.min, "max": self.max, "paramMin": self.param_min,
                 "paramMax": self.param_max, "paramScale": self.param_scale, "minExclusive": self.min_exclusive,
-                "enum": list(self.enum) if self.enum else None, "desc": self.desc}
+                "enum": list(self.enum) if self.enum else None, "desc": self.desc,
+                "label": self.label, "help": self.help, "advanced": self.advanced,
+                "enumLabels": dict(self.enum_labels) if self.enum_labels else None}
 
 
 @dataclass(frozen=True)
@@ -110,11 +116,15 @@ class BlockDef:
     steps: str = ""                    # 펼친 스텝(사람이 읽는 것)
     v1: str = ""
     desc: str = ""
+    help: str = ""                     # 화면용 설명(5-13)
+    group: str = ""                    # 블록 추가 버튼 묶음(BLOCK_GROUPS key)
+    summary: tuple = ()                # 한 줄 요약에 보일 값 이름(순서대로)
 
     def public(self) -> dict:
         return {"type": self.type, "label": self.label, "params": [p.public() for p in self.params],
                 "stage": self.stage, "stages": list(self.stages), "watch": dict(self.watch) if self.watch else None,
-                "container": self.container, "steps": self.steps, "v1": self.v1, "desc": self.desc}
+                "container": self.container, "steps": self.steps, "v1": self.v1, "desc": self.desc,
+                "help": self.help, "group": self.group, "summary": list(self.summary)}
 
 
 P = BParam
@@ -220,6 +230,101 @@ BLOCK_DEFS: tuple = (
         "STOPPING", steps="SafetyEngine.end_row — 지금 행 끝 정지 순서(표 순서 고정, skip 만 뺀다)", v1="pc:1785-2019",
         desc="기본 템플릿의 마지막. 중간에 두면 정지 순서 뒤 다음 블록으로. 목록 끝이 이 블록이 아니면 자동으로 덧붙는다"),
 )
+
+
+# ───────────── 화면용 이름·도움말(5-13, 사용자 결정 2026-10-29) ─────────────
+# 웹·노트북 화면이 같은 말을 쓰도록 장비 정의에 둔다. 설정 키·값 이름·레지스터 같은 개발용 정보는 desc 에 그대로 둔다.
+# 동작·검사·문구(오류·스텝 message)는 바꾸지 않는다 — 여기 글은 묶음(blocks.defs)으로만 나간다.
+BLOCK_GROUPS: tuple = (("prep", "준비"), ("gas", "가스·압력"), ("heater", "히터"), ("power", "파워·셔터"),
+                       ("run", "공정·대기"), ("flow", "흐름"))
+_ADV = "adv"
+_WATCH_TEXT = ("이탈 감시", "이 블록 동안 파워·유량·압력이 목표를 벗어나는지 볼지. 비운 항목은 블록 기본값", _ADV)
+_ON_TIMEOUT_LABELS = (("continue", "경고 남기고 다음으로"), ("abort", "공정 중단"))
+_O2 = lambda s: s.replace("O2", "O₂")        # 화면용 글에서만 O₂ (COND_FIELDS 이름·문구는 그대로)
+
+# 블록 종류 → (group, help, summary, {값: (이름, 도움말, [_ADV], [enum 이름])})
+_UI: Dict[str, tuple] = {
+    "pre_clean": ("prep", "이전 공정에서 켜진 채 남은 파워(DC·RF·RF Pulse)를 끄고 잠시 기다립니다",
+                  ("dc", "rf", "rfpulse", "settle_sec"), {
+        "dc": ("DC 끄기", ""), "rf": ("RF 끄기", "바로 0 으로 끕니다"),
+        "rfpulse": ("RF Pulse 끄기", "RF Pulse 를 쓰는 설정일 때만"),
+        "settle_sec": ("끈 뒤 대기", "출력을 끈 뒤 기다리는 시간(초 단위로 반올림). 비우면 설정값")}),
+    "gas_prep": ("gas", "고른 가스 채널의 유량을 끄고 MFC 밸브를 엽니다", ("ar", "o2"), {
+        "ar": ("Ar 채널", ""), "o2": ("O₂ 채널", "")}),
+    "heater_ramp": ("heater", "히터를 목표 온도까지 올립니다. 설정에서 히터가 꺼져 있으면 시작할 수 없습니다",
+                    ("target_c", "ramp_c_per_min"), {
+        "target_c": ("목표 온도", ""),
+        "ramp_c_per_min": ("승온 속도", "비우거나 0 이면 설정의 기본 속도. 6 °C/min 보다 느리게는 할 수 없음(6 으로)")}),
+    "heater_wait": ("heater", "히터가 지금 목표 온도에 도달해 안정될 때까지 기다립니다. 목표가 없으면 경고만 남기고 넘어갑니다",
+                    (), {}),
+    "base_wait": ("prep", "이온 게이지를 켜고 압력이 목표 이하가 될 때까지 기다린 뒤 게이지를 끕니다. "
+                          "설정에서 이온 게이지가 꺼져 있으면 시작할 수 없습니다", ("target_torr",), {
+        "target_torr": ("목표 압력", "이온 게이지 압력이 이 값 이하가 될 때까지 기다림")}),
+    "gas_intro": ("gas", "영점을 맞추고 차단밸브를 연 뒤 정한 유량으로 가스를 넣습니다", ("ar_flow", "o2_flow"), {
+        "ar": ("Ar 사용", ""), "ar_flow": ("Ar 유량", "Ar 을 쓰면 필요. 상한은 Ar MFC 풀스케일"),
+        "o2": ("O₂ 사용", ""), "o2_flow": ("O₂ 유량", "O₂ 를 쓰면 필요. 상한은 O₂ MFC 풀스케일"),
+        "zero": ("영점 맞추기", "가스를 넣기 전에 MFC 유량·압력 영점을 맞춤", _ADV)}),
+    "pressure": ("gas", "MFC 압력 설정점에 값을 쓰고 그 설정점으로 제어한 뒤, 압력이 들어올 때까지 기다립니다", ("sp", "value"), {
+        "sp": ("설정점 번호", "1 = 작업 압력(SP1), 2·3·4 = 중간 단계 압력"),
+        "value": ("압력", "비우면 SP2·SP3·SP4 는 설정의 단계 압력. SP1 은 설정점에 값을 쓸 때 값이 필요"),
+        "set": ("설정점에 값 쓰기", "끄면 설정점에 들어 있는 값을 그대로 씀", _ADV),
+        "select": ("이 설정점으로 제어", "끄면 값만 써 두고 제어 설정점은 그대로", _ADV),
+        "wait": ("도달 대기", "끄면 압력이 들어오기를 기다리지 않고 다음 블록으로"),
+        "tol_ratio": ("허용 범위", "목표 대비 비율 — 0.1 이면 ±10 %. 비우면 설정값", _ADV),
+        "stable_sec": ("안정 시간", "허용 범위 안에 이 시간 동안 머물면 도달로 봄. 비우면 설정값", _ADV),
+        "timeout_sec": ("최대 대기", "비우면 SP1 은 설정의 SP1 한도, 그 밖은 단계 한도", _ADV),
+        "on_timeout": ("시간 초과 시", "비우면 SP1 은 공정 중단, 그 밖은 경고 남기고 다음으로", _ADV, _ON_TIMEOUT_LABELS)}),
+    "valve": ("gas", "MFC 밸브를 열거나 닫거나, 지금 위치에서 멈춥니다", ("action",), {
+        "action": ("동작", "", None, (("open", "열기"), ("close", "닫기"), ("hold", "지금 위치에서 멈춤")))}),
+    "shutter": ("power", "고른 셔터를 열거나 닫습니다", ("action", "targets"), {
+        "action": ("동작", "", None, (("open", "열기"), ("close", "닫기"))),
+        "targets": ("셔터", "여러 개면 Gun1 → Gun2 → Main 순서로", None,
+                    (("g1", "Gun1 셔터"), ("g2", "Gun2 셔터"), ("ms", "Main 셔터")))}),
+    "power_on": ("power", "값을 넣은 파워(DC·RF·RF Pulse)를 함께 켭니다. 이미 켜져 있으면 목표만 바꿉니다",
+                 ("dc_power", "rf_power", "rfp_power"), {
+        "dc_power": ("DC 파워", ""), "rf_power": ("RF 파워", ""), "rfp_power": ("RF Pulse 파워", ""),
+        "rfp_freq_khz": ("RF Pulse 주파수", "비우면 장비에 설정된 주파수를 그대로 씀"),
+        "rfp_duty": ("RF Pulse 듀티", "비우면 장비에 설정된 듀티를 그대로 씀"),
+        "wait": ("목표 도달 대기", "끄면 켜기만 하고 바로 다음 블록으로"),
+        "timeout_sec": ("최대 대기", "비우면 목표 파워에 맞춰 장비가 계산", _ADV)}),
+    "power_off": ("power", "고른 파워를 끕니다. RF 는 천천히 내린 뒤 끕니다", ("dc", "rf", "rfpulse"), {
+        "dc": ("DC 끄기", ""), "rf": ("RF 끄기", "천천히 내린 뒤 끔"), "rfpulse": ("RF Pulse 끄기", "")}),
+    "gas_off": ("gas", "고른 가스의 유량을 끄고 차단밸브를 닫습니다", ("ar", "o2"), {
+        "ar": ("Ar 끄기", ""), "o2": ("O₂ 끄기", ""), "close_valves": ("차단밸브 닫기", "")}),
+    "heater_off": ("heater", "히터를 끕니다", (), {}),
+    "wait": ("run", "정한 시간만큼 기다립니다. 공정 중에 '지금 대기 끝내기'로 바로 끝낼 수 있습니다", ("sec",), {
+        "sec": ("시간", ""), "watch": _WATCH_TEXT}),
+    "main": ("run", "Main 셔터를 열고 정한 시간 동안 증착합니다. 공정 중에 남은 시간을 바꿀 수 있습니다", ("sec",), {
+        "sec": ("시간", ""), "close": ("끝에 Main 셔터 닫기", "끄면 다음 블록이나 정지 순서에서 닫힘"), "watch": _WATCH_TEXT}),
+    "cond_wait": ("run", "고른 값이 조건을 만족할 때까지 기다립니다", ("field", "op", "value"), {
+        "field": ("볼 값", "", None, tuple((f, _O2(lab)) for f, lab, _ in COND_FIELDS)),
+        "op": ("조건", "", None, tuple(COND_OPS)),
+        "value": ("기준 값", ""),
+        "tol": ("허용 범위", "조건이 '값 ± 허용'일 때만(같은 단위)"),
+        "stable_sec": ("유지 시간", "조건이 이 시간 동안 이어지면 통과"),
+        "timeout_sec": ("최대 대기", ""),
+        "on_timeout": ("시간 초과 시", "비우면 공정 중단", None, _ON_TIMEOUT_LABELS),
+        "watch": _WATCH_TEXT}),
+    "repeat": ("flow", "안의 블록을 정한 횟수만큼 되풀이합니다", ("count",), {"count": ("반복 횟수", "")}),
+    "end_stop": ("flow", "공정을 마치는 정지 순서를 실행합니다. 목록 끝에 없으면 자동으로 덧붙습니다. 파워 끄기는 뺄 수 없습니다",
+                 ("skip",), {
+        "skip": ("뺄 정지 단계", "필라멘트·셔터·히터·가스 단계만 뺄 수 있음(파워 끄기는 늘 실행)")}),
+}
+
+
+def _with_text(d: BlockDef) -> BlockDef:
+    from dataclasses import replace
+    group, help_, summary, texts = _UI[d.type]
+    ps = []
+    for p in d.params:
+        t = texts[p.name]
+        adv = _ADV in t[2:3]
+        enum_labels = t[3] if len(t) > 3 else None
+        ps.append(replace(p, label=t[0], help=t[1], advanced=adv, enum_labels=enum_labels))
+    return replace(d, params=tuple(ps), help=help_, group=group, summary=tuple(summary))
+
+
+BLOCK_DEFS = tuple(_with_text(d) for d in BLOCK_DEFS)
 
 
 def by_type() -> Dict[str, BlockDef]:
@@ -770,10 +875,13 @@ class AdjustItem:
     when_live: str              # "지금 쓰는 중" 판단
     rules: tuple = ()           # 바꾼 순간 지속 시간을 다시 세는 이탈 판정
     settle: bool = False        # 새 목표에 다시 도달할 때까지 이탈 판정 쉼
+    label: str = ""             # 화면용 이름(5-13) — apply·when_live 는 개발용
+    help: str = ""
 
     def public(self) -> dict:
         return {"device": self.device, "item": self.item, "key": self.key, "param": self.param.public(), "apply": self.apply,
-                "whenLive": self.when_live, "rules": list(self.rules), "settle": self.settle}
+                "whenLive": self.when_live, "rules": list(self.rules), "settle": self.settle,
+                "label": self.label, "help": self.help}
 
 
 ADJUST_ITEMS: tuple = (
@@ -813,6 +921,32 @@ ADJUST_ITEMS: tuple = (
     AdjustItem("process", "skip_wait", "process.skip_wait", P("value", "bool", "", required=True),
                "지금 대기·조건 대기 블록을 바로 끝냄(value=true)", "대기·조건 대기 블록이 돌고 있을 때만"),
 )
+
+
+_RFP_LIVE = "RF Pulse 가 켜진 뒤면 바로 바뀝니다"
+_ADJUST_UI: Dict[str, tuple] = {
+    "mfc.ar_flow": ("Ar 유량", "Ar 가스를 넣은 뒤면 바로 바뀝니다"),
+    "mfc.o2_flow": ("O₂ 유량", "O₂ 가스를 넣은 뒤면 바로 바뀝니다"),
+    "mfc.wp": ("작업 압력(SP1)", "SP1 을 쓴 뒤면 바로 바뀝니다. 도달 대기 중이면 새 목표로 다시 기다립니다"),
+    "dc.power": ("DC 파워", "DC 가 켜진 뒤면 바로 바뀝니다"),
+    "rf.power": ("RF 파워", "RF 가 켜진 뒤면 1 W/s 로 천천히 바뀝니다"),
+    "rfpulse.power": ("RF Pulse 파워", _RFP_LIVE),
+    "rfpulse.freq_hz": ("RF Pulse 주파수", _RFP_LIVE),
+    "rfpulse.duty": ("RF Pulse 듀티", _RFP_LIVE),
+    "heater.target": ("히터 목표 온도", "히터 목표를 낸 뒤면 바로 바뀝니다. 도달 대기 중이면 새 목표로 기다립니다"),
+    "heater.ramp": ("히터 승온 속도", "히터 승온을 시작한 뒤면 바로 바뀝니다"),
+    "process.main_remaining": ("메인 남은 시간", "메인 블록 중이면 남은 시간이 이 값이 됩니다. 아직이면 다음 메인 블록 길이가 됩니다"),
+    "process.skip_wait": ("지금 대기 끝내기", "대기·조건 대기 블록 중에만 쓸 수 있습니다"),
+}
+
+
+def _adjust_text(a: AdjustItem) -> AdjustItem:
+    from dataclasses import replace
+    lab, help_ = _ADJUST_UI[a.key]
+    return replace(a, label=lab, help=help_)
+
+
+ADJUST_ITEMS = tuple(_adjust_text(a) for a in ADJUST_ITEMS)
 
 
 def adjust_item(device: str, item: str) -> Optional[AdjustItem]:

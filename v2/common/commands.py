@@ -71,7 +71,7 @@ COMMON_REASONS: tuple = (
     Reason("PERMISSION", "권한 없음", "reject"),
     Reason("STATE_NOT_ALLOWED", "지금 상태에서 허용되지 않음", "reject"),
     Reason("EXPIRED", "유효 시간이 지난 명령", "reject"),
-    Reason("COMMAND_EXPIRED", "유효 시간(expiresAt)이 지난 웹 명령 — 실행하지 않음(장비 시계 기준)", "reject"),
+    Reason("COMMAND_EXPIRED", "유효 시간이 지난 웹 명령 — 실행하지 않음(장비 시계 기준)", "reject"),
     Reason("DUPLICATE", "이미 처리한 명령 id", "reject"),
     Reason("LINK_DOWN", "장비 통신 끊김", "reject"),
     Reason("DEVICE_DISABLED", "설정에서 꺼진 장비", "reject"),

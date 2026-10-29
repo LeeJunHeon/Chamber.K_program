@@ -20,6 +20,9 @@
                 쓰는 값)·overridden(노트북 덮어쓰기가 정한 키), current 는 실행 값(덮어쓰기 반영) 그대로. 묶음 머리·hello 에
                 overriddenKeys. CONFIG_ROLLBACK version(새 버전 번호를 웹이 정함). state.adjust(공정 중 수정 항목의 지금 값·
                 레시피 값·수정 여부·scope) — 이벤트 adjust 와 같은 항목(adjust.items)
+                버전 11: 화면용 이름·도움말(블록 값 label·help·advanced·enumLabels, 블록 help·group·summary·groups, 정지 단계 label,
+                공정 중 수정 label·help, 레시피 열 label·help·group, 스냅샷 detail·desc·enumLabels·블록 desc, eventKinds,
+                paramGroups) — 동작·문구는 그대로. 개발용 정보(설정 키·레지스터·코드 위치)는 desc 등에 그대로 남는다
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
   recipe        행 레시피 열(rf_pulse_freq 는 kHz, zeroIsEmpty 열은 0 = 빈 값) · 히터 레시피 열
@@ -27,6 +30,9 @@
   adjust        공정 중 수정 항목(장비 → 세부, 형식·범위·적용 방식·판정)
   stopSequence  STOP·이상 중단·행 끝 정지 단계(고정 — 정상 끝 정지만 end_stop skip, 파워 단계 제외) · allStopSequence(고정)
   states        공정 상태 이름 · events 웹이 받는 공정 기록 이벤트(종류·data 키)
+  eventKinds    event 메시지의 (context.source, context.kind) → 화면 이름·level(main 평소 로그 / detail 상세에서만).
+                warn·error·critical 은 표와 상관없이 늘 보이고, 표에 없는 짝은 detail 로 본다
+  paramGroups   설정(params[].group) 묶음 key → 화면 이름
   snapshot      1초 스냅샷 열 정의(웹 화면 라벨·단위·형식·그래프) — tick·process 필드, 장비 블록(이름·라벨·worker·
                 품질 열 <블록>.q·<블록>.age_s) → 필드(column 전체 이름·형식 fmt 는 파이썬 format spec 그대로 .1f·.2E·d).
                 ownQuality 필드는 <column>.q·<column>.age_s 품질 열을 더 갖는다. 열 집합 = hello.snapshotColumns
@@ -49,7 +55,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 10
+EXPORT_VERSION = 11
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -68,6 +74,71 @@ EVENTS: tuple = (
     ("list_done", "레시피 리스트 끝", ()),
     ("list_cancel", "레시피 리스트 취소", ()),
 )
+
+
+# 설정 묶음(params[].group) → 화면 이름
+PARAM_GROUPS: tuple = (
+    ("install", "설치·장비"), ("secret", "비밀값"), ("tick", "1초 읽기"), ("comm", "통신"), ("plc", "PLC"),
+    ("mfc", "MFC"), ("dc", "DC 전원"), ("rf", "RF 전원"), ("stop", "정지 순서"), ("rfpulse", "RF Pulse"),
+    ("ig", "이온 게이지"), ("heater", "히터"), ("heater_plc", "히터 PLC 설정"), ("heater_ramp", "히터 승온"),
+    ("heater_hold", "히터 유지 모드"), ("heater_recipe", "히터 레시피"), ("heater_gas", "히터 가스"),
+    ("process", "공정"), ("uplink", "웹 연결"), ("record", "기록"),
+)
+
+# event 메시지 (context.source, context.kind) → (화면 이름, level). hub.on_event 가 정하는 source:
+#   process(ProcEvent) · safety(SafetyEvent) · heater(HeaterEvent) · 드라이버 이벤트 클래스 이름(dc·ig·mfc·plc·rfp) ·
+#   worker·통신 가드 이벤트는 worker 이름(plc·mfc·dc·rfpulse·ig).
+#   main = 사람이 공정 흐름을 따라가는 데 필요한 것, detail = 스텝 하나하나·되읽기·식별·자기 진단 등(상세에서만).
+#   run_start·run_end 는 event 가 아니라 run_start·run_end 메시지로 나가지만 표에는 둔다(ProcEvent 종류 전부).
+_M, _D = "main", "detail"
+_WORKERS = ("plc", "mfc", "dc", "rfpulse", "ig")
+EVENT_KINDS: tuple = (
+    ("process", "run_start", "공정 시작", _M), ("process", "run_end", "공정 끝", _M),
+    ("process", "state", "상태 바뀜", _M), ("process", "block", "블록", _M),
+    ("process", "steps", "펼친 스텝 목록", _D), ("process", "step", "스텝", _D),
+    ("process", "warn", "공정 경고", _M), ("process", "adjust", "공정 중 수정", _M),
+    ("process", "plc_manual", "공정 중 PLC 버튼", _M), ("process", "list_done", "레시피 끝", _M),
+    ("process", "list_cancel", "레시피 취소", _M), ("process", "stop_rest", "남은 정지 단계 실행", _M),
+    ("process", "auto_end_stop", "자동 끝 정지 덧붙임", _M), ("process", "reject", "시작 거부", _M),
+    ("process", "base_reached", "베이스 압력 도달", _M), ("process", "heater_handover", "히터 켠 채 넘김", _M),
+    ("process", "cleanup_start", "남은 출력 정리 시작", _M), ("process", "cleanup", "남은 출력 정리 끝", _M),
+    ("process", "message", "장비 알림", _D),
+    ("safety", "fired", "안전 규칙 발동", _M), ("safety", "released", "안전 규칙 해제", _M),
+    ("safety", "blip", "안전 규칙 순간 발동", _D), ("safety", "also", "이미 정지 중 — 추가 발동", _D),
+    ("safety", "abort", "공정 중단", _M), ("safety", "seq_start", "정지 순서 시작", _M),
+    ("safety", "seq_done", "정지 순서 끝", _M), ("safety", "step", "정지 단계 진행", _D),
+    ("safety", "error", "정지 단계 오류", _M),
+    ("heater", "reached", "히터 목표 도달", _M), ("heater", "engaged", "유지 모드 진입", _M),
+    ("heater", "give_up", "유지 모드 포기", _M), ("heater", "alert", "히터 경고", _M),
+    ("heater", "saturated", "히터 출력 포화", _M), ("heater", "gas", "히터 가스", _M),
+    ("heater", "recipe_step", "히터 레시피 스텝", _M), ("heater", "recipe_finished", "히터 레시피 끝", _M),
+    ("heater", "message", "히터 알림", _D),
+    ("plc", "link_up", "장비 연결 복구", _M), ("plc", "link_down", "장비 연결 끊김", _M),
+    ("plc", "plc_restarted", "PLC 재기동 감지", _M), ("plc", "marker_written", "재기동 마커 씀", _D),
+    ("plc", "heater_config_ok", "히터 설정 확인", _D), ("plc", "heater_config_mismatch", "히터 설정 다름", _M),
+    ("plc", "heater_residual_run", "히터 RUN 남음", _M), ("plc", "heater_off_pending", "히터 끄기 보류", _M),
+    ("plc", "heater_off_applied", "히터 끄기 적용", _M), ("plc", "heater_off_retry", "히터 끄기 다시", _D),
+    ("plc", "heater_wd_delay", "워치독 쓰기 지연", _D), ("plc", "heater_wd_recovered", "워치독 쓰기 복구", _D),
+    ("plc", "blackbox", "블랙박스 기록", _D),
+    ("mfc", "fs", "풀스케일", _D), ("mfc", "fs_not_100", "풀스케일 100 아님", _M), ("mfc", "scale", "눈금", _D),
+    ("mfc", "verify_ok", "되읽기 확인", _D), ("mfc", "verify_mismatch", "되읽기 다름", _M),
+    ("mfc", "sp_readback", "설정점 되읽기", _D), ("mfc", "remote_state", "원격 상태", _D),
+    ("mfc", "read_plan", "읽기 계획", _D),
+    ("dc", "identity", "장비 식별", _D), ("dc", "syst_err", "자기 진단", _D), ("dc", "last_state", "마지막 상태", _D),
+    ("dc", "protection", "보호 설정", _D), ("dc", "trip", "보호 트립", _M), ("dc", "out_check", "출력 확인", _D),
+    ("dc", "off_confirmed", "꺼짐 확인", _D), ("dc", "off_unconfirmed", "꺼짐 미확인", _M),
+    ("dc", "off_unverified", "꺼짐 확인 생략", _D),
+    ("rfp", "identity", "장비 식별", _D), ("rfp", "auto_off", "자동 꺼짐", _M), ("rfp", "auto_off_read", "자동 꺼짐 읽기", _D),
+    ("rfp", "csr_recovery", "명령 응답 복구", _D), ("rfp", "config_readback", "설정 되읽기", _D),
+    ("rfp", "read_plan", "읽기 계획", _D), ("rfp", "retry", "다시 시도", _D), ("rfp", "adjusted", "공정 중 수정 적용", _D),
+    ("rfp", "off_confirmed", "꺼짐 확인", _D), ("rfp", "off_unconfirmed", "꺼짐 미확인", _M),
+    ("ig", "identity_ok", "장비 식별", _D), ("ig", "filament_sent", "필라멘트 명령", _D),
+    ("ig", "filament_result", "필라멘트 결과", _M), ("ig", "parse_error", "응답 해석 실패", _D),
+) + tuple(x for w in _WORKERS for x in (
+    (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "connect_retry", "연결 다시 시도", _D),
+    (w, "disconnected", "장비 연결 끊김", _M), (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),
+    (w, "COMMAND_BLOCKED", "명령 막힘", _M),
+))
 
 
 def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any],
@@ -99,23 +170,24 @@ def _col(c) -> dict:
     return {"name": c.name, "type": c.type, "unit": c.unit, "required": c.required, "min": c.min, "max": c.max,
             "paramMin": c.param_min, "paramMax": c.param_max, "minExclusive": c.min_exclusive,
             "zeroIsEmpty": c.zero_is_empty, "v1Name": c.v1_name,
-            "desc": c.desc}
+            "desc": c.desc, "label": c.label, "help": c.help, "group": c.group}
 
 
 def _seq(s) -> dict:
     return {"no": s.no, "act": s.act.kind, "args": dict(s.act.args), "timeoutParam": s.timeout_param or None,
-            "must": s.must, "when": s.when, "desc": s.desc, "nowait": s.nowait}
+            "must": s.must, "when": s.when, "desc": s.desc, "nowait": s.nowait, "label": s.label}
 
 
 def _field(f, column: str) -> dict:
     return {"column": column, "name": f.name, "type": f.type.value, "unit": f.unit, "label": f.label, "fmt": f.fmt,
-            "summary": f.summary, "ownQuality": f.own_quality}
+            "summary": f.summary, "ownQuality": f.own_quality, "detail": f.detail, "desc": f.desc,
+            "enumLabels": dict(f.enum_labels) if f.enum_labels else None}
 
 
 def snapshot() -> Dict[str, Any]:
     return {"tick": [_field(f, f.name) for f in TICK_COLUMNS],
             "process": [_field(f, f.name) for f in SF.PROCESS_FIELDS],
-            "blocks": [{"name": b.name, "label": b.label, "worker": SF.BLOCK_WORKER[b.name],
+            "blocks": [{"name": b.name, "label": b.label, "desc": b.desc, "worker": SF.BLOCK_WORKER[b.name],
                         "quality": [f"{b.name}.q", f"{b.name}.age_s"],
                         "fields": [_field(f, f"{b.name}.{f.name}") for f in b.fields]} for b in SF.BLOCKS],
             "columns": SF.columns()}
@@ -140,6 +212,7 @@ def definitions() -> Dict[str, Any]:
                    "delayPattern": RC.DELAY_RE.pattern,
                    "blockRow": "{process_name?, blocks: [블록...]} — 행 목록에 v1 행·딜레이 행과 섞을 수 있다"},
         "blocks": {"defs": [d.public() for d in BK.BLOCK_DEFS],
+                   "groups": [{"key": k, "label": lab} for k, lab in BK.BLOCK_GROUPS],
                    "watchItems": [{"item": i, "rule": r, "label": lab} for i, r, lab in BK.WATCH_ITEMS],
                    "watchDefault": dict(BK.WATCH_DEFAULT), "watchMain": dict(BK.WATCH_MAIN),
                    "condFields": [{"field": f, "label": lab, "unit": u} for f, lab, u in BK.COND_FIELDS],
@@ -169,6 +242,8 @@ def definitions() -> Dict[str, Any]:
         "allStopSequence": {"fixed": True, "steps": [_seq(s) for s in SR.ALL_STOP_SEQUENCE]},
         "states": [{"name": s.name, "label": s.label, "kind": s.kind.value} for s in PS.STATES],
         "events": [{"kind": k, "label": lab, "data": list(keys)} for k, lab, keys in EVENTS],
+        "eventKinds": [{"source": s, "kind": k, "label": lab, "level": lv} for s, k, lab, lv in EVENT_KINDS],
+        "paramGroups": [{"key": k, "label": lab} for k, lab in PARAM_GROUPS],
         "snapshot": snapshot(),
     }
 

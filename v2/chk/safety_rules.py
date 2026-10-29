@@ -312,8 +312,9 @@ class SeqStep:
     timeout_param: str = ""      # 이 단계 한도(넘어도 다음 단계로)
     must: bool = True            # 앞 단계에서 예외가 나도 반드시 실행
     when: str = ""               # 조건
-    desc: str = ""
+    desc: str = ""               # 개발용 설명 — AWAIT 문구에도 쓰인다(그대로 둔다)
     nowait: bool = False         # 보내기만 하고 다음 단계로(결과는 뒤의 AWAIT 단계가 받는다)
+    label: str = ""              # 화면용 짧은 이름(5-13)
 
 
 # STOP·이상 중단은 늘 이 표 순서 전체(v1 처럼 고정 — 사용자 결정 2026-10-21, 설정으로 바꾸지 않음).
@@ -361,6 +362,22 @@ ALL_STOP_SEQUENCE: tuple = (
     SeqStep(8, Act("RFP_SAFE_OFF"), "", True, "", "RF Pulse OFF 직결 — 공정 여부와 무관(v1 맨 끝 rfpulse_stop)"),
     SeqStep(9, Act("AWAIT", {"no": 4}), "", True, "", "DC OFF 결과"),
 )
+
+# 화면용 짧은 이름(5-13) — 단계 번호 → 이름. desc 는 AWAIT 문구에 쓰이므로 그대로 둔다
+_STOP_LABELS = {1: "베이스 대기 정리", 2: "Main 셔터 닫기", 3: "히터 끄기", 4: "DC 끄기", 5: "RF Pulse 끄기", 6: "RF 내리기",
+                7: "RF 출력 끄기", 8: "RF Pulse 꺼짐 확인", 9: "가스 유량 끄기", 10: "MFC 밸브 열기(배기)", 11: "건 셔터 닫기",
+                12: "차단밸브 닫기", 13: "DC 꺼짐 확인"}
+_ALL_STOP_LABELS = {1: "히터 레시피 중단", 2: "공정 중단", 3: "PLC 출력 모두 끄기", 4: "DC 끄기", 5: "가스 유량 끄기",
+                    6: "MFC 밸브 열기(배기)", 7: "이온 게이지 끄기", 8: "RF Pulse 끄기", 9: "DC 꺼짐 확인"}
+
+
+def _labeled(seq: tuple, labels: dict) -> tuple:
+    from dataclasses import replace
+    return tuple(replace(s, label=labels[s.no]) for s in seq)
+
+
+STOP_SEQUENCE = _labeled(STOP_SEQUENCE, _STOP_LABELS)
+ALL_STOP_SEQUENCE = _labeled(ALL_STOP_SEQUENCE, _ALL_STOP_LABELS)
 
 # 공정 시작 전 확인 규칙(process_states 의 START 전이 guard)
 START_GUARDS: tuple = ("S1", "S5", "S19", "S35", "S47")

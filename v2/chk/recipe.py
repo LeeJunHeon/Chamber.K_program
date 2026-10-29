@@ -30,7 +30,10 @@ class Col:
     min_exclusive: bool = False
     zero_is_empty: bool = False   # 숫자 0 = 빈 값(범위 검사 안 함, 정리된 행에서 빠짐)
     v1_name: str = ""
-    desc: str = ""
+    desc: str = ""                # 개발용 설명
+    label: str = ""               # 화면용 이름(5-13)
+    help: str = ""                # 화면용 도움말
+    group: str = ""               # 화면 열 묶음 이름
 
 
 PROCESS_COLUMNS: tuple = (
@@ -89,6 +92,47 @@ HEATER_GAS_COLUMNS: tuple = (
     Col("wp_mtorr", "float", "mTorr", "optional", min=0.0, max=1000.0, min_exclusive=True, v1_name="wp_mtorr",
         desc="가스를 쓰면 필수"),
 )
+
+# ── 화면용 이름·도움말(5-13) — 열 → (묶음, 이름, 도움말). 검사·문구는 그대로 ──
+_HEATER_RAMP_HELP = "비우거나 0 이면 설정의 기본 속도. 6 °C/min 보다 느리게는 할 수 없음(6 으로)"
+_PROCESS_UI = {
+    "process_name": ("기본", "공정 이름", "'delay 30s'·'delay 5m' 처럼 쓰면 딜레이 행. 비우면 STEP 번호"),
+    "ar": ("가스", "Ar", ""), "ar_flow": ("가스", "Ar 유량", "상한은 Ar MFC 풀스케일"),
+    "o2": ("가스", "O₂", ""), "o2_flow": ("가스", "O₂ 유량", "상한은 O₂ MFC 풀스케일"),
+    "base_pressure": ("압력·시간", "베이스 압력", "0 이나 빈 값이면 베이스 압력 대기를 하지 않음"),
+    "working_pressure": ("압력·시간", "작업 압력", ""),
+    "process_time": ("압력·시간", "공정 시간", ""),
+    "shutter_delay": ("압력·시간", "셔터 딜레이", ""),
+    "use_dc": ("파워", "DC", ""), "dc_power": ("파워", "DC 파워", ""),
+    "use_dc_delay": ("파워", "DC 안정화 대기", "DC 를 쓸 때만 — 작업 압력에 도달한 뒤 설정의 DC 안정화 시간만큼 기다림"),
+    "use_rf": ("파워", "RF", ""), "rf_power": ("파워", "RF 파워", ""),
+    "use_rf_pulse": ("파워", "RF Pulse", ""), "rf_pulse_power": ("파워", "RF Pulse 파워", ""),
+    "rf_pulse_freq": ("파워", "RF Pulse 주파수", "비우면 장비에 설정된 주파수를 그대로 씀"),
+    "rf_pulse_duty": ("파워", "RF Pulse 듀티", "비우면 장비에 설정된 듀티를 그대로 씀"),
+    "use_heater": ("히터", "히터", ""), "heater_temp": ("히터", "히터 온도", ""),
+    "heater_ramp": ("히터", "승온 속도", _HEATER_RAMP_HELP),
+    "gun1": ("건·타겟", "Gun1", ""), "gun2": ("건·타겟", "Gun2", ""),
+    "g1_target": ("건·타겟", "G1 타겟", ""), "g2_target": ("건·타겟", "G2 타겟", ""),
+}
+_HEATER_STEP_UI = {
+    "target_c": ("", "목표 온도", ""),
+    "ramp_c_per_min": ("", "승온 속도", "승온 시간과 함께 쓰지 않음. 둘 다 비우면 기본 속도"),
+    "ramp_min": ("", "승온 시간", ""), "soak_min": ("", "유지 시간", ""), "repeat": ("", "반복", ""),
+}
+_HEATER_GAS_UI = {
+    "use_ar": ("", "Ar", ""), "ar_flow": ("", "Ar 유량", ""), "use_o2": ("", "O₂", ""), "o2_flow": ("", "O₂ 유량", ""),
+    "wp_mtorr": ("", "압력", "가스를 쓰면 필요"),
+}
+
+
+def _with_text(cols: tuple, ui: dict) -> tuple:
+    from dataclasses import replace
+    return tuple(replace(c, group=ui[c.name][0], label=ui[c.name][1], help=ui[c.name][2]) for c in cols)
+
+
+PROCESS_COLUMNS = _with_text(PROCESS_COLUMNS, _PROCESS_UI)
+HEATER_STEP_COLUMNS = _with_text(HEATER_STEP_COLUMNS, _HEATER_STEP_UI)
+HEATER_GAS_COLUMNS = _with_text(HEATER_GAS_COLUMNS, _HEATER_GAS_UI)
 
 DELAY_RE = re.compile(r"^\s*delay\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*$", re.IGNORECASE)   # v1 core/recipe.py:12
 _UNIT_SEC = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}

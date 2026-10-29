@@ -47,6 +47,9 @@ class FieldDef:
     source: str = ""          # 읽는 곳(레지스터·명령) — 근거
     own_quality: bool = False # 번갈아 읽기 등으로 장비 품질과 따로 품질을 가진다
     summary: str = "last"     # 1분 요약 방식: last / mean / min / max / any(bool OR) / none
+    detail: bool = False      # 화면 카드에서 평소 접어 둘 값(5-13)
+    desc: str = ""            # 개발용 설명(레지스터 등) — 화면은 '상세'에서만
+    enum_labels: Optional[tuple] = None   # str 값 → 화면용 이름 ((값, 이름), ...)
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,7 @@ class DeviceBlock:
     name: str                 # 열 접두어(소문자)
     label: str
     fields: tuple
+    desc: str = ""            # 개발용 설명(장비 모델 등)
 
     def columns(self) -> list:
         cols = [f"{self.name}.q", f"{self.name}.age_s"]
@@ -65,10 +69,10 @@ class DeviceBlock:
 
 
 TICK_COLUMNS: tuple = (
-    FieldDef("ts", FType.STR, "", "시각(정각 초, 로컬 ISO 8601)", source="clock"),
-    FieldDef("seq", FType.INT, "", "tick 번호(시작 뒤)", source="clock"),
-    FieldDef("jitter_ms", FType.INT, "ms", "읽기 시작 지연(실제 − 정각)", source="clock"),
-    FieldDef("skipped", FType.INT, "", "직전 행 뒤 건너뛴 tick 수", source="clock"),
+    FieldDef("ts", FType.STR, "", "시각", source="clock", detail=True, desc="정각 초, 로컬 ISO 8601"),
+    FieldDef("seq", FType.INT, "", "읽기 번호", source="clock", detail=True, desc="tick 번호(시작 뒤)"),
+    FieldDef("jitter_ms", FType.INT, "ms", "읽기 시작 지연", source="clock", detail=True, desc="실제 − 정각"),
+    FieldDef("skipped", FType.INT, "", "건너뛴 읽기 수", source="clock", detail=True, desc="직전 행 뒤 건너뛴 tick 수"),
 )
 
 
