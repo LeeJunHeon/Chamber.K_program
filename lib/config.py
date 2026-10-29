@@ -267,6 +267,41 @@ def _validate_heater_cascade_config() -> None:
 
 _validate_heater_cascade_config()
 
+# ── 메인 셔터 열기 직전 히터 정착 확인(공정 스텝 HEATER_SETTLE, 캐스케이드 모드에서만) ──
+#  HEATER_WAIT 통과 뒤 가스 도입·압력·파워 동안 TC1 이 내려간 채 셔터가 열리면, 셔터가 열린 동안은 bias 적분을 멈추는
+#  설계라 그 부족분이 증착 내내 남는다(2026-10-28 CeO2 #8-3: 가스 도입 뒤 TC1 598.6 → 594.8, 594.8°C 에서 SV2 고정).
+#  TC1 이 목표 ±TOL 안에 SEC 이상 연속이면 셔터를 연다. 연속 시간은 HEATER_WAIT 통과 뒤부터 센다(이미 맞으면 바로 통과).
+HEATER_SHUTTER_SETTLE_TOL_C       = get('HEATER_SHUTTER_SETTLE_TOL_C',       2.0)        # 허용 폭 ±[°C]
+HEATER_SHUTTER_SETTLE_SEC         = get('HEATER_SHUTTER_SETTLE_SEC',         60)         # 범위 안 연속 시간 [s]
+HEATER_SHUTTER_SETTLE_MAX_SEC     = get('HEATER_SHUTTER_SETTLE_MAX_SEC',     900)        # 대기 상한 [s] — 0 이면 단계 없음
+HEATER_SHUTTER_SETTLE_FAIL_ACTION = get('HEATER_SHUTTER_SETTLE_FAIL_ACTION', "proceed")  # 상한 초과: proceed | abort
+
+
+def _validate_heater_shutter_settle_config() -> None:
+    """설정이 틀려도 프로그램은 떠야 한다 — 클램프/기본값 복귀만 하고 예외는 던지지 않는다."""
+    global HEATER_SHUTTER_SETTLE_FAIL_ACTION
+    for _name, _lo, _hi, _def in (("HEATER_SHUTTER_SETTLE_TOL_C", 0.5, 10.0, 2.0),
+                                  ("HEATER_SHUTTER_SETTLE_SEC", 10.0, 600.0, 60.0),
+                                  ("HEATER_SHUTTER_SETTLE_MAX_SEC", 0.0, 3600.0, 900.0)):
+        _raw = globals()[_name]
+        try:
+            _v = float(_raw)
+        except Exception:
+            print(f"[Config] {_name} {_raw!r} → {_def:g}"); _v = _def
+        _c = min(max(_v, _lo), _hi)
+        if _c != _v:
+            print(f"[Config] {_name} {_v:g} → {_c:g} 로 클램프 (허용 {_lo:g}~{_hi:g})")
+        globals()[_name] = _c
+    _a = str(HEATER_SHUTTER_SETTLE_FAIL_ACTION or "").strip().lower()
+    if _a not in ("proceed", "abort"):
+        print(f"[Config] HEATER_SHUTTER_SETTLE_FAIL_ACTION {HEATER_SHUTTER_SETTLE_FAIL_ACTION!r} → \"proceed\""
+              f" (허용: proceed / abort)")
+        _a = "proceed"
+    HEATER_SHUTTER_SETTLE_FAIL_ACTION = _a
+
+
+_validate_heater_shutter_settle_config()
+
 # 인터락 기준값/공정 파라미터 등
 INTERLOCK_CHECK_INTERVAL = 0.2  # sec
 

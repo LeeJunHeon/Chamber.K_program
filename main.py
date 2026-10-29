@@ -743,6 +743,7 @@ class MainDialog(QDialog):
         self.process_controller.set_hold_state_provider(lambda: dict(self._hold_snapshot))
         self.process_controller.request_hold_force.connect(self._on_hold_force)
         self.process_controller.heater_hold_failed.connect(self._on_heater_hold_failed)
+        self.process_controller.heater_settle_failed.connect(self._on_heater_settle_failed)
         # DAC 포화 감시 — 유지 모드와 독립된 안전망(HEATER_HOLD_MODE 가 off 여도 돈다)
         self.heater_sat = HeaterSaturationGuard(mv_limit=HEATER_MV_LIMIT, mv_min=HEATER_MV_MIN,
                                                 sat_sec=HEATER_MV_SAT_SEC, parent=self)
@@ -2329,6 +2330,29 @@ class MainDialog(QDialog):
             self.chat_chk.notify_heater_alert("히터 유지 모드 진입 실패", self._heater_run_context(), fields, ok=False)
         except Exception as e:
             log_message_to_monitor("경고", f"유지 모드 실패 카드 전송 실패: {e!r}")
+
+    @Slot(dict)
+    def _on_heater_settle_failed(self, info: dict) -> None:
+        """셔터 전 히터 정착 미달(HEATER_SETTLE 상한 초과) — 경고 로그 + 히터 런 이벤트 + 챗 카드 1장(proceed·abort 모두)."""
+        action = str(info.get("action") or "")
+        reason = str(info.get("reason") or "")
+        log_message_to_monitor("히터(경고)", f"[셔터 전 정착] {reason} — {'공정 중단' if action == 'abort' else '셔터 열고 진행'}")
+        self._heater_run_event("셔터 전 정착 미달")
+        if not self.chat_chk:
+            return
+        try:
+            st = self.plc_controller.get_heater_status() or {}
+            fields = {"사유": reason, "조치": ("공정 중단" if action == "abort" else "경고 후 셔터 열고 진행"),
+                      "TC1": self._chat_temp(st.get('pv')), "목표": self._chat_temp(info.get("target")),
+                      "허용": f"±{float(info.get('tol') or 0.0):g}°C, {float(info.get('need') or 0.0):.0f}초 연속",
+                      "대기": f"{int(info.get('elapsed') or 0)}초", "TC2": self._chat_temp(st.get('pv2'))}
+            if _CASCADE:
+                c = self.heater_casc
+                fields["SV2"] = self._chat_temp(c.sv2)
+                fields["bias"] = f"{c.bias:+.1f}°C (ff {c.bias_ff:+.1f} / int {c.bias_int:+.1f})"
+            self.chat_chk.notify_heater_alert("히터 셔터 전 정착 미달", self._heater_run_context(), fields, ok=False)
+        except Exception as e:
+            log_message_to_monitor("경고", f"셔터 전 정착 미달 카드 전송 실패: {e!r}")
 
     @Slot(str, dict)
     def _on_heater_hold_alert(self, kind: str, d: dict) -> None:

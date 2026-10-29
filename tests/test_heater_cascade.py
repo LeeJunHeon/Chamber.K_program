@@ -583,6 +583,40 @@ def test_csv_logger_columns(tmp_path, monkeypatch):
     assert row["bias_ff_c"] == "" and row["bias_int_c"] == ""        # casc 에 없으면 빈칸
 
 
+# ───────────────────────── g) #8-3 재현: 가스 도입 뒤 TC1 하락 → 셔터 전 정착 확인 ─────────────────────────
+def test_g_83_gas_drop_then_shutter_settle(tmp_path):
+    """2026-10-28 CeO2 #8-3: 600°C 도달 뒤 가스 도입(18:10)으로 TC1 598.6 → 594.8, 셔터 열림(18:17) 594.8°C 에서 SV2 고정.
+    가스 도입은 TC1/TC2 관계가 TC1 쪽으로 4°C 낮아지는 것으로 흉내 낸다(같은 TC2 에서 TC1 −4°C — 시료대 열손실 증가).
+    600°C 에서 TC2 = SV2 로 자리 잡은 뒤(#8-3 은 300→600 공정, HEATER_WAIT 를 넉넉히 지나 있었다) 가스를 넣고, 7분 뒤
+    (가스·압력·파워·Shutter Delay 300 s) HEATER_SETTLE 에 들어간다. 셔터는 TC1 이 ±2°C 안에 60 s 연속인 뒤에 열려야 한다."""
+    from controller.process_controller import SettleTracker
+    s = Sim(tmp_path, offset=0.0)
+    s.c.start(600, 6.0, "sim"); s.run = True
+    s.runfor((600 - 25) / 6.0 * 60 + 90 * 60)                           # 600°C 정상 상태(TC2 = SV2)
+    assert abs(s.pl.tc1 - 600.0) < 0.1 and abs(s.pl.tc2 - s.D[35]) < 0.1
+    tr = SettleTracker(600.0, 2.0, 60.0, clock=lambda: s.t)             # HEATER_WAIT 통과 뒤부터 센다
+    feed = lambda: tr.feed(s.st()["pv"], final_ok=s.c.r1_done(600))
+    for _ in range(60):
+        s.step(); feed()
+    s.pl.offset += 4.0 * Tc2Map(MAP).slope(600.0)                      # 가스 도입: 같은 TC2 에서 TC1 −4°C
+    t_gas = s.t
+    for _ in range(420):                                                # 가스·압력·파워·Shutter Delay 300 s
+        s.step(); feed()
+    t_enter, pv_enter = s.t, s.st()["pv"]
+    opened = tr.ok() or s.run_until(lambda: (feed() or tr.ok()), 900)
+    t_open, pv_open = s.t, s.st()["pv"]
+    seg = [r for r in s.rec if r[0] > t_gas]
+    t_min, tc1_min = min(((r[0], r[1]) for r in seg), key=lambda x: x[1])
+    back = next(r[0] for r in seg if r[0] > t_min and abs(round(r[1], 1) - 600.0) <= 2.0)   # PLC 처럼 0.1 단위
+    RESULTS.append(("g) #8-3 가스 −4°C: 셔터 진입 편차→열 때 편차", pv_enter - 600.0, None, abs(pv_open - 600.0),
+                    (t_open - t_enter) / 60.0))
+    RESULTS.append(("g) #8-3 최저 TC1 편차·±2 복귀(가스 뒤 분)", tc1_min - 600.0, None, None, (back - t_gas) / 60.0))
+    assert opened and abs(pv_open - 600.0) <= 2.0
+    assert pv_enter < 598.0                                             # 예전이면 이 온도에서 셔터가 열렸다
+    assert t_open - back >= 60.0 - 1.0                                  # ±2 복귀 뒤 60 s 연속을 채우고 연다
+    assert t_open - t_enter < 900.0                                     # 상한(900 s) 안
+
+
 def test_zz_print_summary_table():
     """요약표(pytest -s 로 본다). 같은 세션에서 위 시나리오가 돈 뒤에 찍힌다."""
     def f(v, fmt="{:+.2f}"):
