@@ -17,7 +17,7 @@ from collections import deque
 
 import pytest
 
-from controller.heater_cascade import HeaterCascade, Tc2Map, ENGAGE_TIMEOUT_SEC, ALARM_HOLD_SEC
+from controller.heater_cascade import HeaterCascade, Tc2Map, FfCurve, ENGAGE_TIMEOUT_SEC, ALARM_HOLD_SEC
 
 MAP = [[25, 25], [300, 445], [400, 570], [500, 695], [600, 825]]
 OT2 = 1150.0
@@ -269,16 +269,21 @@ def test_a_targets_map_minus25_first_run(tmp_path, target):
 
 @pytest.mark.parametrize("target", [300, 600])
 def test_a_learned_rerun(tmp_path, target):
-    """첫 운전이 학습 파일에 (목표, SV2) 를 남기고, 다음 운전은 그 값을 초기 bias 로 쓴다.
-    냉간 시동에서는 학습 bias(−25)가 상온 구간 SV2 를 바닥(1.0)에 붙여 r1 이 홀드백에 걸리고, 그동안 bias 가 0 쪽으로
-    되감겨 결과가 첫 운전과 거의 같다 — 도움이 되는 것은 같은 목표 근처에서 다시 켜는 경우다(표에 수치만 남긴다)."""
+    """첫 운전이 학습 파일에 (목표, SV2) 를 남기고, 다음 운전은 그 점으로 만든 학습 보정 곡선 ff 를 쓴다.
+    ff 는 상온 0 → 학습 온도에서 전체로 온도에 비례해 들어간다 — 예전처럼 학습 bias(−25)를 상온부터 통째로 더하면
+    냉간 구간 SV2 가 바닥(1.0)에 붙어 r1 이 홀드백에 걸리고 결과가 첫 운전과 같았다."""
     learned = tmp_path / "learned.json"
     s1, m1 = _ramp_run(tmp_path, target, -25.0, learned=learned)
     assert learned.exists() and any("매핑 학습" in m for _, _, m in s1.msgs)
     s2, m2 = _ramp_run(tmp_path, target, -25.0, learned=learned)
     _row(f"a) 25→{target} map-25 (학습 후 냉간 재운전)", m2)
-    assert "목표 근처 학습점" in s2.c.bias_source
-    assert m2["err"] <= 1.0 and m2["pp"] <= 2.0 and m2["over"] <= 8.0, m2
+    assert "학습 보정: [TC1" in s2.c.bias_source and "상온 0" in s2.c.bias_source
+    assert min(r[6] for r in s2.rec if r[7] == 'running') > 1.0          # SV2 가 하한 1.0 에 붙지 않는다
+    # 오버슈트는 첫 운전보다 1°C 이상 작다(300: 7.1 → 3.9, 600: 5.1 → 3.8). 도달은 첫 운전보다 3~6분 늦다 — 첫 운전은
+    #  매핑이 25°C 높아 SV2 가 먼저 앞서 가는(그래서 넘치는) 쪽이고, 학습 보정은 그만큼 SV2 를 낮추기 때문이다.
+    #  예전 방식(학습 bias 를 상온부터 통째로)의 재운전(300: 76.0분, 600: 125.2분)보다는 빠르다.
+    assert m2["err"] <= 1.0 and m2["pp"] <= 2.0 and m2["over"] <= m1["over"] - 1.0, (m1, m2)
+    assert m2["arrive_min"] <= m1["arrive_min"] + 8.0, (m1, m2)
 
 
 # ───────────────────────── b) 매핑 ±40 ─────────────────────────
@@ -474,20 +479,78 @@ def test_run_off_releases(tmp_path):
     assert ev == [("sel", False), ("sv2", 0.0)] and c.state == 'idle'
 
 
-def test_initial_bias_sources(tmp_path):
+def _learned(p, *pts):
     import json
+    p.write_text(json.dumps({"points": [{"tc1": a, "tc2": b, "t": f"2026-10-29 0{i}:00:00"}
+                                        for i, (a, b) in enumerate(pts)]}), encoding="utf-8")
+
+
+def test_ff_curve_points_0_1_2():
+    """ff(T): (T_amb, 0) + 학습점 사이 선형, T ≤ T_amb 은 0, 최고점 위는 그 값 그대로(기울기 외삽 안 함)."""
+    f0 = FfCurve(25.0)
+    assert [f0.value(t) for t in (10, 25, 300, 900)] == [0.0, 0.0, 0.0, 0.0] and f0.value(None) == 0.0
+    f1 = FfCurve(25.0, [(600.0, 15.0)])
+    assert f1.value(25) == 0.0 and f1.value(0) == 0.0
+    assert f1.value(312.5) == pytest.approx(7.5) and f1.value(600) == pytest.approx(15.0)
+    assert f1.value(700) == pytest.approx(15.0) and f1.value(1000) == pytest.approx(15.0)
+    f2 = FfCurve(25.0, [(600.0, 15.0), (300.0, -10.0)])          # 순서와 무관
+    assert f2.value(25) == 0.0
+    assert f2.value(162.5) == pytest.approx(-5.0)                 # 25~300 사이: 0 → −10
+    assert f2.value(450) == pytest.approx(2.5)                    # 300~600 사이: −10 → +15
+    assert f2.value(800) == pytest.approx(15.0)
+    assert FfCurve(25.0, [(20.0, 9.0)]).points == [(25.0, 0.0)]   # 상온 이하 학습점은 쓰지 않는다
+
+
+def test_ff_from_learned_file_and_excessive_point_ignored(tmp_path):
+    """학습점은 절대값(TC1, TC2)이라 보정값은 지금 매핑으로 다시 계산한다. |tc2 − map(tc1)| ≥ 경보 폭이면 쓰지 않고 경고."""
     p = tmp_path / "learned.json"
     c, _, _ = _bare(tmp_path, learned=p)
+    msgs = []
+    c.message.connect(lambda l, m: msgs.append((l, m)))
     c.start(600, 6.0)
-    assert c.bias == 0.0 and "학습점 없음" in c.bias_source
+    assert c.bias == 0.0 and c.bias_source.startswith("학습점 없음 → ff 0")
     c.stop()
-    p.write_text(json.dumps({"points": [{"tc1": 300.0, "tc2": 455.0, "t": "2026-10-01 10:00:00"},
-                                        {"tc1": 600.0, "tc2": 840.0, "t": "2026-09-01 10:00:00"}]}), encoding="utf-8")
-    c.start(620, 6.0)                             # ±50 안에 600 학습점
-    assert c.bias == pytest.approx(15.0) and "목표 근처 학습점" in c.bias_source
+    _learned(p, (300.0, 455.0), (600.0, 840.0), (450.0, 700.0))   # map: 300→445, 600→825, 450→632.5(+67.5)
+    c.start(620, 6.0)
+    assert c._ff.points == [(25.0, 0.0), (300.0, pytest.approx(10.0)), (450.0, pytest.approx(67.5)),
+                            (600.0, pytest.approx(15.0))]
+    assert "목표 620 에서 ff +15.0" in c.bias_source and "상온 0" in c.bias_source and "적분 보정 0" in c.bias_source
     c.stop()
-    c.start(450, 6.0)                             # 근처 없음 → 가장 최근(300, 10-01)
-    assert c.bias == pytest.approx(10.0) and "가장 최근 학습점" in c.bias_source
+    _learned(p, (300.0, 455.0), (600.0, 840.0), (450.0, 750.0))   # 450: +117.5 ≥ 100 → 무시
+    msgs.clear()
+    c.start(600, 6.0)
+    assert [x for x, _ in c._ff.points] == [25.0, 300.0, 600.0]
+    assert any(l == "히터(경고)" and "학습점 무시(보정 과대)" in m and "TC1 450" in m for l, m in msgs)
+    c._r1 = 25.0
+    assert c.bias_ff == 0.0 and c.bias_int == 0.0 and c.bias == 0.0
+    c._r1 = 450.0; c._b_int = -2.0
+    assert c.bias_ff == pytest.approx(12.5) and c.bias == pytest.approx(10.5)
+    snap = c.snapshot()
+    assert snap["bias"] == pytest.approx(10.5) and snap["bias_ff"] == pytest.approx(12.5)
+    assert snap["bias_int"] == pytest.approx(-2.0)
+
+
+def test_learn_blocked_after_alarm_or_excess_bias(tmp_path):
+    """TC1 탈락 경보가 난 운전, 또는 |ff + b_int| ≥ 경보 폭이면 학습하지 않는다(사유 1회 로그)."""
+    learned = tmp_path / "learned.json"
+    s = Sim(tmp_path, offset=0.0, learned=learned)
+    s.c.start(300, 6.0, "sim"); s.run = True
+    s.runfor(60)
+    s.c._alarm_sent = True                                    # 이번 운전에 경보가 났다고 놓는다
+    s.runfor((300 - 25) / 6.0 * 60 + 60 * 60)
+    assert not learned.exists()
+    skip = [m for _, l, m in s.msgs if "매핑 학습 안 함" in m]
+    assert len(skip) == 1 and "TC1 탈락 경보" in skip[0]
+    c, _, _ = _bare(tmp_path)
+    c.start(300, 6.0)
+    c._r1 = 300.0
+    assert c._learn_block_reason() is None
+    c._b_int = 99.9
+    assert c._learn_block_reason() is None
+    c._b_int = 100.0
+    assert "보정 과대" in c._learn_block_reason()
+    c._b_int = -100.0
+    assert "보정 과대" in c._learn_block_reason()
 
 
 def test_map_interp_and_extrapolation():
@@ -512,10 +575,12 @@ def test_csv_logger_columns(tmp_path, monkeypatch):
     lg.stop()
     rows = list(csv.reader(open(path, encoding="utf-8-sig")))
     head, row = rows[0], dict(zip(rows[0], rows[1]))
-    assert head[:len(HL.COLUMNS) - 8] == HL.COLUMNS[:len(HL.COLUMNS) - 8]
-    assert head[-8:] == ["ctrl_mode", "r1_c", "r1_lag_c", "tc1_ema_c", "sv2_map_c", "bias_c", "casc_state", "shutter_open"]
+    assert head[:len(HL.COLUMNS) - 10] == HL.COLUMNS[:len(HL.COLUMNS) - 10]
+    assert head[-10:] == ["ctrl_mode", "r1_c", "r1_lag_c", "tc1_ema_c", "sv2_map_c", "bias_c", "casc_state", "shutter_open",
+                          "bias_ff_c", "bias_int_c"]
     assert row["ramp_sv_c"] == "600.0" and row["cur_sv_c"] == "600.0" and row["sv2_c"] == "812.3"
     assert row["bias_c"] == "-12.70" and row["hold_kind"] == "cascade" and row["ctrl_mode"] == "cascade"
+    assert row["bias_ff_c"] == "" and row["bias_int_c"] == ""        # casc 에 없으면 빈칸
 
 
 def test_zz_print_summary_table():

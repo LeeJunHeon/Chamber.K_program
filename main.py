@@ -2420,8 +2420,8 @@ class MainDialog(QDialog):
         if _CASCADE:
             c = self.heater_casc
             if c.engaged():
-                return (f"캐스케이드 TC2 제어 (SV2 {self._chat_temp(c.sv2)}, bias {c.bias:+.1f}°C, "
-                        f"초기 bias 출처: {self._chat_short(c.bias_source, 40)})"), True
+                return (f"캐스케이드 TC2 제어 (SV2 {self._chat_temp(c.sv2)}, bias {c.bias:+.1f}°C = "
+                        f"ff {c.bias_ff:+.1f} + int {c.bias_int:+.1f})"), True
             return f"캐스케이드 {c.status_text()} — TC2 제어 아님", False
         if HEATER_HOLD_MODE == "off":
             txt, ok = "사용 안 함 (HEATER_HOLD_MODE=off)", True
@@ -2719,7 +2719,7 @@ class MainDialog(QDialog):
                       f" · 제어 {HEATER_CTRL_MODE} · 유지 모드 {_hold_mode_eff()}")
                 if _CASCADE:
                     c = self.heater_casc
-                    _emit(f"설정(캐스케이드): {c.settings_text()} · 초기 bias {c.bias:+.1f}°C ({c.bias_source or '-'})")
+                    _emit(f"설정(캐스케이드): {c.settings_text()} · {c.bias_source or '-'}")
         except Exception:
             pass
 

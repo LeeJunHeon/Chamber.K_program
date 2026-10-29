@@ -13,8 +13,13 @@
   안쪽(빠름, PLC) : 히터 RUN 동안 처음부터 끝까지 PID PV = TC2, SV = SV2(D00035). 래더의 기존 TC2 경로
                    (M0004A ∧ TC2 정상 ∧ RUN ∧ D00035>0 → M0004B, D00019 ← min(D00035, D00036))를 그대로 쓴다.
                    M0004B 동안 래더 램프·홀드백·상한 클램프는 꺼지므로 SV2 를 천천히 올리는 것은 여기 책임이다.
-  바깥(느림, 여기): r1 = TC1 기준값(감속 접근 램프 + TC1 홀드백), SV2 = map(r1) + bias.
-                   e = r1(t − LAG) − TC1_ema, d(bias)/dt = slope(map, r1) · e / TI (적분만, 변화율·크기 제한).
+  바깥(느림, 여기): r1 = TC1 기준값(감속 접근 램프 + TC1 홀드백), SV2 = map(r1) + ff(r1) + b_int.
+                   ff(T) = 학습 보정 곡선 — 점 {(T_amb, 0)} ∪ {(tc1_i, tc2_i − map(tc1_i))} 사이 선형 보간, T ≤ T_amb 은 0,
+                   가장 높은 학습점 위는 그 보정값 그대로(T_amb = 기본 매핑 첫 점의 TC1). 학습값은 그 목표 온도에서
+                   필요한 보정이라 상온부터 통째로 더하지 않는다(2026-10-29 #8-4: 학습 +13.1 을 TC1 29°C 에서 더해 출발).
+                   b_int = 적분 보정 — 매 운전 0 에서 시작.
+                   e = r1(t − LAG) − TC1_ema, d(b_int)/dt = slope(map, r1) · e / TI (적분만, 변화율·크기 제한).
+                   bias(화면·ERP·챗·CSV) = ff(r1) + b_int = 기본 매핑에서 벗어난 전체 보정(SV2 = map + bias).
                    비례항이 없어 바깥 루프는 TI(600 s) 시간 규모로만 움직인다 — TC1 의 105 s 지연이 루프를
                    흔들 수 없다. 비교 기준을 LAG 전의 r1 로 두는 것은 램프 중 TC1 이 열 지연만큼 뒤처지는 것을
                    오차로 보고 bias 를 감아 올렸다가 도착 뒤 넘치는 것을 막기 위해서다.
@@ -23,7 +28,7 @@
                      · 홀드백은 r1(t−LAG) 기준이다. 지금의 r1 기준이면 열 지연만으로 상시 걸린다.
                      · 안쪽 루프가 SV2 를 못 따라가는 동안(TC2 가 SV2 보다 slope×HOLDBACK 이상 처짐)은 같은 방향으로
                        적분하지 않는다(캐스케이드 anti-windup). 출력 상한/하한, SV2 상한/하한도 마찬가지.
-  메인 셔터가 열려 있으면 bias 적분을 멈추고 SV2 를 고정한다(상승 목표도 셔터가 닫힐 때까지 보류, 하강은 즉시).
+  메인 셔터가 열려 있으면 b_int 적분을 멈추고 SV2 를 고정한다(상승 목표도 셔터가 닫힐 때까지 보류, 하강은 즉시).
   매 주기 D00012 ← r1 을 써 둔다 — TC2 를 잃어 래더가 TC1 제어로 넘어가도(M0004B 하강 엣지에서 D00019 ← TC1,
   이후 D00022 = min(D00012, D00013) 을 향해 래더 램프) 같은 r1 을 따라가게 하기 위해서다.
 
@@ -54,7 +59,6 @@ ENGAGE_TIMEOUT_SEC  = 5.0     # engaging 각 단계(D00035 되읽기 / M0004B �
 ALARM_HOLD_SEC      = 60.0    # |bias| ≥ ALARM 이 이만큼 지속되면 TC1 탈락 의심
 CAP_WARN_SEC        = 60.0    # SV2 가 상한에 걸린 채 TC1 이 목표 아래에 이만큼 머물면 안내 1회
 LEARN_BIAS_RATE_MAX = 0.2     # 학습 조건: 유지 창 동안 bias 변화율 [°C/min] 이하
-LEARN_NEAR_C        = 50.0    # 초기 bias: 최종 목표 ± 이 안의 학습점을 우선
 REENGAGE_OK_SEC     = 30.0    # TC2 폴백 뒤 TC2 가 이만큼 연속 정상이면 다시 TC2 제어를 시도
 REENGAGE_RETRY_SEC  = 60.0    # 재시도 간격
 REENGAGE_MAX        = 3       # 한 운전에서 재시도 상한(래더가 계속 거부하면 M0004A 를 흔들지 않는다)
@@ -110,6 +114,29 @@ class Tc2Map:
         return " ".join(f"{a:g}→{b:g}" for a, b in self.points)
 
 
+class FfCurve:
+    """학습 보정 곡선 ff(T). 점 = (T_amb, 0) + 학습점 (tc1, tc2 − map(tc1)). T ≤ T_amb 은 0, 점 사이 선형,
+    가장 높은 점 위는 그 값 그대로(기울기 외삽 안 함). 학습점은 절대값(TC1, TC2)으로 저장돼 있어 매핑이 바뀌어도
+    보정값은 지금 매핑 기준으로 다시 계산된다."""
+
+    def __init__(self, t_amb: float, points=()):
+        self.t_amb = float(t_amb)
+        pts = sorted((float(a), float(b)) for a, b in points if float(a) > self.t_amb)
+        self.points = [(self.t_amb, 0.0)] + pts
+
+    def value(self, t) -> float:
+        if t is None:
+            return 0.0
+        t = float(t)
+        p = self.points
+        if t <= p[0][0]:
+            return 0.0
+        for (x0, y0), (x1, y1) in zip(p, p[1:]):
+            if t <= x1:
+                return y0 + (y1 - y0) * (t - x0) / (x1 - x0)
+        return p[-1][1]
+
+
 class HeaterCascade(QObject):
     request_target   = Signal(float)   # D00012 ← r1 (TC1 기준값 — 폴백 경로와 화면 의미를 위해 늘 써 둔다)
     request_sv2      = Signal(float)   # D00035 ← SV2
@@ -147,7 +174,9 @@ class HeaterCascade(QObject):
         self._state = 'idle'
         self._final = None; self._rate = 0.0; self._label = ""
         self._r1 = None; self._held = False
-        self._bias = 0.0; self._bias_src = ""
+        self._b_int = 0.0; self._bias_src = ""
+        self._ff = FfCurve(self.map.points[0][0])
+        self._learn_skip_logged = False
         self._ema = None
         self._ring: deque = deque()                # (t, r1)
         self._t_calc = 0.0
@@ -192,7 +221,18 @@ class HeaterCascade(QObject):
 
     @property
     def bias(self) -> float:
-        return float(self._bias)
+        """기본 매핑에서 벗어난 전체 보정 = ff(r1) + b_int (SV2 = map(r1) + bias)."""
+        return self.bias_ff + float(self._b_int)
+
+    @property
+    def bias_ff(self) -> float:
+        """학습 보정 ff(r1) — r1 이 아직 없으면 0."""
+        return float(self._ff.value(self._r1))
+
+    @property
+    def bias_int(self) -> float:
+        """적분 보정 b_int(매 운전 0 에서 시작)."""
+        return float(self._b_int)
 
     @property
     def bias_source(self) -> str:
@@ -245,7 +285,7 @@ class HeaterCascade(QObject):
         """화면 상태 문구 꼬리 — "TC2 제어 · bias +12.3"."""
         base = STATE_TEXT.get(self._state, self._state)
         if self.engaged():
-            return f"{base} · bias {self._bias:+.1f}"
+            return f"{base} · bias {self.bias:+.1f}"
         if self._state == 'dac' and self._dac_value is not None:
             return f"{base} {self._dac_value}"
         return base
@@ -254,7 +294,8 @@ class HeaterCascade(QObject):
         """process_controller(다른 스레드)가 읽는 값 — main 이 스냅샷에 싣는다."""
         return {"active": self.is_active(), "state": self._state, "engaged": self.engaged(),
                 "final": self._final, "r1": self._r1, "r1_done": self.r1_done(),
-                "sv2": self._sv2_cmd, "bias": self._bias, "bias_src": self._bias_src,
+                "sv2": self._sv2_cmd, "bias": self.bias, "bias_ff": self.bias_ff, "bias_int": self._b_int,
+                "bias_src": self._bias_src,
                 "shutter": self._shutter, "held": self._held}
 
     def log_fields(self) -> dict:
@@ -262,8 +303,10 @@ class HeaterCascade(QObject):
         def f(v):
             return "" if v is None else f"{float(v):.1f}"
         return {"r1_c": f(self._r1), "r1_lag_c": f(self._r1_lag), "tc1_ema_c": f(self._ema),
-                "sv2_map_c": f(self._sv2_map), "bias_c": (f"{self._bias:.2f}" if self.is_active() else ""),
-                "casc_state": self._state, "shutter_open": (1 if self._shutter else 0)}
+                "sv2_map_c": f(self._sv2_map), "bias_c": (f"{self.bias:.2f}" if self.is_active() else ""),
+                "casc_state": self._state, "shutter_open": (1 if self._shutter else 0),
+                "bias_ff_c": (f"{self.bias_ff:.2f}" if self.is_active() else ""),
+                "bias_int_c": (f"{self._b_int:.2f}" if self.is_active() else "")}
 
     def settings_text(self) -> str:
         return (f"매핑 {self.map.text()} · TI {self.ti:g}s · LAG {self.lag:g}s · bias 변화율 ≤{self.bias_rate_max:g}°C/min"
@@ -298,7 +341,8 @@ class HeaterCascade(QObject):
         self._final = target
         self._rate = rate
         self._label = label or ""
-        self._bias, self._bias_src = self._initial_bias(target)
+        self._ff, self._bias_src = self._build_ff(target)
+        self._b_int = 0.0
         self._emit_ramp_counts()
         pv = st.get('pv')
         if pv is not None:
@@ -309,8 +353,8 @@ class HeaterCascade(QObject):
         est = ""
         if pv is not None and rate > 0 and target > float(pv):
             est = f" · 예상 {ramp_minutes(target - float(pv), rate):.1f}분"
-        self._msg("히터", f"시작{_lb}: 목표 TC1 {target:.1f}°C · {rate:g}°C/min{est} · 초기 bias {self._bias:+.1f}"
-                         f" ({self._bias_src}) · {self.settings_text()}")
+        self._msg("히터", f"시작{_lb}: 목표 TC1 {target:.1f}°C · {rate:g}°C/min{est} · {self._bias_src}"
+                         f" · {self.settings_text()}")
         return True
 
     def _emit_ramp_counts(self) -> None:
@@ -339,11 +383,12 @@ class HeaterCascade(QObject):
             self.request_sv2.emit(0.0)
         if st_ == 'dac':
             self.request_mv_limit.emit(int(self.mv_limit))
-        self._msg("히터", f"종료 ({why}) — r1 {self._fmt(self._r1)} / bias {self._bias:+.1f}"
+        self._msg("히터", f"종료 ({why}) — r1 {self._fmt(self._r1)} / bias {self.bias:+.1f}"
+                         f" (ff {self.bias_ff:+.1f} / int {self._b_int:+.1f})"
                          + (" · TC1 제어 복귀" if st_ in ('running', 'frozen') else ""))
         self._reset()
 
-    # ───────────────────────── 초기 bias / 학습 ─────────────────────────
+    # ───────────────────────── 학습 보정(ff) / 학습 ─────────────────────────
     def _load_learned(self) -> List[dict]:
         try:
             with open(self.learned_path, encoding="utf-8") as f:
@@ -359,20 +404,27 @@ class HeaterCascade(QObject):
             self._msg("히터(경고)", f"학습 매핑 파일을 읽을 수 없음 — 무시 ({e!r})")
             return []
 
-    def _initial_bias(self, final: float):
+    def _build_ff(self, final: float):
+        """학습 보정 곡선을 만든다. |tc2 − map(tc1)| ≥ 경보 폭인 학습점은 쓰지 않는다(TC1 이 떨어진 런 등 — 경고 1줄).
+        돌려주는 문구는 시작 로그·화면 설정 줄·챗 카드에 그대로 쓴다."""
         pts = self._load_learned()
-        if not pts:
-            return 0.0, "학습점 없음 → 0"
-        near = [p for p in pts if abs(p["tc1"] - final) <= LEARN_NEAR_C]
-        if near:
-            p = min(near, key=lambda q: abs(q["tc1"] - final))
-            why = "목표 근처 학습점"
-        else:
-            p = max(pts, key=lambda q: q["t"])
-            why = "가장 최근 학습점"
-        b = p["tc2"] - self.map.value(p["tc1"])
-        b = max(-self.bias_limit, min(self.bias_limit, b))
-        return b, f"{why} TC1 {p['tc1']:g} → TC2 {p['tc2']:.1f} ({p['t'] or '시각 없음'})"
+        t_amb = self.map.points[0][0]
+        use, txt = [], []
+        for p in sorted(pts, key=lambda q: q["tc1"]):
+            corr = p["tc2"] - self.map.value(p["tc1"])
+            tag = f"TC1 {p['tc1']:g} → TC2 {p['tc2']:.1f} ({p['t'] or '시각 없음'})"
+            if p["tc1"] <= t_amb:
+                continue
+            if abs(corr) >= self.bias_alarm:
+                self._msg("히터(경고)", f"학습점 무시(보정 과대) — {tag}: 보정 {corr:+.1f} ≥ ±{self.bias_alarm:g}°C")
+                continue
+            use.append((p["tc1"], corr))
+            txt.append(tag)
+        ff = FfCurve(t_amb, use)
+        if not use:
+            return ff, "학습점 없음 → ff 0 · 적분 보정 0 에서 시작"
+        return ff, (f"학습 보정: [{', '.join(txt)}] · 목표 {final:g} 에서 ff {ff.value(final):+.1f} · 상온 0"
+                    f" · 적분 보정 0 에서 시작")
 
     def _learn(self, final: float, sv2: float) -> None:
         pts = [p for p in self._load_learned() if int(round(p["tc1"] / 10.0)) != int(round(final / 10.0))]
@@ -384,7 +436,8 @@ class HeaterCascade(QObject):
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({"points": pts}, f, ensure_ascii=False, indent=1)
             os.replace(tmp, self.learned_path)
-            self._msg("히터", f"매핑 학습 — TC1 {final:.1f} → TC2 {sv2:.1f} (bias {self._bias:+.1f}) 저장")
+            self._msg("히터", f"매핑 학습 — TC1 {final:.1f} → TC2 {sv2:.1f} (bias {self.bias:+.1f} ="
+                             f" ff {self.bias_ff:+.1f} + int {self._b_int:+.1f}) 저장")
         except Exception as e:
             if not self._learn_warned:
                 self._learn_warned = True
@@ -438,7 +491,8 @@ class HeaterCascade(QObject):
                 self._tc2_lost(st, now, "래더가 TC2 제어를 해제(M0004B OFF)"); return
             if self._shutter and self._state == 'running':
                 self._state = 'frozen'
-                self._msg("히터", f"메인 셔터 열림 — bias {self._bias:+.1f} · SV2 {self._fmt(self._sv2_cmd)} 고정")
+                self._msg("히터", f"메인 셔터 열림 — bias {self.bias:+.1f} (ff {self.bias_ff:+.1f} / int {self._b_int:+.1f})"
+                                 f" · SV2 {self._fmt(self._sv2_cmd)} 고정")
             elif not self._shutter and self._state == 'frozen':
                 self._state = 'running'
                 self._resume_at = now + self.lag + 2.0 * EMA_TAU_SEC
@@ -494,7 +548,7 @@ class HeaterCascade(QObject):
         m = self.map.value(self._r1)
         self._sv2_map = m
         cap = self._sv2_cap(st)
-        raw = m + self._bias
+        raw = m + self._ff.value(self._r1) + self._b_int
         return max(SV2_FLOOR_C, min(cap, raw)), raw, cap
 
     def _begin_engage(self, st: dict, now: float, first: bool = False) -> None:
@@ -538,7 +592,7 @@ class HeaterCascade(QObject):
                     self._dac_value = None
                 self._msg("히터", f"TC2 제어 시작 — TC1 {self._fmt(st.get('pv'))} / TC2 {self._fmt(st.get('pv2'))}"
                                  f" · r1 {self._fmt(self._r1)} → SV2 {self._sv2_cmd:.1f}"
-                                 f" (map {self._fmt(self._sv2_map)} {self._bias:+.1f})"
+                                 f" ({self._parts()})"
                                  + (f" · DAC 상한 {int(self.mv_limit)} 원복" if restore_dac else ""))
                 return
         if (now - self._engage_t0) > ENGAGE_TIMEOUT_SEC:
@@ -698,7 +752,7 @@ class HeaterCascade(QObject):
                 d = self.map.slope(self._r1) * e / self.ti * dt
                 lim_d = self.bias_rate_max / 60.0 * dt
                 d = max(-lim_d, min(lim_d, d))
-                self._bias = max(-self.bias_limit, min(self.bias_limit, self._bias + d))
+                self._b_int = max(-self.bias_limit, min(self.bias_limit, self._b_int + d))
             sv2_now, raw, cap = self._sv2_for(st)
             sv2_now = round(sv2_now, 1)
             if self._sv2_cmd is None or sv2_now != round(float(self._sv2_cmd), 1):
@@ -712,7 +766,7 @@ class HeaterCascade(QObject):
             if self._sv2_cmd is not None and sv2_now < round(float(self._sv2_cmd), 1) - 0.05:
                 self._sv2_cmd = sv2_now
                 self.request_sv2.emit(float(sv2_now))
-                self._msg("히터", f"셔터 열림 중 목표 하강 — SV2 {sv2_now:.1f} 로 내림 (bias {self._bias:+.1f} 고정)")
+                self._msg("히터", f"셔터 열림 중 목표 하강 — SV2 {sv2_now:.1f} 로 내림 ({self._parts()}, int 고정)")
         self._logs(st, now)
 
     def _inner_lagging(self, st: dict, e: float) -> bool:
@@ -730,18 +784,18 @@ class HeaterCascade(QObject):
     def _watch(self, st: dict, now: float, pv, raw: float, cap: float) -> None:
         """TC1 탈락 경보 / SV2 상한 안내 / 매핑 학습 — running(셔터 닫힘) 에서만."""
         # TC1 탈락 의심
-        if abs(self._bias) >= self.bias_alarm:
+        if abs(self.bias) >= self.bias_alarm:                 # 기본 매핑 대비 전체 벗어남(ff + b_int)
             if not self._alarm_t0:
                 self._alarm_t0 = now
             elif (now - self._alarm_t0) >= ALARM_HOLD_SEC and not self._alarm_sent:
                 self._alarm_sent = True
                 exp = self.map.value(self._r1)
                 text = (f"TC1 이 시료대에서 떨어졌거나 TC1/TC2 관계가 크게 바뀜 — TC1 {self._fmt(pv)}, "
-                        f"TC2 {self._fmt(st.get('pv2'))}, 예상 TC2 {exp:.1f} (bias {self._bias:+.1f}, "
+                        f"TC2 {self._fmt(st.get('pv2'))}, 예상 TC2 {exp:.1f} (bias {self.bias:+.1f}, "
                         f"{ALARM_HOLD_SEC:.0f}초 이상 |bias| ≥ {self.bias_alarm:g})")
                 self._msg("히터(경고)", text)
                 self.alert.emit("tc1_detached", {"text": text, "pv": pv, "pv2": st.get('pv2'), "expected": exp,
-                                                  "bias": self._bias, "action": self.alarm_action})
+                                                  "bias": self.bias, "action": self.alarm_action})
         else:
             self._alarm_t0 = 0.0
         # SV2 상한 때문에 목표 도달 불가
@@ -762,14 +816,19 @@ class HeaterCascade(QObject):
         if (fin is not None and self.r1_done() and pv is not None and abs(float(pv) - float(fin)) <= self.soak_tol
                 and round(float(fin), 1) not in self._learned_targets):
             if not self._soak_t0:
-                self._soak_t0 = now; self._soak_bias0 = self._bias
+                self._soak_t0 = now; self._soak_bias0 = self.bias
             elif (now - self._soak_t0) >= self.soak_sec:
-                rate = abs(self._bias - self._soak_bias0) / ((now - self._soak_t0) / 60.0)
-                if rate <= LEARN_BIAS_RATE_MAX:
+                rate = abs(self.bias - self._soak_bias0) / ((now - self._soak_t0) / 60.0)
+                skip = self._learn_block_reason()
+                if skip:
+                    if not self._learn_skip_logged:
+                        self._learn_skip_logged = True
+                        self._msg("히터(경고)", f"매핑 학습 안 함 — {skip}")
+                elif rate <= LEARN_BIAS_RATE_MAX:
                     self._learned_targets.add(round(float(fin), 1))
                     self._learn(float(fin), float(self._sv2_cmd))
                 else:
-                    self._soak_t0 = now; self._soak_bias0 = self._bias     # 아직 bias 가 움직인다 — 창을 다시 잰다
+                    self._soak_t0 = now; self._soak_bias0 = self.bias     # 아직 bias 가 움직인다 — 창을 다시 잰다
         else:
             self._soak_t0 = 0.0
 
@@ -778,12 +837,24 @@ class HeaterCascade(QObject):
         if (now - self._text_log_t) >= TEXT_LOG_SEC and key != self._text_log_key:
             self._text_log_t = now; self._text_log_key = key
             self._msg("히터", f"TC1 기준 r1 {self._fmt(self._r1)} → SV2 {self._fmt(self._sv2_cmd)}"
-                             f" (map {self._fmt(self._sv2_map)} {self._bias:+.1f})")
+                             f" ({self._parts()})")
         if (now - self._status_log_t) >= STATUS_LOG_SEC:
             self._status_log_t = now
             self._msg("히터", f"TC1 {self._fmt(st.get('pv'))} / r1 {self._fmt(self._r1)} / TC2 {self._fmt(st.get('pv2'))}"
-                             f" / SV2 {self._fmt(self._sv2_cmd)} / bias {self._bias:+.1f} / {STATE_TEXT.get(self._state)}"
+                             f" / SV2 {self._fmt(self._sv2_cmd)} / {self._parts()} / {STATE_TEXT.get(self._state)}"
                              + ("" if self._integrating or self._state != 'running' else " (적분 정지)"))
+
+    def _learn_block_reason(self) -> Optional[str]:
+        """매핑 학습을 막는 사유(없으면 None) — TC1 이 떨어진 런의 TC2 가 다음 런의 출발값이 되지 않게."""
+        if self._alarm_sent:
+            return "이번 운전에 TC1 탈락 경보가 났음"
+        if abs(self.bias) >= self.bias_alarm:
+            return f"보정 과대 |bias| {abs(self.bias):.1f} ≥ {self.bias_alarm:g}°C (ff {self.bias_ff:+.1f} / int {self._b_int:+.1f})"
+        return None
+
+    def _parts(self) -> str:
+        """SV2 구성 — "map 569.0 + ff +3.4 + int -1.2"."""
+        return f"map {self._fmt(self._sv2_map)} + ff {self.bias_ff:+.1f} + int {self._b_int:+.1f}"
 
     @staticmethod
     def _fmt(v) -> str:

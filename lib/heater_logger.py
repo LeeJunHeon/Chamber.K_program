@@ -34,8 +34,11 @@ COLUMNS = [
     "WD age[s]",              # 행을 쓸 때 마지막 워치독 하트비트 성공 뒤 경과 초(래더는 10초에 트립). 운전마다 새 파일이라 맨 끝에 붙인다
     # 캐스케이드(controller/heater_cascade) — 기존 열 뒤에만 붙인다. ctrl_mode 는 cascade / tc1
     "ctrl_mode", "r1_c", "r1_lag_c", "tc1_ema_c", "sv2_map_c", "bias_c", "casc_state", "shutter_open",
+    # bias_c = 전체 보정(ff + 적분, sv2_c = sv2_map_c + bias_c). 그 둘을 나눈 열은 맨 끝에
+    "bias_ff_c", "bias_int_c",
 ]
-CASC_COLUMNS = ("r1_c", "r1_lag_c", "tc1_ema_c", "sv2_map_c", "bias_c", "casc_state", "shutter_open")
+CASC_COLUMNS = ("r1_c", "r1_lag_c", "tc1_ema_c", "sv2_map_c", "bias_c", "casc_state", "shutter_open",
+                "bias_ff_c", "bias_int_c")
 
 
 class HeaterCsvLogger:

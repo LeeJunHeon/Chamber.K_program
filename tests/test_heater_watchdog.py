@@ -260,9 +260,9 @@ def test_heater_csv_wd_age_column(tmp_path, monkeypatch):
     lg.stop()
     with open(p, encoding="utf-8-sig", newline="") as f:
         rows = list(csv.reader(f))
-    # WD age 는 캐스케이드 열(2026-10-27, 맨 끝에 덧붙임) 바로 앞 — 기존 열의 이름·순서는 그대로다
+    # WD age 는 캐스케이드 열(2026-10-27 8개 + bias_ff_c·bias_int_c, 맨 끝에 덧붙임) 바로 앞 — 기존 열의 이름·순서는 그대로다
     k = rows[0].index("WD age[s]")
-    assert k == len(HL.COLUMNS) - 1 - 8 and len(rows[0]) == len(HL.COLUMNS)
+    assert k == len(HL.COLUMNS) - 1 - 10 and len(rows[0]) == len(HL.COLUMNS)
     assert rows[1][k] == "6.2" and rows[2][k] == "" and all(len(r) == len(rows[0]) for r in rows)
 
 
