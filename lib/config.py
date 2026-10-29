@@ -210,9 +210,11 @@ _validate_heater_hold_config()
 #             안정시킬 수 없다. TC2 루프는 유지 모드 실측 표준편차 0.15~0.2°C 로 안정하다.
 #  "tc1"    : 기존 TC1 직접 제어(RampProfiler + HeaterHold) 그대로 — 롤백용.
 HEATER_CTRL_MODE = get('HEATER_CTRL_MODE', "cascade")
-# TC1→TC2 기본 매핑 [[TC1, TC2], ...]. 600°C 런 36개 램프 구간 실측 중앙값 기반(100≈150, 150≈220, 250≈380 과도 대략 맞음).
-#  점 사이 선형 보간, 범위 밖은 양 끝 구간 기울기로 외삽. 300°C 이하는 과거 진동 때문에 실측이 흩어져 있어 출발점일 뿐이다.
-HEATER_TC2_MAP = get('HEATER_TC2_MAP', [[25, 25], [300, 445], [400, 570], [500, 695], [600, 825]])
+# TC1→TC2 기본 매핑 [[TC1, TC2], ...]. 점 사이 선형 보간, 범위 밖은 양 끝 구간 기울기로 외삽.
+#  2026-10-28~29 캐스케이드 3런(수동 300°C, CeO2 #8-3, #8-4)에서 TC2(t) 와 TC1(t+약 75 s) 를 짝지어 구한 평형 관계.
+#  300°C 는 수동 유지 실측 437 과 일치. 600°C 는 두 런(838, 847) 평균.
+#  (예전 값 [[25,25],[300,445],[400,570],[500,695],[600,825]] 은 100~150°C 에서 실제보다 20~40°C, 600°C 에서 13~22°C 낮았다)
+HEATER_TC2_MAP = get('HEATER_TC2_MAP', [[25, 25], [50, 92], [100, 170], [150, 226], [200, 290], [250, 365], [300, 437], [400, 569], [500, 705], [600, 842]])
 HEATER_CASCADE_TI_SEC        = get('HEATER_CASCADE_TI_SEC',        600)    # 바깥 루프 적분 시간 [s]
 HEATER_CASCADE_LAG_SEC       = get('HEATER_CASCADE_LAG_SEC',       90)     # TC1 비교 기준 지연 [s] — e = r1(t−LAG) − TC1_ema
 HEATER_CASCADE_BIAS_RATE_MAX = get('HEATER_CASCADE_BIAS_RATE_MAX', 3.0)    # bias 최대 변화율 [°C/min, TC2 기준]
@@ -230,7 +232,8 @@ def _validate_heater_cascade_config() -> None:
         print(f"[Config] HEATER_CTRL_MODE {HEATER_CTRL_MODE!r} → \"cascade\" (허용: cascade / tc1)")
         _m = "cascade"
     HEATER_CTRL_MODE = _m
-    _def_map = [[25.0, 25.0], [300.0, 445.0], [400.0, 570.0], [500.0, 695.0], [600.0, 825.0]]
+    _def_map = [[25.0, 25.0], [50.0, 92.0], [100.0, 170.0], [150.0, 226.0], [200.0, 290.0], [250.0, 365.0],
+                [300.0, 437.0], [400.0, 569.0], [500.0, 705.0], [600.0, 842.0]]
     try:
         pts = [[float(a), float(b)] for a, b in HEATER_TC2_MAP]
         ok = len(pts) >= 2 and all(pts[i + 1][0] > pts[i][0] and pts[i + 1][1] > pts[i][1]

@@ -184,7 +184,7 @@
        "sv": "106.0",
        "dev": "Δ-6.0",
        "devOk": false,
-       "tc2": "TC2 140.0 → 148.7",
+       "tc2": "TC2 140.0 → 176.7",
        "tc2Hold": true,
        "badge": "RUN"
       },
@@ -409,7 +409,7 @@
        "sv": "106.0",
        "dev": "Δ-6.0",
        "devOk": false,
-       "tc2": "TC2 140.0 → 148.7",
+       "tc2": "TC2 140.0 → 176.7",
        "tc2Hold": false,
        "badge": "RUN"
       },
