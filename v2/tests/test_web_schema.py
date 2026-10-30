@@ -11,10 +11,10 @@ from v2.chk import params as P
 from v2.chk import safety_rules as SR
 from v2.chk import web_schema as W
 
-PINNED = (13, "ca74eef30e5b733ea8b9bf5e4ad78e822996256fb0dcb06ffb307f658340a519")
+PINNED = (13, "9498a7cba1d65e3b2292835711e5eadc1721de932577cde818d009a6cef4e317")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "overriddenKeys", "params", "crossRules", "dropped", "commands", "preconditions",
        "reasons", "plcButtons", "recipe", "blocks", "adjust", "stopSequence", "allStopSequence", "states", "events",
-       "eventKinds", "paramGroups", "snapshot"]
+       "eventKinds", "eventSources", "paramGroups", "snapshot"]
 
 
 def test_version_and_hash_pinned():

@@ -94,7 +94,7 @@ EVENTS: tuple = (
 # 설정 묶음(params[].group) → 화면 이름
 PARAM_GROUPS: tuple = (
     ("install", "설치·장비"), ("secret", "비밀값"), ("tick", "1초 읽기"), ("comm", "통신"), ("plc", "PLC"),
-    ("mfc", "MFC"), ("dc", "DC 전원"), ("rf", "RF 전원"), ("stop", "정지 순서"), ("rfpulse", "RF Pulse"),
+    ("mfc", "MFC"), ("dc", "DC Power"), ("rf", "RF Power"), ("stop", "정지 순서"), ("rfpulse", "RF Pulse"),
     ("ig", "이온 게이지"), ("heater", "히터"), ("heater_plc", "히터 PLC 설정"), ("heater_ramp", "히터 승온"),
     ("heater_hold", "히터 유지 모드"), ("heater_recipe", "히터 레시피"), ("heater_gas", "히터 가스"),
     ("process", "공정"), ("uplink", "웹 연결"), ("record", "기록"),
@@ -106,6 +106,11 @@ PARAM_GROUPS: tuple = (
 #   main = 사람이 공정 흐름을 따라가는 데 필요한 것, detail = 스텝 하나하나·되읽기·식별·자기 진단 등(상세에서만).
 #   run_start·run_end 는 event 가 아니라 run_start·run_end 메시지로 나가지만 표에는 둔다(ProcEvent 종류 전부).
 _M, _D = "main", "detail"
+# event 메시지 context.source → 화면 출처 이름(5-15 — 장비 이름은 DC Power·RF Power·RF Pulse)
+EVENT_SOURCES: tuple = (
+    ("process", "공정"), ("safety", "안전 규칙"), ("heater", "히터"), ("plc", "PLC"), ("mfc", "MFC"), ("dc", "DC Power"),
+    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "이온 게이지"),
+)
 _WORKERS = ("plc", "mfc", "dc", "rfpulse", "ig")
 EVENT_KINDS: tuple = (
     ("process", "run_start", "공정 시작", _M), ("process", "run_end", "공정 끝", _M),
@@ -261,6 +266,7 @@ def definitions() -> Dict[str, Any]:
         "states": [{"name": s.name, "label": s.label, "kind": s.kind.value} for s in PS.STATES],
         "events": [{"kind": k, "label": lab, "data": list(keys)} for k, lab, keys in EVENTS],
         "eventKinds": [{"source": s, "kind": k, "label": lab, "level": lv} for s, k, lab, lv in EVENT_KINDS],
+        "eventSources": [{"source": s, "label": lab} for s, lab in EVENT_SOURCES],
         "paramGroups": [{"key": k, "label": lab} for k, lab in PARAM_GROUPS],
         "snapshot": snapshot(),
     }

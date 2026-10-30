@@ -1,4 +1,4 @@
-"""DC 전원 드라이버 + 시뮬레이터 시험(가상 시계). 실제 포트는 열지 않는다."""
+"""DC Power 드라이버 + 시뮬레이터 시험(가상 시계). 실제 포트는 열지 않는다."""
 import pytest
 
 from v2.common.clock import VirtualClock

@@ -201,7 +201,7 @@ MFC = Device(
            "R70/R71·E·Delimiter 실제 값", "압력 풀스케일(E 레인지)로 작업 압력 상한 1000 mTorr 가정 확인"),
 )
 
-# ═════════════ 3. DC 전원 — ODA EX 시리즈 ═════════════
+# ═════════════ 3. DC Power — ODA EX 시리즈 ═════════════
 # 10/20 bench: VOLT:OVL? 630·CURR:OCL? 2.1(기본값 = 설정 가능한 최대 [p.15, p.98]) → 사양표 [DC p.105] EX 600-2(1.2 kW급).
 # v1 소프트웨어 상한 DC_MAX_*(600 V·1 A·600 W)는 그대로. 그 밖에: OVP 660 V·OCP 2.2 A(사용 1), LAST-STA DISABLE, FACT:ADC 20Hz
 DC_RATED_VOLTAGE_V = 630.0
@@ -209,7 +209,7 @@ DC_RATED_CURRENT_A = 2.1
 DC_RATED_POWER_W = 1200.0
 
 DC = Device(
-    key="dc", name="DC 전원", model="ODA EX 600-2(630 V·2.1 A, 1.2 kW급) — *IDN? 'ODA Technologies,EX-Series,2.1-1.0-1.6'"
+    key="dc", name="DC Power", model="ODA EX 600-2(630 V·2.1 A, 1.2 kW급) — *IDN? 'ODA Technologies,EX-Series,2.1-1.0-1.6'"
                                     "(10/16 bench), OVL 630·OCL 2.1(10/20 bench)과 사양표 [p.105]", model_confirmed=True,
     manual="DC",
     serial="RS-232C/RS-485/TCP(옵션), 9600 기본(9600~230400), 8N1 고정 [DC p.13/15, p.36-37/38-39]. "
@@ -261,7 +261,7 @@ DC = Device(
 
 # ═════════════ 4. RF Power — YSR-06MF(추정), PLC 아날로그 제어 ═════════════
 RF = Device(
-    key="rf", name="RF 전원(아날로그)", model="YSR-06MF 13.56 MHz 600 W(추정, 03MF=300 W) + AMN-100", model_confirmed=False,
+    key="rf", name="RF Power(아날로그)", model="YSR-06MF 13.56 MHz 600 W(추정, 03MF=300 W) + AMN-100", model_confirmed=False,
     manual="RF",
     serial="통신 없음 — 15핀 D-sub 아날로그 I/F, PLC DAC(XBF-DV04A 0~10 V=0~4000)·ADC 로 제어",
     framing="핀 5: 출력 설정 0~10 V = 0~정격, 핀 2·3: 순방향/반사 모니터 출력, 핀 4: RF ON 입력(0 V Off/+5 V On), "

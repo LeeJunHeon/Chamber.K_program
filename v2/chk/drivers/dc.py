@@ -1,4 +1,4 @@
-"""챔버K DC 전원 드라이버 — ODA EX 시리즈 SCPI(종단 LF).
+"""챔버K DC Power 드라이버 — ODA EX 시리즈 SCPI(종단 LF).
 
 읽기: tick 마다 MEAS:ALL?("V,I") — 스냅샷 묶기 소스(dc.v·dc.i·dc.p, 명령 기준 dc.i_set·dc.out, 공정 목표 dc.set_w).
 쓰기 규칙(devices.DC, v1 실측): 설정 명령에는 응답이 없고, 쓰기 뒤 DC_WRITE_QUERY_GAP_MS 안의 질의에는 장비가 답하지 않는다

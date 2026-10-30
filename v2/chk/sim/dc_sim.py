@@ -1,4 +1,4 @@
-"""DC 전원 시뮬레이터 — ODA EX 시리즈 SCPI(RS-232 9600 8N1, 종단 LF).
+"""DC Power 시뮬레이터 — ODA EX 시리즈 SCPI(RS-232 9600 8N1, 종단 LF).
 
 명령(devices.DC): *IDN? *RST *CLS, APPL[y] v,i, CURR x / CURR?, VOLT x / VOLT?, OUTP ON|OFF / OUTP?,
   MEAS:ALL?("V,I") MEAS:VOLT? MEAS:CURR?, SYST:ERR?, VOLT:OVP x / VOLT:OVP?, CURR:OCP x / CURR:OCP?,

@@ -61,8 +61,8 @@ PARAMS: tuple = (
     _inst("PLC_SLAVE_ID", "PLC Modbus 국번", I, 1, lo=1, hi=247, src="lib/config.py:25 (고정값)"),
     _inst("MFC_PORT", "MFC 포트", S, "COM10", pattern=_COM),
     _inst("MFC_BAUD", "MFC 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L),
-    _inst("DC_PORT", "DC 전원 포트", S, "COM11", pattern=_COM),
-    _inst("DC_BAUD", "DC 전원 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L,
+    _inst("DC_PORT", "DC Power 포트", S, "COM11", pattern=_COM),
+    _inst("DC_BAUD", "DC Power 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L,
           v1_key="DC_BAUDRATE"),
     _inst("RFPULSE_ENABLED", "RF Pulse 사용", B, False, v1_default=True, src=_V2,
           desc="false 면 포트를 열지 않고 rfp 블록 품질 off, RF Pulse 를 쓰는 레시피는 DEVICE_DISABLED 로 시작 거부"
@@ -197,7 +197,7 @@ PARAMS: tuple = (
     _p("MFC_SP1_VERIFY_TOL", "mfc", "SP1 설정 확인 허용 오차", "장비 단위", F, 0.1, 0.01, 1.0, safety=L,
        src="lib/config.py:808 (고정값)"),
 
-    # ───────────── DC 전원 ─────────────
+    # ───────────── DC Power ─────────────
     _p("DC_MAX_VOLTAGE", "dc", "DC 전압 상한", "V", F, 600.0, 0.0, 1000.0, safety=H,
        src="lib/config.py:512 (고정값)", desc="APPL 전압 상한. 장비 정격 이하"),
     _p("DC_MAX_CURRENT", "dc", "DC 전류 상한", "A", F, 1.0, 0.0, 2.0, safety=H, src="lib/config.py:513 (고정값)"),

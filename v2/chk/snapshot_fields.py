@@ -81,7 +81,7 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
     _f("sv2_map", F, "°C", "SV2 매핑값", ".1f", "core", detail=True, desc="map(r1) — HEATER_TC2_MAP(v1 sv2_map_c)"),
 ), desc="PLC 내장 PID")
 
-RF_BLOCK = DeviceBlock("rf", "RF 전원", (
+RF_BLOCK = DeviceBlock("rf", "RF Power", (
     _f("fwd_w", F, "W", "순방향", ".1f", "plc:rf_fwd_adc × RF_FWD_FULL_SCALE_W/4000", summary="mean"),
     _f("ref_w", F, "W", "반사", ".1f", "plc:rf_ref_adc × RF_REF_FULL_SCALE_W/4000", summary="max"),
     _f("dac", I, "count", "DAC 설정값", "d", "plc:rf_dac", detail=True),
@@ -99,7 +99,7 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
     _f("sp_mtorr", F, "mTorr", "압력 설정", ".2f", "core"),
 ), desc="GPC3000")
 
-DC_BLOCK = DeviceBlock("dc", "DC 전원", (
+DC_BLOCK = DeviceBlock("dc", "DC Power", (
     _f("v", F, "V", "전압", ".1f", "MEAS:ALL?", summary="mean"),
     _f("i", F, "A", "전류", ".4f", "MEAS:ALL?", summary="mean"),
     _f("p", F, "W", "파워", ".1f", "계산", summary="mean", desc="V×I 로 계산"),

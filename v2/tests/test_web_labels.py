@@ -199,3 +199,21 @@ def test_reason_and_command_labels_not_in_messages():
 def test_export_version_11_hash_changed():
     assert W.EXPORT_VERSION >= 11                                          # 5-14 에서 12
     assert W.content_hash() != "702c6f0d959ddf570f6d6b38cfa9b25c738093f8ad5921884fb92cea5779a017"   # v10
+
+
+def test_device_names_dc_power_rf_power():
+    """5-15: 화면·기록·설정에 나가는 장비 이름은 DC Power·RF Power(RF Pulse 그대로). 일반 낱말 '전원 OFF' 는 그대로."""
+    from v2.chk import devices as D
+    from v2.chk import params as P
+    from v2.chk import snapshot_fields as SF
+    b = W.bundle()
+    names = {x["name"]: x["label"] for x in b["snapshot"]["blocks"]}
+    assert names["dc"] == "DC Power" and names["rf"] == "RF Power" and names["rfp"] == "RF Pulse"
+    assert dict((x["key"], x["label"]) for x in b["paramGroups"])["dc"] == "DC Power"
+    assert dict((x["key"], x["label"]) for x in b["paramGroups"])["rf"] == "RF Power"
+    src = {x["source"]: x["label"] for x in b["eventSources"]}
+    assert src["dc"] == "DC Power" and src["rfp"] == src["rfpulse"] == "RF Pulse"
+    assert {s for s, _, _, _ in W.EVENT_KINDS} <= set(src)
+    labels = [p.label for p in P.PARAMS] + [b_.label for b_ in SF.BLOCKS] + [d.name for d in D.DEVICES]
+    assert not [x for x in labels if "DC 전원" in x or "RF 전원" in x]
+    assert next(p.label for p in P.PARAMS if p.key == "DC_PORT") == "DC Power 포트"
