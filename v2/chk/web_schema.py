@@ -26,6 +26,12 @@
                 버전 12: 스냅샷 이온 게이지 상태 열 ig.ion_state·ig.a_state·ig.b_state(enumLabels)와 값 열의 stateColumn
                 (값이 비어 있고 상태가 ok 가 아니면 상태 이름을 보인다), commands[].benchOk(bench 에서도 받는 명령),
                 eventKinds safety bench_skip(bench 에서 안전 조치를 보내지 않음)
+                버전 13: 히터 2단(캐스케이드) 제어 설정 HEATER_CTRL_MODE·HEATER_TC2_MAP·HEATER_CASCADE_*·HEATER_SHUTTER_SETTLE_*
+                (키 사이 규칙 X26), 블록 heater_settle·상태 HEATER_SETTLE, 스냅샷 heater.ctrl_mode·casc_state·r1·bias·bias_ff·
+                bias_int·r1_lag·tc1_ema·sv2_map(heater.sv2 는 평소 화면), blocks.defs[].skip·pause(건너뛰기·일시정지 규칙과 문구),
+                명령 PROCESS_SKIP·PROCESS_PAUSE·PROCESS_RESUME·PROCESS_EDIT, 설정 PROCESS_PAUSE_MAX_SEC, 스냅샷 proc.paused·
+                proc.revision, events skip·pause·resume·edit·pause_long(run_end summary), eventKinds 그 종류, eventSources(출처 이름),
+                장비 이름 DC Power·RF Power
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -36,6 +42,7 @@
   states        공정 상태 이름 · events 웹이 받는 공정 기록 이벤트(종류·data 키)
   eventKinds    event 메시지의 (context.source, context.kind) → 화면 이름·level(main 평소 로그 / detail 상세에서만).
                 warn·error·critical 은 표와 상관없이 늘 보이고, 표에 없는 짝은 detail 로 본다
+  eventSources  event 메시지 context.source → 화면 출처 이름(DC Power·RF Pulse …)
   paramGroups   설정(params[].group) 묶음 key → 화면 이름
   snapshot      1초 스냅샷 열 정의(웹 화면 라벨·단위·형식·그래프) — tick·process 필드, 장비 블록(이름·라벨·worker·
                 품질 열 <블록>.q·<블록>.age_s) → 필드(column 전체 이름·형식 fmt 는 파이썬 format spec 그대로 .1f·.2E·d).

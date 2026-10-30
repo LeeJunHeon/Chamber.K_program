@@ -104,6 +104,12 @@ MESSAGES: tuple = (
     )),
     MessageDef("state", "up", "현재 상태 1개 — POST 마다 최신 하나(보관하지 않음)", (
         _f("procState", "str", True, "공정 상태 기계 상태"),
+        _f("paused", "bool", False, "공정 일시정지 중(PROCESS_PAUSE) — procState 는 그대로(안전 규칙 구간이 바뀌지 않게)"),
+        _f("procLabel", "str", False, "화면용 상태 이름 덮어쓰기 — 일시정지 중 '일시정지', 아니면 null(procState 의 이름)"),
+        _f("run", "obj", False, "지금 행의 판·블록(5-15) {revision(판 번호, 딜레이 행 0), current(지금 블록 번호 — 반복 안이면 안쪽, "
+           "딜레이 행 'delay'), paused({at, no, type, label, kind, by, source, remainS, pausedS} 또는 null), blocksVersion, "
+           "blocks(바뀌었을 때·10초마다만 — [{no, type, label, status(waiting·running·paused·done·skipped·aborted), start, end, "
+           "durationS, skip, pause(지금 할 수 있나), skipText, pauseText, pausedSec, revision, auto}])} — 공정 행이 아니면 null"),
         _f("runId", "str", False, "진행 중 공정 id"),
         _f("step", "obj", False, "현재 블록(번호·총수·종류·이름·남은 초)"),
         _f("recipe", "obj", False, "적재된 레시피(이름·행)"),
@@ -155,7 +161,8 @@ MESSAGES: tuple = (
         _f("runId", "str", True, "공정 id"),
         _f("result", "str", True, "done / aborted / error"),
         _f("reasonCode", "str", False, "사유 코드"),
-        _f("summary", "obj", True, "공정 요약"),
+        _f("summary", "obj", True, "공정 요약 {name, executed(실행된 순서 [{no, type, label, start, end, result(done·skipped·"
+           "aborted), pausedSec, revision}]), revision(마지막 판), skips, pauses, pausedSec} — 웹은 객체 그대로 저장"),
     )),
     MessageDef("cmd_result", "up", "명령 결과(accepted/rejected) — 같은 명령 id 가 다시 오면 같은 내용으로 다시", (
         _f("cmdId", "str", False, "명령 id(웹 명령은 늘 있음 — id 없이 보낸 로컬 화면 명령은 null)"),
