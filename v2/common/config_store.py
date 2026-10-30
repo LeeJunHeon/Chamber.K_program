@@ -5,6 +5,7 @@
 - config_prev.json   : 직전 버전(같은 형식)
 - local_override.json: {"values": {...}} — 노트북 비상용 덮어쓰기. scope 가 install·secret 인 키만.
                        비밀값(웹 주소·토큰)은 여기에만 둔다.
+  읽기는 utf-8-sig — 사람이 메모장·PowerShell 5(Set-Content -Encoding UTF8)로 저장해 BOM 이 붙어도 받는다(5-14). 쓰기는 BOM 없이.
 
 읽기(load)
 - active 를 검사(파일 해시·ParamDef 타입·범위·키 사이 규칙). 실패하면 prev. 둘 다 실패면 ConfigError — 시작 거부.
@@ -111,7 +112,7 @@ class ConfigStore:
         if not self.override_path.exists():
             return {}
         try:
-            obj = json.loads(self.override_path.read_text(encoding="utf-8"))
+            obj = json.loads(self.override_path.read_text(encoding="utf-8-sig"))
             vals = obj["values"]
             if not isinstance(vals, dict):
                 raise ValueError("values 가 객체가 아님")
@@ -150,7 +151,7 @@ class ConfigStore:
 
     def _read_file(self, path: Path) -> tuple:
         """(version, persisted 값, notes). 실패하면 예외."""
-        obj = json.loads(path.read_text(encoding="utf-8"))
+        obj = json.loads(path.read_text(encoding="utf-8-sig"))
         version, sh, vals, ch = obj["version"], obj["schemaHash"], obj["values"], obj["contentHash"]
         if not isinstance(version, int) or not isinstance(vals, dict):
             raise ValueError("형식 오류")

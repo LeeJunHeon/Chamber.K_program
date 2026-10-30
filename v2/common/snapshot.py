@@ -50,6 +50,7 @@ class FieldDef:
     detail: bool = False      # 화면 카드에서 평소 접어 둘 값(5-13)
     desc: str = ""            # 개발용 설명(레지스터 등) — 화면은 '상세'에서만
     enum_labels: Optional[tuple] = None   # str 값 → 화면용 이름 ((값, 이름), ...)
+    state: str = ""           # 같은 블록의 상태 열 이름(5-14). 값이 비어 있고 상태가 ok 가 아니면 화면은 그 상태 이름을 보인다
 
 
 @dataclass(frozen=True)

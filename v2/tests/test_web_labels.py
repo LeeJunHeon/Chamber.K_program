@@ -197,5 +197,5 @@ def test_reason_and_command_labels_not_in_messages():
 
 
 def test_export_version_11_hash_changed():
-    assert W.EXPORT_VERSION == 11
+    assert W.EXPORT_VERSION >= 11                                          # 5-14 에서 12
     assert W.content_hash() != "702c6f0d959ddf570f6d6b38cfa9b25c738093f8ad5921884fb92cea5779a017"   # v10

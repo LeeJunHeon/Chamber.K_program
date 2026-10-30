@@ -41,7 +41,7 @@ from v2.chk import inventory as INV
 from v2.chk import params as P
 from v2.chk import snapshot_fields as SF
 from v2.chk.drivers.dc import DcDriver
-from v2.chk.drivers.ig import E_ITEM_COUNT, IgDriver
+from v2.chk.drivers.ig import E_ITEM_COUNT, IgDriver, pressure_text
 from v2.chk.drivers.mfc import MfcDriver
 from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
@@ -257,7 +257,7 @@ class BenchProbe:
                 raw = got[0] if got else None
                 okf = raw is None or INV.ig_pair(raw, False) is not None or raw.strip() in ("0", "-900", "-999")
                 inv.items.append(INV.Item("ig", ch, raw, okf, {"F": "이온 압력", "G": "게이지 A 압력", "H": "게이지 B 압력"}[ch],
-                                          INV.ig_meaning(24, raw) if raw is not None else ""))
+                                          INV.ig_meaning({"F": 24, "G": 25, "H": 26}[ch], raw) if raw is not None else ""))
             INV.ig_interpret(inv)
         if self.first_poll is not None:
             fp = self.first_poll
@@ -419,6 +419,8 @@ class BenchProbe:
         r = self.ig.last
         if r is not None:
             self.say(f"IG E: 이온 {r.raw[0]!r} · A {r.raw[1]!r} · B {r.raw[2]!r} · 필라멘트 {int(r.filament)} · 오류 {r.err_code}")
+            self.say(f"IG: 이온 {pressure_text(r.ion_torr, r.ion_state)} · 게이지 A {pressure_text(r.a_torr, r.a_state)}"
+                     f" · 게이지 B {pressure_text(r.b_torr, r.b_state)}")
         plc_ok = sum(1 for x in self.rows if x["plc.q"] == "ok")
         self.say(f"PLC 블록 읽기(FC1 0..95·FC1 160..320·FC3 D0..D60): 정상 {plc_ok}/{len(self.rows)} tick")
         self.say("---------------- devices.ASSUMPTIONS ----------------")

@@ -201,7 +201,7 @@ class ChkSystem:
             self.process = ProcessEngine(clock, c, self.plc, self.mfc, self.dc, self.rfp, self.ig, self.heater, self.links,
                                          on_event=self._pev)
         self.safety = ChkSafety(clock, c, self.process, self.plc, self.mfc, self.dc, self.rfp, self.ig, on_event=self._sev,
-                                heater=self.heater)
+                                heater=self.heater, bench=self.policy.mode is RunMode.BENCH)
         if not simple_process:
             self.process.safety = self.safety
         self.store = store

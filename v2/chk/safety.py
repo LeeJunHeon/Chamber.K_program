@@ -417,12 +417,14 @@ class ChkSafety:
     """엔진 + 조치 처리기 + 정지 순서 + 연결 고리."""
 
     def __init__(self, clock, cfg: Dict[str, Any], process, plc, mfc, dc, rfp, ig,
-                 on_event: Optional[Callable[[SafetyEvent], None]] = None, heater=None) -> None:
+                 on_event: Optional[Callable[[SafetyEvent], None]] = None, heater=None, bench: bool = False) -> None:
         self.clock, self.cfg, self.process = clock, cfg, process
         self.heater = heater                      # HeaterEngine(있으면 히터 레시피 중단·가스 유지를 여기로)
         self.plc, self.mfc, self.dc, self.rfp, self.ig = plc, mfc, dc, rfp, ig
         self.engine = SafetyEngine(clock, build_rules(cfg), cfg, self._handlers(), process, on_event)
         self.engine.stop_steps = self.stop_steps
+        self.engine.bench = bench                 # bench 에서 BENCH_READ_ONLY 거부는 조치 실패가 아니다(5-14)
+        self.engine.bench_info_rules = frozenset({"S41"})   # 종료 때 히터 RUN=0 — bench 에서는 보내지 않는 것이 정상
         self.engine.all_stop_steps = self.all_stop_steps
         self.locks: set = set()
         self._prev_run: Optional[bool] = None

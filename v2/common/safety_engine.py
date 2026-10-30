@@ -12,6 +12,9 @@
 
 조치
 - 규칙 조치는 handlers[act.kind](args, done) 로 바로 실행(드라이버가 safety 우선순위로 큐에 넣는다 — tick 을 기다리지 않음).
+  조치 실패는 error. 단 bench(장비 쓰기 금지 — 장비 쪽이 bench=True 로 둔다)에서 사유가 BENCH_READ_ONLY 면 실패가 아니라
+  bench_skip("bench — 보내지 않음(읽기 전용)") — bench_info_rules 의 규칙(종료 등)은 info, 그 밖은 warn(규칙이 실제 값으로
+  발동했다는 사실은 fired 로 남는다).
 - PROCESS_ABORT 는 엔진이 처리: 공정 쪽 on_abort(reason) 를 부르고 정지 순서를 실행.
 - 정지 순서(StepRunner): 단계마다 결과를 이벤트로. 단계에서 예외·실패가 나면 must=False 단계는 건너뛰고,
   must=True 단계는 반드시 실행한다. 단계 한도(timeout)를 넘으면 기다리지 않고 다음 단계로.
@@ -40,7 +43,7 @@ class Act:
 
 @dataclass
 class SafetyEvent:
-    kind: str                  # fired · released · blip · also · step · seq_done · error
+    kind: str                  # fired · released · blip · also · step · seq_done · error · bench_skip
     rule: str = ""
     code: str = ""
     detail: str = ""
@@ -171,6 +174,8 @@ class SafetyEngine:
         self.last_fire_t: Dict[str, float] = {}
         self.seq_results: Dict[str, List[tuple]] = {}
         self._threads: "collections.deque[Any]" = collections.deque(maxlen=64)   # 최근 정지 순서 스레드
+        self.bench = False                         # bench 모드(장비 쓰기 금지) — 장비 쪽이 정한다
+        self.bench_info_rules: frozenset = frozenset()   # bench_skip 을 info 로 남길 규칙(나머지는 warn)
 
     # ───────── 이벤트 ─────────
     def _emit(self, e: SafetyEvent) -> None:
@@ -255,10 +260,16 @@ class SafetyEngine:
             self._emit(SafetyEvent("error", rule, a.kind, "조치 처리기 없음", "error", t))
             return
         try:
-            h(dict(a.args), lambda err=None: None if err is None else self._emit(
-                SafetyEvent("error", rule, a.kind, f"조치 실패: {err}", "error", self.clock.wall())))
+            h(dict(a.args), lambda err=None: None if err is None else self._failed(rule, a.kind, err))
         except Exception as e:
             self._emit(SafetyEvent("error", rule, a.kind, f"조치 예외 {e!r}", "error", t))
+
+    def _failed(self, rule: str, kind: str, err: str) -> None:
+        if self.bench and err == "BENCH_READ_ONLY":
+            self._emit(SafetyEvent("bench_skip", rule, kind, "bench — 보내지 않음(읽기 전용)",
+                                   "info" if rule in self.bench_info_rules else "warn", self.clock.wall()))
+            return
+        self._emit(SafetyEvent("error", rule, kind, f"조치 실패: {err}", "error", self.clock.wall()))
 
     def abort(self, reason: str, rule: str = "", t: Optional[float] = None) -> bool:
         """공정 중단 — 공정이 진행 중이고 정지 중이 아니면 첫 사유로 기록하고 정지 순서. 아니면 이벤트(SAFETY_ALSO)만."""

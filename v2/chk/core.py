@@ -28,7 +28,7 @@ from v2.chk.heater_engine import parse_recipe_steps
 from v2.chk import recipe as RC
 
 
-NO_DEVICE_WRITE = ("RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK")   # bench 에서도 받는 명령
+NO_DEVICE_WRITE = tuple(c.kind for c in C.COMMANDS if c.bench_ok)   # bench 에서도 받는 명령(commands.CommandDef.bench_ok)
 
 
 @dataclass

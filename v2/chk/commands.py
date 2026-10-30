@@ -12,7 +12,7 @@ PLC_MANUAL_IN_PROCESS(info)로 남긴다. "정말 하시겠습니까?" 확인은
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Optional
 
 from v2.common.commands import ArgDef, COMMON_REASONS, Reason, Source
@@ -217,6 +217,7 @@ class CommandDef:
     args: tuple = ()
     desc: str = ""
     v1: str = ""
+    bench_ok: bool = False        # bench(장비 쓰기 금지)에서도 받는 명령 — 장비에 쓰지 않는다(5-14, core 가 이 값을 본다)
 
 
 def _a(name, type_, required=True, **kw) -> ArgDef:
@@ -328,6 +329,11 @@ COMMANDS: tuple = (
     C("PLC_MARKER_WRITE", "PLC 재기동 마커 쓰기", (INT,), "system", (ANY_STATE,)),
     C("NOTIFY", "이벤트·알람 보내기", (INT,), "system", (ANY_STATE,), (), (_a("level", "str"), _a("code", "str"))),
 )
+
+# bench 에서도 받는 명령(장비에 쓰지 않음) — 이 목록 한 곳만(core·묶음 commands[].benchOk 가 같은 값을 본다)
+_BENCH_OK = frozenset({"RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK"})
+assert _BENCH_OK <= {c.kind for c in COMMANDS}
+COMMANDS = tuple(replace(c, bench_ok=c.kind in _BENCH_OK) for c in COMMANDS)
 
 
 def by_kind() -> dict:

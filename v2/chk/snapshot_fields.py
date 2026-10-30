@@ -7,14 +7,15 @@ heater 와 rf 블록은 PLC 한 번 읽기에서 나오지만 화면·요약 단
 from __future__ import annotations
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType, row_columns
+from v2.chk.drivers.ig import GAUGE_STATES, ION_STATES
 
 F, I, B, S = FType.FLOAT, FType.INT, FType.BOOL, FType.STR
 
 
 def _f(name, type_, unit, label, fmt="", source="", own=False, summary="last", detail=False, desc="",
-       enum_labels=None) -> FieldDef:
+       enum_labels=None, state="") -> FieldDef:
     return FieldDef(name=name, type=type_, unit=unit, label=label, fmt=fmt, source=source,
-                    own_quality=own, summary=summary, detail=detail, desc=desc, enum_labels=enum_labels)
+                    own_quality=own, summary=summary, detail=detail, desc=desc, enum_labels=enum_labels, state=state)
 
 
 def _bit(name, label, addr=None, detail=False, desc="") -> FieldDef:
@@ -42,7 +43,9 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
     _f("pv", F, "°C", "TC1", ".1f", "plc:heater_pv", summary="mean"),
     _f("pv2", F, "°C", "TC2", ".1f", "plc:heater_pv2", summary="mean"),
     _f("sv", F, "°C", "목표 온도", ".1f", "plc:heater_sv"),
-    _f("cur_sv", F, "°C", "램프 적용 목표", ".1f", "plc:heater_cur_sv", detail=True),
+    _f("cur_sv", F, "°C", "램프 적용 목표", ".1f", "plc:heater_cur_sv", detail=True,
+       desc="D00016 × 0.1 °C(v1 과 같은 레지스터·배율). 래더가 운전(RUN=1) 중에만 갱신 — 정지 중에는 마지막 운전 때 값이 "
+            "남는다(실측 10/20 825.1·10/29 513.3, v1 main.py 는 정지 중 D00012 를 보임). TC2 추종·캐스케이드 중에는 TC2 목표"),
     _f("sv_ramp", F, "°C", "램프 중간 목표", ".1f", "plc:heater_sv_ramp", detail=True),
     _f("sv2", F, "°C", "TC2 목표", ".1f", "plc:heater_sv2", detail=True),
     _f("sv_limit", F, "°C", "목표 상한", ".1f", "plc:heater_sv_limit", detail=True, desc="PLC D00013"),
@@ -100,13 +103,20 @@ RFPULSE_BLOCK = DeviceBlock("rfp", "RF Pulse", (
 ), desc="CESAR 1310")
 
 IG_BLOCK = DeviceBlock("ig", "이온 게이지", (
-    _f("ion_torr", F, "Torr", "이온 압력", ".2E", "E #24", summary="min"),
-    _f("a_torr", F, "Torr", "게이지 A", ".2E", "E #25", summary="mean"),
-    _f("b_torr", F, "Torr", "게이지 B", ".2E", "E #26", summary="mean"),
+    _f("ion_torr", F, "Torr", "이온 압력", ".2E", "E #24", summary="min", state="ion_state"),
+    _f("a_torr", F, "Torr", "게이지 A", ".2E", "E #25", summary="mean", state="a_state"),
+    _f("b_torr", F, "Torr", "게이지 B", ".2E", "E #26", summary="mean", state="b_state"),
     _f("filament", B, "", "필라멘트", source="E #2", summary="any"),
     _f("emission", B, "", "방출 정상", source="E #3", summary="any"),
     _f("degas", B, "", "디개스", source="E #1", summary="any"),
     _f("err_code", I, "", "필라멘트 오류 코드", "d", "E #5", detail=True),
+    # 값이 빈 이유(5-14) — 값 열의 state 가 가리킨다. 열은 블록 끝에(앞 열 순서 그대로)
+    _f("ion_state", S, "", "이온 압력 상태", source="E #24", detail=True, enum_labels=ION_STATES,
+       desc="drivers.ig.pressure_from_pair — ok 가 아니면 이온 압력이 빈 칸"),
+    _f("a_state", S, "", "게이지 A 상태", source="E #25", detail=True, enum_labels=GAUGE_STATES,
+       desc="drivers.ig.pressure_from_pair — ok 가 아니면 게이지 A 가 빈 칸(below = 측정 하한 GAUGE_MIN_TORR 아래)"),
+    _f("b_state", S, "", "게이지 B 상태", source="E #26", detail=True, enum_labels=GAUGE_STATES,
+       desc="drivers.ig.pressure_from_pair — ok 가 아니면 게이지 B 가 빈 칸(below = 측정 하한 GAUGE_MIN_TORR 아래)"),
 ), desc="Terranova 934")
 
 BLOCKS: tuple = (PLC_BLOCK, HEATER_BLOCK, RF_BLOCK, MFC_BLOCK, DC_BLOCK, RFPULSE_BLOCK, IG_BLOCK)

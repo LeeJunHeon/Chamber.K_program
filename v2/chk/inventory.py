@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from v2.chk import cmd_guard as G
+from v2.chk.drivers.ig import IgParseError, pressure_from_pair, pressure_text
 
 NUM = r"[+\-]?\d+(?:\.\d+)?"
 
@@ -213,13 +214,11 @@ def ig_meaning(n: int, raw: str) -> str:
     if n in IG_SETPOINT_ITEMS:
         v = ig_pair(raw, True)
         return "형식 다름" if v is None else f"{v:.1E} Torr"
-    if n in IG_PRESSURE_ITEMS:
-        if raw.strip() == "0":
-            return "꺼짐(0)"
-        if raw.strip() in ("-900", "-999"):
-            return {"-900": "게이지 없음", "-999": "영점 안 됨"}[raw.strip()]
-        v = ig_pair(raw, False)
-        return "형식 다름" if v is None else f"{v:.1E} Torr"
+    if n in IG_PRESSURE_ITEMS:                      # 화면·공정 기록과 같은 문구("< 1.0E-3 Torr"·"미연결" …)
+        try:
+            return pressure_text(*pressure_from_pair(raw, "ion" if n == 24 else "conv"))
+        except IgParseError:
+            return "형식 다름"
     if n == 20:
         return f"{int(raw) / 100:.2f}" if raw.strip().isdigit() else "형식 다름"
     if n == 21:

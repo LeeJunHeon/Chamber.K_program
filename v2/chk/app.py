@@ -16,6 +16,7 @@
 - Ctrl+C: 공정 진행·정지 순서·CSV 리스트(딜레이·행 사이)·공정 밖 정리 중이거나 히터 가스가 잡혀 있으면 거부(콘솔에 이유).
   히터 운전·히터 레시피 중이면 "종료하면 히터가 꺼집니다 — 5초 안에 Ctrl+C 를 한 번 더"(v1 확인창 대신).
   정상 종료: 히터 레시피 정지 → S41(히터 RUN=0) → 결과를 짧게 기다림 → worker 정지·포트 닫기 → 기록 flush → 서버 정지.
+  bench(장비 쓰기 금지)는 S41 이 보내지 않음(bench_skip, info)으로 끝나고 RUN=0 쓰기·기다림을 건너뛴다(5-14).
 - 강제 종료(콘솔 창 닫기·로그오프·윈도우 종료 — SetConsoleCtrlHandler): 거부할 수 없으므로 결정 4(2026-10-20)대로 파워 출력만 끈다 —
   DC OFF, RF DAC 0·enable OFF, RF Pulse OFF, 히터 RUN=0(히터 레시피 중단). PLC 릴레이(펌프·밸브·가스 차단밸브·셔터)와 MFC 는 그대로.
   공정 중이었으면 먼저 공정을 멈추고(program_exit — runner 취소·제어 루프 멈춤·ABORTED, run_end error PROGRAM_EXIT) 그다음 끄기 명령.
@@ -476,7 +477,9 @@ class App:
             if s.heater.recipe_running:
                 s.heater.recipe_stop("프로그램 종료")
             s.safety.event("shutdown")                     # S41 HEATER_FORCE_OFF
-            if s.workers["plc"].ready:
+            if not s.policy.device_writes:
+                self.log.info("bench — 히터 쓰기 건너뜀")    # 장비 쓰기 금지 — RUN=0 을 보내지도 기다리지도 않는다
+            elif s.workers["plc"].ready:
                 # 지난 읽기 값(이미 RUN=0)이 아니라 쓰기 끝을 기다린다 — 같은 큐 뒤에 하나 더 넣어 S41 쓰기까지 끝난 뒤에
                 # 포트를 닫는다(먼저 닫으면 S41 쓰기가 CANCELLED)
                 res: Dict[str, Any] = {}

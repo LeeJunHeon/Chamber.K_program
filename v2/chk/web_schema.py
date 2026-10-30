@@ -23,8 +23,12 @@
                 버전 11: 화면용 이름·도움말(블록 값 label·help·advanced·enumLabels, 블록 help·group·summary·groups, 정지 단계 label,
                 공정 중 수정 label·help, 레시피 열 label·help·group, 스냅샷 detail·desc·enumLabels·블록 desc, eventKinds,
                 paramGroups) — 동작·문구는 그대로. 개발용 정보(설정 키·레지스터·코드 위치)는 desc 등에 그대로 남는다
+                버전 12: 스냅샷 이온 게이지 상태 열 ig.ion_state·ig.a_state·ig.b_state(enumLabels)와 값 열의 stateColumn
+                (값이 비어 있고 상태가 ok 가 아니면 상태 이름을 보인다), commands[].benchOk(bench 에서도 받는 명령),
+                eventKinds safety bench_skip(bench 에서 안전 조치를 보내지 않음)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
-  commands      명령(종류·경로·역할·허용 상태·조건·인자) · preconditions · reasons(사유 코드) · plcButtons
+  commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
+                benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
   recipe        행 레시피 열(rf_pulse_freq 는 kHz, zeroIsEmpty 열은 0 = 빈 값) · 히터 레시피 열
   blocks        블록 정의(종류·값·단위·범위·기본값·설명) + 감시 항목·조건 값·한도·값 사이 규칙(valueRules)
   adjust        공정 중 수정 항목(장비 → 세부, 형식·범위·적용 방식·판정)
@@ -35,7 +39,9 @@
   paramGroups   설정(params[].group) 묶음 key → 화면 이름
   snapshot      1초 스냅샷 열 정의(웹 화면 라벨·단위·형식·그래프) — tick·process 필드, 장비 블록(이름·라벨·worker·
                 품질 열 <블록>.q·<블록>.age_s) → 필드(column 전체 이름·형식 fmt 는 파이썬 format spec 그대로 .1f·.2E·d).
-                ownQuality 필드는 <column>.q·<column>.age_s 품질 열을 더 갖는다. 열 집합 = hello.snapshotColumns
+                ownQuality 필드는 <column>.q·<column>.age_s 품질 열을 더 갖는다. 열 집합 = hello.snapshotColumns.
+                stateColumn(값 열) = 같은 블록 상태 열 — 화면 규칙: 값이 비어 있고 그 상태가 ok 가 아니면 상태 열의
+                enumLabels 이름을 값 자리에 보인다(장비 종류를 따로 보지 않는다)
 범위가 파라미터 값에 묶인 항목(paramMin·paramMax·paramScale)은 웹이 params 의 현재값으로 계산한다.
 hash 는 정의만으로 계산한다(현재값·대기값 제외) — 내용이 바뀌면 시험(test_web_schema)이 알고 EXPORT_VERSION 을 올리게 한다.
 """
@@ -55,7 +61,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 11
+EXPORT_VERSION = 12
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -107,7 +113,7 @@ EVENT_KINDS: tuple = (
     ("safety", "blip", "안전 규칙 순간 발동", _D), ("safety", "also", "이미 정지 중 — 추가 발동", _D),
     ("safety", "abort", "공정 중단", _M), ("safety", "seq_start", "정지 순서 시작", _M),
     ("safety", "seq_done", "정지 순서 끝", _M), ("safety", "step", "정지 단계 진행", _D),
-    ("safety", "error", "정지 단계 오류", _M),
+    ("safety", "error", "정지 단계 오류", _M), ("safety", "bench_skip", "bench — 보내지 않음", _M),
     ("heater", "reached", "히터 목표 도달", _M), ("heater", "engaged", "유지 모드 진입", _M),
     ("heater", "give_up", "유지 모드 포기", _M), ("heater", "alert", "히터 경고", _M),
     ("heater", "saturated", "히터 출력 포화", _M), ("heater", "gas", "히터 가스", _M),
@@ -181,7 +187,8 @@ def _seq(s) -> dict:
 def _field(f, column: str) -> dict:
     return {"column": column, "name": f.name, "type": f.type.value, "unit": f.unit, "label": f.label, "fmt": f.fmt,
             "summary": f.summary, "ownQuality": f.own_quality, "detail": f.detail, "desc": f.desc,
-            "enumLabels": dict(f.enum_labels) if f.enum_labels else None}
+            "enumLabels": dict(f.enum_labels) if f.enum_labels else None,
+            "stateColumn": f"{column.rsplit('.', 1)[0]}.{f.state}" if f.state else None}
 
 
 def snapshot() -> Dict[str, Any]:
@@ -202,7 +209,7 @@ def definitions() -> Dict[str, Any]:
                     for d in P.DROPPED],
         "commands": [{"kind": c.kind, "label": c.label, "sources": [s.value for s in c.sources], "role": c.role,
                       "states": list(c.states), "requires": list(c.requires), "args": [_arg(a) for a in c.args],
-                      "desc": c.desc, "v1": c.v1} for c in C.COMMANDS],
+                      "desc": c.desc, "v1": c.v1, "benchOk": c.bench_ok} for c in C.COMMANDS],
         "preconditions": [{"id": p.id, "desc": p.desc, "reason": p.reason, "v1": p.v1} for p in C.PRECONDITIONS],
         "reasons": [{"code": r.code, "label": r.label, "category": r.category} for r in C.ALL_REASONS],
         "plcButtons": [{"target": b.target, "addr": b.addr, "label": b.label} for b in C.PLC_BUTTONS],

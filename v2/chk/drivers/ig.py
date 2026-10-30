@@ -27,6 +27,27 @@ E_BLOCK_S = 1.0          # A·B 뒤 E 를 보내지 않는 시간(v1 e_block_sec
 GAUGE_NEG_OK_TORR = -5.0e-3
 GAUGE_MIN_TORR = 1.0e-3
 
+
+def torr_text(v: float) -> str:
+    """1.0E-3 꼴(지수 앞 0 없음 — v1 화면과 같게)."""
+    m, e = f"{v:.1E}".split("E")
+    return f"{m}E{int(e)}"
+
+
+# 압력 상태 → 화면 문구(v1 device/IonGauge.py STATE_TEXT 와 같은 말 — 숫자 대신 이 말을 보여 준다).
+# below 는 측정 하한 GAUGE_MIN_TORR 에서 만든다(v1 화면 "< 1.0E-3 Torr")
+ION_STATES = (("ok", "정상"), ("off", "꺼짐"), ("preparing", "측정 준비 중"), ("invalid", "값 오류"))
+GAUGE_STATES = (("ok", "정상"), ("below", f"< {torr_text(GAUGE_MIN_TORR)} Torr"), ("negative", "음수 — 영점·오염 확인"),
+                ("disconnected", "미연결"), ("unzeroed", "영점 미조정"), ("invalid", "값 오류"))
+STATE_TEXT = dict(ION_STATES + GAUGE_STATES)
+
+
+def pressure_text(torr: Optional[float], state: str) -> str:
+    """화면·기록 문구 — ok 면 "6.3E-3 Torr", 아니면 상태 문구("< 1.0E-3 Torr"·"미연결" …)."""
+    if state == "ok" and torr is not None:
+        return f"{torr_text(torr)} Torr"
+    return STATE_TEXT.get(state, state)
+
 FILAMENT_ERRORS = {
     3: "방출 상실로 꺼짐", 4: "필라멘트가 제한 시간 안에 안 켜짐", 5: "자동 시작에서 켜기 실패",
     6: "게이지 커넥터에 고전압 없음", 7: "필라멘트 전류 없음(단선 가능)", 8: "필라멘트 과전류(단락)",
@@ -225,7 +246,8 @@ class IgDriver:
             self.emission_since = None
         self._judge(r)
         return {"ig.ion_torr": r.ion_torr, "ig.a_torr": r.a_torr, "ig.b_torr": r.b_torr, "ig.filament": r.filament,
-                "ig.emission": r.emission, "ig.degas": r.degas, "ig.err_code": r.err_code}
+                "ig.emission": r.emission, "ig.degas": r.degas, "ig.err_code": r.err_code,
+                "ig.ion_state": r.ion_state, "ig.a_state": r.a_state, "ig.b_state": r.b_state}
 
     # ───────── 필라멘트 ─────────
     def filament_on(self, on_done: Optional[Callable[[Result], None]] = None) -> None:
