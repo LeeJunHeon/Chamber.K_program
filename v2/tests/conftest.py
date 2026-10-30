@@ -62,6 +62,19 @@ def _mb(v) -> str:
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: 오래 걸리는 시험(골든 하니스·전체 공정 sim 등) — 빠른 시험에서 뺀다")
+    config.addinivalue_line("markers", "cascade: HEATER_CTRL_MODE=cascade(2단 제어) 경로로 돌린다 — 표시가 없으면 tc1(롤백 경로)")
+
+
+@pytest.fixture(autouse=True)
+def heater_ctrl_mode(request, monkeypatch):
+    """기존 시험은 롤백 경로(HEATER_CTRL_MODE=tc1 — RampProfiler + HeaterHold, 템플릿에 셔터 전 정착 없음)를 그대로 검증한다
+    (v1 3f4cdef conftest 와 같은 방법). 2단 제어 시험은 @pytest.mark.cascade 로 연다 — 설정값(기본 cascade)은 그대로 두고
+    제어 구조를 읽는 함수(heater_cascade.ctrl_mode)만 고정한다(묶음·설정 시험이 기본값을 보도록)."""
+    from v2.chk import heater_cascade as HC
+    cascade = request.node.get_closest_marker("cascade") is not None
+    if not cascade:
+        monkeypatch.setattr(HC, "ctrl_mode", lambda cfg: "tc1")
+    yield "cascade" if cascade else "tc1"
 
 
 @pytest.hookimpl(hookwrapper=True)

@@ -579,6 +579,11 @@ class ChkSafety:
         if code and code not in ("USER_STOP",) and self.process.active:
             self.engine.abort(code, rule="heater_recipe")
 
+    def heater_casc_abort(self, code: str) -> None:
+        """캐스케이드 TC1 탈락 의심(HEATER_CASCADE_ALARM_ACTION=abort) — 공정이 히터를 소유하면 공정 중단(v1 _on_heater_casc_alert)."""
+        if code and self.process.active:
+            self.engine.abort(code, rule="heater_cascade")
+
     def check_heater_start(self, view: View) -> Optional[str]:
         if self.process.active:
             return "PROCESS_RUNNING"                                     # S5(히터 가스)

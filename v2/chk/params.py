@@ -336,6 +336,35 @@ PARAMS: tuple = (
        v1_default=500.0, desc="HEATER_SV_LIMIT_C 이하"),
     _p("HEATER_SOAK_TOLERANCE", "heater", "도달 판정 허용 편차", "°C", F, 2.0, 0.5, 20.0, v1_default=3.0),
     _p("HEATER_SOAK_TIME_SEC", "heater", "공정 레시피 도달 후 유지", "s", I, 60, 0, 3600),
+    # ── 히터 제어 구조(5-15 — v1 f188f28·b0a945a·3328872 lib/config.py, controller/heater_cascade) ──
+    _p("HEATER_CTRL_MODE", "heater", "히터 제어 구조", "", E, "cascade", enum=("cascade", "tc1"), safety=H,
+       src="lib/config.py(3328872)",
+       desc="cascade = 2단 제어(PLC PID 는 RUN 내내 TC2, 파이썬이 SV2 = 매핑(TC1 기준값 r1) + 보정. 유지 모드는 쓰지 않음) / "
+            "tc1 = 예전 TC1 직접 제어 + 유지 모드(롤백용)"),
+    _p("HEATER_TC2_MAP", "heater", "TC1→TC2 기본 매핑", "°C", S, "25:25,50:92,100:170,150:226,200:290,250:365,300:437,400:569,500:705,600:842",
+       pattern=r"\s*-?\d+(\.\d+)?\s*:\s*-?\d+(\.\d+)?\s*(,\s*-?\d+(\.\d+)?\s*:\s*-?\d+(\.\d+)?\s*)+",
+       safety=H, src="lib/config.py(b0a945a)",
+       desc="'TC1:TC2' 를 쉼표로 이은 것(v1 [[TC1, TC2], ...]). 점 사이 선형, 범위 밖은 끝 구간 기울기로 외삽. "
+            "2026-10-28~29 캐스케이드 3런의 평형 관계(300 °C = 수동 유지 실측 437)"),
+    _p("HEATER_CASCADE_TI_SEC", "heater", "바깥 루프 적분 시간", "s", F, 600.0, 60.0, 7200.0, src="lib/config.py(f188f28)"),
+    _p("HEATER_CASCADE_LAG_SEC", "heater", "TC1 비교 기준 지연", "s", F, 90.0, 0.0, 600.0, src="lib/config.py(f188f28)",
+       desc="e = r1(t−LAG) − TC1(EMA 30 s)"),
+    _p("HEATER_CASCADE_BIAS_RATE_MAX", "heater", "보정 최대 변화율", "°C/min", F, 3.0, 0.1, 60.0,
+       src="lib/config.py(f188f28)", desc="TC2 기준"),
+    _p("HEATER_CASCADE_BIAS_LIMIT_C", "heater", "보정 크기 상한", "°C", F, 150.0, 10.0, 500.0, src="lib/config.py(f188f28)"),
+    _p("HEATER_CASCADE_BIAS_ALARM_C", "heater", "TC1 탈락 의심 보정 크기", "°C", F, 100.0, 10.0, 500.0,
+       src="lib/config.py(f188f28)", desc="|보정| 이 이 값 이상으로 60 s 지속되면 TC1 탈락 의심 경보"),
+    _p("HEATER_CASCADE_ALARM_ACTION", "heater", "TC1 탈락 의심 시", "", E, "abort", enum=("abort", "warn"), safety=H,
+       src="lib/config.py(f188f28)", desc="abort = 공정 소유면 공정 중단·히터 레시피면 레시피 중단·수동이면 경고 / warn = 경고만"),
+    _p("HEATER_SHUTTER_SETTLE_TOL_C", "heater", "셔터 전 정착 허용 폭", "°C", F, 2.0, 0.5, 10.0, src="lib/config.py(3328872)",
+       desc="메인 셔터 열기 직전 TC1 이 목표 ±이 값 안에 HEATER_SHUTTER_SETTLE_SEC 연속이면 연다(캐스케이드만)"),
+    _p("HEATER_SHUTTER_SETTLE_SEC", "heater", "셔터 전 정착 연속 시간", "s", F, 60.0, 10.0, 600.0,
+       src="lib/config.py(3328872)", desc="연속 시간은 승온 대기 통과 뒤부터 센다 — 이미 맞으면 바로 통과"),
+    _p("HEATER_SHUTTER_SETTLE_MAX_SEC", "heater", "셔터 전 정착 대기 상한", "s", F, 900.0, 0.0, 3600.0,
+       src="lib/config.py(3328872)", desc="0 이면 기본 템플릿에 이 단계를 넣지 않는다"),
+    _p("HEATER_SHUTTER_SETTLE_FAIL_ACTION", "heater", "셔터 전 정착 상한 초과 시", "", E, "proceed",
+       enum=("proceed", "abort"), safety=H, src="lib/config.py(3328872)",
+       desc="proceed = 경고 후 셔터 열고 진행 / abort = 알리고 공정 중단"),
     _p("HEATER_WAIT_TIMEOUT_SEC", "heater", "승온 대기 최소 한도", "s", I, 5400, 600, 43200, v1_default=3600,
        desc="실제 한도 = min(max(이 값, 예상 램프 + MARGIN), MAX)"),
     _p("HEATER_WAIT_TIMEOUT_MARGIN_SEC", "heater", "승온 대기 여유", "s", F, 1800.0, 0.0, 14400.0,
@@ -520,6 +549,8 @@ def _need(cond: bool, msg: str) -> Optional[str]:
 
 
 CROSS_RULES: tuple = (
+    _r("X26", ("HEATER_TC2_MAP",), "TC1→TC2 매핑: 점 2개 이상, TC1·TC2 모두 증가(v1 _validate_heater_cascade_config)",
+       lambda v: _map_problem(v["HEATER_TC2_MAP"])),
     _r("X01", ("HEATER_MV_MIN", "HEATER_MV_LIMIT", "HEATER_MV_ABS_MAX"),
        "MV_MIN+20 ≤ MV_LIMIT ≤ MV_ABS_MAX",
        lambda v: _need(v["HEATER_MV_MIN"] + 20 <= v["HEATER_MV_LIMIT"] <= v["HEATER_MV_ABS_MAX"],
@@ -595,6 +626,12 @@ CROSS_RULES: tuple = (
        lambda v: _need(v["RUN_MODE"] != "prod" or bool(v["UPLINK_URL"]),
                        "prod 인데 UPLINK_URL 이 비었다")),
 )
+
+
+def _map_problem(text) -> Optional[str]:
+    from v2.chk.heater_cascade import map_problem
+    p = map_problem(text)
+    return f"HEATER_TC2_MAP: {p}" if p else None
 
 
 def _ports_unique(v: Mapping[str, Any]) -> bool:

@@ -6,7 +6,9 @@
   garbage·truncate·bad_crc·disconnect).
 래더 모델(0.1 s 단계로 시각을 따라간다 — 요청이 올 때와 advance_to 때):
   - 히터: 1차 열 모델 dT/dt = (HEAT_GAIN·p − (T − T_AMB)) / TAU, p = (MV − 400)/1200.
-    TC2 = T + TC2_RISE·p(소자 쪽이 더 뜨겁다). 램프: 중간 목표 sv_ramp 가 SV 쪽으로 D20(카운트/초 = 0.1 °C/s)씩,
+    TC2 = T + TC2_RISE·p(소자 쪽이 더 뜨겁다). tc2_map(5-15, 2단 제어 시험대)을 주면 TC2 는 정상 상태에서 그 매핑을 따른다:
+    TC2 → T + (map(Teq) − Teq), Teq = T_AMB + HEAT_GAIN·p(출력이 정하는 평형 TC1), 1차 지연 TC2_TAU_S — 실제 장비처럼
+    TC2 가 TC1 보다 앞서 움직이고 평형에서 TC2 = map(TC1). 램프: 중간 목표 sv_ramp 가 SV 쪽으로 D20(카운트/초 = 0.1 °C/s)씩,
     남은 거리가 감속 구간(D27) 안이면 D28, PV 가 sv_ramp 보다 홀드백(D21) 넘게 뒤지면 멈춤.
     PI 제어로 MV(D41) = 400 + Kp·e + Ki·∫e, 400~D18. RUN·ITL·¬FAULT 일 때만, 아니면 D41 = 0.
     TC2 제어(M0004A 요구 + RUN + D36>0 + TC2 정상 → M0004B): 목표 SV2(D35), PV = TC2.
@@ -41,6 +43,7 @@ T_AMB = 25.0            # °C
 HEAT_GAIN = 1000.0      # p=1 에서 정상상태 상승 °C
 TAU_HEAT = 600.0        # 열 시정수 s
 TC2_RISE = 150.0        # p=1 에서 TC2 − TC1 °C
+TC2_TAU_S = 15.0        # tc2_map 모델의 TC2 1차 지연 s(v1 heater_cascade 시험 플랜트의 TC2 시정수)
 KP, KI = 8.0, 0.4       # 카운트/°C, 카운트/(°C·s)
 WD_TON_S = float(D.HEATER_WD_TON_SEC)
 RF_GEN_FULL_W = 600.0   # DAC 4000 = 600 W(YSR-06MF 정격)
@@ -66,6 +69,9 @@ class PlcSim(SimDevice):
         self.ref_inject_w = 0.0
         self.chamber = chamber or Chamber(start)
         self.forced_regs: Dict[int, int] = {}          # 래더가 강제하는 값 흉내(되읽기 불일치 시험)
+        self.tc2_map = None                             # [(TC1, TC2), …] — 주면 TC2 가 이 매핑을 따른다(머리말)
+        self.tc2_offset = 0.0                           # tc2_map 모델: 같은 TC2 에서 TC1 이 이만큼 낮게(시료대 열손실 흉내)
+        self._tc2 = None
         self._init_memory()
 
     # ───────── 메모리 ─────────
@@ -115,7 +121,7 @@ class PlcSim(SimDevice):
                 for k in ("heater_ot", "heater_tc_err", "heater_wd_err", "heater_fault"):
                     c[A[k]] = False
         # 트립
-        tc2 = self.T + TC2_RISE * self._p()
+        tc2 = self._tc2_now(dt)
         if self.T >= r[A["heater_ot_limit"]] / 10 or (not self.tc2_fail and tc2 >= r[A["heater_ot2_limit"]] / 10):
             c[A["heater_ot"]] = True
         if self.tc_fail:
@@ -167,13 +173,33 @@ class PlcSim(SimDevice):
         self.chamber.advance_to(self.t + dt)
         self._ladder_outputs()
 
+    def _map(self, t1: float) -> float:
+        p = self.tc2_map
+        for i in range(len(p) - 1):
+            if t1 <= p[i + 1][0]:
+                (x0, y0), (x1, y1) = p[i], p[i + 1]
+                break
+        else:
+            (x0, y0), (x1, y1) = p[-2], p[-1]
+        return y0 + (y1 - y0) / (x1 - x0) * (t1 - x0)
+
+    def _tc2_now(self, dt: float = 0.0) -> float:
+        if not self.tc2_map:
+            return self.T + TC2_RISE * self._p()
+        teq = T_AMB + HEAT_GAIN * self._p()
+        goal = self.T + (self._map(teq) - teq) + self.tc2_offset
+        if self._tc2 is None:
+            self._tc2 = goal
+        self._tc2 += (goal - self._tc2) * min(1.0, dt / TC2_TAU_S)
+        return self._tc2
+
     def _p(self) -> float:
         mv = self.regs[A["heater_mv"]]
         return 0.0 if mv < 400 else min(1.0, (mv - 400) / 1200.0)
 
     def _ladder_outputs(self) -> None:
         r, c = self.regs, self.coils
-        tc2 = self.T + TC2_RISE * self._p()
+        tc2 = self._tc2_now()
         r[A["heater_pv"]] = 0xFFFF if self.tc_fail else int(round(self.T * 10)) & 0xFFFF
         r[A["heater_pv2"]] = 0xFFFF if self.tc2_fail else int(round(tc2 * 10)) & 0xFFFF
         r[A["heater_sv_ramp"]] = int(round(self.sv_ramp * 10))

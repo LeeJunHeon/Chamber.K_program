@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType, row_columns
 from v2.chk.drivers.ig import GAUGE_STATES, ION_STATES
+from v2.chk.heater_cascade import STATE_TEXT
 
 F, I, B, S = FType.FLOAT, FType.INT, FType.BOOL, FType.STR
 
@@ -20,6 +21,10 @@ def _f(name, type_, unit, label, fmt="", source="", own=False, summary="last", d
 
 def _bit(name, label, addr=None, detail=False, desc="") -> FieldDef:
     return _f(name, B, "", label, source=f"plc:{addr or name}", summary="any", detail=detail, desc=desc)
+
+# 히터 제어 구조(HEATER_CTRL_MODE)·캐스케이드 상태(heater_cascade.STATE_TEXT) 화면용 이름
+CTRL_MODE_LABELS = (("cascade", "2단 제어(TC2)"), ("tc1", "TC1 직접 제어"))
+CASC_STATE_LABELS = tuple(STATE_TEXT.items())
 
 # 유지 모드(heater_engine.HeaterEngine.hold_label: off / arming / holding_<kind>, kind = dac·tc2) 화면용 이름
 HOLD_LABELS = (("off", "꺼짐"), ("arming", "진입 대기"), ("holding_dac", "DAC 고정 유지"), ("holding_tc2", "TC2 추종 유지"))
@@ -47,7 +52,7 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
        desc="D00016 × 0.1 °C(v1 과 같은 레지스터·배율). 래더가 운전(RUN=1) 중에만 갱신 — 정지 중에는 마지막 운전 때 값이 "
             "남는다(실측 10/20 825.1·10/29 513.3, v1 main.py 는 정지 중 D00012 를 보임). TC2 추종·캐스케이드 중에는 TC2 목표"),
     _f("sv_ramp", F, "°C", "램프 중간 목표", ".1f", "plc:heater_sv_ramp", detail=True),
-    _f("sv2", F, "°C", "TC2 목표", ".1f", "plc:heater_sv2", detail=True),
+    _f("sv2", F, "°C", "TC2 목표", ".1f", "plc:heater_sv2", desc="D00035 — 2단 제어·TC2 추종 중 PID 가 따라가는 TC2 목표(SV2)"),
     _f("sv_limit", F, "°C", "목표 상한", ".1f", "plc:heater_sv_limit", detail=True, desc="PLC D00013"),
     _f("ot2_limit", F, "°C", "TC2 과온 한계", ".1f", "plc:heater_ot2_limit", detail=True, desc="PLC D00034"),
     _f("sv2_max", F, "°C", "TC2 목표 상한", ".1f", "plc:heater_sv2_max", detail=True,
@@ -62,6 +67,18 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
     _f("pid_err", I, "", "PID 오류 코드", "d", "plc:heater_pid_err", detail=True),
     _f("hold", S, "", "유지 모드", source="core", desc="heater_engine.hold_label — off/arming/holding_dac/holding_tc2",
        enum_labels=HOLD_LABELS),
+    # 2단(캐스케이드) 제어 — 5-15(v1 7542db4·2d8146b 히터 CSV 캐스케이드 열·화면 값). 꺼져 있으면 값 없음(제어 상태는 idle)
+    _f("ctrl_mode", S, "", "제어 구조", source="core", detail=True, enum_labels=CTRL_MODE_LABELS,
+       desc="HEATER_CTRL_MODE — cascade / tc1(롤백)"),
+    _f("casc_state", S, "", "2단 제어 상태", source="core", enum_labels=CASC_STATE_LABELS,
+       desc="heater_cascade.HeaterCascade.state — v1 casc_state 열"),
+    _f("r1", F, "°C", "TC1 기준값", ".1f", "core", desc="r1 — 감속 접근 램프·TC1 홀드백(v1 r1_c). TC2 제어 중 화면 목표 칸"),
+    _f("bias", F, "°C", "보정", ".2f", "core", desc="ff + 적분 보정(SV2 = 매핑값 + 보정, v1 bias_c)"),
+    _f("bias_ff", F, "°C", "학습 보정", ".2f", "core", detail=True, desc="ff(r1) — 학습 매핑 곡선(v1 bias_ff_c)"),
+    _f("bias_int", F, "°C", "적분 보정", ".2f", "core", detail=True, desc="b_int — 매 운전 0 에서(v1 bias_int_c)"),
+    _f("r1_lag", F, "°C", "비교 기준", ".1f", "core", detail=True, desc="r1(t−HEATER_CASCADE_LAG_SEC)(v1 r1_lag_c)"),
+    _f("tc1_ema", F, "°C", "TC1 평균", ".1f", "core", detail=True, desc="TC1 EMA 30 s(v1 tc1_ema_c)"),
+    _f("sv2_map", F, "°C", "SV2 매핑값", ".1f", "core", detail=True, desc="map(r1) — HEATER_TC2_MAP(v1 sv2_map_c)"),
 ), desc="PLC 내장 PID")
 
 RF_BLOCK = DeviceBlock("rf", "RF 전원", (

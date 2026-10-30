@@ -43,6 +43,8 @@ CFG_KEYS: tuple = (
     "PRESSURE_WAIT_TOL_RATIO", "PRE_POWER_OFF_SETTLE_SEC", "RFPULSE_DUTY_MAX", "RFPULSE_DUTY_MIN", "RFPULSE_ENABLED",
     "RFPULSE_MAX_POWER", "RFPULSE_PULSE_FREQ_MAX_HZ", "RFPULSE_PULSE_FREQ_MIN_HZ", "RFPULSE_PULSE_MIN_EDGE_US", "RF_MAX_POWER",
     "SP1_TIMEOUT_SEC", "SP2_MTORR", "SP3_MTORR", "SP4_MTORR",
+    "HEATER_SHUTTER_SETTLE_TOL_C", "HEATER_SHUTTER_SETTLE_SEC", "HEATER_SHUTTER_SETTLE_MAX_SEC",
+    "HEATER_SHUTTER_SETTLE_FAIL_ACTION",
 )
 
 # 규칙 꼬리표 — 시험이 모두 한 번 이상 나오는지 본다(값 사이 규칙은 VALUE_RULES id 로 따로 본다)
@@ -97,6 +99,11 @@ CASES: List[tuple] = [
     ("pressure_custom_abort", [B("pressure", sp=2, value=12.5, tol_ratio=0.1, stable_sec=3.0, timeout_sec=90.0,
                                  on_timeout="abort"), B("pressure", sp=1, value=3.0, on_timeout="continue")], {}, []),
     ("pressure_sp_int_as_float", [B("pressure", sp=2.0)], {}, []),
+    # 셔터 전 히터 정착(5-15) — 비우면 설정값, 상한 0 이면 할 일 없음(NOP)
+    ("heater_settle_defaults", [B("heater_ramp", target_c=300.0), B("heater_settle"), B("main", sec=10.0)], {}, ["defaults"]),
+    ("heater_settle_custom", [B("heater_ramp", target_c=300.0),
+                              B("heater_settle", tol_c=1.5, sec=30.0, max_sec=600.0, fail_action="abort")], {}, []),
+    ("heater_settle_max_zero", [B("heater_settle", max_sec=0)], {}, []),
     ("valve_all", [B("valve", action="open"), B("valve", action="close"), B("valve", action="hold")], {}, []),
     ("shutter_close_all", [B("shutter", action="close", targets=["ms", "g2", "g1"])], {}, []),
     ("power_on_rf_pulse", [B("power_on", rfp_power=100.0, rfp_freq_khz=10.0, rfp_duty=50, timeout_sec=120.0)], RFP, []),

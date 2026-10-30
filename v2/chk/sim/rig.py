@@ -17,6 +17,7 @@ from typing import Any, Dict, Optional
 
 from v2.common.paramdef import defaults
 from v2.common.transport import SimTransport
+from v2.chk import heater_cascade as HC
 from v2.chk import params as P
 from v2.chk.drivers.mfc import CH_AR
 from v2.chk.sim.cesar_sim import CesarSim
@@ -56,7 +57,11 @@ class ChkRig(ChkSystem):
         self.chamber, self.sims = make_sims(clock.monotonic(), log_keep=retention.sim_log)
         self.scenario = scenario
         out = Path(out_dir)
-        super().__init__(clock, dict(defaults(P.PARAMS), **(cfg or {})), out, sim_transports(clock, self.sims), mode=mode,
+        c = dict(defaults(P.PARAMS), **(cfg or {}))
+        if HC.ctrl_mode(c) == "cascade":
+            # 2단 제어 시험대 — TC2 가 매핑을 따르게(기존 tc1 시험의 열 모델은 그대로)
+            self.sims["plc"].tc2_map = sorted(HC.parse_map(c["HEATER_TC2_MAP"]))
+        super().__init__(clock, c, out, sim_transports(clock, self.sims), mode=mode,
                          simple_process=simple_process, store=new_store(out / "config"),
                          scenario_hook=self._scenario if scenario == "light" else None, retention=retention)
 

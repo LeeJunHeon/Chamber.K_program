@@ -32,7 +32,9 @@ REGS = (0, 61)           # FC3 D0..D60
 _ADDR = {a.name: a for a in D.PLC_ADDRS}
 _TEMP_REGS = {"heater_pv", "heater_pv2", "heater_sv", "heater_cur_sv", "heater_sv_ramp", "heater_sv2",
               "heater_sv_limit", "heater_ot2_limit", "heater_sv2_max"}
-CORE_FIELDS = {"heater.hold"}            # 드라이버가 아니라 core(유지 모드 엔진)가 채운다
+# 드라이버가 아니라 core(유지 모드·캐스케이드 — HeaterEngine)가 채운다
+CORE_FIELDS = {"heater.hold", "heater.ctrl_mode", "heater.casc_state", "heater.r1", "heater.bias", "heater.bias_ff",
+               "heater.bias_int", "heater.r1_lag", "heater.tc1_ema", "heater.sv2_map"}
 
 # 히터 한계값(S13) — (ParamDef 키, D 주소 이름, 변환)
 _RATE = lambda c_per_min: max(1, int(round(float(c_per_min) / 6.0)))     # 1 카운트/초 = 6 °C/min
@@ -365,14 +367,17 @@ class PlcDriver:
     def heater_reset(self, on_done=None) -> None:
         self.submit_write("RST", lambda s: self._client(s).write_coil(_ADDR["heater_rst"].addr, True), on_done=on_done)
 
-    def heater_set_reg(self, name: str, raw: int, on_done=None) -> None:
+    def heater_set_reg(self, name: str, raw: int, on_done=None, urgent: bool = False) -> None:
+        """urgent = 히터 끄기와 같은 줄(safety 우선순위)로 — 2단 제어 해제(D00035=0)가 RUN OFF 보다 늦게 나가지 않게."""
         if name not in ("heater_mv_limit", "heater_ramp_rate", "heater_sv2"):
             raise ValueError(name)
-        self.submit_write(f"{name}={raw}", lambda s: self._client(s).write_reg(_ADDR[name].addr, int(raw)), on_done=on_done)
+        self.submit_write(f"{name}={raw}", lambda s: self._client(s).write_reg(_ADDR[name].addr, int(raw)),
+                          kind="safety" if urgent else "write", on_done=on_done)
 
-    def heater_set_pv_sel(self, on: bool, on_done=None) -> None:
+    def heater_set_pv_sel(self, on: bool, on_done=None, urgent: bool = False) -> None:
         self.submit_write(f"PV_SEL={int(on)}",
-                          lambda s: self._client(s).write_coil(_ADDR["heater_pv_sel"].addr, on), on_done=on_done)
+                          lambda s: self._client(s).write_coil(_ADDR["heater_pv_sel"].addr, on),
+                          kind="safety" if urgent else "write", on_done=on_done)
 
     def rf_set_power(self, watts: float, on_done=None) -> None:
         dac = rf_power_to_dac(watts, self.cfg)

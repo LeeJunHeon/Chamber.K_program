@@ -47,7 +47,8 @@ STATES: tuple = (
     S("GAS_PRE", "배기 개방", A, "param", ("STOP_FLOW_OFF_TIMEOUT_SEC",), "abort:MFC_CMD_FAILED",
       v1="pc:522 build_gas_pre_steps", desc="채널별 FLOW_OFF, MFC 밸브 열기"),
     S("HEATER_RAMP", "히터 승온", A, "formula", ("HEATER_WAIT_TIMEOUT_SEC", "HEATER_WAIT_TIMEOUT_MARGIN_SEC",
-      "HEATER_WAIT_TIMEOUT_MAX_SEC", "HEATER_SOAK_TOLERANCE", "HEATER_SOAK_TIME_SEC"), "abort:HEATER_WAIT_TIMEOUT",
+      "HEATER_WAIT_TIMEOUT_MAX_SEC", "HEATER_SOAK_TOLERANCE", "HEATER_SOAK_TIME_SEC", "HEATER_CASCADE_TI_SEC"),
+      "abort:HEATER_WAIT_TIMEOUT",
       skip_if="레시피 행 use_heater 가 아님", v1="pc:534-550, 1295-1329",
       desc="램프 설정·목표 설정 → ±SOAK_TOLERANCE 를 SOAK_TIME 연속 + 램프 목표 도달"),
     S("HEATER_HOLD_WAIT", "히터 유지 모드 진입 대기", A, "param", ("HEATER_HOLD_WAIT_SEC", "HEATER_HOLD_FAIL_ACTION"),
@@ -76,6 +77,10 @@ STATES: tuple = (
       desc="이 동안 DC ±이탈 판정 꺼짐"),
     S("SHUTTER_DELAY", "셔터 딜레이", A, skip_if="shutter_delay = 0", v1="pc:646-657",
       desc="레시피 시간만큼. DC ±이탈 감시 시작(arm)"),
+    S("HEATER_SETTLE", "셔터 전 히터 정착", A, "param", ("HEATER_SHUTTER_SETTLE_TOL_C", "HEATER_SHUTTER_SETTLE_SEC",
+      "HEATER_SHUTTER_SETTLE_MAX_SEC", "HEATER_SHUTTER_SETTLE_FAIL_ACTION"), "proceed",
+      skip_if="히터 미사용·HEATER_CTRL_MODE=tc1·process_time = 0·HEATER_SHUTTER_SETTLE_MAX_SEC = 0", v1="pc HEATER_SETTLE(3328872)",
+      desc="TC1 이 목표 ±TOL 안에 SEC 연속이면 통과(승온 대기 통과 뒤부터 셈). 상한 초과는 FAIL_ACTION — abort 면 HEATER_SETTLE_FAILED"),
     S("MAIN", "메인 공정", A, skip_if="process_time = 0", v1="pc:659-680", desc="Main 셔터 열기 → 레시피 시간"),
     # 블록 공정(blocks.BLOCK_DEFS)의 기본 상태 이름 — 기본 템플릿은 위의 v1 이름(stage)을 쓴다
     S("PRESSURE_SP4", "압력 설정(SP4)", A, v1="v2 블록", desc="압력 블록 sp=4"),
@@ -99,12 +104,13 @@ STATES: tuple = (
 STEP_SEQUENCE: tuple = (
     "PRE_CLEAN", "GAS_PRE", "HEATER_RAMP", "HEATER_HOLD_WAIT", "BASE_WAIT", "GAS_INTRO", "GAS_STABILIZE",
     "GUN_SHUTTER", "POWER_WAIT", "PRESSURE_SP3", "PRESSURE_SP2", "PRESSURE_SP1", "DC_DELAY", "SHUTTER_DELAY",
-    "MAIN",
+    "HEATER_SETTLE", "MAIN",
 )
 
 FORMULAS: dict = {
     "HEATER_RAMP": "min(max(HEATER_WAIT_TIMEOUT_SEC, 예상 램프 초 + HEATER_WAIT_TIMEOUT_MARGIN_SEC), "
-                   "HEATER_WAIT_TIMEOUT_MAX_SEC). 예상 램프 = |목표 − PV| / 램프 속도",
+                   "HEATER_WAIT_TIMEOUT_MAX_SEC). 예상 램프 = |목표 − PV| / 램프 속도. "
+                   "2단 제어(HEATER_CTRL_MODE=cascade)면 + 2 × HEATER_CASCADE_TI_SEC(바깥 루프 수렴 여유)",
     "POWER_WAIT": "min(max(POWER_WAIT_TIMEOUT_SEC, 예상 × POWER_WAIT_EST_FACTOR + POWER_WAIT_EST_MARGIN_SEC), "
                   "POWER_WAIT_TIMEOUT_MAX_SEC). 예상 = max(DC 전류 램프, RF 목표/RF_RAMP_STEP_W + 3×RF_REFP_WAIT_SEC, "
                   "RF Pulse 20 s)",

@@ -5,7 +5,12 @@
 """
 import json
 
+import pytest
+
 from v2.tools import make_web_template_golden as G
+
+# 기본 설정(HEATER_CTRL_MODE=cascade)으로 만든 골든 — 시험 기본 고정(tc1)을 풀어 같은 조건으로 본다(5-15)
+pytestmark = pytest.mark.cascade
 
 
 def test_golden_file_matches_current_code():
@@ -19,7 +24,7 @@ def test_golden_cases_cover_and_cfg_keys_exact():
     d = G.build(read)
     assert read == set(G.CFG_KEYS)                                       # 검사·템플릿이 읽는 설정 키 = 파일의 cfg 키
     cases = d["cases"]
-    assert 20 <= len(cases) <= 40 and len({c["name"] for c in cases}) == len(cases)
+    assert 20 <= len(cases) <= 45 and len({c["name"] for c in cases}) == len(cases)
     ok = [c for c in cases if not c["checkErrors"]]
     bad = [c for c in cases if c["checkErrors"]]
     assert len(bad) >= 5 and all(c["params"] is None and c["blocks"] is None for c in bad)
@@ -27,6 +32,10 @@ def test_golden_cases_cover_and_cfg_keys_exact():
     assert any("heater_ramp" in types(c) for c in ok) and any("heater_ramp" not in types(c) for c in ok)
     assert any("base_wait" in types(c) for c in ok)
     assert any(not c["igEnabled"] for c in ok) and any(c["rfpulsePresent"] for c in ok)
+    by = {c["name"]: c for c in cases}                                   # 셔터 전 히터 정착(5-15) — 2단 제어일 때만, 메인 바로 앞
+    t = types(by["heater_cascade_settle"])
+    assert t[t.index("heater_settle") + 1] == "main" and t[t.index("heater_settle") - 1] == "wait"
+    assert "heater_settle" not in types(by["heater_tc1_no_settle"]) + types(by["heater_settle_max_zero"])
     pw = [b["params"] for c in ok for b in c["blocks"] if b["type"] == "power_on"]
     assert any(p["rfp_freq_khz"] and p["rfp_duty"] for p in pw) and any(p["dc_power"] and p["rf_power"] for p in pw)
     labels = [b["label"] for c in ok for b in c["blocks"]]

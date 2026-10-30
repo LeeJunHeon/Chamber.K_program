@@ -28,6 +28,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
+from v2.chk import heater_cascade as HC
 from v2.chk.process_steps import (ProcessStep, build_gas_intro_steps, build_gas_pre_steps, channels_of, heater_used,
                                   base_pressure_of)
 from v2.chk.recipe import pulse_edge_violation
@@ -151,6 +152,16 @@ BLOCK_DEFS: tuple = (
     BlockDef("heater_wait", "히터 도달·유지 대기", (),
         "HEATER_RAMP", ("HEATER_HOLD_WAIT",), steps="HEATER_WAIT — ±HEATER_SOAK_TOLERANCE 를 HEATER_SOAK_TIME_SEC, 유지 모드 진입",
         v1="pc:546-550, 1295-1530", desc="지금 히터 목표(마지막 승온 블록·공정 중 수정)에 도달·유지할 때까지. 목표가 없으면 경고 뒤 다음"),
+    BlockDef("heater_settle", "셔터 전 히터 정착", (
+        P("tol_c", "float", "°C", "cfg:HEATER_SHUTTER_SETTLE_TOL_C", min=0.5, max=10.0, desc="TC1 허용 폭 ±"),
+        P("sec", "float", "s", "cfg:HEATER_SHUTTER_SETTLE_SEC", min=10.0, max=600.0, desc="범위 안 연속 시간"),
+        P("max_sec", "float", "s", "cfg:HEATER_SHUTTER_SETTLE_MAX_SEC", min=0.0, max=3600.0, desc="대기 상한 — 0 이면 하지 않음"),
+        P("fail_action", "enum", "", "cfg:HEATER_SHUTTER_SETTLE_FAIL_ACTION", enum=("proceed", "abort"),
+          desc="상한 초과 시 proceed(경고 후 진행) / abort(HEATER_SETTLE_FAILED)")),
+        "HEATER_SETTLE", watch={"dc": True, "rf": True, "rfp": True, "flow": False, "pressure": False},
+        steps="HEATER_SETTLE — TC1 이 목표 ±tol_c 안에 sec 연속(승온 대기 통과 뒤부터 셈)", v1="pc HEATER_SETTLE(3328872)",
+        desc="2단 제어(HEATER_CTRL_MODE=cascade)에서 지금 히터 목표(마지막 승온 블록)에 정착할 때까지. 2단 제어가 돌고 있지 않으면 "
+             "경고 뒤 다음(HEATER_SETTLE_SKIPPED). DC ±이탈 감시(S31C)를 켠다(v1 _arm_dc_power_monitor)"),
     BlockDef("base_wait", "베이스 압력 대기(IG)", (
         P("target_torr", "float", "Torr", required=True, param_min="BASE_PRESSURE_MIN_TORR", param_max="BASE_PRESSURE_MAX_TORR"),),
         "BASE_WAIT", steps="IG_FILAMENT_ON · IG_BASE_WAIT · IG_FILAMENT_OFF", v1="pc:1036-1273",
@@ -257,6 +268,12 @@ _UI: Dict[str, tuple] = {
         "ramp_c_per_min": ("승온 속도", "비우거나 0 이면 설정의 기본 속도. 6 °C/min 보다 느리게는 할 수 없음(6 으로)")}),
     "heater_wait": ("heater", "히터가 지금 목표 온도에 도달해 안정될 때까지 기다립니다. 목표가 없으면 경고만 남기고 넘어갑니다",
                     (), {}),
+    "heater_settle": ("heater", "Main 셔터를 열기 전에 히터 온도(TC1)가 목표에 다시 자리 잡을 때까지 기다립니다. "
+                                "2단 제어일 때만 하고, 아니면 넘어갑니다", ("tol_c", "sec"), {
+        "tol_c": ("허용 폭", "TC1 이 목표 ± 이 값 안에 있어야 함. 비우면 설정값"),
+        "sec": ("연속 시간", "허용 폭 안에 이 시간 동안 이어지면 통과. 승온 대기를 통과한 뒤부터 셈. 비우면 설정값"),
+        "max_sec": ("최대 대기", "넘으면 아래 '넘었을 때' 대로. 0 이면 이 블록을 하지 않음. 비우면 설정값", _ADV),
+        "fail_action": ("넘었을 때", "비우면 설정값", _ADV, (("proceed", "경고 남기고 셔터 열고 진행"), ("abort", "공정 중단")))}),
     "base_wait": ("prep", "이온 게이지를 켜고 압력이 목표 이하가 될 때까지 기다린 뒤 게이지를 끕니다. "
                           "설정에서 이온 게이지가 꺼져 있으면 시작할 수 없습니다", ("target_torr",), {
         "target_torr": ("목표 압력", "이온 게이지 압력이 이 값 이하가 될 때까지 기다림")}),
@@ -379,7 +396,7 @@ STAGE_TO_TYPE: Dict[str, str] = {
     "POWER_WAIT": "power_on", "PRESSURE_SP1": "pressure", "PRESSURE_SP2": "pressure", "PRESSURE_SP3": "pressure",
     "PRESSURE_SP4": "pressure", "DC_DELAY": "wait", "SHUTTER_DELAY": "wait", "MAIN": "main", "WAIT": "wait",
     "COND_WAIT": "cond_wait", "VALVE": "valve", "SHUTTER": "shutter", "POWER_OFF": "power_off", "GAS_OFF": "gas_off",
-    "HEATER_OFF": "heater_off",
+    "HEATER_OFF": "heater_off", "HEATER_SETTLE": "heater_settle",
 }
 
 
@@ -632,6 +649,10 @@ def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bo
     if sd > 0:
         out.append(B("wait", f"Shutter Delay {sd}s", "SHUTTER_DELAY", sec=sd, watch={"dc": True}))
     pt = max(0, int(math.ceil(float(p.get("process_time", 0.0) or 0.0) * 60)))
+    if float(p.get("process_time", 0.0) or 0.0) > 0:
+        # 셔터 전 히터 정착(v1 3328872) — 셔터 딜레이 뒤·메인 앞. 2단 제어·히터 사용·HEATER_SHUTTER_SETTLE_MAX_SEC > 0 일 때만
+        if heater_used(p) and HC.ctrl_mode(cfg) == "cascade" and float(cfg["HEATER_SHUTTER_SETTLE_MAX_SEC"]) > 0:
+            out.append(B("heater_settle", tol_c=None, sec=None, max_sec=None, fail_action=None))
     if float(p.get("process_time", 0.0) or 0.0) > 0 and pt > 0:
         out.append(B("main", sec=pt, close=False, watch=None))
     out.append(B("end_stop", skip=None))
@@ -817,6 +838,12 @@ def _expand_block(ctx: _Ctx, b: dict, no: str) -> None:
                     out.append(S("PLC_CMD", f"{'Ar' if g == 'ar' else 'O2'} Valve Close", (btn, False)))
     elif t == "heater_off":
         out.append(S("HEATER_OFF", "히터 끄기"))
+    elif t == "heater_settle":
+        tol, sec, mx = float(p["tol_c"]), float(p["sec"]), float(p["max_sec"])
+        if mx > 0:
+            out.append(S("HEATER_SETTLE", f"셔터 전 히터 정착 확인 (TC1 ±{tol:g}°C, {sec:.0f}s 연속, 상한 {mx:.0f}s)",
+                         value=ctx.heater_target, polling=True,
+                         spec={"tol": tol, "sec": sec, "max_sec": mx, "fail_action": str(p["fail_action"])}))
     elif t == "wait":
         sec = _dur(p["sec"])
         sh = stage == "SHUTTER_DELAY"

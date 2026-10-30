@@ -26,8 +26,11 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from v2.chk import heater_cascade as HC
+from v2.chk.heater_cascade import HeaterCascade, approach_rate, ramp_minutes   # noqa: F401 — 시험·다른 모듈이 여기서 가져간다
 from v2.chk.process_steps import (StepRunner, build_gas_intro_steps, build_gas_pre_steps, build_gas_release_steps,
                                   build_pressure_stage_steps)
 
@@ -48,24 +51,7 @@ class HeaterEvent:
     data: Optional[dict] = None
 
 
-# ───────────── 감속 접근 프로파일(lib/heater_profile) ─────────────
-def approach_rate(dist: float, rate: float, zone: float, rmin: float) -> float:
-    if rate <= rmin or zone <= 0 or dist >= zone:
-        return float(rate)
-    return rmin + (rate - rmin) * max(0.0, dist) / zone
-
-
-def ramp_minutes(span: float, rate: float, zone: float, rmin: float) -> float:
-    span, rate = abs(float(span)), float(rate)
-    if rate <= 0 or span <= 0:
-        return 0.0
-    if zone <= 0 or rate <= rmin:
-        return span / rate
-    d1 = min(span, zone)
-    b = (rate - rmin) / zone
-    return (span - d1) / rate + math.log((rmin + b * d1) / rmin) / b
-
-
+# ───────────── 감속 접근 프로파일(lib/heater_profile) — approach_rate·ramp_minutes 는 heater_cascade 와 같은 것 ─────────────
 def solve_rate_for_minutes(span: float, minutes: float, zone: float, rmin: float) -> float:
     span, minutes = abs(float(span)), float(minutes)
     if minutes <= 0 or span <= 0:
@@ -108,11 +94,14 @@ class HeaterPort:
     def mv_limit(self, v: int) -> None:
         self.plc.heater_set_reg("heater_mv_limit", int(v))
 
-    def sv2(self, c: float) -> None:
-        self.plc.heater_set_reg("heater_sv2", int(round(float(c) * 10)))
+    def sv2(self, c: float, urgent: bool = False) -> None:
+        """urgent = 2단 제어 해제 — 히터 끄기(safety)와 같은 줄로(RUN OFF 보다 늦게 나가지 않게)."""
+        kw = {"urgent": True} if urgent else {}
+        self.plc.heater_set_reg("heater_sv2", int(round(float(c) * 10)), **kw)
 
-    def pv_sel(self, on: bool) -> None:
-        self.plc.heater_set_pv_sel(bool(on))
+    def pv_sel(self, on: bool, urgent: bool = False) -> None:
+        kw = {"urgent": True} if urgent else {}
+        self.plc.heater_set_pv_sel(bool(on), **kw)
 
 
 # ───────────── RampProfiler(controller/heater_ramp.py) ─────────────
@@ -206,7 +195,11 @@ class RampProfiler:
 
 # ───────────── HeaterHold(controller/heater_hold.py) ─────────────
 class HeaterHold:
-    mode = _cfg("HEATER_HOLD_MODE", str)
+    @property
+    def mode(self) -> str:
+        """실제로 쓰는 유지 모드 — 캐스케이드면 "off"(PLC 에 아무것도 쓰지 않는다, v1 main._hold_mode_eff)."""
+        return "off" if HC.ctrl_mode(self.cfg) == "cascade" else str(self.cfg["HEATER_HOLD_MODE"])
+
     mv_limit, mv_min = _cfg("HEATER_MV_LIMIT", int), _cfg("HEATER_MV_MIN", int)
     enter_tol, enter_sec = _cfg("HEATER_HOLD_MV_ENTER_TOL_C"), _cfg("HEATER_HOLD_MV_ENTER_SEC")
     arrive_tol = _cfg("HEATER_HOLD_MV_ARRIVE_TOL_C")
@@ -821,6 +814,13 @@ class RecipeRunner:
         self.finished: Optional[tuple] = None        # (ok, 사유 코드, 문구)
         self.start_fail: Optional[str] = None        # start() 가 거부한 사유
         self.on_finished: Callable[[bool, str], None] = lambda ok, code: None
+        # 2단(캐스케이드) 제어 — HeaterEngine 이 넣는다(cascade 가 아니면 None → RampProfiler 경로). 캐스케이드는 엔진의 PLC 폴링이
+        # tick 한다 — 러너는 start/hold/resume/stop 만 부른다(시계는 하나). 캐스케이드가 D00012 를 r1 로 쥐므로 러너는 쓰지 않는다
+        self.casc_fn: Callable[[], Any] = lambda: None
+
+    @property
+    def casc(self):
+        return self.casc_fn()
 
     def _zr(self):
         return float(self.cfg["HEATER_APPROACH_ZONE_C"]), float(self.cfg["HEATER_APPROACH_MIN_RATE_C_PER_MIN"])
@@ -906,7 +906,10 @@ class RecipeRunner:
             return True
         self.held, self.held_at = True, self._mono()
         st = self._status() or {}
-        if self.state == self.RAMPING:
+        if self.state == self.RAMPING and self.casc is not None:
+            self.held_target = None
+            self.casc.hold()                        # r1 을 그 자리에 세운다(거리 기준 — 재개 때 보정 없음)
+        elif self.state == self.RAMPING:
             if self.ramp.is_active():
                 self.held_target = None
                 self.ramp.hold()
@@ -926,7 +929,9 @@ class RecipeRunner:
             return False
         saved = self.held_target
         self._clear_hold()
-        if self.state == self.RAMPING:
+        if self.state == self.RAMPING and self.casc is not None:
+            self.casc.resume()
+        elif self.state == self.RAMPING:
             if self.ramp.is_active():
                 self.ramp.resume()
             elif saved is not None:
@@ -945,6 +950,8 @@ class RecipeRunner:
 
     def _safe_shutdown(self, keep_running: bool = False) -> None:
         self.ramp.stop(restore_rate=False)
+        if self.casc is not None and not keep_running:
+            self.casc.stop("레시피 종료")            # M0004A OFF → D00035=0 을 RUN OFF 보다 먼저
         if not keep_running:
             self.port.run(False)
         self.port.ramp(ramp_raw(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]))
@@ -987,7 +994,12 @@ class RecipeRunner:
             s.resolved_rate = float(s.ramp_c_per_min)
         self.step_timeout = self._calc_step_timeout(s, from_temp)
         rate = s.resolved_rate
-        if s.is_cooldown or rate <= 0:
+        if self.casc is not None:
+            # 캐스케이드: 승온·하강·냉각 모두 같은 경로 — 하강/냉각은 r1 을 바로 내리고, 승온은 r1 을 감속 접근으로 올린다
+            self.casc.resume()                      # HOLD 중 skip 이면 r1 정지를 풀고 새 스텝으로(아니면 아무것도 안 함)
+            self.casc.start(float(s.target_c), float(rate if rate > 0 else self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]),
+                            f"레시피 스텝 {self.idx + 1}")
+        elif s.is_cooldown or rate <= 0:
             self.port.ramp(ramp_raw(rate or self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]))
             self.port.target(float(s.target_c))
         elif s.target_c > from_temp + 0.05:
@@ -1007,6 +1019,16 @@ class RecipeRunner:
     def _enter_soak(self, s: RecipeStep) -> None:
         self.ramp.stop(restore_rate=False)
         self.state = self.SOAKING
+        if self.casc is not None:
+            # 캐스케이드는 목표를 그대로 유지한다(SOAK 중에도 bias 보정은 계속). D00012 는 캐스케이드가 쥔다
+            t = self.casc.target()
+            if t is None or abs(float(t) - float(s.target_c)) > 0.05:
+                self.casc.start(float(s.target_c), float(s.resolved_rate or self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]),
+                                f"레시피 스텝 {self.idx + 1}")
+            self.soak_deadline = self.now() + s.soak_min * 60.0
+            self._msg("info", f"스텝 {self.idx + 1}: {s.target_c:g}°C "
+                              + ("RAMP 완료 (SOAK 없음)" if s.soak_min <= 0 else f"SOAK {s.soak_min:g}분 시작"))
+            return
         self.port.target(float(s.target_c))
         self.soak_deadline = self.now() + s.soak_min * 60.0
 
@@ -1015,7 +1037,9 @@ class RecipeRunner:
         self._clear_hold()
         last = self.steps[-1] if self.steps else None
         hold = bool(self.cfg["HEATER_RECIPE_HOLD_AT_END"]) and last is not None and not last.is_cooldown
-        if hold:
+        if hold and self.casc is not None:
+            self.casc.start(float(last.target_c), float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]), "레시피 종료 후 유지")
+        elif hold:
             self.port.target(float(last.target_c))
         self._safe_shutdown(keep_running=hold)
         self._msg("info", "레시피 완료" + (" (히터 계속 운전)" if hold else ""))
@@ -1029,7 +1053,10 @@ class RecipeRunner:
         pv, svr = st.get("pv"), st.get("sv_ramp")
         if s is None or pv is None:
             return
-        if svr is not None:
+        c = self.casc
+        if c is not None and c.is_active():
+            arrived = c.r1_done(float(s.target_c))     # 캐스케이드: D00019 는 SV2 다 — r1(TC1 기준값)이 이 스텝 목표에 닿았나
+        elif svr is not None:
             arrived = abs(float(svr) - s.target_c) <= float(self.cfg["HEATER_RAMP_DONE_TOL_C"])
         else:
             arrived = abs(float(pv) - s.target_c) <= float(self.cfg["HEATER_SOAK_TOLERANCE"])
@@ -1042,7 +1069,8 @@ class RecipeRunner:
             return
         now = self.now()
         if self.state == self.RAMPING:
-            self.ramp.tick()
+            if self.casc is None:
+                self.ramp.tick()                    # 캐스케이드는 엔진의 PLC 폴링이 tick 한다
             if now - self.step_started > self.step_timeout:
                 self.abort("HEATER_WAIT_TIMEOUT", f"스텝 {self.idx + 1} RAMP 시간 초과 ({self.step_timeout:.0f}초)")   # S18D
         elif self.state == self.SOAKING:
@@ -1127,7 +1155,9 @@ class HeaterEngine:
     def __init__(self, clock, cfg: Dict[str, Any], plc, mfc, on_event: Optional[Callable[[HeaterEvent], None]] = None,
                  process_active: Callable[[], bool] = lambda: False,
                  on_gas_failed: Callable[[str], None] = lambda why: None,
-                 on_recipe_failed: Callable[[str], None] = lambda code: None) -> None:
+                 on_recipe_failed: Callable[[str], None] = lambda code: None,
+                 on_casc_abort: Callable[[str], None] = lambda code: None,
+                 learned_path=None) -> None:
         self.clock, self.cfg, self.plc, self.mfc = clock, cfg, plc, mfc
         self.on_event = on_event
         self.process_active = process_active
@@ -1139,6 +1169,11 @@ class HeaterEngine:
         self.hold = HeaterHold(cfg, self.port, self._msg, self._emit, mono)
         self.sat = SaturationGuard(cfg, self.port, self._msg, self._emit, mono)
         self.recipe = RecipeRunner(cfg, self.port, self.ramp, lambda: self.st, self._msg, self._emit, mono)
+        # 2단(캐스케이드) 제어 — HEATER_CTRL_MODE=cascade 면 수동·공정·히터 레시피·원격 명령이 전부 이것 하나를 쓴다(v1 3f4cdef)
+        self.casc = HeaterCascade(cfg, self.port, self._msg, self._casc_alert, mono,
+                                  wallclock=lambda: datetime.fromtimestamp(clock.wall()), learned_path=learned_path)
+        self.recipe.casc_fn = lambda: self.casc if self.cascade else None
+        self._on_casc_abort = on_casc_abort
         self.atm = Atmosphere(cfg, clock, mfc, plc, self._msg, self._gas_failed)
         self._on_gas_failed = on_gas_failed
         self._on_recipe_failed = on_recipe_failed
@@ -1154,6 +1189,11 @@ class HeaterEngine:
         self.events: "deque[HeaterEvent]" = deque(maxlen=20000)   # 최근 기록(링 버퍼)
 
     # ── 공용 ──
+    @property
+    def cascade(self) -> bool:
+        """2단(캐스케이드) 제어로 도는가(HEATER_CTRL_MODE — 쓰는 때 읽는다)."""
+        return HC.ctrl_mode(self.cfg) == "cascade"
+
     def _emit(self, e: HeaterEvent) -> None:
         self.events.append(e)
         if self.on_event:
@@ -1164,6 +1204,33 @@ class HeaterEngine:
 
     def _msg(self, level: str, text: str) -> None:
         self._emit(HeaterEvent("message", level, text))
+
+    # 캐스케이드 알림 → 사건(경고) 코드
+    CASC_ALERTS = {"tc1_detached": ("TC1 탈락 의심", "HEATER_TC1_DETACHED"),
+                   "tc2_lost": ("TC2 상실 → TC1 제어", "HEATER_TC2_LOST"),
+                   "sv2_capped": ("TC2 상한으로 목표 도달 불가", "HEATER_SV2_CAPPED"),
+                   "demoted": ("셔터 열림 중 TC2 상실 → DAC 상한 고정", "HEATER_HOLD_DEMOTED"),
+                   "demote_failed": ("DAC 고정 실패", "HEATER_DEMOTE_FAILED")}
+
+    def _casc_alert(self, kind: str, d: dict) -> None:
+        """v1 main._on_heater_casc_alert — 사건(경고) + TC1 탈락 조치(HEATER_CASCADE_ALARM_ACTION=abort):
+        공정이 히터를 소유하면 공정 중단, 히터 레시피면 레시피 중단(히터 OFF), 수동이면 경고만. 챗 카드 대신 사건으로 남긴다."""
+        label, code = self.CASC_ALERTS.get(kind, (kind, "HEATER_CASCADE_ALERT"))
+        text = str(d.get("text") or d.get("why") or label)
+        action = ""
+        if kind == "tc1_detached" and str(d.get("action")) == "abort":
+            if self.process_active() and (self.owner == "process" or self.recipe.is_running()):
+                action = "공정 중단"
+                self._after.append(lambda: self._on_casc_abort(code))
+            elif self.recipe.is_running():
+                action = "히터 레시피 중단(히터 OFF)"
+                self.recipe.abort(code, f"TC1 탈락 의심 — {text}")
+            else:
+                action = "경고만(수동 히터 — 계속 운전)"
+            self._msg("warn", f"[캐스케이드] TC1 탈락 의심 조치: {action}")
+        data = {k: v for k, v in d.items() if k != "text"}
+        data.update(kind=kind, action=action or None)
+        self._emit(HeaterEvent("alert", "warn", f"{label}: {text}", code, data))
 
     def _recipe_finished(self, ok: bool, code: str) -> None:
         if not ok and code != "USER_STOP":              # v1: 사용자 정지(stop)가 아닌 비정상 끝 → 같이 돌던 공정도 중단
@@ -1191,10 +1258,14 @@ class HeaterEngine:
         st = {k: g(k) for k in ("pv", "pv2", "sv", "cur_sv", "sv_ramp", "sv2", "mv", "mv_limit", "run", "itl", "fault",
                                 "ot", "tc_err", "wd_err", "pv_sel_eff", "sv_limit", "ot2_limit", "sv2_max")}
         st["ok"] = st["pv"] is not None
+        st["shutter_open"] = values.get("plc.ms")       # 메인 셔터(M00009) — 같은 폴링의 코일 값(v1 b49d683). 못 읽었으면 None
         return st
 
     def final_target(self, st: dict):
-        """v1 _heater_final_target: 램프 목표 → 레시피 현재 스텝 목표 → st['sv']."""
+        """v1 _heater_final_target: 캐스케이드 목표 → 램프 목표 → 레시피 현재 스텝 목표 → st['sv']."""
+        t = self.casc.target() if self.cascade else None
+        if t is not None:
+            return float(t)
         t = self.ramp.target()
         if t is not None:
             return float(t)
@@ -1202,6 +1273,13 @@ class HeaterEngine:
         if s is not None:
             return float(s.target_c)
         return st.get("sv")
+
+    def casc_fields(self) -> Dict[str, Any]:
+        """스냅샷 heater 블록의 제어 구조·캐스케이드 열(core 가 채운다 — v1 히터 CSV·화면의 캐스케이드 값)."""
+        with self._lock:
+            out = self.casc.fields()
+        out["heater.ctrl_mode"] = HC.ctrl_mode(self.cfg)
+        return out
 
     @property
     def hold_label(self) -> str:
@@ -1225,7 +1303,13 @@ class HeaterEngine:
             run = bool(st.get("run"))
             edge = "rise" if run and self._prev_run is False else ("fall" if self._prev_run and not run else None)
             self._prev_run = run
-            self.sat.tick(st, self.hold.is_holding(), self.hold.kind)
+            if self.cascade:
+                # 캐스케이드가 이번 폴링 상태를 먼저 본다. 포화 감시는 TC1 직접 제어 때와 같이(MV 기준) — 단 셔터 열림 중
+                # TC2 상실로 캐스케이드가 D00018 을 잡고 있으면 그쪽이 소유자다(v1 main.update_heater_display)
+                self.casc.tick(st)
+                self.sat.tick(st, *self.casc.sat_hold())
+            else:
+                self.sat.tick(st, self.hold.is_holding(), self.hold.kind)
             self.hold.tick(st, self.final_target(st))
             self.recipe.on_status(st)
             self._gas_hold_tick(st, edge)
@@ -1307,7 +1391,10 @@ class HeaterEngine:
             return None
 
     def _manual_go(self, v: float) -> None:
-        if not self.ramp.start(v, float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]), "수동"):
+        """수동 ON — 감속 접근으로 올리고 히터를 켠다(캐스케이드면 TC2 제어로)."""
+        if self.cascade:
+            self.casc.start(v, float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]), "수동")
+        elif not self.ramp.start(v, float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]), "수동"):
             self.port.target(v)
         self.port.run(True)
 
@@ -1319,18 +1406,23 @@ class HeaterEngine:
                 self.atm.release("사용자 취소")
                 return
             self.ramp.stop()
+            self.casc.stop("수동 OFF")                   # M0004A OFF → D00035=0 을 RUN OFF 보다 먼저 보낸다
             self.port.run(False)
             if self.owner == "manual":
                 self.owner = None
 
     def set_sv(self, v: float) -> None:
         with self._lock:
-            if self.st.get("run"):
+            if self.st.get("run") and self.cascade:
+                # 운전 중 목표 변경 — 캐스케이드는 끊지 않고 목표만 바꾼다(TC2 제어 유지, 하강은 즉시)
+                self.casc.start(v, float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]), "수동")
+            elif self.st.get("run"):
                 self.ramp.stop(restore_rate=False)
                 if not self.ramp.start(v, float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]), "수동"):
                     self.port.target(v)
             else:
                 self.ramp.stop()
+                self.casc.stop("목표만 기록(히터 꺼짐)")
                 self.port.target(v)
 
     def gas_release(self) -> None:
@@ -1409,7 +1501,9 @@ class HeaterEngine:
             self.handed_over = False                    # 다음 행·공정이 다시 가져감
             rate = self.proc.get("rate") or float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"])
             self.ramp.stop(restore_rate=False)
-            if not self.ramp.start(float(target), rate, "공정"):
+            if self.cascade:
+                self.casc.start(float(target), rate, "공정")
+            elif not self.ramp.start(float(target), rate, "공정"):
                 self.port.ramp(ramp_raw(rate))                 # 감속 접근을 못 쓰면 이 행의 램프 속도로 SV 직접(v1)
                 self.port.target(float(target))
             self.port.run(True)
@@ -1431,7 +1525,9 @@ class HeaterEngine:
             tgt = float(target) if target is not None else float(p["target"])
             r = p.get("rate") or float(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"])
             self.ramp.stop(restore_rate=False)
-            if not self.ramp.start(tgt, r, "공정 수정"):
+            if self.cascade:
+                self.casc.start(tgt, r, "공정 수정")
+            elif not self.ramp.start(tgt, r, "공정 수정"):
                 self.port.ramp(ramp_raw(r))
                 self.port.target(tgt)
             p["target"] = tgt
@@ -1463,6 +1559,9 @@ class HeaterEngine:
                     need = ramp_minutes(abs(target - float(pv)), rate, float(c["HEATER_APPROACH_ZONE_C"]),
                                         float(c["HEATER_APPROACH_MIN_RATE_C_PER_MIN"])) * 60.0
                     to = min(max(to, need + float(c["HEATER_WAIT_TIMEOUT_MARGIN_SEC"])), float(c["HEATER_WAIT_TIMEOUT_MAX_SEC"]))
+                if self.cascade:
+                    # 2단 제어: r1 이 목표에 닿은 뒤 바깥 루프(bias, 적분 시간 TI)가 매핑 오차를 걷어 낼 여유(v1 3f4cdef)
+                    to += 2.0 * float(c["HEATER_CASCADE_TI_SEC"])
                 p["timeout"] = to
             if p["phase"] in ("RAMP", "SOAK"):
                 if st.get("fault"):
@@ -1470,7 +1569,13 @@ class HeaterEngine:
                 if now - p["t0"] > p["timeout"]:
                     return ("fail", "HEATER_WAIT_TIMEOUT")                    # S18E
                 pv, svr = st.get("pv"), st.get("sv_ramp")
-                ramp_done = True if svr is None else abs(float(svr) - target) <= float(c["HEATER_RAMP_DONE_TOL_C"])
+                cs = self.casc.snapshot() if self.cascade else {}
+                if cs.get("active"):
+                    # 캐스케이드면 D00019 는 SV2(TC2 목표)라 쓸 수 없다 — r1(TC1 기준값)이 최종 목표에 닿았는지를 본다
+                    ramp_done = (bool(cs.get("r1_done")) and cs.get("final") is not None
+                                 and abs(float(cs["final"]) - target) <= float(c["HEATER_RAMP_DONE_TOL_C"]))
+                else:
+                    ramp_done = True if svr is None else abs(float(svr) - target) <= float(c["HEATER_RAMP_DONE_TOL_C"])
                 if pv is not None and ramp_done and abs(float(pv) - target) <= float(c["HEATER_SOAK_TOLERANCE"]):
                     if p["phase"] == "RAMP":
                         p["phase"], p["band_t0"] = "SOAK", now
@@ -1485,6 +1590,8 @@ class HeaterEngine:
 
     def _hold_wait_enter(self, now: float):
         p, c = self.proc, self.cfg
+        if self.cascade:
+            return self._casc_wait_enter(now)
         mode, wait = str(c["HEATER_HOLD_MODE"]), float(c["HEATER_HOLD_WAIT_SEC"])
         if mode == "off" or wait <= 0 or self.hold.is_holding():
             p["phase"] = "DONE"
@@ -1494,8 +1601,61 @@ class HeaterEngine:
         self._msg("info", f"목표 도달 — 유지 모드({mode}) 진입 대기 시작 (상한 {wait:.0f}s)")
         return "wait"
 
+    # ── 캐스케이드 도달 뒤(v1 _casc_hold_wait) ──
+    def _casc_desc(self) -> str:
+        cs = self.casc
+        return (f"SV2 {float(cs.sv2):.1f}°C, bias {cs.bias:+.1f}°C" if cs.sv2 is not None else f"상태 {cs.state}")
+
+    def _casc_reached(self) -> str:
+        p = self.proc
+        p["phase"] = "DONE"
+        self._msg("info", f"캐스케이드 TC2 제어 확인 ({self._casc_desc()})")
+        self._emit(HeaterEvent("reached", detail=f"{p['target']:.1f}°C 캐스케이드 TC2 제어"))
+        return "reached"
+
+    def _casc_wait_enter(self, now: float):
+        """PID 가 이미 TC2 를 보고 있으면 바로 통과. 아니면 HEATER_HOLD_WAIT_SEC 동안 기다리고, 그래도 아니면
+        HEATER_HOLD_FAIL_ACTION(HeaterHold 의 완화 tc2 / dac 폴백은 타지 않는다)."""
+        p = self.proc
+        if self.casc.engaged():
+            return self._casc_reached()
+        wait = float(self.cfg["HEATER_HOLD_WAIT_SEC"])
+        if wait <= 0:
+            return self._casc_wait_fail(0.0)
+        p.update(phase="HOLD_WAIT", hold_t0=now)
+        self._msg("info", f"목표 도달 — 캐스케이드 TC2 제어 대기 (상태 {self.casc.state}, 상한 {wait:.0f}s)")
+        return "wait"
+
+    def _casc_wait_fail(self, waited: float):
+        p, c = self.proc, self.cfg
+        reason = f"캐스케이드가 TC2 제어가 아님(상태 {self.casc.state}) — TC1 제어(래더 기본 경로)로 도달"
+        if float(c["HEATER_HOLD_WAIT_SEC"]) <= 0:
+            self._msg("warn", f"{reason} — HEATER_HOLD_WAIT_SEC=0 이라 그대로 진행")
+            p["phase"] = "DONE"
+            self._emit(HeaterEvent("reached", detail=f"{p['target']:.1f}°C"))
+            return "reached"
+        action = str(c["HEATER_HOLD_FAIL_ACTION"])
+        self._emit(HeaterEvent("alert", "warn", f"{reason} → {action}", "HEATER_HOLD_FAILED",
+                               {"reason": reason, "elapsed": int(waited), "target": float(p["target"]), "action": action,
+                                "state": self.casc.state}))
+        if action == "proceed":
+            self._msg("warn", f"{reason} — 경고만 내고 진행(HEATER_HOLD_FAIL_ACTION=proceed)")
+            p["phase"] = "DONE"
+            return "reached"
+        self._msg("warn", f"{reason} — 공정 중단")
+        p["phase"] = "FAILED"
+        return ("fail", "HEATER_HOLD_FAILED")
+
     def _hold_wait_tick(self, now: float):
         p, c, st = self.proc, self.cfg, self.st
+        if self.cascade:
+            if st.get("fault"):
+                return ("fail", "HEATER_FAULT")
+            if self.casc.engaged():
+                return self._casc_reached()
+            if now - p["hold_t0"] < float(c["HEATER_HOLD_WAIT_SEC"]):
+                return "wait"
+            return self._casc_wait_fail(now - p["hold_t0"])
         if st.get("fault"):
             return ("fail", "HEATER_FAULT")
         if self.hold.is_holding():
@@ -1543,7 +1703,9 @@ class HeaterEngine:
         with self._lock:
             if self.owner != "process" or not self.st.get("run"):
                 return None
-            target = self.ramp.target()
+            target = self.casc.target() if self.cascade else None
+            if target is None:
+                target = self.ramp.target()
             if target is None:
                 target = self.proc.get("target") if self.proc.get("target") is not None else self.st.get("sv")
             self.owner, self.handed_over, self.proc = "manual", True, {}
@@ -1558,6 +1720,7 @@ class HeaterEngine:
         """넘긴 히터 끄기(공정 밖 STOP 정리·다음 공정의 정지 순서) — process_off 와 같은 정리(RUN=0·램프 원복·감속 접근 멈춤·소유 해제)."""
         with self._lock:
             self.ramp.stop(restore_rate=False)
+            self.casc.stop("넘긴 히터 끄기")
             self.port.run(False)
             self.port.ramp(ramp_raw(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]))
             if self.owner == "manual":
@@ -1575,6 +1738,7 @@ class HeaterEngine:
         """v1 _heater_off — RUN=0, 램프 속도 원복(공정이 히터를 썼을 때만 부른다)."""
         with self._lock:
             self.ramp.stop(restore_rate=False)
+            self.casc.stop("공정 히터 OFF")              # 꺼져 있으면 아무것도 하지 않는다
             self.port.run(False)
             self.port.ramp(ramp_raw(self.cfg["HEATER_RAMP_RATE_C_PER_MIN"]))
             if self.owner == "process":

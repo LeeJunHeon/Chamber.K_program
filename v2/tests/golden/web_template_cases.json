@@ -37,7 +37,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -259,7 +261,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -484,7 +488,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -706,7 +712,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -920,7 +928,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -1102,6 +1112,17 @@
      "stage": "PRESSURE_SP1"
     },
     {
+     "type": "heater_settle",
+     "params": {
+      "tol_c": null,
+      "sec": null,
+      "max_sec": null,
+      "fail_action": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
      "type": "main",
      "params": {
       "sec": 600,
@@ -1159,7 +1180,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -1339,6 +1362,17 @@
      },
      "label": "Stage3(SP1=3.00)",
      "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "heater_settle",
+     "params": {
+      "tol_c": null,
+      "sec": null,
+      "max_sec": null,
+      "fail_action": null
+     },
+     "label": "",
+     "stage": ""
     },
     {
      "type": "main",
@@ -1399,7 +1433,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -1581,6 +1617,17 @@
      "stage": "PRESSURE_SP1"
     },
     {
+     "type": "heater_settle",
+     "params": {
+      "tol_c": null,
+      "sec": null,
+      "max_sec": null,
+      "fail_action": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
      "type": "main",
      "params": {
       "sec": 600,
@@ -1639,7 +1686,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -1823,6 +1872,17 @@
      "stage": "PRESSURE_SP1"
     },
     {
+     "type": "heater_settle",
+     "params": {
+      "tol_c": null,
+      "sec": null,
+      "max_sec": null,
+      "fail_action": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
      "type": "main",
      "params": {
       "sec": 600,
@@ -1879,7 +1939,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -2110,7 +2172,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": false,
    "rfpulsePresent": false,
@@ -2157,7 +2221,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": false,
    "rfpulsePresent": false,
@@ -2380,7 +2446,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -2603,7 +2671,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": false,
    "rfpulsePresent": false,
@@ -2826,7 +2896,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -3049,7 +3121,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -3097,7 +3171,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -3145,7 +3221,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -3192,7 +3270,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -3417,7 +3497,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -3642,7 +3724,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": true,
@@ -3864,7 +3948,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": true,
@@ -4090,7 +4176,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": true,
@@ -4312,7 +4400,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -4534,7 +4624,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -4740,7 +4832,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -4931,7 +5025,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -5163,7 +5259,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 0
+    "DC_POWER_DELAY_SEC": 0,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -5386,7 +5484,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -5620,7 +5720,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -5844,7 +5946,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6075,7 +6179,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6120,7 +6226,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6167,7 +6275,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6214,7 +6324,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6263,7 +6375,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6312,7 +6426,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": true,
@@ -6361,7 +6477,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6371,6 +6489,764 @@
    "checkWarnings": [],
    "params": null,
    "blocks": null
+  },
+  {
+   "name": "heater_cascade_settle",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_heater": true,
+    "heater_temp": 300.0,
+    "shutter_delay": 1.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 1.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": true,
+    "heater_temp": 300.0,
+    "heater_ramp": 12.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 300.0,
+      "ramp_c_per_min": 12.0
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_wait",
+     "params": {},
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": {
+       "dc": true
+      }
+     },
+     "label": "Shutter Delay 60s",
+     "stage": "SHUTTER_DELAY"
+    },
+    {
+     "type": "heater_settle",
+     "params": {
+      "tol_c": null,
+      "sec": null,
+      "max_sec": null,
+      "fail_action": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "heater_tc1_no_settle",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_heater": true,
+    "heater_temp": 300.0,
+    "shutter_delay": 1.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "tc1",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 1.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": true,
+    "heater_temp": 300.0,
+    "heater_ramp": 12.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 300.0,
+      "ramp_c_per_min": 12.0
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_wait",
+     "params": {},
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": {
+       "dc": true
+      }
+     },
+     "label": "Shutter Delay 60s",
+     "stage": "SHUTTER_DELAY"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
+  },
+  {
+   "name": "heater_settle_max_zero",
+   "row": {
+    "process_name": "base",
+    "ar": true,
+    "ar_flow": 20.0,
+    "working_pressure": 3.0,
+    "process_time": 10.0,
+    "use_dc": true,
+    "dc_power": 100.0,
+    "gun1": true,
+    "use_heater": true,
+    "heater_temp": 300.0
+   },
+   "cfg": {
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "DC_MAX_POWER": 500.0,
+    "RF_MAX_POWER": 600.0,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RFPULSE_ENABLED": false,
+    "IG_ENABLED": true,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "RF_CAL_OFFSET": 6.79,
+    "RF_CAL_GAIN": 1.0395,
+    "GAS_STABILIZE_SEC": 60.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 0
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "checkErrors": [],
+   "checkWarnings": [],
+   "params": {
+    "process_name": "base",
+    "use_ar_gas": true,
+    "use_o2_gas": false,
+    "ar_flow": 20.0,
+    "o2_flow": 0.0,
+    "selected_gas": "Ar",
+    "mfc_flow": 20.0,
+    "base_pressure": 0.0,
+    "sp1_set": 3.0,
+    "dc_power": 100.0,
+    "rf_power": 0.0,
+    "shutter_delay": 0.0,
+    "process_time": 10.0,
+    "rf_offset": 6.79,
+    "rf_param": 1.0395,
+    "use_rf_pulse": false,
+    "rf_pulse_power": 0.0,
+    "rf_pulse_freq_hz": null,
+    "rf_pulse_duty": null,
+    "use_g1": true,
+    "use_g2": false,
+    "use_dc_delay": false,
+    "use_heater": true,
+    "heater_temp": 300.0,
+    "heater_ramp": 12.0,
+    "g1_target_name": "",
+    "g2_target_name": ""
+   },
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": false,
+      "settle_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_prep",
+     "params": {
+      "ar": true,
+      "o2": false
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 300.0,
+      "ramp_c_per_min": 12.0
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_wait",
+     "params": {},
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "gas_intro",
+     "params": {
+      "ar": true,
+      "ar_flow": 20.0,
+      "o2": false,
+      "o2_flow": null,
+      "zero": true
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": true,
+      "select": true,
+      "wait": false,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": 60,
+      "watch": null
+     },
+     "label": "압력 안정화 대기(60초)",
+     "stage": "GAS_STABILIZE"
+    },
+    {
+     "type": "shutter",
+     "params": {
+      "action": "open",
+      "targets": [
+       "g1"
+      ]
+     },
+     "label": "건 셔터 열기",
+     "stage": "GUN_SHUTTER"
+    },
+    {
+     "type": "power_on",
+     "params": {
+      "dc_power": 100.0,
+      "rf_power": null,
+      "rfp_power": null,
+      "rfp_freq_khz": null,
+      "rfp_duty": null,
+      "wait": true,
+      "timeout_sec": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": 15.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "value": 5.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage2(SP2)",
+     "stage": "PRESSURE_SP2"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": null,
+      "stable_sec": null,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage3(SP1=3.00)",
+     "stage": "PRESSURE_SP1"
+    },
+    {
+     "type": "main",
+     "params": {
+      "sec": 600,
+      "close": false,
+      "watch": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "end_stop",
+     "params": {
+      "skip": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ]
   },
   {
    "name": "err_missing_working_pressure",
@@ -6407,7 +7283,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,
@@ -6455,7 +7333,9 @@
     "GAS_STABILIZE_SEC": 60.0,
     "SP2_MTORR": 5.0,
     "SP3_MTORR": 15.0,
-    "DC_POWER_DELAY_SEC": 300
+    "DC_POWER_DELAY_SEC": 300,
+    "HEATER_CTRL_MODE": "cascade",
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,

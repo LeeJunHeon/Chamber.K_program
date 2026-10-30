@@ -6,9 +6,14 @@
 import json
 import re
 
+import pytest
+
 from v2.chk import blocks as BK
 from v2.chk import web_schema as W
 from v2.tools import make_web_block_golden as G
+
+# 기본 설정(HEATER_CTRL_MODE=cascade)으로 만든 골든 — 시험 기본 고정(tc1)을 풀어 같은 조건으로 본다(5-15)
+pytestmark = pytest.mark.cascade
 
 
 def test_golden_file_matches_current_code():
@@ -43,7 +48,7 @@ def test_covers_all_block_types_tags_and_value_rules():
     for c in cases:
         if c["clean"]:
             walk(c["clean"])
-    assert seen == {d.type for d in BK.BLOCK_DEFS} and len(seen) == 18     # 통과 경우만으로 18종 모두
+    assert seen == {d.type for d in BK.BLOCK_DEFS} and len(seen) == 19     # 통과 경우만으로 19종 모두(5-15 heater_settle)
     tags = [t for c in cases for t in c["covers"]]
     assert set(tags) == set(G.TAGS)
     for r in BK.VALUE_RULES:                                             # 값 사이·꺼진 장비 규칙이 모두 한 번 이상 걸림

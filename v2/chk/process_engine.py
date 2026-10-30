@@ -49,6 +49,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.judge import Persist
 from v2.chk import blocks as BK
+from v2.chk.heater_cascade import SettleTracker, mmss
 from v2.chk import process_states as PS
 from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
@@ -145,6 +146,8 @@ class ProcessEngine:
         self.reject_detail = ""                 # 마지막 적재·시작·수정 거부의 이유 문구(첫 오류 — core 가 cmd_result.detail 로)
         self.last_view = None
         self._end_stop_resume = False
+        # 셔터 전 히터 정착(HEATER_SETTLE, v1 3328872) — 승온 대기 통과 뒤부터 TC1 범위 안 연속 시간을 센다(행이 끝나면 지움)
+        self.settle_track: Optional[SettleTracker] = None
 
     # ── 안전 엔진이 보는 것 ──
     @property
@@ -581,6 +584,7 @@ class ProcessEngine:
             self.runner.cancel()
         self.dcc.stop()
         self.rfc.stop()
+        self.settle_track = None
         if heater and self.uses_heater:
             self.heater.process_off()
 
@@ -710,11 +714,12 @@ class ProcessEngine:
         self.row_is_process, self.comm_aborted, self.filament_by_process = True, False, False
         self.dc_on = self.rf_on = self.rfp_on = False
         self.power, self.base = {}, {}
+        self.settle_track = None
         h = {"DC_POWER_STOP": self._h_dc_stop, "RF_POWER_STOP": self._h_rf_stop, "RF_PULSE_STOP": self._h_rfp_stop,
              "HEATER_RAMP": self._h_heater_ramp, "HEATER_SET": self._h_heater_set, "HEATER_WAIT": self._h_heater_wait,
              "IG_FILAMENT_ON": self._h_ig_on, "IG_BASE_WAIT": self._h_ig_wait, "IG_FILAMENT_OFF": self._h_ig_off,
              "POWER_WAIT": self._h_power_wait, "POWER_START": self._h_power_wait, "RF_RAMP_OFF": self._h_rf_ramp_off,
-             "HEATER_OFF": self._h_heater_off, "END_STOP": self._h_end_stop}
+             "HEATER_OFF": self._h_heater_off, "END_STOP": self._h_end_stop, "HEATER_SETTLE": self._h_heater_settle}
         self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, h, self._step_event, cfg=self.cfg,
                                  resolve=self._resolve, on_step_done=self._on_step_done)
         if self.safety is not None:
@@ -796,6 +801,7 @@ class ProcessEngine:
             if self.state not in ACT or self.runner is None:
                 return
             self.rfc.tick(view.get("rf.fwd_w"), view.get("rf.ref_w"))
+            self._settle_feed(view)
             self._settle_tick(view, now)
             self.runner.tick(view, now)
             if self.runner.failed and self.state in ACT:
@@ -906,8 +912,104 @@ class ProcessEngine:
             return "next"
         res = self.heater.process_wait_tick(now)
         if res == "reached":
+            nxt = next((x for x in r.steps[r.idx + 1:] if x.action == "HEATER_SETTLE"), None)
+            if nxt is not None:
+                self._settle_track_start(float(self.heater.proc["target"]), nxt)
             return "next"
         return res if isinstance(res, tuple) else "wait"
+
+    # ── 셔터 전 히터 정착(HEATER_SETTLE, v1 process_controller._heater_settle) ──
+    def _settle_track_start(self, target: float, s: ProcessStep) -> None:
+        sp = s.spec or {}
+        self.settle_track = SettleTracker(target, float(sp.get("tol", self.cfg["HEATER_SHUTTER_SETTLE_TOL_C"])),
+                                          float(sp.get("sec", self.cfg["HEATER_SHUTTER_SETTLE_SEC"])), self.clock.monotonic)
+
+    def _settle_feed(self, view) -> None:
+        """승온 대기 통과 뒤 매 tick — TC1 과 캐스케이드 최종 목표(공정 목표와 같아야 연속)."""
+        tr = self.settle_track
+        if tr is None:
+            return
+        c = self.heater.casc.snapshot()
+        final_ok = c.get("final") is not None and abs(float(c["final"]) - tr.target) <= float(self.cfg["HEATER_RAMP_DONE_TOL_C"])
+        tr.feed(view.get("heater.pv"), final_ok=final_ok)
+
+    @staticmethod
+    def _settle_bias_text(c: dict) -> str:
+        return (f"bias {float(c.get('bias') or 0.0):+.1f} (ff {float(c.get('bias_ff') or 0.0):+.1f}"
+                f" / int {float(c.get('bias_int') or 0.0):+.1f})")
+
+    @staticmethod
+    def _f1(v) -> str:
+        return "--.-" if v is None else f"{float(v):.1f}"
+
+    def _h_heater_settle(self, r, s, cur, view, now):
+        """메인 셔터 열기 직전 — TC1 이 목표 ±tol 안에 sec 이상 연속이면 통과(승온 대기 통과 뒤부터 센다 — 이미 맞으면 바로).
+        상한 초과는 fail_action(proceed = 경고 후 진행 / abort = HEATER_SETTLE_FAILED). 이 동안 DC ±이탈 감시(블록 watch dc)·
+        STOP·ALL STOP 은 셔터 딜레이와 같다."""
+        sp = s.spec or {}
+        tol, need, mx = float(sp["tol"]), float(sp["sec"]), float(sp["max_sec"])
+        if not cur.issued:
+            cur.issued = True
+            c = self.heater.casc.snapshot()
+            if not self.heater.cascade or not c.get("active"):
+                self.settle_track = None
+                self._emit(ProcEvent("warn", f"셔터 전 히터 정착 확인 생략 — 캐스케이드가 활성이 아님"
+                                             f" (상태 {c.get('state') or '-'}, 공정이 히터를 소유하지 않음)",
+                                     "HEATER_SETTLE_SKIPPED", {"level": "warn"}))
+                return "next"
+            target = float(s.value) if s.value is not None else float(c.get("final") or 0.0)
+            tr = self.settle_track
+            if tr is None or abs(tr.target - target) > float(self.cfg["HEATER_RAMP_DONE_TOL_C"]):
+                self._settle_track_start(target, s)          # 승온 대기를 거치지 않은 경우 — 지금부터 센다
+                self._settle_feed(view)
+            if self.settle_track.ok():
+                return self._settle_pass(0.0)
+            cur.extra["last_log"] = now
+            self._dev_msg("info", f"셔터 전 히터 정착 대기 시작 — 목표 {target:.1f}°C ±{tol:g}, {need:.0f}초 연속 "
+                                  f"(지금 {self.settle_track.held_sec():.0f}초), 상한 {mmss(mx)}")
+            return "wait"
+        tr = self.settle_track
+        if tr is None:
+            return "next"
+        if view is not None and view.get("heater.fault"):
+            self.settle_track = None
+            self._emit(ProcEvent("warn", "히터 이상 발생(셔터 전 정착 대기 중)", "HEATER_FAULT"))
+            return ("fail", "HEATER_FAULT")
+        el = now - cur.t0
+        if tr.ok():
+            return self._settle_pass(el)
+        if el - cur.extra.get("last_log", cur.t0) >= 30.0:
+            cur.extra["last_log"] = now
+            self._dev_msg("info", f"셔터 전 히터 정착 대기 — TC1 {self._f1(tr.last_pv)} / 목표 {tr.target:.1f}"
+                                  f" (±{tol:g}, {need:.0f}초 연속 필요, 지금 {tr.held_sec():.0f}초) · "
+                                  f"{self._settle_bias_text(self.heater.casc.snapshot())}"
+                                  f" · 경과 {mmss(el)} / 상한 {mmss(mx)}")
+        if el < mx - 1e-9:
+            return "wait"
+        action = str(sp.get("fail_action") or "proceed")
+        reason = (f"셔터 전 정착 미달 — TC1 {self._f1(tr.last_pv)} / 목표 {tr.target:.1f} ±{tol:g}, "
+                  f"{need:.0f}초 연속 못 채움(최장 지금 {tr.held_sec():.0f}초) · 상한 {mmss(mx)} 초과")
+        self.settle_track = None
+        c = self.heater.casc.snapshot()
+        data = {"action": action, "reason": reason, "pv": tr.last_pv, "target": float(tr.target), "tol": tol,
+                "need": need, "elapsed": int(round(el)), "sv2": c.get("sv2"), "bias": c.get("bias"),
+                "bias_ff": c.get("bias_ff"), "bias_int": c.get("bias_int"), "level": "warn"}
+        if action == "abort":
+            self._emit(ProcEvent("warn", f"{reason} — 공정 중단(HEATER_SHUTTER_SETTLE_FAIL_ACTION=abort)",
+                                 "HEATER_SETTLE_FAILED", data))
+            return ("fail", "HEATER_SETTLE_FAILED")
+        self._emit(ProcEvent("warn", f"{reason} — 경고 후 셔터를 열고 진행(HEATER_SHUTTER_SETTLE_FAIL_ACTION=proceed)",
+                             "HEATER_SETTLE_TIMEOUT", data))
+        return "next"
+
+    def _settle_pass(self, waited: float):
+        tr = self.settle_track
+        pv = tr.last_pv if tr is not None else None
+        dev = "-" if (pv is None or tr is None) else f"{pv - tr.target:+.1f}"
+        self._dev_msg("info", f"셔터 전 히터 정착 확인 — TC1 {self._f1(pv)} (목표 {tr.target:.1f}, 편차 {dev})"
+                              f" · 대기 {mmss(waited)}")
+        self.settle_track = None
+        return "next"
 
     # 베이스 압력(v1 _ig_*)
     def _ig_result(self, since: float):

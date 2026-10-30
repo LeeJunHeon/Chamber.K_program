@@ -28,6 +28,7 @@ CFG_KEYS: tuple = (
     "RFPULSE_PULSE_MIN_EDGE_US", "RFPULSE_ENABLED", "IG_ENABLED", "HEATER_ENABLED", "HEATER_MAX_TEMP",
     "HEATER_RECIPE_RAMP_MAX_C_PER_MIN", "HEATER_RAMP_RATE_C_PER_MIN", "RF_CAL_OFFSET", "RF_CAL_GAIN",
     "GAS_STABILIZE_SEC", "SP2_MTORR", "SP3_MTORR", "DC_POWER_DELAY_SEC",
+    "HEATER_CTRL_MODE", "HEATER_SHUTTER_SETTLE_MAX_SEC",
 )
 
 _BASE = {"process_name": "base", "ar": True, "ar_flow": 20.0, "working_pressure": 3.0, "process_time": 10.0,
@@ -87,6 +88,10 @@ CASES: List[tuple] = [
     ("err_rf_pulse_edge", _row(use_dc=None, dc_power=None, use_rf_pulse=True, rf_pulse_power=100.0,
                                rf_pulse_freq=25, rf_pulse_duty=10), {"RFPULSE_ENABLED": True}),
     ("err_heater_disabled", _row(use_heater=True, heater_temp=200.0), {"HEATER_ENABLED": False}),
+    # 셔터 전 히터 정착(5-15, v1 3328872) — 2단 제어·히터·메인·상한 > 0 이면 셔터 딜레이 뒤·메인 앞
+    ("heater_cascade_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {}),
+    ("heater_tc1_no_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {"HEATER_CTRL_MODE": "tc1"}),
+    ("heater_settle_max_zero", _row(use_heater=True, heater_temp=300.0), {"HEATER_SHUTTER_SETTLE_MAX_SEC": 0}),
     ("err_missing_working_pressure", _row(working_pressure=None), {}),
     ("warn_dc_delay_without_dc", _row(use_dc=None, dc_power=None, use_rf=True, rf_power=100.0, use_dc_delay=True), {}),
 ]

@@ -36,6 +36,7 @@ from v2.chk.drivers.ig import IgDriver
 from v2.chk.drivers.mfc import MfcDriver
 from v2.chk.drivers.plc import PlcDriver, PlcFastPoller
 from v2.chk.drivers.rfpulse import RfPulseDriver
+from v2.chk.heater_cascade import LEARNED_FILE
 from v2.chk.heater_engine import HeaterEngine
 from v2.chk.hub import MessageHub
 from v2.chk.process_engine import ProcessEngine
@@ -193,7 +194,9 @@ class ChkSystem:
         self.heater = HeaterEngine(clock, c, self.plc, self.mfc, on_event=self._hev,
                                    process_active=lambda: self.process.active,
                                    on_gas_failed=lambda why: self.safety.event("heater_gas_failed"),
-                                   on_recipe_failed=lambda code: self.safety.heater_recipe_failed(code))
+                                   on_recipe_failed=lambda code: self.safety.heater_recipe_failed(code),
+                                   on_casc_abort=lambda code: self.safety.heater_casc_abort(code),
+                                   learned_path=Path(data_dir) / LEARNED_FILE)
         self.links = {k: (lambda x=x: x.ready) for k, x in self.workers.items()}
         if simple_process:
             self.process = SimpleProcess()
@@ -267,6 +270,7 @@ class ChkSystem:
 
     def _extra(self, t) -> dict:
         out = {"heater.hold": self.heater.hold_label}
+        out.update(self.heater.casc_fields())
         if hasattr(self.process, "snapshot_fields"):
             out.update(self.process.snapshot_fields())
         return out

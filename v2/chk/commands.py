@@ -91,6 +91,8 @@ CHK_REASONS: tuple = (
     Reason("HEATER_GAS_FAILED", "히터 가스 준비 실패", "abort"),
     Reason("COND_WAIT_TIMEOUT", "조건 대기 한도 초과(공정 중단)", "abort"),
     Reason("PRESSURE_WAIT_TIMEOUT", "압력 블록(SP2~SP4) 도달 한도 초과(공정 중단)", "abort"),
+    Reason("HEATER_TC1_DETACHED", "히터 TC1 탈락 의심 — 2단 제어 보정이 오래 너무 큼", "abort"),
+    Reason("HEATER_SETTLE_FAILED", "셔터 전 히터 정착 미달 — 대기 상한 초과(공정 중단 설정)", "abort"),
     Reason("PROGRAM_EXIT", "프로그램 강제 종료(콘솔 창 닫기·로그오프·윈도우 종료) — 파워 출력만 끄고 PLC 릴레이는 유지(결정 4)",
            "abort"),
     # 경고·정보
@@ -126,6 +128,11 @@ CHK_REASONS: tuple = (
     Reason("RF_OFF_FAILED", "파워 끄기 블록의 RF OFF 결과 오류", "info"),
     Reason("PROCESS_ADJUST", "공정 중 값 수정 기록(장비·항목·이전 → 새 값·출처·결과)", "info"),
     Reason("ADJUST_SETTLE_TIMEOUT", "공정 중 수정 뒤 새 목표에 한도 안에 못 감 — 이탈 판정 다시 켬", "info"),
+    Reason("HEATER_TC2_LOST", "히터 TC2 상실 — TC1 제어로 전환(히터 계속 운전)", "info"),
+    Reason("HEATER_SV2_CAPPED", "히터 TC2 목표 상한 때문에 목표 도달 불가", "info"),
+    Reason("HEATER_DEMOTE_FAILED", "히터 출력 상한 고정 실패(직전 출력 없음) — TC1 제어", "info"),
+    Reason("HEATER_SETTLE_SKIPPED", "셔터 전 히터 정착 확인 생략 — 2단 제어가 돌고 있지 않음", "info"),
+    Reason("HEATER_SETTLE_TIMEOUT", "셔터 전 히터 정착 미달 — 경고 후 셔터 열고 진행", "info"),
 )
 
 ALL_REASONS: tuple = COMMON_REASONS + CHK_REASONS
