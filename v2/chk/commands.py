@@ -55,6 +55,14 @@ CHK_REASONS: tuple = (
     Reason("ADJUST_OUT_OF_RANGE", "공정 중 수정: 범위 밖(레시피와 같은 상한·펄스 ON/OFF 시간)", "reject"),
     Reason("ADJUST_NOT_APPLICABLE", "공정 중 수정: 지금 블록에 해당 없음(대기 끝내기는 대기·조건 대기 블록만)", "reject"),
     Reason("ADJUST_BUSY", "공정 중 수정: 장비가 시작 중(RF Pulse START) — 끝난 뒤에", "reject"),
+    Reason("SKIP_STALE", "건너뛰기: 화면이 본 블록·판이 지금과 다름 — 다시 보고 누를 것", "reject"),
+    Reason("PAUSE_STALE", "일시정지·재개: 화면이 본 블록·판이 지금과 다름 — 다시 보고 누를 것", "reject"),
+    Reason("EDIT_STALE", "순서 고치기: 화면이 본 판이 지금과 다름 — 다시 받아 고칠 것", "reject"),
+    Reason("SKIP_NOT_ALLOWED", "이 블록은 건너뛸 수 없음(끄기·닫기·정상 끝 정지 등)", "reject"),
+    Reason("PAUSE_NOT_ALLOWED", "이 블록은 멈출 수 없음(바로 끝나는 명령 블록 등)", "reject"),
+    Reason("EDIT_TOUCHES_STARTED", "순서 고치기: 시작했거나 끝난 블록과 그 앞 순서는 바꿀 수 없음", "reject"),
+    Reason("PROCESS_PAUSED", "이미 일시정지 중", "reject"),
+    Reason("PROCESS_NOT_PAUSED", "일시정지 중이 아님", "reject"),
     # 공정 중단(abort)
     Reason("MV_CLOSED", "공정 중 메인 밸브 닫힘", "abort"),
     Reason("MV_INTERLOCK_LOST", "공정 중 MV 인터록 해제 지속", "abort"),
@@ -93,6 +101,7 @@ CHK_REASONS: tuple = (
     Reason("PRESSURE_WAIT_TIMEOUT", "압력 블록(SP2~SP4) 도달 한도 초과(공정 중단)", "abort"),
     Reason("HEATER_TC1_DETACHED", "히터 TC1 탈락 의심 — 2단 제어 보정이 오래 너무 큼", "abort"),
     Reason("HEATER_SETTLE_FAILED", "셔터 전 히터 정착 미달 — 대기 상한 초과(공정 중단 설정)", "abort"),
+    Reason("PAUSE_TIMEOUT", "일시정지가 한도를 넘음 — 정지 순서", "abort"),
     Reason("PROGRAM_EXIT", "프로그램 강제 종료(콘솔 창 닫기·로그오프·윈도우 종료) — 파워 출력만 끄고 PLC 릴레이는 유지(결정 4)",
            "abort"),
     # 경고·정보
@@ -133,6 +142,12 @@ CHK_REASONS: tuple = (
     Reason("HEATER_DEMOTE_FAILED", "히터 출력 상한 고정 실패(직전 출력 없음) — TC1 제어", "info"),
     Reason("HEATER_SETTLE_SKIPPED", "셔터 전 히터 정착 확인 생략 — 2단 제어가 돌고 있지 않음", "info"),
     Reason("HEATER_SETTLE_TIMEOUT", "셔터 전 히터 정착 미달 — 경고 후 셔터 열고 진행", "info"),
+    Reason("HEATER_SETTLE_NOT_CHECKED", "셔터 전 히터 정착 확인 없이 진행(사용자 건너뛰기)", "info"),
+    Reason("PROCESS_SKIP", "공정 중 블록 건너뛰기 기록(누가·블록·정리한 것)", "info"),
+    Reason("PROCESS_PAUSE", "공정 중 일시정지 기록(누가·블록·남은 시간)", "info"),
+    Reason("PROCESS_RESUME", "일시정지 재개 기록(누가·멈춘 시간)", "info"),
+    Reason("PROCESS_EDIT", "공정 중 순서 고치기 기록(판 번호·누가·바뀐 것·전체 블록)", "info"),
+    Reason("PAUSE_LONG", "일시정지가 길어짐 — 곧 정지 순서", "info"),
 )
 
 ALL_REASONS: tuple = COMMON_REASONS + CHK_REASONS
@@ -301,6 +316,25 @@ COMMANDS: tuple = (
                                                                      desc="비우면 경로(web·hmi → local)")),
       desc="이번 공정의 그 값을 바꾼다 — 지금 쓰는 블록이면 바로(드라이버 경로·되읽기), 아직 안 온 블록이면 그 블록이 새 값으로. "
            "공정 밖·정지 중 PROCESS_NOT_RUNNING. 결과 기록 ProcEvent adjust(PROCESS_ADJUST)", v1="v2"),
+    # 공정 중 건너뛰기·일시정지·순서 고치기(5-15) — 판단은 장비(process_engine), 규칙은 blocks.BlockDef skip·pause
+    C("PROCESS_SKIP", "지금 블록 건너뛰기", (WEB, HMI), "operator", ACTIVE_STATES, (),
+      (_a("no", "str", desc="지금 블록 번호(state.run.current — 반복 안이면 그 안쪽, 딜레이 행은 delay)"),
+       _a("revision", "int", min=0, desc="지금 판 번호(state.run.revision, 딜레이 행 0)")),
+      desc="지금 블록을 끝내고 다음으로 — 정리는 블록 정의 skip(기다림만 끝냄·Main 셔터 닫음·필라멘트 끔·보낸 명령 그대로). "
+           "다르면 SKIP_STALE, 못 하는 블록 SKIP_NOT_ALLOWED. 정지 순서 중 STATE_NOT_ALLOWED. 기록 ProcEvent skip(PROCESS_SKIP)",
+      v1="v2"),
+    C("PROCESS_PAUSE", "지금 블록 일시정지", (WEB, HMI), "operator", ACTIVE_STATES, (),
+      (_a("no", "str", desc="지금 블록 번호"), _a("revision", "int", min=0, desc="지금 판 번호")),
+      desc="블록 정의 pause — 대기·딜레이는 남은 시간, 메인은 Main 셔터를 닫고 남은 시간, 도달 대기는 판정·시간 한도를 멈춤. "
+           "안전 규칙·STOP·ALL STOP·공정 중 수정은 그대로. PROCESS_PAUSE_MAX_SEC 를 넘으면 정지 순서(PAUSE_TIMEOUT)", v1="v2"),
+    C("PROCESS_RESUME", "일시정지 재개", (WEB, HMI), "operator", ACTIVE_STATES, (),
+      (_a("revision", "int", min=0, desc="지금 판 번호"),),
+      desc="멈춘 블록 이어서(메인은 셔터를 다시 염, 도달 대기는 안정 유지 시간을 처음부터)", v1="v2"),
+    C("PROCESS_EDIT", "진행 중 순서 고치기", (WEB,), "operator", ACTIVE_STATES, (),
+      (_a("revision", "int", min=1, desc="지금 판 번호"),
+       _a("blocks", "rows", desc="지금 행의 새 블록 전체 목록(blocks.BLOCK_DEFS)")),
+      desc="아직 시작하지 않은 블록만 추가·삭제·순서·값 — 시작한 블록과 그 앞은 그대로(EDIT_TOUCHES_STARTED). 적재 때와 같은 검사 뒤 "
+           "판 +1, 지금 블록은 끊지 않고 남은 부분을 새 목록으로. 기록 ProcEvent edit(PROCESS_EDIT)", v1="v2"),
     # 설정
     C("CONFIG_APPLY", "설정 적용", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),
       (_a("version", "int", min=1), _a("values", "obj"), _a("schemaHash", "str")),

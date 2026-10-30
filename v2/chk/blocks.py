@@ -120,12 +120,25 @@ class BlockDef:
     help: str = ""                     # 화면용 설명(5-13)
     group: str = ""                    # 블록 추가 버튼 묶음(BLOCK_GROUPS key)
     summary: tuple = ()                # 한 줄 요약에 보일 값 이름(순서대로)
+    # 공정 중 건너뛰기·일시정지(5-15) — 판단은 장비(process_engine). kind 가 비면 못 함. when = 값 조건(_when 문법, 비면 늘)
+    skip: str = ""                     # wait(기다림만 끝냄) · settle(+ 정착 확인 없음 경고) · main(Main 셔터 닫음) ·
+                                       # base(이 공정이 켠 필라멘트 끔) · cmd(보낸 명령 그대로, 확인 기다림만 끝냄)
+    skip_when: str = ""
+    skip_text: str = ""                # 건너뛸 때 정리할 것(확인창 문구)
+    skip_no: str = ""                  # 못 하는 이유(kind 가 비었거나 when 이 거짓일 때)
+    pause: str = ""                    # timer(남은 시간 멈춤) · main(셔터 닫고 시간 멈춤) · judge(판정·시간 한도 멈춤)
+    pause_when: str = ""
+    pause_text: str = ""               # 멈춤의 뜻
+    pause_no: str = ""
 
     def public(self) -> dict:
         return {"type": self.type, "label": self.label, "params": [p.public() for p in self.params],
                 "stage": self.stage, "stages": list(self.stages), "watch": dict(self.watch) if self.watch else None,
                 "container": self.container, "steps": self.steps, "v1": self.v1, "desc": self.desc,
-                "help": self.help, "group": self.group, "summary": list(self.summary)}
+                "help": self.help, "group": self.group, "summary": list(self.summary),
+                "skip": {"kind": self.skip or None, "when": self.skip_when or None, "text": self.skip_text, "no": self.skip_no},
+                "pause": {"kind": self.pause or None, "when": self.pause_when or None, "text": self.pause_text,
+                          "no": self.pause_no}}
 
 
 P = BParam
@@ -342,6 +355,64 @@ def _with_text(d: BlockDef) -> BlockDef:
 
 
 BLOCK_DEFS = tuple(_with_text(d) for d in BLOCK_DEFS)
+
+# ───────────── 공정 중 건너뛰기·일시정지 규칙(5-15, 사용자 지시) — 블록 종류 → (건너뛰기, 멈춤) ─────────────
+# 각 (kind, when, 할 일 문구, 못 하는 이유). 지금 행의 지금 블록만, 정지 순서 중에는 못 함. 딜레이 행은 '대기'와 같다.
+_S_WAIT = "기다림만 끝내고 다음 블록으로 — 쓴 설정값·켜진 출력은 그대로"
+_S_CMD = "보낸 명령은 되돌리지 않고 확인 기다림만 끝냄(남은 명령은 보내지 않음)"
+_NO_OFF = "끄기·닫기 블록은 건너뛸 수 없음"
+_P_JUDGE = "도달 판정과 시간 한도를 멈춤 — 출력은 그대로. 재개하면 안정 유지 시간은 처음부터"
+_P_TIMER = "남은 시간을 멈춤 — 출력은 그대로"
+_P_NO_CMD = "바로 끝나는 명령 블록은 멈출 수 없음"
+_CTRL: Dict[str, tuple] = {
+    "pre_clean": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
+    "gas_prep": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
+    "heater_ramp": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
+    "heater_wait": (("wait", "", _S_WAIT, ""), ("judge", "", _P_JUDGE, "")),
+    "heater_settle": (("settle", "", "정착 확인 없이 다음 블록으로(경고 남김) — 히터는 그대로", ""), ("judge", "", _P_JUDGE, "")),
+    "base_wait": (("base", "", "이 공정이 켠 이온 게이지 필라멘트를 끄고 다음 블록으로", ""), ("judge", "", _P_JUDGE, "")),
+    "gas_intro": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
+    "pressure": (("wait", "", "압력 도달 기다림만 끝냄 — 쓴 설정점·제어 설정점은 그대로", ""),
+                 ("judge", "wait=true", _P_JUDGE, "도달 대기가 없는 압력 블록은 멈출 수 없음")),
+    "valve": (("cmd", "action^=open", _S_CMD, "밸브 닫기·멈춤은 건너뛸 수 없음"), ("", "", "", _P_NO_CMD)),
+    "shutter": (("cmd", "action^=open", _S_CMD, "셔터 닫기는 건너뛸 수 없음"), ("", "", "", _P_NO_CMD)),
+    "power_on": (("cmd", "", "보낸 명령은 되돌리지 않음 — 출력은 목표로 계속 가고 도달 확인만 끝냄", ""),
+                 ("judge", "wait=true", _P_JUDGE, "도달 대기 없이 켜기만 하는 블록은 멈출 수 없음")),
+    "power_off": (("", "", "", _NO_OFF), ("", "", "", _P_NO_CMD)),
+    "gas_off": (("", "", "", _NO_OFF), ("", "", "", _P_NO_CMD)),
+    "heater_off": (("", "", "", _NO_OFF), ("", "", "", _P_NO_CMD)),
+    "wait": (("wait", "", _S_WAIT, ""), ("timer", "", _P_TIMER, "")),
+    "main": (("main", "", "이 블록이 연 Main 셔터를 닫고 남은 시간은 버림", ""),
+             ("main", "", "Main 셔터를 닫고 남은 시간을 멈춤(파워·가스·압력은 그대로). 재개하면 셔터를 다시 열고 이어서", "")),
+    "cond_wait": (("wait", "", _S_WAIT, ""), ("judge", "", _P_JUDGE, "")),
+    "repeat": (("", "", "", "반복은 안쪽 블록 단위로만"), ("", "", "", "반복은 안쪽 블록 단위로만")),
+    "end_stop": (("", "", "", "정상 끝 정지는 건너뛸 수 없음"), ("", "", "", "정상 끝 정지는 멈출 수 없음")),
+}
+# 딜레이 행(CSV 'delay N') — 대기와 같은 규칙. 화면의 블록 번호는 DELAY_NO, 판 번호는 0
+DELAY_NO = "delay"
+DELAY_CTRL = _CTRL["wait"]
+
+
+def _with_ctrl(d: BlockDef) -> BlockDef:
+    from dataclasses import replace
+    (sk, sw, st, sn), (pk, pw, pt, pn) = _CTRL[d.type]
+    return replace(d, skip=sk, skip_when=sw, skip_text=st, skip_no=sn, pause=pk, pause_when=pw, pause_text=pt, pause_no=pn)
+
+
+BLOCK_DEFS = tuple(_with_ctrl(d) for d in BLOCK_DEFS)
+
+
+def control(type_: str, params: Mapping[str, Any], which: str) -> tuple:
+    """(가능, kind, 문구) — which = "skip" / "pause". 문구는 가능하면 할 일, 못 하면 이유."""
+    if type_ == DELAY_NO:
+        (sk, _, st, sn), (pk, _, pt, pn) = DELAY_CTRL
+        return (True, sk, st) if which == "skip" else (True, pk, pt)
+    d = by_type()[type_]
+    kind, when, text, no = ((d.skip, d.skip_when, d.skip_text, d.skip_no) if which == "skip"
+                            else (d.pause, d.pause_when, d.pause_text, d.pause_no))
+    if kind and (not when or _when(when, params)):
+        return True, kind, text
+    return False, "", no
 
 
 def by_type() -> Dict[str, BlockDef]:

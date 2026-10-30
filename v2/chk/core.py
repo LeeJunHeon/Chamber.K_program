@@ -136,6 +136,15 @@ class ChkCore:
         if kind == "PROCESS_ADJUST":
             src = a.get("source") or ("local" if source == Source.HMI else "web")
             return self._why(p, lambda: p.adjust(str(a.get("device") or ""), str(a.get("item") or ""), a["value"], src, by=by))
+        if kind in ("PROCESS_SKIP", "PROCESS_PAUSE", "PROCESS_RESUME", "PROCESS_EDIT"):
+            src = "local" if source == Source.HMI else "web"
+            if kind == "PROCESS_SKIP":
+                return self._why(p, lambda: p.skip(a["no"], int(a["revision"]), by=by, source=src))
+            if kind == "PROCESS_PAUSE":
+                return self._why(p, lambda: p.pause(a["no"], int(a["revision"]), by=by, source=src))
+            if kind == "PROCESS_RESUME":
+                return self._why(p, lambda: p.resume(int(a["revision"]), by=by, source=src))
+            return self._why(p, lambda: p.edit(int(a["revision"]), a["blocks"], by=by, source=src))
         if kind == "RECIPE_START":
             return p.start_recipe()
         if kind == "PLC_BUTTON":

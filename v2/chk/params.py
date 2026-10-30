@@ -476,6 +476,8 @@ PARAMS: tuple = (
        src="controller/heater_atmosphere.py:43"),
 
     # ───────────── 공정 시퀀스(process) ─────────────
+    _p("PROCESS_PAUSE_MAX_SEC", "process", "공정 일시정지 한도", "s", F, 1800.0, 0.0, 86400.0, src="v2",
+       desc="공정 중 일시정지(PROCESS_PAUSE)가 이만큼 이어지면 정지 순서(PAUSE_TIMEOUT). 5분 전 경고. 0 = 한도 없음(5-15)"),
     _p("PRE_POWER_OFF_SETTLE_SEC", "process", "시작 전 전원 OFF 뒤 대기", "s", F, 1.0, 0.0, 30.0, safety=L,
        src="controller/process_controller.py:519"),
     _p("GAS_STABILIZE_SEC", "process", "SP4 ON 뒤 압력 안정화", "s", F, 60.0, 0.0, 600.0,

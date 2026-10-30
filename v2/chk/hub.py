@@ -36,6 +36,8 @@ def utc_iso(t_wall: Optional[float] = None) -> str:
     return d.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+RUN_BLOCKS_EVERY = 10          # state.run.blocks 를 바뀌지 않아도 싣는 간격(tick) — 화면을 새로 열어도 10초 안에 받게
+
 class Subscriber:
     def __init__(self, hub: "MessageHub", maxsize: int, name: str) -> None:
         self.hub, self.name = hub, name
@@ -223,7 +225,8 @@ class MessageHub:
             return
         if e.kind == "run_end":
             self.publish("run_end", {"runId": getattr(p, "run_id", None) or None, "result": d.get("status"),
-                                     "reasonCode": d.get("reason"), "summary": {"name": d.get("name")}})
+                                     "reasonCode": d.get("reason"),
+                                     "summary": dict({"name": d.get("name")}, **(d.get("summary") or {}))})
             return
         level = d.get("level") or ("warn" if e.code else "info")
         self._event(level, e.code or e.kind.upper(), None, e.detail, {"source": "process", "kind": e.kind, "data": d or None})
@@ -250,7 +253,17 @@ class MessageHub:
         alarms = [dict({"ruleId": r}, **self.alarm_codes.get(r, {})) for r in sorted(fired)]
         links = {b.name: {"q": row.get(f"{b.name}.q"), "age": row.get(f"{b.name}.age_s")} for b in s.bus.blocks}
         st = s.store
-        return {"procState": p.state, "runId": f.get("proc.run_id"), "step": blk, "remainS": f.get("proc.remain_s"),
+        run = None
+        if hasattr(p, "run_state"):
+            # 블록 목록은 바뀌었을 때(blocksVersion)와 10초마다만 싣는다 — 평소에는 판·지금 번호·멈춤만(5-15)
+            self._run_tick = getattr(self, "_run_tick", 0) + 1
+            ver = getattr(p, "blocks_version", 0)
+            full = ver != getattr(self, "_run_ver", None) or self._run_tick % RUN_BLOCKS_EVERY == 0
+            run = p.run_state(full)
+            if run is not None and full:
+                self._run_ver = ver
+        return {"procState": p.state, "paused": bool(getattr(p, "paused", None)),
+                "procLabel": "일시정지" if getattr(p, "paused", None) else None, "run": run, "runId": f.get("proc.run_id"), "step": blk, "remainS": f.get("proc.remain_s"),
                 "recipe": recipe, "heaterRecipe": hr,
                 "adjust": p.adjust_state() if hasattr(p, "adjust_state") else None,
                 "heater": {"owner": h.owner, "handedOver": bool(h.handed_over), "gas": h.gas_state},

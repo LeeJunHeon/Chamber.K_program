@@ -38,6 +38,19 @@ STOP → 정지 순서 → run_end aborted(USER_STOP). 중단(안전 규칙·장
 (ProcEvent "adjust" PROCESS_ADJUST: 장비·항목·이전 → 새 값·출처·결과(rejected/scheduled/applied → confirmed/failed)·사유).
 지금 값(adjust_state → state.adjust): 항목마다 이번 공정이 지금 쓰는 값·레시피 원래 값·마지막 수정(by·시각)·scope —
 adjust 와 같은 기준(공정 중 = 진행 상태·공정 행, 지금 쓰는 중 = _adjust_apply 가 바로 쓰는 조건, 안 씀 = ADJUST_NOT_USED).
+공정 중 건너뛰기·일시정지·순서 고치기(5-15 — PROCESS_SKIP·PROCESS_PAUSE·PROCESS_RESUME·PROCESS_EDIT): 지금 행만, 판단은 여기.
+- 규칙은 블록 정의(blocks.BlockDef skip·pause, blocks.control) — 지금 블록 번호(no)·판 번호(revision)가 지금과 다르면 *_STALE.
+  정지 순서 중에는 셋 다 거부(STATE_NOT_ALLOWED — 명령 표의 허용 상태). 딜레이 행은 대기와 같은 규칙(no = "delay", 판 0).
+- 건너뛰기: 지금 블록의 남은 스텝을 버리고 다음 블록으로(블록 결과 skipped). 정리는 kind 대로 — main 은 Main 셔터 닫음,
+  base 는 이 공정이 켠 필라멘트 끔, settle 은 '정착 확인 없이 진행' 경고, cmd·wait 는 보낸 명령·쓴 값 그대로. 멈춘 블록도 건너뛴다.
+- 일시정지: 스텝 실행기를 tick 하지 않는다(판정·시간 한도가 멈춤 — 상태 이름·안전 규칙·STOP·ALL STOP·공정 중 수정은 그대로).
+  main 은 Main 셔터를 닫고, 재개 때 다시 연다. 재개 때 지금 스텝의 시작 시각을 멈춘 만큼 미루고 안정 판정을 처음부터.
+  PROCESS_PAUSE_MAX_SEC(0 = 한도 없음) — 5분 전 경고(PAUSE_LONG), 넘으면 정지 순서(PAUSE_TIMEOUT).
+- 순서 고치기: 새 블록 전체 목록 — 시작한 블록(진행 중인 반복은 통째로)과 그 앞은 그대로여야 하고(EDIT_TOUCHES_STARTED),
+  적재 때와 같은 검사(check_blocks·꺼진 장비·연결) 뒤 판 +1, 지금 블록은 끊지 않고 남은 부분을 새 목록으로 다시 펼친다.
+  공정 중 수정 값은 남은 스텝이 쓰는 항목이면 지우고(새 목록 값), 지금 쓰는 값은 그대로.
+- 기록: 블록마다 실행 결과(exec — 번호·종류·이름표·시작·끝·done/skipped/aborted·멈춘 초·실행 판), run_end summary 에 실행 순서·
+  마지막 판·건너뛴/멈춘 횟수. 사건 skip·pause·resume·edit(PROCESS_SKIP·PROCESS_PAUSE·PROCESS_RESUME·PROCESS_EDIT).
 """
 from __future__ import annotations
 
@@ -148,6 +161,17 @@ class ProcessEngine:
         self._end_stop_resume = False
         # 셔터 전 히터 정착(HEATER_SETTLE, v1 3328872) — 승온 대기 통과 뒤부터 TC1 범위 안 연속 시간을 센다(행이 끝나면 지움)
         self.settle_track: Optional[SettleTracker] = None
+        # 건너뛰기·일시정지·순서 고치기(5-15)
+        self.revision = 0                       # 지금 행의 판 번호(행 시작 1, 고칠 때마다 +1)
+        self.paused: Optional[Dict[str, Any]] = None
+        self.exec_log: List[Dict[str, Any]] = []   # 블록 실행 결과(행마다)
+        self.skips = self.pauses = 0
+        self.paused_total = 0.0
+        self.block_paused = 0.0                 # 지금 블록이 멈춘 초 합
+        self.block_wall0 = 0.0
+        self.block_rev = 0
+        self.blocks_version = 0                 # 블록 목록·상태가 바뀔 때마다 +1(state.run.blocks 를 다시 싣는 기준)
+        self._delay_rec: Optional[Dict[str, Any]] = None
 
     # ── 안전 엔진이 보는 것 ──
     @property
@@ -280,11 +304,13 @@ class ProcessEngine:
                 "proc.block": f"{b.index + 1}/{len(self.insts)}" if b is not None else None,
                 "proc.block_type": b.type if b is not None else None,
                 "proc.block_label": (b.label or b.no) if b is not None else None,
-                "proc.remain_s": self.remain_s()}
+                "proc.remain_s": self.remain_s(),
+                "proc.paused": self.paused is not None if self.state in ACT else None,
+                "proc.revision": self.revision if (self.row_is_process and self.state in ACT) else None}
 
     def remain_s(self) -> Optional[int]:
         """지금 대기 스텝(DELAY·조건 대기·압력 대기)의 남은 초 — 화면용. 딜레이 행이면 그 남은 시간."""
-        now = self.clock.monotonic()
+        now = self.paused["t0"] if self.paused is not None else self.clock.monotonic()   # 멈춘 동안은 멈춘 값
         if self.state == "CSV_DELAY":
             return max(0, int(round(self.delay_s - (now - self.delay_t0))))
         r = self.runner
@@ -585,6 +611,8 @@ class ProcessEngine:
         self.dcc.stop()
         self.rfc.stop()
         self.settle_track = None
+        if self.paused is not None:
+            self._end_pause(self.clock.monotonic(), resumed=False)
         if heater and self.uses_heater:
             self.heater.process_off()
 
@@ -630,7 +658,8 @@ class ProcessEngine:
                 self.left = {}                                     # 정지 순서 전체 — 남긴 것도 함께 꺼졌다
             self.end_skip = ()
             self._block_end("ok" if kind_ == "done" else kind_, code)
-            self._emit(ProcEvent("run_end", kind_, code, {"name": self.run_name, "status": kind_, "reason": code}))
+            self._emit(ProcEvent("run_end", kind_, code, {"name": self.run_name, "status": kind_, "reason": code,
+                                                          "summary": self.run_summary()}))
             self.row_is_process = False
             self.filament_by_process = False
             self.params = {}
@@ -659,7 +688,8 @@ class ProcessEngine:
             self.rfc.stop()
             self._block_end("error", "PROGRAM_EXIT")
             self._emit(ProcEvent("run_end", "error", "PROGRAM_EXIT",
-                                 {"name": self.run_name, "status": "error", "reason": "PROGRAM_EXIT"}))
+                                 {"name": self.run_name, "status": "error", "reason": "PROGRAM_EXIT",
+                                  "summary": self.run_summary()}))
             self.row_is_process = False
             if self.list_active:
                 self._emit(ProcEvent("list_cancel", self.recipe_name, "PROGRAM_EXIT"))
@@ -688,6 +718,8 @@ class ProcessEngine:
                 if r["delay_s"] <= 0:
                     continue                              # 0초 딜레이는 건너뜀(v1)
                 self.delay_s, self.delay_t0 = float(r["delay_s"]), self.clock.monotonic()
+                self._delay_rec, self.paused, self.revision = {}, None, 0
+                self.blocks_version += 1
                 self.row_is_process = False
                 self._set_state("CSV_DELAY")
                 return
@@ -715,6 +747,10 @@ class ProcessEngine:
         self.dc_on = self.rf_on = self.rfp_on = False
         self.power, self.base = {}, {}
         self.settle_track = None
+        self.revision, self.paused, self.exec_log = 1, None, []
+        self.skips = self.pauses = 0
+        self.paused_total = self.block_paused = 0.0
+        self.blocks_version += 1
         h = {"DC_POWER_STOP": self._h_dc_stop, "RF_POWER_STOP": self._h_rf_stop, "RF_PULSE_STOP": self._h_rfp_stop,
              "HEATER_RAMP": self._h_heater_ramp, "HEATER_SET": self._h_heater_set, "HEATER_WAIT": self._h_heater_wait,
              "IG_FILAMENT_ON": self._h_ig_on, "IG_BASE_WAIT": self._h_ig_wait, "IG_FILAMENT_OFF": self._h_ig_off,
@@ -738,6 +774,8 @@ class ProcessEngine:
             return
         self._block_end("ok")
         self.block_idx, self.block_t0 = idx, self.clock.monotonic()
+        self.block_wall0, self.block_paused, self.block_rev = self.clock.wall(), 0.0, self.revision
+        self.blocks_version += 1
         b = self.block
         if b is not None:
             self._emit(ProcEvent("block", f"{b.no} {b.type} {b.label}".strip(), data=dict(
@@ -748,6 +786,10 @@ class ProcessEngine:
         if b is None or b.ended:
             return
         b.ended = True
+        self.exec_log.append({"no": b.no, "type": b.type, "label": b.label, "start": self.block_wall0, "end": self.clock.wall(),
+                              "result": {"ok": "done", "skipped": "skipped"}.get(result, "aborted"),
+                              "pausedSec": round(self.block_paused, 1), "revision": self.block_rev})
+        self.blocks_version += 1
         self._emit(ProcEvent("block", f"{b.no} {b.type} → {result}", code, data=dict(
             b.record(), phase="end", result=result, reason=code, index=b.index + 1, total=len(self.insts),
             elapsed_s=round(self.clock.monotonic() - self.block_t0, 1), t=self.clock.wall(), run_id=self.run_id)))
@@ -792,7 +834,12 @@ class ProcessEngine:
                 self._set_state("LOADED" if self.rows else "IDLE")
                 return
             if self.state == "CSV_DELAY":
-                if now - self.delay_t0 >= self.delay_s - 1e-9:
+                if self.paused is not None:
+                    self._pause_tick(now)
+                elif self._delay_rec is not None and self._delay_rec.get("skip"):
+                    self._delay_rec = None
+                    self._next_row()
+                elif now - self.delay_t0 >= self.delay_s - 1e-9:
                     self._next_row()
                 return
             if self.state == "CSV_BETWEEN":
@@ -803,6 +850,9 @@ class ProcessEngine:
             self.rfc.tick(view.get("rf.fwd_w"), view.get("rf.ref_w"))
             self._settle_feed(view)
             self._settle_tick(view, now)
+            if self.paused is not None:
+                self._pause_tick(now)                   # 멈춘 동안은 스텝 실행기를 돌리지 않는다(판정·시간 한도 멈춤)
+                return
             self.runner.tick(view, now)
             if self.runner.failed and self.state in ACT:
                 if self.safety is not None:
@@ -820,6 +870,311 @@ class ProcessEngine:
                     st = "HEATER_HOLD_WAIT"
                 if st in ACT:
                     self._set_state(st)
+
+    # ── 건너뛰기·일시정지·순서 고치기(5-15) ──
+    def _top(self, inst: BK.BlockInst) -> int:
+        """블록 번호("3"·"3.2#1") → 맨 위 목록 순번(0부터)."""
+        return int(str(inst.no).split(".")[0].split("#")[0]) - 1
+
+    def _ctl_check(self, no: Any, revision: Any, stale: str) -> Optional[str]:
+        """공통 거부 — 공정 중·정지 순서 아님·지금 블록·판. 딜레이 행은 no "delay"·판 0."""
+        if self.state not in ACT or self.state == "CSV_BETWEEN":
+            return "PROCESS_NOT_RUNNING"
+        if self.safety is not None and self.safety.engine.stopping is not None:
+            return "STATE_NOT_ALLOWED"
+        if self.state == "CSV_DELAY":
+            if str(no) != BK.DELAY_NO or revision != 0:
+                self.reject_detail = f"지금은 딜레이 행(번호 {BK.DELAY_NO}, 판 0)"
+                return stale
+            return None
+        b = self.block
+        if not self.row_is_process or self.runner is None or b is None:
+            return "PROCESS_NOT_RUNNING"
+        if revision != self.revision or str(no) != str(b.no):
+            self.reject_detail = f"지금 블록 {b.no}, 판 {self.revision}"
+            return stale
+        return None
+
+    def _ctl_event(self, kind: str, code: str, text: str, data: Dict[str, Any]) -> None:
+        self.blocks_version += 1
+        self._emit(ProcEvent(kind, text, code, dict(data, run_id=self.run_id or None, revision=self.revision,
+                                                    t=self.clock.wall(), level="info")))
+
+    def skip(self, no: Any, revision: Any, by: Optional[str] = None, source: str = "web") -> Optional[str]:
+        """PROCESS_SKIP — 지금 블록을 끝내고 다음으로. 돌려주는 값은 거부 사유 코드 또는 None."""
+        with self._lock:
+            self.reject_detail = ""
+            why = self._ctl_check(no, revision, "SKIP_STALE")
+            if why:
+                return why
+            now = self.clock.monotonic()
+            if self.state == "CSV_DELAY":
+                was = self._end_pause(now, resumed=False) if self.paused is not None else 0.0
+                self.skips += 1
+                self._delay_rec = {"skip": True}
+                self._ctl_event("skip", "PROCESS_SKIP", f"딜레이 행 건너뜀 ({by or source})",
+                                {"by": by, "source": source, "no": BK.DELAY_NO, "type": "delay", "label": "",
+                                 "kind": "wait", "cleaned": [], "pausedSec": round(was, 1)})
+                return None
+            b, r = self.block, self.runner
+            ok, kind, text = BK.control(b.type, b.params, "skip")
+            if not ok:
+                self.reject_detail = text
+                return "SKIP_NOT_ALLOWED"
+            was = self._end_pause(now, resumed=False) if self.paused is not None else 0.0
+            cleaned = self._skip_cleanup(b, kind)
+            self.skips += 1
+            self._ctl_event("skip", "PROCESS_SKIP", f"블록 {b.no} {b.type} 건너뜀 ({by or source})",
+                            {"by": by, "source": source, "no": b.no, "type": b.type, "label": b.label, "kind": kind,
+                             "cleaned": cleaned, "pausedSec": round(was, 1)})
+            if kind == "settle":
+                self._emit(ProcEvent("warn", "셔터 전 히터 정착 확인 없이 진행(사용자 건너뛰기)", "HEATER_SETTLE_NOT_CHECKED",
+                                     {"by": by, "level": "warn"}))
+            self._block_end("skipped")
+            i = r.idx + 1
+            while i < len(r.steps) and r.steps[i].block == b.index:
+                i += 1
+            r.skip_to(i, now)
+            return None
+
+    def _skip_cleanup(self, b: BK.BlockInst, kind: str) -> List[str]:
+        r = self.runner
+        s, cur = r.step, r.cur
+        out: List[str] = []
+        if kind == "main":
+            first = next(i for i, x in enumerate(r.steps) if x.block == b.index)
+            opened = r.idx > first or (cur is not None and cur.issued)
+            if opened:
+                self.plc.set_button("ms", False)
+                out.append("Main 셔터 닫음")
+        elif kind == "base":
+            last = getattr(self.ig, "last", None)
+            if self.filament_by_process and last is not None and getattr(last, "filament", False):
+                self.ig.filament_off()
+                out.append("이 공정이 켠 필라멘트 끔")
+            self.filament_by_process = False
+        elif kind == "settle":
+            self.settle_track = None
+        elif kind == "cmd" and s is not None and cur is not None and cur.issued:
+            if s.action == "MFC_CMD" and s.params[0] in ("FLOW_ON", "FLOW_OFF"):
+                self._on_step_done(s)                      # 보낸 FLOW ON 은 그대로 — 유량 이탈 판정 기준도
+            out.append(f"보낸 명령 그대로({s.message})")
+        return out
+
+    def pause(self, no: Any, revision: Any, by: Optional[str] = None, source: str = "web") -> Optional[str]:
+        """PROCESS_PAUSE — 지금 블록 멈춤."""
+        with self._lock:
+            self.reject_detail = ""
+            why = self._ctl_check(no, revision, "PAUSE_STALE")
+            if why:
+                return why
+            if self.paused is not None:
+                return "PROCESS_PAUSED"
+            now = self.clock.monotonic()
+            if self.state == "CSV_DELAY":
+                b_no, b_type, b_label, kind = BK.DELAY_NO, "delay", "", "timer"
+            else:
+                b = self.block
+                ok, kind, text = BK.control(b.type, b.params, "pause")
+                if not ok:
+                    self.reject_detail = text
+                    return "PAUSE_NOT_ALLOWED"
+                s = self.runner.step
+                if kind == "judge" and b.type == "power_on" and (s is None or s.action != "POWER_WAIT"):
+                    self.reject_detail = "도달 대기가 없는 파워 켜기는 멈출 수 없음"
+                    return "PAUSE_NOT_ALLOWED"
+                b_no, b_type, b_label = b.no, b.type, b.label
+            remain = self.remain_s()
+            self.paused = {"t0": now, "at": self.clock.wall(), "no": b_no, "type": b_type, "label": b_label, "kind": kind,
+                           "by": by, "source": source, "remainS": remain, "warned": False, "msClosed": False}
+            if kind == "main":
+                self.plc.set_button("ms", False)
+                self.paused["msClosed"] = True
+            self.pauses += 1
+            self._ctl_event("pause", "PROCESS_PAUSE", f"블록 {b_no} 일시정지 ({by or source})",
+                            {"by": by, "source": source, "no": b_no, "type": b_type, "label": b_label, "kind": kind,
+                             "remainS": remain, "cleaned": ["Main 셔터 닫음"] if kind == "main" else []})
+            return None
+
+    def resume(self, revision: Any, by: Optional[str] = None, source: str = "web") -> Optional[str]:
+        """PROCESS_RESUME — 멈춘 블록 이어서."""
+        with self._lock:
+            self.reject_detail = ""
+            if self.paused is None:
+                return "PROCESS_NOT_PAUSED"
+            if revision != (0 if self.state == "CSV_DELAY" else self.revision):
+                self.reject_detail = f"지금 판 {0 if self.state == 'CSV_DELAY' else self.revision}"
+                return "PAUSE_STALE"
+            p = dict(self.paused)
+            dur = self._end_pause(self.clock.monotonic(), resumed=True)
+            self._ctl_event("resume", "PROCESS_RESUME", f"블록 {p['no']} 재개 — {dur:.0f} s 멈춤 ({by or source})",
+                            {"by": by, "source": source, "no": p["no"], "type": p["type"], "label": p["label"],
+                             "kind": p["kind"], "pausedSec": round(dur, 1),
+                             "cleaned": ["Main 셔터 다시 엶"] if p["msClosed"] else []})
+            return None
+
+    def _end_pause(self, now: float, resumed: bool) -> float:
+        """멈춤 끝 — 멈춘 초를 기록하고, 지금 스텝의 시작 시각을 그만큼 미루고 안정 판정을 처음부터(재개)."""
+        p, self.paused = self.paused, None
+        if p is None:
+            return 0.0
+        dur = max(0.0, now - p["t0"])
+        self.paused_total += dur
+        self.block_paused += dur
+        self.blocks_version += 1
+        if self.state == "CSV_DELAY":
+            self.delay_t0 += dur
+            return dur
+        r = self.runner
+        cur, s = (r.cur, r.step) if r is not None else (None, None)
+        if cur is not None:
+            cur.t0 += dur
+            if cur.persist is not None:
+                cur.persist.reset()
+            if "stab_t0" in cur.extra:
+                cur.extra["stab_t0"] += dur
+        if s is not None and s.action == "HEATER_WAIT":
+            hp = self.heater.proc
+            if hp.get("t0") is not None:
+                hp["t0"] += dur
+            if hp.get("phase") == "SOAK":
+                hp["phase"] = "RAMP"
+            if hp.get("hold_t0") is not None:
+                hp["hold_t0"] += dur
+        if s is not None and s.action == "HEATER_SETTLE" and self.settle_track is not None:
+            self.settle_track.since = None
+        if s is not None and s.action == "IG_BASE_WAIT" and self.base.get("relight_t0") is not None:
+            self.base["relight_t0"] += dur
+        if resumed and p.get("msClosed"):
+            self.plc.set_button("ms", True)
+        return dur
+
+    def _pause_tick(self, now: float) -> None:
+        """멈춘 동안 — PROCESS_PAUSE_MAX_SEC 5분 전 경고, 넘으면 정지 순서(PAUSE_TIMEOUT)."""
+        p = self.paused
+        mx = float(self.cfg["PROCESS_PAUSE_MAX_SEC"])
+        if p is None or mx <= 0:
+            return
+        el = now - p["t0"]
+        if not p["warned"] and el >= mx - 300.0:
+            p["warned"] = True
+            self._emit(ProcEvent("pause_long", f"일시정지 {el:.0f} s — {max(0.0, mx - el):.0f} s 뒤 정지 순서", "PAUSE_LONG",
+                                 {"no": p["no"], "pausedSec": round(el, 1), "maxSec": mx, "level": "warn"}))
+        if el >= mx:
+            self._end_pause(now, resumed=False)
+            if self.state == "CSV_DELAY":
+                self._cancel_list("PAUSE_TIMEOUT")
+            elif self.safety is not None:
+                self.safety.engine.abort("PAUSE_TIMEOUT", rule="pause")
+
+    def edit(self, revision: Any, blocks: Any, by: Optional[str] = None, source: str = "web") -> Optional[str]:
+        """PROCESS_EDIT — 지금 행의 새 블록 전체 목록. 시작한 블록과 그 앞은 그대로, 나머지를 바꾼다."""
+        with self._lock:
+            self.reject_detail = ""
+            if self.state not in ACT or self.state in ("CSV_BETWEEN", "CSV_DELAY") or not self.row_is_process \
+                    or self.runner is None:
+                return "PROCESS_NOT_RUNNING"
+            if self.safety is not None and self.safety.engine.stopping is not None:
+                return "STATE_NOT_ALLOWED"
+            if revision != self.revision:
+                self.reject_detail = f"지금 판 {self.revision}"
+                return "EDIT_STALE"
+            bl, errs, warns = BK.check_blocks(blocks, self.cfg)
+            if errs:
+                self.reject_detail = errs[0][:300]
+                return _row_error_code(errs)
+            b = self.block
+            k = self._top(b) if b is not None else -1
+            if bl[:k + 1] != self.blocks[:k + 1]:
+                self.reject_detail = f"시작했거나 끝난 블록(맨 위 1~{k + 1}번)과 그 앞 순서는 그대로여야 함"
+                return "EDIT_TOUCHES_STARTED"
+            u = BK.uses_of(bl)
+            why = self._device_guard(u)
+            if why:
+                return why
+            if u["heater"] and not self.uses_heater and self.heater.recipe_running:
+                return "HEATER_RECIPE_CONFLICT"
+            ig_en, rfp_en = bool(self.cfg["IG_ENABLED"]), bool(self.cfg["RFPULSE_ENABLED"])
+            steps, insts = BK.expand(bl, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
+            n = sum(1 for x in self.insts if self._top(x) <= k)
+            r = self.runner
+            cut_old = next((i for i, s in enumerate(r.steps) if s.block >= n), len(r.steps))
+            cut_new = next((i for i, s in enumerate(steps) if s.block >= n), len(steps))
+            tail = steps[cut_new:]
+            # 남은 스텝이 쓰는 항목의 공정 중 수정 값은 지운다(아직 안 온 블록은 새 목록 값) — 지금 쓰는 값(cur_vals)은 그대로
+            drop = {s.ref for s in tail if s.ref}
+            if any(s.action in ("POWER_WAIT", "POWER_START") for s in tail):
+                drop |= {"dc.power", "rf.power", "rfpulse.power", "rfpulse.freq_hz", "rfpulse.duty"}
+            if any((s.spec or {}).get("main") for s in tail):
+                drop.add("process.main_remaining")
+            for key in drop:
+                self.overrides.pop(key, None)
+            old_n = len(self.blocks)
+            first = next((i for i, (x, y) in enumerate(zip(self.blocks, bl)) if x != y), min(old_n, len(bl)))
+            r.replace_tail(cut_old, tail)
+            self.insts = self.insts[:n] + insts[n:]
+            self.blocks, self.uses = bl, u
+            self.revision += 1
+            summary = f"맨 위 블록 {old_n} → {len(bl)}개, {first + 1}번부터 바뀜"
+            self._ctl_event("edit", "PROCESS_EDIT", f"순서 고침 판 {self.revision} — {summary} ({by or source})",
+                            {"by": by, "source": source, "summary": summary, "from": first + 1, "count": len(bl),
+                             "blocks": bl, "warnings": list(warns), "insts": [x.record() for x in self.insts]})
+            return None
+
+    def run_summary(self) -> Dict[str, Any]:
+        """run_end summary — 실행된 순서·마지막 판·건너뛴/멈춘 횟수(웹 DB 는 이 객체를 그대로 저장)."""
+        return {"executed": list(self.exec_log), "revision": self.revision, "skips": self.skips, "pauses": self.pauses,
+                "pausedSec": round(self.paused_total, 1)}
+
+    def run_state(self, full: bool) -> Optional[Dict[str, Any]]:
+        """state.run — 판·지금 블록·멈춤(늘), 블록 목록은 full 일 때만(바뀌었거나 주기적으로 — hub)."""
+        if self.state == "CSV_DELAY":
+            out = {"revision": 0, "current": BK.DELAY_NO, "paused": self._pause_public(), "blocksVersion": self.blocks_version,
+                   "delay": {"sec": self.delay_s, "remainS": self.remain_s()}}
+            if full:
+                ok_s, _, ts = BK.control(BK.DELAY_NO, {}, "skip")
+                ok_p, _, tp = BK.control(BK.DELAY_NO, {}, "pause")
+                out["blocks"] = [{"no": BK.DELAY_NO, "type": "delay", "label": "", "status": "paused" if self.paused else "running",
+                                  "start": None, "end": None, "durationS": self.delay_s, "skip": ok_s, "pause": ok_p,
+                                  "skipText": ts, "pauseText": tp, "pausedSec": 0.0, "revision": 0}]
+            return out
+        if not self.row_is_process or self.state not in ACT and self.state != "STOPPING":
+            return None
+        b = self.block
+        out = {"revision": self.revision, "current": b.no if b is not None else None, "paused": self._pause_public(),
+               "blocksVersion": self.blocks_version}
+        if full:
+            done = {}
+            for e in self.exec_log:
+                done[e["no"]] = e
+            stopping = self.state == "STOPPING"
+            lst = []
+            for x in self.insts:
+                e = done.get(x.no)
+                if e is not None:
+                    st = e["result"]
+                elif b is not None and x.index == b.index:
+                    st = "paused" if self.paused is not None else "running"
+                else:
+                    st = "waiting"
+                ok_s, _, ts = BK.control(x.type, x.params, "skip")
+                ok_p, _, tp = BK.control(x.type, x.params, "pause")
+                live = st in ("running", "paused") and not stopping
+                dur = x.params.get("sec") if x.type in ("wait", "main") else None
+                lst.append({"no": x.no, "type": x.type, "label": x.label, "status": st,
+                            "start": e["start"] if e else (self.block_wall0 if live else None), "end": e["end"] if e else None,
+                            "durationS": dur, "skip": ok_s and live, "pause": ok_p and live, "skipText": ts, "pauseText": tp,
+                            "pausedSec": e["pausedSec"] if e else (round(self.block_paused, 1) if live else 0.0),
+                            "revision": e["revision"] if e else self.revision, "auto": x.auto})
+            out["blocks"] = lst
+        return out
+
+    def _pause_public(self) -> Optional[Dict[str, Any]]:
+        p = self.paused
+        if p is None:
+            return None
+        return {"at": p["at"], "no": p["no"], "type": p["type"], "label": p["label"], "kind": p["kind"], "by": p["by"],
+                "source": p["source"], "remainS": p["remainS"], "pausedS": round(self.clock.monotonic() - p["t0"], 1)}
 
     # ── 스텝 처리기(StepRunner handlers) ──
     def _h_dc_stop(self, r, s, cur, view, now):

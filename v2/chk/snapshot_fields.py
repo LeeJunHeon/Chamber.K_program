@@ -148,6 +148,9 @@ PROCESS_FIELDS: tuple = (
     FieldDef("proc.block_label", FType.STR, "", "지금 블록 이름", detail=True, desc="블록 label, 없으면 블록 번호"),
     FieldDef("proc.remain_s", FType.INT, "s", "남은 시간", detail=True, desc="지금 대기(DELAY·조건·압력 대기)의 남은 초"),
     FieldDef("proc.alarms", FType.STR, "", "활성 알람", detail=True, desc="활성 알람 규칙 id(쉼표)"),
+    FieldDef("proc.paused", FType.BOOL, "", "일시정지", summary="any",
+             desc="PROCESS_PAUSE 로 멈춤(공정 상태 이름은 그대로 — 안전 규칙 구간이 바뀌지 않게, 5-15)"),
+    FieldDef("proc.revision", FType.INT, "", "순서 판", detail=True, desc="지금 행의 판 번호(PROCESS_EDIT 마다 +1)"),
 )
 
 # 블록 → 품질을 공유하는 worker

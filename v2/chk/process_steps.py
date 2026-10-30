@@ -224,11 +224,7 @@ class StepRunner:
         self.failed: Optional[str] = None
         self.cancelled = False
         # 기록 번호는 블록 제어 스텝(internal)을 빼고 센다 — v1 과 같은 "[k/N]"
-        self._pos, n = [], 0
-        for s in self.steps:
-            n += 0 if s.internal else 1
-            self._pos.append(n)
-        self._total = n
+        self._number()
 
     @property
     def step(self) -> Optional[ProcessStep]:
@@ -240,6 +236,25 @@ class StepRunner:
 
     def cancel(self) -> None:
         self.cancelled = True
+
+    def _number(self) -> None:
+        self._pos, n = [], 0
+        for s in self.steps:
+            n += 0 if s.internal else 1
+            self._pos.append(n)
+        self._total = n
+
+    def skip_to(self, i: int, now: float) -> None:
+        """공정 중 건너뛰기(5-15) — 지금 스텝을 버리고 i 번째 스텝으로(끝이면 finished)."""
+        self.idx = i - 1
+        self._advance(now)
+
+    def replace_tail(self, cut: int, tail: List[ProcessStep]) -> None:
+        """공정 중 순서 고치기(5-15) — cut 번째부터 새 스텝으로(지금 스텝은 cut 앞이어야 함). 기록 번호를 다시 센다."""
+        if self.idx >= cut:
+            raise ValueError("지금 스텝을 바꿀 수 없음")
+        self.steps = self.steps[:cut] + list(tail)
+        self._number()
 
     def _advance(self, now: float) -> None:
         self.idx += 1

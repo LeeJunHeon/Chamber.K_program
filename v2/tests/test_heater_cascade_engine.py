@@ -100,7 +100,7 @@ def test_manual_on_engage_retarget_off_order_golden_28a(tmp_path):
     got = {"timeline": rec, "on_writes": [list(x) for x in first[:6]], "off_writes": [list(x) for x in last[:3]]}
     got = json.loads(json.dumps(got))
     if os.environ.get("CHK_UPDATE_GOLDEN") == "1" or not GOLDEN.exists():
-        GOLDEN.write_text(json.dumps(got, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        GOLDEN.write_text(json.dumps(got, ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
     assert got == json.loads(GOLDEN.read_text(encoding="utf-8"))
 
 
