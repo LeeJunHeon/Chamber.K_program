@@ -332,8 +332,9 @@ COMMANDS: tuple = (
       desc="멈춘 블록 이어서(메인은 셔터를 다시 염, 도달 대기는 안정 유지 시간을 처음부터)", v1="v2"),
     C("PROCESS_EDIT", "진행 중 순서 고치기", (WEB,), "operator", ACTIVE_STATES, (),
       (_a("revision", "int", min=1, desc="지금 판 번호"),
-       _a("blocks", "rows", desc="지금 행의 새 블록 전체 목록(blocks.BLOCK_DEFS)")),
-      desc="아직 시작하지 않은 블록만 추가·삭제·순서·값 — 시작한 블록과 그 앞은 그대로(EDIT_TOUCHES_STARTED). 적재 때와 같은 검사 뒤 "
+       _a("blocks", "rows", desc="지금 행의 새 블록 전체 목록 — state.run.editBase.blocks(장비가 실행하는 정리 목록)를 고친 것(5-16)")),
+      desc="아직 시작하지 않은 블록만 추가·삭제·순서·값 — 시작한 블록과 그 앞은 그대로(EDIT_TOUCHES_STARTED — 둘 다 check_blocks "
+           "정리 모양으로 비교해 키 순서·기본값 생략·0/0.0 차이는 같다고 봄). 적재 때와 같은 검사 뒤 "
            "판 +1, 지금 블록은 끊지 않고 남은 부분을 새 목록으로. 기록 ProcEvent edit(PROCESS_EDIT)", v1="v2"),
     # 설정
     C("CONFIG_APPLY", "설정 적용", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),

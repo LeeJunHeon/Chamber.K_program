@@ -109,7 +109,9 @@ MESSAGES: tuple = (
         _f("run", "obj", False, "지금 행의 판·블록(5-15) {revision(판 번호, 딜레이 행 0), current(지금 블록 번호 — 반복 안이면 안쪽, "
            "딜레이 행 'delay'), paused({at, no, type, label, kind, by, source, remainS, pausedS} 또는 null), blocksVersion, "
            "blocks(바뀌었을 때·10초마다만 — [{no, type, label, status(waiting·running·paused·done·skipped·aborted), start, end, "
-           "durationS, skip, pause(지금 할 수 있나), skipText, pauseText, pausedSec, revision, auto}])} — 공정 행이 아니면 null"),
+           "durationS, skip, pause(지금 할 수 있나), skipText, pauseText, pausedSec, revision, auto}]), "
+           "editBase(판이 바뀔 때·10초마다만 — {revision, blocks(지금 판의 맨 위 블록 정리 목록 = PROCESS_EDIT blocks 모양, "
+           "장비가 실제로 실행하는 것. 고쳐서 그대로 보낸다)} — 딜레이 행·정지 순서 중 없음, 5-16)} — 공정 행이 아니면 null"),
         _f("runId", "str", False, "진행 중 공정 id"),
         _f("step", "obj", False, "현재 블록(번호·총수·종류·이름·남은 초)"),
         _f("recipe", "obj", False, "적재된 레시피(이름·행)"),

@@ -380,3 +380,122 @@ def test_heater_wait_pause_shifts_wait_clock(tmp_path):
     r.run(120)
     assert [x.reason for x in _res(r)] == [None, None, None]
     assert 59.0 <= got["t0b"] - got["t0"] <= 61.5 and got["phase"] == "RAMP"
+
+
+# ───────────────────────── 순서 고치기 기준 목록(5-16) ─────────────────────────
+def _loose(blocks):
+    """정리 차이만 있는 같은 목록 — 기본값과 같은 값·빈 label·stage 를 빼고, 정수값 float 는 int(0 / 0.0)."""
+    defs = BK.by_type()
+    out = []
+    for b in blocks:
+        dflt = {p.name: p.default for p in defs[b["type"]].params}
+        ps = {k: (int(v) if isinstance(v, float) and v.is_integer() else v) for k, v in b["params"].items() if v != dflt[k]}
+        x = {"params": ps, "type": b["type"]}                                      # 키 순서도 다르게
+        x.update({k: b[k] for k in ("stage", "label") if b.get(k)})
+        if b.get("blocks"):
+            x["blocks"] = _loose(b["blocks"])
+        out.append(x)
+    return out
+
+
+def _edit_via_base(r, at_no, change_no):
+    """지금 블록이 at_no 일 때 장비가 준 editBase 로 — 시작한 블록 값 바꿈(거부) → 정리 차이 + 뒤 블록 값 바꿈(통과)."""
+    import copy
+    got = {}
+
+    def go():
+        base = r.rig.process.run_state(False, True)["editBase"]
+        got["base"] = copy.deepcopy(base)
+        k = int(at_no)
+        touched = copy.deepcopy(base["blocks"])
+        touched[k - 1]["params"]["sec"] = touched[k - 1]["params"]["sec"] + 1.0         # 지금 블록(시작함)
+        r.results.append(r.rig.core.command("PROCESS_EDIT", {"revision": base["revision"], "blocks": touched}))
+        new = copy.deepcopy(base["blocks"])
+        new[int(change_no) - 1]["params"]["sec"] = 9.0
+        got["new"] = new
+        r.results.append(r.rig.core.command("PROCESS_EDIT", {"revision": base["revision"],
+                                                             "blocks": _loose(new[:k]) + new[k:]}))
+        got["after"] = r.rig.process.run_state(False, True)["editBase"]
+    r.when(lambda: _cur(r) and _cur(r)["current"] == at_no, go)
+    return got
+
+
+def _check_edit(r, got, n_res):
+    res = [x.reason for x in _res(r)]
+    assert res[-2:] == ["EDIT_TOUCHES_STARTED", None], res
+    assert len(res) == n_res
+    assert got["base"]["revision"] == 1 and got["after"]["revision"] == 2
+    assert got["after"]["blocks"] == got["new"]                                   # 새 판 기준 = 장비가 정리한 새 목록
+    cl, errs, _ = BK.check_blocks(got["base"]["blocks"], r.rig.process.cfg)
+    assert errs == [] and cl == got["base"]["blocks"]                             # 기준 목록은 그대로 다시 보내도 통과
+    assert _ends(r) == [("done", None)]
+    assert r.ev("run_end")[0].data["summary"]["revision"] == 2
+
+
+V1_ROW = {"process_name": "V1", "ar": True, "ar_flow": 20.0, "working_pressure": 5.0, "process_time": 0.1,
+          "shutter_delay": 0.1, "use_dc": True, "dc_power": 100.0, "gun1": True}
+
+
+def test_edit_base_v1_row_loaded(tmp_path):
+    """v1 행(적재·시작) — 기준 목록 = 기본 템플릿 정리 목록, 웹이 받은 원본으로 고침."""
+    r = R(tmp_path)
+    r.on(3, _cmd(r, "RECIPE_LOAD", name="v1", rows=[V1_ROW]))
+    r.on(4, _cmd(r, "RECIPE_START"))
+    got = _edit_via_base(r, "5", "10")                     # 5 = 가스 안정 대기(wait 60), 10 = 셔터 딜레이 wait
+    r.run(400)
+    assert [b["type"] for b in got["base"]["blocks"]][:5] == ["pre_clean", "gas_prep", "gas_intro", "pressure", "wait"]
+    assert got["base"]["blocks"][0]["params"]["settle_sec"] == "cfg:PRE_POWER_OFF_SETTLE_SEC"
+    _check_edit(r, got, 4)
+    sh = [x for x in r.ev("run_end")[0].data["summary"]["executed"] if x["no"] == "10"][0]
+    assert sh["revision"] == 2 and 8 <= sh["end"] - sh["start"] <= 11
+
+
+def test_edit_base_single_row_start(tmp_path):
+    """한 행 바로 시작(PROCESS_START row) — 웹 레시피가 없어도 기준 목록으로 고침."""
+    r = R(tmp_path)
+    r.on(3, _cmd(r, "PROCESS_START", row=V1_ROW))
+    got = _edit_via_base(r, "5", "10")
+    r.run(400)
+    _check_edit(r, got, 3)
+
+
+def test_edit_base_loaded_block_row(tmp_path):
+    """적재 시작(블록 행) — 느슨하게 보낸 목록도 기준 목록은 정리 모양."""
+    r = R(tmp_path)
+    blocks = [{"type": "gas_intro", "params": {"ar": True, "ar_flow": 20, "zero": False}}, B("wait", sec=40),
+              {"type": "wait", "params": {"sec": 2}, "label": "", "stage": ""}, B("gas_off", ar=True)]
+    r.on(3, _cmd(r, "RECIPE_LOAD", name="b", blocks=blocks))
+    r.on(4, _cmd(r, "RECIPE_START"))
+    got = _edit_via_base(r, "2", "3")
+    r.run(200)
+    b0 = got["base"]["blocks"][0]
+    assert b0["params"]["ar_flow"] == 20.0 and b0["label"] == "" and b0["params"]["o2"] is False
+    _check_edit(r, got, 4)
+
+
+def test_hub_edit_base_only_on_revision_change_or_every_10s(tmp_path):
+    r = R(tmp_path)
+    blocks = [B("wait", sec=40), B("wait", sec=5)]
+    r.on(3, _cmd(r, "PROCESS_START", blocks=blocks))
+    r.on(15, _cmd(r, "PROCESS_EDIT", revision=1, blocks=[B("wait", sec=40), B("wait", sec=6)]))
+    states = []
+    sub = {}
+
+    def grab():
+        if "s" not in sub:
+            sub["s"] = r.rig.hub.subscribe()
+        while True:
+            x = sub["s"].get(0)
+            if x is None:
+                return
+            if isinstance(x, dict) and x.get("type") == "state":
+                states.append(x["data"])
+    r.rig.loop.tick_hooks.append(lambda t: grab() if t.seq >= 2 else None)
+    r.run(35)
+    run = [s["run"] for s in states if s.get("run") and s["run"].get("revision")]
+    eb = [x for x in run if "editBase" in x]
+    assert run and 2 <= len(eb) < len(run) // 3
+    assert [x["editBase"]["revision"] for x in eb][0] == 1 and eb[-1]["editBase"]["revision"] == 2
+    assert eb[-1]["editBase"]["blocks"][1]["params"]["sec"] == 6.0
+    first2 = next(i for i, x in enumerate(run) if x["revision"] == 2)
+    assert "editBase" in run[first2]                                               # 판이 바뀐 첫 state 에 실림

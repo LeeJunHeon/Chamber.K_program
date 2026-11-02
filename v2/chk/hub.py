@@ -259,9 +259,14 @@ class MessageHub:
             self._run_tick = getattr(self, "_run_tick", 0) + 1
             ver = getattr(p, "blocks_version", 0)
             full = ver != getattr(self, "_run_ver", None) or self._run_tick % RUN_BLOCKS_EVERY == 0
-            run = p.run_state(full)
+            # 순서 고치기 기준 목록(editBase)은 판이 바뀔 때와 10초마다만(5-16)
+            key = (getattr(p, "run_id", None), getattr(p, "revision", None))
+            base = key != getattr(self, "_base_key", None) or self._run_tick % RUN_BLOCKS_EVERY == 0
+            run = p.run_state(full, base)
             if run is not None and full:
                 self._run_ver = ver
+            if run is not None and "editBase" in run:
+                self._base_key = key
         return {"procState": p.state, "paused": bool(getattr(p, "paused", None)),
                 "procLabel": "일시정지" if getattr(p, "paused", None) else None, "run": run, "runId": f.get("proc.run_id"), "step": blk, "remainS": f.get("proc.remain_s"),
                 "recipe": recipe, "heaterRecipe": hr,

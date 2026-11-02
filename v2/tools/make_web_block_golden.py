@@ -140,6 +140,17 @@ CASES: List[tuple] = [
                            B("end_stop", label="", stage="")], {}, ["format.blankLabelStage"]),   # = 없는 것과 같다
     ("empty_values_are_defaults", [B("wait", sec=4, watch=None), B("pre_clean", settle_sec="  "),
                                    B("pressure", sp=2, value="", on_timeout=None)], {}, ["defaults"]),
+    # 정리된 목록을 그대로 다시 보냄(5-16 — state.run.editBase) — 값이 그 값의 기본값 "cfg:키" 와 같으면 비운 값과 같다
+    ("clean_resubmit_cfg_defaults", [B("pre_clean", dc=True, rf=True, rfpulse=True, settle_sec="cfg:PRE_POWER_OFF_SETTLE_SEC"),
+                                     B("pressure", sp=1, value=3.0, tol_ratio="cfg:PRESSURE_WAIT_TOL_RATIO",
+                                       stable_sec="cfg:PRESSURE_WAIT_STABLE_SEC", label="", stage=""),
+                                     B("heater_ramp", target_c=300.0),
+                                     B("heater_settle", tol_c="cfg:HEATER_SHUTTER_SETTLE_TOL_C", sec="cfg:HEATER_SHUTTER_SETTLE_SEC",
+                                       max_sec="cfg:HEATER_SHUTTER_SETTLE_MAX_SEC",
+                                       fail_action="cfg:HEATER_SHUTTER_SETTLE_FAIL_ACTION")], {}, ["defaults"]),
+    ("err_cfg_default_other_key", [B("pressure", sp=1, value=3.0, tol_ratio="cfg:PRESSURE_WAIT_STABLE_SEC"),
+                                   B("heater_settle", fail_action="cfg:HEATER_SHUTTER_SETTLE_TOL_C"),
+                                   B("wait", sec="cfg:PRE_POWER_OFF_SETTLE_SEC")], {}, ["format.strNumber", "enum"]),
     ("params_falsy_is_empty", [{"type": "heater_wait", "params": []}, {"type": "valve", "params": {"action": "open"}}], {},
      ["format.notObject"]),
     # ── 목록 ──

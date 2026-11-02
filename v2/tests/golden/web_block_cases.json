@@ -9619,6 +9619,387 @@
    ]
   },
   {
+   "name": "clean_resubmit_cfg_defaults",
+   "covers": [
+    "defaults"
+   ],
+   "blocks": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": true,
+      "settle_sec": "cfg:PRE_POWER_OFF_SETTLE_SEC"
+     }
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "tol_ratio": "cfg:PRESSURE_WAIT_TOL_RATIO",
+      "stable_sec": "cfg:PRESSURE_WAIT_STABLE_SEC"
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 300.0
+     }
+    },
+    {
+     "type": "heater_settle",
+     "params": {
+      "tol_c": "cfg:HEATER_SHUTTER_SETTLE_TOL_C",
+      "sec": "cfg:HEATER_SHUTTER_SETTLE_SEC",
+      "max_sec": "cfg:HEATER_SHUTTER_SETTLE_MAX_SEC",
+      "fail_action": "cfg:HEATER_SHUTTER_SETTLE_FAIL_ACTION"
+     }
+    }
+   ],
+   "cfg": {
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "DC_MAX_POWER": 500.0,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_SOAK_TIME_SEC": 60,
+    "HEATER_SOAK_TOLERANCE": 2.0,
+    "IG_ENABLED": true,
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "PRESSURE_STAGE_TIMEOUT_SEC": 180.0,
+    "PRESSURE_WAIT_STABLE_SEC": 6.0,
+    "PRESSURE_WAIT_TOL_RATIO": 0.1,
+    "PRE_POWER_OFF_SETTLE_SEC": 1.0,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_ENABLED": false,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RF_MAX_POWER": 600.0,
+    "SP1_TIMEOUT_SEC": 300.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "SP4_MTORR": 30.0,
+    "HEATER_SHUTTER_SETTLE_TOL_C": 2.0,
+    "HEATER_SHUTTER_SETTLE_SEC": 60.0,
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0,
+    "HEATER_SHUTTER_SETTLE_FAIL_ACTION": "proceed"
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "clean": [
+    {
+     "type": "pre_clean",
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": true,
+      "settle_sec": "cfg:PRE_POWER_OFF_SETTLE_SEC"
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": "cfg:PRESSURE_WAIT_TOL_RATIO",
+      "stable_sec": "cfg:PRESSURE_WAIT_STABLE_SEC",
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_ramp",
+     "params": {
+      "target_c": 300.0,
+      "ramp_c_per_min": null
+     },
+     "label": "",
+     "stage": ""
+    },
+    {
+     "type": "heater_settle",
+     "params": {
+      "tol_c": "cfg:HEATER_SHUTTER_SETTLE_TOL_C",
+      "sec": "cfg:HEATER_SHUTTER_SETTLE_SEC",
+      "max_sec": "cfg:HEATER_SHUTTER_SETTLE_MAX_SEC",
+      "fail_action": "cfg:HEATER_SHUTTER_SETTLE_FAIL_ACTION"
+     },
+     "label": "",
+     "stage": ""
+    }
+   ],
+   "errors": [],
+   "warnings": [],
+   "uses": {
+    "dc": false,
+    "rf": false,
+    "rfp": false,
+    "heater": true,
+    "ig": false,
+    "ar": false,
+    "o2": false
+   },
+   "expanded": [
+    {
+     "no": "1",
+     "type": "pre_clean",
+     "label": "",
+     "stage": "PRE_CLEAN",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "dc": true,
+      "rf": true,
+      "rfpulse": true,
+      "settle_sec": 1.0
+     },
+     "steps": [
+      {
+       "action": "DC_POWER_STOP",
+       "message": "PRE: DC Power OFF"
+      },
+      {
+       "action": "RF_POWER_STOP",
+       "message": "PRE: RF Power OFF"
+      },
+      {
+       "action": "DELAY",
+       "message": "PRE: Power OFF settle",
+       "sec": 1
+      }
+     ]
+    },
+    {
+     "no": "2",
+     "type": "pressure",
+     "label": "",
+     "stage": "PRESSURE_SP1",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "set": true,
+      "select": true,
+      "wait": true,
+      "tol_ratio": 0.1,
+      "stable_sec": 6.0,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "steps": [
+      {
+       "action": "MFC_CMD",
+       "message": "SP1: SP1_SET=3.00 설정",
+       "params": [
+        "SP1_SET",
+        {
+         "value": 3.0
+        }
+       ],
+       "ref": "mfc.wp"
+      },
+      {
+       "action": "MFC_CMD",
+       "message": "SP1: SP1_ON",
+       "params": [
+        "SP1_ON",
+        {}
+       ]
+      },
+      {
+       "action": "MFC_CMD",
+       "message": "SP1: 압력 도달 대기 (target=3.00, ±10%, timeout=300s, FAIL ON TIMEOUT)",
+       "params": [
+        "WAIT_PRESSURE",
+        {
+         "target": 3.0,
+         "tolerance_ratio": 0.1,
+         "stable_sec": 6.0,
+         "timeout_sec": 300.0,
+         "fail_on_timeout": true
+        }
+       ],
+       "ref": "mfc.wp"
+      }
+     ]
+    },
+    {
+     "no": "3",
+     "type": "heater_ramp",
+     "label": "",
+     "stage": "HEATER_RAMP",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "target_c": 300.0,
+      "ramp_c_per_min": null
+     },
+     "steps": [
+      {
+       "action": "HEATER_RAMP",
+       "message": "히터 램프 속도 12°C/min 설정",
+       "value": 12.0,
+       "ref": "heater.ramp"
+      },
+      {
+       "action": "HEATER_SET",
+       "message": "히터 목표 300.0°C 설정 — 승온 시작",
+       "value": 300.0,
+       "ref": "heater.target"
+      }
+     ]
+    },
+    {
+     "no": "4",
+     "type": "heater_settle",
+     "label": "",
+     "stage": "HEATER_SETTLE",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "tol_c": 2.0,
+      "sec": 60.0,
+      "max_sec": 900.0,
+      "fail_action": "proceed"
+     },
+     "watch": {
+      "dc": true,
+      "rf": true,
+      "rfp": true,
+      "flow": false,
+      "pressure": false
+     },
+     "steps": [
+      {
+       "action": "HEATER_SETTLE",
+       "message": "셔터 전 히터 정착 확인 (TC1 ±2°C, 60s 연속, 상한 900s)",
+       "value": 300.0,
+       "polling": true,
+       "spec": {
+        "tol": 2.0,
+        "sec": 60.0,
+        "max_sec": 900.0,
+        "fail_action": "proceed"
+       }
+      }
+     ]
+    },
+    {
+     "no": "5",
+     "type": "end_stop",
+     "label": "자동 끝 정지",
+     "stage": "STOPPING",
+     "iter": null,
+     "auto": true,
+     "params": {
+      "skip": null
+     },
+     "steps": [
+      {
+       "action": "END_STOP",
+       "message": "정상 끝 정지 순서",
+       "internal": true,
+       "spec": {
+        "skip": []
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "err_cfg_default_other_key",
+   "covers": [
+    "enum",
+    "format.strNumber"
+   ],
+   "blocks": [
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": 3.0,
+      "tol_ratio": "cfg:PRESSURE_WAIT_STABLE_SEC"
+     }
+    },
+    {
+     "type": "heater_settle",
+     "params": {
+      "fail_action": "cfg:HEATER_SHUTTER_SETTLE_TOL_C"
+     }
+    },
+    {
+     "type": "wait",
+     "params": {
+      "sec": "cfg:PRE_POWER_OFF_SETTLE_SEC"
+     }
+    }
+   ],
+   "cfg": {
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "DC_MAX_POWER": 500.0,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 12.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_SOAK_TIME_SEC": 60,
+    "HEATER_SOAK_TOLERANCE": 2.0,
+    "IG_ENABLED": true,
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "PRESSURE_STAGE_TIMEOUT_SEC": 180.0,
+    "PRESSURE_WAIT_STABLE_SEC": 6.0,
+    "PRESSURE_WAIT_TOL_RATIO": 0.1,
+    "PRE_POWER_OFF_SETTLE_SEC": 1.0,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_ENABLED": false,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RF_MAX_POWER": 600.0,
+    "SP1_TIMEOUT_SEC": 300.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "SP4_MTORR": 30.0,
+    "HEATER_SHUTTER_SETTLE_TOL_C": 2.0,
+    "HEATER_SHUTTER_SETTLE_SEC": 60.0,
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0,
+    "HEATER_SHUTTER_SETTLE_FAIL_ACTION": "proceed"
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "clean": null,
+   "errors": [
+    "블록 1(pressure): tol_ratio: 숫자여야 함",
+    "블록 2(heater_settle): fail_action: ['proceed', 'abort'] 중 하나",
+    "블록 3(wait): sec: 숫자여야 함"
+   ],
+   "warnings": [],
+   "uses": null,
+   "expanded": null
+  },
+  {
    "name": "params_falsy_is_empty",
    "covers": [
     "format.notObject"

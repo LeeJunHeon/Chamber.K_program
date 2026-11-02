@@ -55,6 +55,7 @@ adjust 와 같은 기준(공정 중 = 진행 상태·공정 행, 지금 쓰는 �
 from __future__ import annotations
 
 import collections
+import copy
 import threading
 import uuid
 from dataclasses import dataclass
@@ -736,6 +737,10 @@ class ProcessEngine:
         else:
             params = row_to_params(row, self.cfg)
             blocks = BK.template_blocks(params, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
+            # 순서 고치기 기준(state.run.editBase)·비교는 정리된 모양 — 블록 행(적재 때 check_blocks)과 같게(5-16)
+            clean, _, _ = BK.check_blocks(blocks, self.cfg)    # 템플릿은 늘 통과(test_template_blocks_pass_block_check_as_is)
+            if clean is not None:
+                blocks = clean
         steps, insts = BK.expand(blocks, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
         self.params, self.run_name, self.run_id = params, name, uuid.uuid4().hex[:12]
         self.blocks, self.insts, self.uses = blocks, insts, BK.uses_of(blocks)
@@ -1085,6 +1090,7 @@ class ProcessEngine:
                 return _row_error_code(errs)
             b = self.block
             k = self._top(b) if b is not None else -1
+            # 둘 다 check_blocks 정리 모양(키 순서·빈 값/기본값·"cfg:키"·0/0.0 차이 없음)으로 비교 — 시작한 블록과 그 앞만(5-16)
             if bl[:k + 1] != self.blocks[:k + 1]:
                 self.reject_detail = f"시작했거나 끝난 블록(맨 위 1~{k + 1}번)과 그 앞 순서는 그대로여야 함"
                 return "EDIT_TOUCHES_STARTED"
@@ -1126,8 +1132,9 @@ class ProcessEngine:
         return {"executed": list(self.exec_log), "revision": self.revision, "skips": self.skips, "pauses": self.pauses,
                 "pausedSec": round(self.paused_total, 1)}
 
-    def run_state(self, full: bool) -> Optional[Dict[str, Any]]:
-        """state.run — 판·지금 블록·멈춤(늘), 블록 목록은 full 일 때만(바뀌었거나 주기적으로 — hub)."""
+    def run_state(self, full: bool, base: bool = False) -> Optional[Dict[str, Any]]:
+        """state.run — 판·지금 블록·멈춤(늘), 블록 목록은 full 일 때만(바뀌었거나 주기적으로 — hub).
+        base 면 editBase {revision, blocks}(지금 판의 맨 위 블록 정리 목록 = PROCESS_EDIT blocks 모양, 5-16) — 판이 바뀔 때·주기적으로(hub)."""
         if self.state == "CSV_DELAY":
             out = {"revision": 0, "current": BK.DELAY_NO, "paused": self._pause_public(), "blocksVersion": self.blocks_version,
                    "delay": {"sec": self.delay_s, "remainS": self.remain_s()}}
@@ -1143,6 +1150,8 @@ class ProcessEngine:
         b = self.block
         out = {"revision": self.revision, "current": b.no if b is not None else None, "paused": self._pause_public(),
                "blocksVersion": self.blocks_version}
+        if base and self.state != "STOPPING":
+            out["editBase"] = {"revision": self.revision, "blocks": copy.deepcopy(self.blocks)}
         if full:
             done = {}
             for e in self.exec_log:

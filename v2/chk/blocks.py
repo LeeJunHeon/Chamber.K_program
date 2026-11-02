@@ -584,6 +584,9 @@ def _check_one(b: Any, path: str, cfg: Mapping[str, Any], depth: int, errs: list
     bad: set = set()                                     # 빠졌거나(필수) 틀린 값 — 이 값을 쓰는 값 사이 규칙은 건너뛴다
     for p in d.params:
         v = params.get(p.name)
+        if isinstance(p.default, str) and p.default.startswith("cfg:") and v == p.default:
+            out[p.name] = p.default                      # 정리된 목록을 그대로 다시 보낸 것("cfg:키" = 비운 값과 같음, 5-16)
+            continue
         if _empty(v):
             if p.required:
                 errs.append(f"{pre}: {p.name}: 값 필요")

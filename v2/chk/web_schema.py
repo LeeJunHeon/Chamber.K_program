@@ -32,6 +32,9 @@
                 명령 PROCESS_SKIP·PROCESS_PAUSE·PROCESS_RESUME·PROCESS_EDIT, 설정 PROCESS_PAUSE_MAX_SEC, 스냅샷 proc.paused·
                 proc.revision, events skip·pause·resume·edit·pause_long(run_end summary), eventKinds 그 종류, eventSources(출처 이름),
                 장비 이름 DC Power·RF Power
+                버전 14: 순서 고치기 기준 목록 state.run.editBase {revision, blocks}(지금 판의 맨 위 블록 정리 목록 — v1 행·장비 앞면
+                시작·한 행 바로 시작도) — PROCESS_EDIT blocks 는 이것을 고친 것, 비교는 정리 모양. 블록 검사가 정리된 목록의
+                "cfg:키"(설정 기본값)를 비운 값과 같게 받음(정리 목록을 그대로 다시 보내도 통과)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -68,7 +71,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 13
+EXPORT_VERSION = 14
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
