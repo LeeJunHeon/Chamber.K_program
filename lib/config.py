@@ -209,12 +209,20 @@ _validate_heater_hold_config()
 #             HEATER_WAIT 90분 타임아웃. 히터→TC2 약 40 s, TC2→TC1 약 65 s 지연이라 고정 Kp 하나로는 전 온도 범위를
 #             안정시킬 수 없다. TC2 루프는 유지 모드 실측 표준편차 0.15~0.2°C 로 안정하다.
 #  "tc1"    : 기존 TC1 직접 제어(RampProfiler + HeaterHold) 그대로 — 롤백용.
-HEATER_CTRL_MODE = get('HEATER_CTRL_MODE', "cascade")
+#  "tc2"    : TC2 단독 제어(기본, 2026-11-02 사용자 결정). PID 는 RUN 내내 TC2 를 보고 SV2 = map(r1) 만 쓴다 —
+#             바깥 루프(bias 적분)·학습 보정·TC1 탈락 경보·셔터 전 정착(HEATER_SETTLE)은 쓰지 않는다. TC1 은 기록·안내만.
+#             103개 히터 로그: 히터 출력↔TC2 는 9월부터 안정, TC1↔TC2 는 TC1 을 시료대에 다시 꽂을 때마다 통째로 이동
+#             (TC1 600°C 에 필요한 TC2: 9월 852~860, 10월 초 814~822, 10/27 이후 838~848). 흔들리는 쪽은 TC1 이다.
+#             최근 2단 제어 7런(10/28~11/02)은 250~600°C 에서 TC2 ≈ 1.36 × TC1 + 25, 런 간 ±1~2°C.
+#  되돌리기: config_user.json 의 HEATER_CTRL_MODE 를 "cascade" 또는 "tc1" 로 바꾸고 프로그램을 다시 켠다.
+HEATER_CTRL_MODE = get('HEATER_CTRL_MODE', "tc2")
 # TC1→TC2 기본 매핑 [[TC1, TC2], ...]. 점 사이 선형 보간, 범위 밖은 양 끝 구간 기울기로 외삽.
 #  2026-10-28~29 캐스케이드 3런(수동 300°C, CeO2 #8-3, #8-4)에서 TC2(t) 와 TC1(t+약 75 s) 를 짝지어 구한 평형 관계.
 #  300°C 는 수동 유지 실측 437 과 일치. 600°C 는 두 런(838, 847) 평균.
 #  (예전 값 [[25,25],[300,445],[400,570],[500,695],[600,825]] 은 100~150°C 에서 실제보다 20~40°C, 600°C 에서 13~22°C 낮았다)
-HEATER_TC2_MAP = get('HEATER_TC2_MAP', [[25, 25], [50, 92], [100, 170], [150, 226], [200, 290], [250, 365], [300, 437], [400, 569], [500, 705], [600, 842]])
+#  2026-11-02: 600 은 2026-10-28~11-02 2단 제어 런의 정상 상태 실측 중앙값 846. 700 은 실측 없음 — 250~600 실측 직선
+#  (기울기 1.36)으로 외삽. 700 위는 마지막 구간 기울기로 외삽(Tc2Map 기존 동작). tc2·cascade 두 모드가 이 매핑을 쓴다.
+HEATER_TC2_MAP = get('HEATER_TC2_MAP', [[25, 25], [50, 92], [100, 170], [150, 226], [200, 290], [250, 365], [300, 437], [400, 569], [500, 705], [600, 846], [700, 982]])
 HEATER_CASCADE_TI_SEC        = get('HEATER_CASCADE_TI_SEC',        600)    # 바깥 루프 적분 시간 [s]
 HEATER_CASCADE_LAG_SEC       = get('HEATER_CASCADE_LAG_SEC',       90)     # TC1 비교 기준 지연 [s] — e = r1(t−LAG) − TC1_ema
 HEATER_CASCADE_BIAS_RATE_MAX = get('HEATER_CASCADE_BIAS_RATE_MAX', 3.0)    # bias 최대 변화율 [°C/min, TC2 기준]
@@ -222,18 +230,25 @@ HEATER_CASCADE_BIAS_LIMIT_C  = get('HEATER_CASCADE_BIAS_LIMIT_C',  150.0)  # |bi
 HEATER_CASCADE_BIAS_ALARM_C  = get('HEATER_CASCADE_BIAS_ALARM_C',  100.0)  # |bias| 가 이 이상 60 s 지속 → TC1 탈락 의심
 # TC1 탈락 의심 시: "abort"(공정 소유면 공정 중단, 히터 레시피면 레시피 중단, 수동이면 경고) | "warn"(경고만)
 HEATER_CASCADE_ALARM_ACTION  = get('HEATER_CASCADE_ALARM_ACTION',  "abort")
+# tc2 모드 TC1 편차 안내(기록용 — 제어에는 영향 없음): 셔터 닫힘 · r1 도달 · |TC2 − SV2| ≤ HEATER_SOAK_TOLERANCE 에서
+#  |TC1 − 최종 목표| > WARN_C 가 WARN_SEC 이상 지속되면 경고 1줄 + 런 이벤트 + 챗 카드 1장(공정은 멈추지 않는다)
+HEATER_TC2_TC1_WARN_C   = get('HEATER_TC2_TC1_WARN_C',   15.0)   # [°C] 허용 3~100
+HEATER_TC2_TC1_WARN_SEC = get('HEATER_TC2_TC1_WARN_SEC', 120)    # [s]  허용 30~1800
+# tc2 모드 홀드백 폭 [°C, TC1 눈금] — (SV2 − TC2) > slope(map, r1) × 이 값이면 r1 을 세운다. HEATER_HOLDBACK_C(D00021) 와 따로 둔다:
+#  램프 중 PLC PI 가 SV2 를 14~27°C 뒤처져 따라가(시뮬레이터) 10 이면 r1 이 오래 멈춰 HEATER_WAIT 타임아웃을 넘었다.
+HEATER_TC2_HOLDBACK_C   = get('HEATER_TC2_HOLDBACK_C',   20.0)   # 허용 2~100
 
 
 def _validate_heater_cascade_config() -> None:
     """설정이 틀려도 프로그램은 떠야 한다 — 클램프/기본값 복귀만 하고 예외는 던지지 않는다."""
     global HEATER_CTRL_MODE, HEATER_TC2_MAP, HEATER_CASCADE_ALARM_ACTION
     _m = str(HEATER_CTRL_MODE or "").strip().lower()
-    if _m not in ("cascade", "tc1"):
-        print(f"[Config] HEATER_CTRL_MODE {HEATER_CTRL_MODE!r} → \"cascade\" (허용: cascade / tc1)")
-        _m = "cascade"
+    if _m not in ("tc2", "cascade", "tc1"):
+        print(f"[Config] HEATER_CTRL_MODE {HEATER_CTRL_MODE!r} → \"tc2\" (허용: tc2 / cascade / tc1)")
+        _m = "tc2"
     HEATER_CTRL_MODE = _m
     _def_map = [[25.0, 25.0], [50.0, 92.0], [100.0, 170.0], [150.0, 226.0], [200.0, 290.0], [250.0, 365.0],
-                [300.0, 437.0], [400.0, 569.0], [500.0, 705.0], [600.0, 842.0]]
+                [300.0, 437.0], [400.0, 569.0], [500.0, 705.0], [600.0, 846.0], [700.0, 982.0]]
     try:
         pts = [[float(a), float(b)] for a, b in HEATER_TC2_MAP]
         ok = len(pts) >= 2 and all(pts[i + 1][0] > pts[i][0] and pts[i + 1][1] > pts[i][1]
@@ -248,7 +263,10 @@ def _validate_heater_cascade_config() -> None:
                                   ("HEATER_CASCADE_LAG_SEC", 0.0, 600.0, 90.0),
                                   ("HEATER_CASCADE_BIAS_RATE_MAX", 0.1, 60.0, 3.0),
                                   ("HEATER_CASCADE_BIAS_LIMIT_C", 10.0, 500.0, 150.0),
-                                  ("HEATER_CASCADE_BIAS_ALARM_C", 10.0, 500.0, 100.0)):
+                                  ("HEATER_CASCADE_BIAS_ALARM_C", 10.0, 500.0, 100.0),
+                                  ("HEATER_TC2_TC1_WARN_C", 3.0, 100.0, 15.0),
+                                  ("HEATER_TC2_TC1_WARN_SEC", 30.0, 1800.0, 120.0),
+                                  ("HEATER_TC2_HOLDBACK_C", 2.0, 100.0, 20.0)):
         _raw = globals()[_name]
         try:
             _v = float(_raw)
