@@ -31,7 +31,7 @@ from typing import Any, Dict, List
 from v2.common.paramdef import defaults
 from v2.chk import blocks as BK
 from v2.chk import params as P
-from v2.tools.make_web_template_golden import _Track
+from v2.tools.make_web_template_golden import _Track, check_over
 
 OUT = Path(__file__).resolve().parents[1] / "tests" / "golden" / "web_block_cases.json"
 
@@ -258,6 +258,7 @@ def summary(steps: list, insts: list) -> List[Dict[str, Any]]:
 
 
 def one(name: str, blocks: Any, over: Dict[str, Any], tags: list, track: set = None) -> Dict[str, Any]:
+    check_over(name, over)
     full = _Track(defaults(P.PARAMS), **over)
     ig, rfp = bool(full["IG_ENABLED"]), bool(full["RFPULSE_ENABLED"])
     clean, errs, warns = BK.check_blocks(blocks, full)

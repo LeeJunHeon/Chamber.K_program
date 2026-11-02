@@ -17,6 +17,20 @@ def test_golden_file_matches_current_code():
     have = json.loads(G.OUT.read_text(encoding="utf-8"))
     want = json.loads(G.to_json(G.build()))
     assert have == want, "기본 템플릿 골든이 지금 코드와 다름 — python -m v2.tools.make_web_template_golden 으로 다시 만들 것"
+    # 글자까지 같은지 — json 비교는 0 == 0.0 이라 숫자 표기 차이(웹 TS 가 보는 것)를 놓친다(5-16)
+    assert G.OUT.read_text(encoding="utf-8") == G.to_json(G.build())
+
+
+@pytest.mark.parametrize("over", [{"HEATER_SHUTTER_SETTLE_MAX_SEC": 0}, {"HEATER_MAX_TEMP": 400},
+                                  {"DC_POWER_DELAY_SEC": 0.0}, {"IG_ENABLED": 0}, {"NO_SUCH_KEY": 1}])
+def test_check_over_rejects_wrong_type(over):
+    with pytest.raises((TypeError, ValueError)):
+        G.check_over("x", over)
+
+
+def test_check_over_accepts_cases():
+    for n, _, o in G.CASES:
+        G.check_over(n, o)
 
 
 def test_golden_cases_cover_and_cfg_keys_exact():

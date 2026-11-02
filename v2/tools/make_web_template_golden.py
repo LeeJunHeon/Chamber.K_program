@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-from v2.common.paramdef import defaults
+from v2.common.paramdef import PType, defaults
 from v2.chk import blocks as BK
 from v2.chk import params as P
 from v2.chk import recipe as RC
@@ -91,10 +91,26 @@ CASES: List[tuple] = [
     # 셔터 전 히터 정착(5-15, v1 3328872) — 2단 제어·히터·메인·상한 > 0 이면 셔터 딜레이 뒤·메인 앞
     ("heater_cascade_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {}),
     ("heater_tc1_no_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {"HEATER_CTRL_MODE": "tc1"}),
-    ("heater_settle_max_zero", _row(use_heater=True, heater_temp=300.0), {"HEATER_SHUTTER_SETTLE_MAX_SEC": 0}),
+    ("heater_settle_max_zero", _row(use_heater=True, heater_temp=300.0), {"HEATER_SHUTTER_SETTLE_MAX_SEC": 0.0}),
     ("err_missing_working_pressure", _row(working_pressure=None), {}),
     ("warn_dc_delay_without_dc", _row(use_dc=None, dc_power=None, use_rf=True, rf_power=100.0, use_dc_delay=True), {}),
 ]
+
+
+def check_over(name: str, over: Dict[str, Any]) -> None:
+    """설정 바꿈 값이 params 정의 형식과 같은지(5-16) — float 키에 int(0 등)를 넣으면 골든의 cfg 가 0 으로 적혀
+    웹(TS)과 숫자 표기가 갈린다. 다르면 골든을 만들지 않고 실패."""
+    types = {p.key: p.type for p in P.PARAMS}
+    for k, v in over.items():
+        t = types.get(k)
+        if t is None:
+            raise ValueError(f"{name}: 없는 설정 키 {k}")
+        if t == PType.FLOAT and type(v) is not float:
+            raise TypeError(f"{name}: {k} 는 float 설정 — {v!r} 대신 {float(v)!r} 로 적을 것")
+        if t == PType.INT and type(v) is not int:
+            raise TypeError(f"{name}: {k} 는 int 설정 — {v!r}")
+        if t == PType.BOOL and type(v) is not bool:
+            raise TypeError(f"{name}: {k} 는 bool 설정 — {v!r}")
 
 
 class _Track(dict):
@@ -114,6 +130,7 @@ class _Track(dict):
 
 
 def one(name: str, row: Dict[str, Any], over: Dict[str, Any], track: set = None) -> Dict[str, Any]:
+    check_over(name, over)
     full = _Track(defaults(P.PARAMS), **over)
     ig, rfp = bool(full["IG_ENABLED"]), bool(full["RFPULSE_ENABLED"])
     clean, errs, warns = RC.check_process_row(row, full)

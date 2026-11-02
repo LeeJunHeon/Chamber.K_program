@@ -7047,7 +7047,7 @@
     "SP3_MTORR": 15.0,
     "DC_POWER_DELAY_SEC": 300,
     "HEATER_CTRL_MODE": "cascade",
-    "HEATER_SHUTTER_SETTLE_MAX_SEC": 0
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 0.0
    },
    "igEnabled": true,
    "rfpulsePresent": false,

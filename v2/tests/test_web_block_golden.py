@@ -20,6 +20,7 @@ def test_golden_file_matches_current_code():
     have = json.loads(G.OUT.read_text(encoding="utf-8"))
     want = json.loads(G.to_json(G.build()))
     assert have == want, "블록 검사 골든이 지금 코드와 다름 — python -m v2.tools.make_web_block_golden 으로 다시 만들 것"
+    assert G.OUT.read_text(encoding="utf-8") == G.to_json(G.build())   # 글자까지(0 / 0.0 표기, 5-16)
 
 
 def test_cfg_keys_exact_and_shape():
