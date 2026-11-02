@@ -695,8 +695,8 @@ class SputterProcessController(QObject):
 
         # Main Shutter
         if float(p.get('process_time', 0.0)) > 0:
-            # 셔터 전 히터 정착 확인 — 캐스케이드는 셔터가 열린 동안 bias 를 고정하므로 TC1 이 목표에 돌아온 뒤 연다.
-            #  tc1 모드·히터 미사용·메인 공정 없음·HEATER_SHUTTER_SETTLE_MAX_SEC=0 이면 스텝 목록은 예전과 같다.
+            # 셔터 전 히터 정착 확인(cascade 전용) — 캐스케이드는 셔터가 열린 동안 bias 를 고정하므로 TC1 이 목표에 돌아온 뒤 연다.
+            #  tc1·tc2 모드·히터 미사용·메인 공정 없음·HEATER_SHUTTER_SETTLE_MAX_SEC=0 이면 넣지 않는다(tc2 는 셔터 직전 기록 한 줄만).
             if (self._heater_used and HEATER_CTRL_MODE == "cascade" and self._casc_mode()
                     and float(HEATER_SHUTTER_SETTLE_MAX_SEC) > 0):
                 steps.append(ProcessStep(
@@ -789,6 +789,8 @@ class SputterProcessController(QObject):
 
             elif step.action == ActionType.PLC_CMD:
                 btn, st = step.params
+                if str(btn) == 'MS_button' and bool(st) and self._heater_used and self._tc2_only_mode():
+                    self._log_tc2_before_shutter()
                 self.update_plc_port.emit(str(btn), bool(st))
                 QTimer.singleShot(800, self._next_step)  # 릴레이/실린더 여유
 
@@ -1380,8 +1382,10 @@ class SputterProcessController(QObject):
                 _timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)
                 _to_why = "계산 실패 → 기본값 HEATER_WAIT_TIMEOUT_SEC"
         # 2단(캐스케이드) 제어: r1 이 목표에 닿은 뒤 바깥 루프(bias, 적분 시간 TI)가 매핑 오차를 걷어 낼 여유를 더한다
-        _casc = self._casc_mode()
-        if _casc:
+        #  (cascade 전용 — TC2 단독은 바깥 루프가 없어 더하지 않는다). r1 도달 판정은 TC2 PID 두 모드 공통이다.
+        _casc = self._tc2_pid_mode()
+        _tc2_only = self._tc2_only_mode()
+        if self._casc_mode():
             _timeout_sec += 2.0 * float(HEATER_CASCADE_TI_SEC)
             _to_why += f" + 바깥 루프 수렴 여유 {2.0 * float(HEATER_CASCADE_TI_SEC) / 60:.0f}분(TI×2)"
         timeout_ms = int(_timeout_sec * 1000)
@@ -1403,6 +1407,37 @@ class SputterProcessController(QObject):
                 loop.quit(); return
 
             pv = st.get('pv')
+            if _tc2_only:
+                # TC2 단독: 판정은 TC2 − SV2 만. TC1 은 기록(없어도 판정에는 영향 없음 — TC1 이상은 래더가 히터를 멈춘다)
+                state['last_pv'] = None if pv is None else float(pv)
+                pv2 = st.get('pv2')
+                state['last_pv2'] = None if pv2 is None else float(pv2)
+                _cc = self._hold_snapshot().get("casc") or {}
+                elapsed_ms = total_clock.elapsed()
+                if elapsed_ms - state['last_report'] >= 60000:
+                    state['last_report'] = elapsed_ms
+                    self.status_message.emit(
+                        "히터",
+                        f"히터 승온 중 — TC2 {self._f1(pv2)} / SV2 {self._f1(_cc.get('sv2'))}"
+                        f" (TC1 {self._f1(pv)} 기록, 목표 {target_c:.1f}°C), {int(elapsed_ms // 60000)}분 경과")
+                try:
+                    ok_ramp = (bool(_cc.get("active")) and bool(_cc.get("r1_done")) and _cc.get("final") is not None
+                               and abs(float(_cc["final"]) - float(target_c)) <= RAMP_DONE_TOL_C)
+                    in_band = (ok_ramp and pv2 is not None and _cc.get("sv2") is not None
+                               and abs(float(pv2) - float(_cc["sv2"])) <= tol)
+                    state['last_sv2'] = _cc.get("sv2")
+                except Exception:
+                    in_band = False
+                if in_band:
+                    if state['in_band_since'] is None:
+                        clock.start()
+                        state['in_band_since'] = True
+                        self.status_message.emit("공정", f"히터 목표 도달(TC2 기준) — {need_sec}s 유지 확인 중")
+                    elif clock.elapsed() >= need_sec * 1000:
+                        loop.quit()
+                else:
+                    state['in_band_since'] = None
+                return
             if pv is None:          # TC 이상
                 state['in_band_since'] = None
                 return
@@ -1482,10 +1517,15 @@ class SputterProcessController(QObject):
         self.status_message.emit("정보", "히터 온도 도달 완료.")
         _took = int(total_clock.elapsed() // 1000)
         _pv = state.get('last_pv')
-        self.status_message.emit(
-            "히터",
-            f"히터 도달 — {('%.1f' % _pv) if _pv is not None else '--.-'}°C, "
-            f"승온 소요 {_took // 60}분 {_took % 60}초")
+        _record = None
+        if _tc2_only:
+            _record = self._tc2_record_text(state.get('last_pv2'), state.get('last_sv2'), _pv, target_c)
+            self.status_message.emit("히터", f"히터 도달 — {_record}, 승온 소요 {_took // 60}분 {_took % 60}초")
+        else:
+            self.status_message.emit(
+                "히터",
+                f"히터 도달 — {('%.1f' % _pv) if _pv is not None else '--.-'}°C, "
+                f"승온 소요 {_took // 60}분 {_took % 60}초")
         try:
             _nxt = self._steps[self._idx + 1].message if 0 <= self._idx + 1 < len(self._steps) else ""
         except Exception:
@@ -1494,7 +1534,10 @@ class SputterProcessController(QObject):
             _pv2 = (self.plc.get_heater_status() or {}).get('pv2')
         except Exception:
             _pv2 = None
-        self.heater_reached.emit({"pv": _pv, "pv2": _pv2, "target": float(target_c), "took_sec": _took, "next": _nxt})
+        _d = {"pv": _pv, "pv2": _pv2, "target": float(target_c), "took_sec": _took, "next": _nxt}
+        if _record:
+            _d["record"] = _record
+        self.heater_reached.emit(_d)
         if any(s.action == ActionType.HEATER_SETTLE for s in self._steps[self._idx + 1:]):
             self._settle_track_start(target_c)
         self._next_step()
@@ -1643,7 +1686,7 @@ class SputterProcessController(QObject):
         """온도 조건 통과 뒤, 유지 모드(HeaterHold)가 holding 이 될 때까지 최대 HEATER_HOLD_WAIT_SEC 기다린다.
         True 면 다음으로 진행, False 면 이미 중단(_abort_with_error) 했거나 stop 중이다.
         mode "off" / WAIT 0 / 주입 없음 → 즉시 통과(이전 동작). 어떤 경우에도 무알림 진행은 없다."""
-        if self._casc_mode():
+        if self._tc2_pid_mode():
             return self._casc_hold_wait(target_c)
         wait_sec = float(HEATER_HOLD_WAIT_SEC)
         snap = self._hold_snapshot()
@@ -1740,8 +1783,34 @@ class SputterProcessController(QObject):
         return False
 
     def _casc_mode(self) -> bool:
-        """2단(캐스케이드) 제어로 도는가 — main 이 스냅샷 제공자를 주입한 경우에만(단독 테스트는 기존 경로)."""
+        """cascade 전용(바깥 루프·셔터 전 정착)으로 도는가 — main 이 스냅샷 제공자를 주입한 경우에만(단독 테스트는 기존 경로)."""
         return HEATER_CTRL_MODE == "cascade" and self._hold_state is not None
+
+    def _tc2_pid_mode(self) -> bool:
+        """PID 가 TC2 를 보는 두 모드(cascade·tc2) 공통 경로인가 — r1 도달 판정, TC2 제어 진입 확인."""
+        return HEATER_CTRL_MODE in ("cascade", "tc2") and self._hold_state is not None
+
+    def _tc2_only_mode(self) -> bool:
+        """TC2 단독 제어(tc2) — 승온 판정은 TC2 − SV2, TC1 은 기록만."""
+        return HEATER_CTRL_MODE == "tc2" and self._hold_state is not None
+
+    def _tc2_record_text(self, pv2, sv2, pv, target_c) -> str:
+        """ "TC2 x (SV2 y) · TC1 z (목표 대비 ±d, 기록용)" """
+        try:
+            d = "" if pv is None else f"목표 대비 {float(pv) - float(target_c):+.1f}, "
+        except Exception:
+            d = ""
+        return f"TC2 {self._f1(pv2)} (SV2 {self._f1(sv2)}) · TC1 {self._f1(pv)} ({d}기록용)"
+
+    def _log_tc2_before_shutter(self) -> None:
+        """TC2 단독 — 메인 셔터 열기 직전 TC1·TC2 를 한 줄 남긴다(대기 없음)."""
+        try:
+            st = self.plc.get_heater_status() or {}
+        except Exception:
+            st = {}
+        c = self._hold_snapshot().get("casc") or {}
+        self.status_message.emit("히터", f"셔터 열기 직전 기록 — TC2 {self._f1(st.get('pv2'))} (SV2 {self._f1(c.get('sv2'))})"
+                                        f" · TC1 {self._f1(st.get('pv'))}")
 
     def _casc_hold_wait(self, target_c: float) -> bool:
         """캐스케이드: PID 가 이미 TC2 를 보고 있으면(M0004B 확인) 즉시 통과. HeaterHold 의 완화 tc2 / dac 폴백은 타지 않는다.
@@ -1750,6 +1819,8 @@ class SputterProcessController(QObject):
             return self._hold_snapshot().get("casc") or {}
 
         def _desc(c):
+            if c.get("sv2") is not None and c.get("mode") == "tc2":
+                return f"SV2 {float(c['sv2']):.1f}°C, TC2 단독"
             return (f"SV2 {float(c['sv2']):.1f}°C, bias {float(c.get('bias') or 0.0):+.1f}°C"
                     if c.get("sv2") is not None else f"상태 {c.get('state')}")
         c = _c()

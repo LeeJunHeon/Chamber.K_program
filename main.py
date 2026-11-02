@@ -66,6 +66,7 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         HEATER_CTRL_MODE, HEATER_TC2_MAP, HEATER_CASCADE_TI_SEC, HEATER_CASCADE_LAG_SEC,
                         HEATER_CASCADE_BIAS_RATE_MAX, HEATER_CASCADE_BIAS_LIMIT_C, HEATER_CASCADE_BIAS_ALARM_C,
                         HEATER_CASCADE_ALARM_ACTION, HEATER_HOLDBACK_C, HEATER_SOAK_TIME_SEC,
+                        HEATER_TC2_TC1_WARN_C, HEATER_TC2_TC1_WARN_SEC, HEATER_TC2_HOLDBACK_C,
                         RFPULSE_MAX_POWER, RFPULSE_PULSE_FREQ_MAX_HZ, RFPULSE_PULSE_FREQ_MIN_HZ,
                         rfpulse_pulse_edge_violation,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
@@ -81,14 +82,19 @@ from controller.heater_ramp import RampProfiler
 from controller.heater_atmosphere import HeaterAtmosphere
 from lib.heater_logger import HeaterCsvLogger
 
-# 히터 제어 구조(HEATER_CTRL_MODE). "cascade" 면 PID 가 RUN 내내 TC2 를 보고(HeaterCascade), 목표 도달 후 유지 모드
-#  (HeaterHold)는 쓰지 않는다 — PLC 에 아무것도 쓰지 않도록 "off" 로 만든다. "tc1" 이면 예전 그대로(롤백 경로).
+# 히터 제어 구조(HEATER_CTRL_MODE).
+#  _TC2_PID : "cascade"·"tc2" — PID 가 RUN 내내 TC2 를 본다(HeaterCascade). 수동·공정·레시피·ERP 경로, 화면·CSV·ERP 표시,
+#             진입/해제·TC2 상실 처리, 포화 감시 소유자가 공통이다. 목표 도달 후 유지 모드(HeaterHold)는 쓰지 않는다
+#             — PLC 에 아무것도 쓰지 않도록 "off" 로 만든다.
+#  _CASCADE : "cascade" 전용 — 바깥 루프(bias 적분)·학습 ff·TC1 탈락 경보·셔터 전 정착(HEATER_SETTLE)과 그 표시.
+#  "tc1" 이면 둘 다 False — 예전 그대로(롤백 경로).
+_TC2_PID = (HEATER_CTRL_MODE in ("cascade", "tc2"))
 _CASCADE = (HEATER_CTRL_MODE == "cascade")
 
 
 def _hold_mode_eff() -> str:
-    """실제로 쓰는 유지 모드 — 캐스케이드면 "off"(HeaterHold 는 PLC 에 아무것도 쓰지 않는다), 아니면 HEATER_HOLD_MODE."""
-    return "off" if _CASCADE else HEATER_HOLD_MODE
+    """실제로 쓰는 유지 모드 — TC2 PID(cascade·tc2)면 "off"(HeaterHold 는 PLC 에 아무것도 쓰지 않는다), 아니면 HEATER_HOLD_MODE."""
+    return "off" if _TC2_PID else HEATER_HOLD_MODE
 
 # 히터 레시피 단계 표기. 화면/툴팁이 같은 말을 쓰도록 여기 한 곳에서만 정한다.
 HEATER_PHASE_TEXT = {"ramp": "RAMP", "soak": "SOAK", "cool": "COOL"}
@@ -493,7 +499,7 @@ class _MainErpStateSource:
         return getattr(self.w, "_erp_heater_dev_ok", False)
 
     def heater_hold(self):
-        """유지 모드 객체(is_holding()·kind·sv2) — 캐스케이드면 HeaterCascade(kind 'cascade')."""
+        """유지 모드 객체(is_holding()·kind·sv2) — TC2 PID(cascade·tc2)면 HeaterCascade(kind 'cascade')."""
         fn = getattr(self.w, "_hold_view", None)
         return fn() if fn is not None else getattr(self.w, "heater_hold", None)
 
@@ -719,18 +725,21 @@ class MainDialog(QDialog):
         self.heater_hold.engaged.connect(self._on_heater_hold_engaged)
         self.heater_hold.give_up.connect(lambda why: self._refresh_hold_snapshot())
         self.heater_hold.alert.connect(self._on_heater_hold_alert)
-        # 2단(캐스케이드) 제어 — HEATER_CTRL_MODE=cascade 일 때 수동·공정·레시피·ERP 히터 경로가 전부 이것 하나를 쓴다.
-        #  PLC 쓰기 시그널은 아래 HEATER_ENABLED 블록에서 PLC 스레드로 잇는다.
+        # 2단(캐스케이드)·TC2 단독 제어 — HEATER_CTRL_MODE=cascade·tc2 일 때 수동·공정·레시피·ERP 히터 경로가 전부 이것
+        #  하나를 쓴다(tc2 는 mode="tc2" — 바깥 루프·학습·TC1 탈락 경보 없음). PLC 쓰기 시그널은 아래 HEATER_ENABLED 블록에서 잇는다.
         self.heater_casc = HeaterCascade(
             map_points=HEATER_TC2_MAP, ti_sec=HEATER_CASCADE_TI_SEC, lag_sec=HEATER_CASCADE_LAG_SEC,
             bias_rate_max=HEATER_CASCADE_BIAS_RATE_MAX, bias_limit_c=HEATER_CASCADE_BIAS_LIMIT_C,
             bias_alarm_c=HEATER_CASCADE_BIAS_ALARM_C, alarm_action=HEATER_CASCADE_ALARM_ACTION,
             holdback_c=HEATER_HOLDBACK_C, tc2_margin_c=HEATER_HOLD_TC2_MARGIN_C,
             mv_limit=HEATER_MV_LIMIT, mv_min=HEATER_MV_MIN,
-            soak_tol_c=HEATER_SOAK_TOLERANCE, soak_sec=HEATER_SOAK_TIME_SEC, parent=self)
+            soak_tol_c=HEATER_SOAK_TOLERANCE, soak_sec=HEATER_SOAK_TIME_SEC,
+            mode=lambda: ("tc2" if (_TC2_PID and not _CASCADE) else "cascade"),   # 모드 상수를 그때그때 읽는다
+            tc1_warn_c=HEATER_TC2_TC1_WARN_C, tc1_warn_sec=HEATER_TC2_TC1_WARN_SEC,
+            tc2_holdback_c=HEATER_TC2_HOLDBACK_C, parent=self)
         self.heater_casc.message.connect(log_message_to_monitor)
         self.heater_casc.alert.connect(self._on_heater_casc_alert)
-        self.heater_recipe.set_cascade(lambda: self.heater_casc if _CASCADE else None)
+        self.heater_recipe.set_cascade(lambda: self.heater_casc if _TC2_PID else None)
         # process_controller 는 main 속성을 직접 읽지 않는다 — 스냅샷 dict 를 돌려주는 콜러블을 주입한다
         self._hold_snapshot: dict = {}
         self._hold_fail_info = None            # 도달 흐름 안의 유지 모드 실패 정보 — 도달 카드가 싣고 비운다(공정마다 리셋)
@@ -1671,7 +1680,7 @@ class MainDialog(QDialog):
         램프를 못 쓰는 상황(현재 온도 미상·하강)이면 예전처럼 목표만 쓴다.
         """
         rate = self._process_heater_rate_c or float(HEATER_RAMP_RATE_C_PER_MIN)
-        if _CASCADE:
+        if _TC2_PID:
             self.heater_casc.start(float(t), rate, "공정")
             return
         if not self.heater_ramp.start(float(t), rate, "공정"):
@@ -1686,8 +1695,8 @@ class MainDialog(QDialog):
         self.request_heater_run.emit(bool(on))
 
     def _heater_manual_go(self, v: float):
-        """수동 ON — 감속 접근으로 올리고 히터를 켠다(캐스케이드면 TC2 제어로)."""
-        if _CASCADE:
+        """수동 ON — 감속 접근으로 올리고 히터를 켠다(cascade·tc2 면 TC2 제어로)."""
+        if _TC2_PID:
             self.heater_casc.start(v, float(HEATER_RAMP_RATE_C_PER_MIN), "수동")
         elif not self.heater_ramp.start(v, float(HEATER_RAMP_RATE_C_PER_MIN), "수동"):
             self.request_heater_target.emit(v)
@@ -1699,8 +1708,8 @@ class MainDialog(QDialog):
         if v is None:
             return
         st = self.plc_controller.get_heater_status() or {}
-        if st.get('run') and _CASCADE:
-            # 운전 중 목표 변경 — 캐스케이드는 끊지 않고 목표만 바꾼다(TC2 제어 유지, 하강은 즉시)
+        if st.get('run') and _TC2_PID:
+            # 운전 중 목표 변경 — 캐스케이드(·TC2 단독)는 끊지 않고 목표만 바꾼다(TC2 제어 유지, 하강은 즉시)
             self.heater_casc.start(v, HEATER_RAMP_RATE_C_PER_MIN, "수동")
         elif st.get('run'):
             # 운전 중 목표 변경 — 지금 램프를 끊고 새 목표로 다시 접근한다.
@@ -1809,10 +1818,14 @@ class MainDialog(QDialog):
                 f"{int(mv)} ({int(st.get('mv_pct') or 0)}%"
                 + (f", \u2248{amp:.1f}A)" if amp is not None else ")"))
 
+            _casc_on = _TC2_PID and self.heater_casc.engaged() and self.heater_casc.r1 is not None
             lines = [
                 (f"히터 : PV {_n('pv', unit=_DEG)} / r1 {self.heater_casc.r1:.1f}{_DEG} / TC2 {_n('pv2', unit=_DEG)}"
                  f" → SV2 {_n('sv2', unit=_DEG)} (bias {self.heater_casc.bias:+.1f}) / MV {mv_txt}"
-                 if (_CASCADE and self.heater_casc.engaged() and self.heater_casc.r1 is not None)
+                 if (_casc_on and _CASCADE)
+                 else f"히터 : TC2 {_n('pv2', unit=_DEG)} → SV2 {_n('sv2', unit=_DEG)} / r1 {self.heater_casc.r1:.1f}{_DEG}"
+                      f" / TC1 {_n('pv', unit=_DEG)}(기록) / MV {mv_txt}"
+                 if _casc_on
                  else f"히터 : PV {_n('pv', unit=_DEG)} / SV {_n('cur_sv', unit=_DEG)} / MV {mv_txt}"),
                 (f"상태 : RUN {_b('run')} \u00b7 ITL {_b('itl')} \u00b7 FAULT {_b('fault')}"
                  f" \u00b7 OT {_b('ot')} \u00b7 TC {_b('tc_err')} \u00b7 WD {_b('wd_err')}"
@@ -2162,14 +2175,14 @@ class MainDialog(QDialog):
     def _hold_view(self):
         """화면·ERP·로그가 "지금 히터를 무엇이 묶고 있나"를 묻는 곳 — 캐스케이드면 HeaterCascade, 아니면 HeaterHold.
         둘 다 is_holding() / kind / sv2 를 가진다(캐스케이드 kind: 'cascade' = TC2 제어, 'dac' = 셔터 열림 중 TC2 상실 폴백)."""
-        return self.heater_casc if _CASCADE else self.heater_hold
+        return self.heater_casc if _TC2_PID else self.heater_hold
 
     def _refresh_hold_snapshot(self) -> None:
         """process_controller(다른 스레드)가 읽는 유지 모드 스냅샷 — main 스레드에서만 갱신한다."""
         h = self.heater_hold
         casc = getattr(self, "heater_casc", None)
         self._hold_snapshot = {"mode": _hold_mode_eff(), "ctrl_mode": HEATER_CTRL_MODE,
-                               "casc": (casc.snapshot() if (_CASCADE and casc is not None) else None),
+                               "casc": (casc.snapshot() if (_TC2_PID and casc is not None) else None),
                                "state": h.state, "kind": h.kind,
                                "holding": h.is_holding(), "sv2": h.sv2, "value": h.value, "gave_up": h.gave_up,
                                "relaxed": h.engaged_relaxed, "no_margin_warned": h.no_margin_warned,
@@ -2185,7 +2198,8 @@ class MainDialog(QDialog):
             self._on_heater_hold_alert(kind, d)
             return
         label = {"tc1_detached": "TC1 탈락 의심", "tc2_lost": "TC2 상실 → TC1 제어",
-                 "sv2_capped": "TC2 상한으로 목표 도달 불가"}.get(kind, kind)
+                 "sv2_capped": "TC2 상한으로 목표 도달 불가",
+                 "tc1_deviation": "TC1 편차 큼(기록용)"}.get(kind, kind)
         self._heater_run_event(label)
         action = ""
         if kind == "tc1_detached" and str(d.get("action")) == "abort":
@@ -2217,10 +2231,18 @@ class MainDialog(QDialog):
             common = {"TC1": self._chat_temp(st.get('pv')), "TC2": self._chat_temp(st.get('pv2')),
                       "r1": self._chat_temp(c.r1), "SV2": self._chat_temp(st.get('sv2')),
                       "bias": f"{c.bias:+.1f}°C", "MV": str(st.get('mv'))}
+            if c.tc2_only:
+                common.pop("bias")                       # TC2 단독 — bias 없음
+                common["제어"] = "TC2 단독(TC1 은 기록·안내만)"
             if kind == "tc1_detached":
                 title = "히터 TC1 탈락 의심"
                 fields = {"내용": str(d.get("text")), "예상 TC2": self._chat_temp(d.get("expected")),
                           "조치": action or "경고만 (HEATER_CASCADE_ALARM_ACTION=warn)", **common}
+            elif kind == "tc1_deviation":
+                title = "히터 TC1 편차 큼(기록용)"
+                fields = {"내용": str(d.get("text")), "목표": self._chat_temp(d.get("final")),
+                          "편차": f"{float(d.get('dev') or 0.0):+.1f}°C",
+                          "조치": "공정 계속 — 제어에는 영향 없음, TC1 위치/접촉 확인", **common}
             elif kind == "tc2_lost":
                 title = "히터 TC2 상실 — TC1 제어로 전환"
                 fields = {"사유": str(d.get("why")), "상태": "히터 계속 운전, PID 는 TC1(래더 기본 경로)",
@@ -2425,6 +2447,11 @@ class MainDialog(QDialog):
                 c = self.heater_casc
                 fields["SV2"] = self._chat_temp(c.sv2 if c.sv2 is not None else d.get("sv2"))
                 fields["bias"] = f"{c.bias:+.1f}°C"
+            elif _TC2_PID:
+                c = self.heater_casc
+                fields["SV2"] = self._chat_temp(c.sv2 if c.sv2 is not None else d.get("sv2"))
+                if d.get("record"):
+                    fields["기록"] = str(d.get("record"))   # "TC2 x (SV2 y) · TC1 z (목표 대비 ±d, 기록용)"
             self.chat_chk.notify_heater_reached(self._heater_run_context(), fields, ok=ok)
         except Exception as e:
             log_message_to_monitor("경고", f"히터 도달 카드 실패: {e!r}")
@@ -2441,6 +2468,11 @@ class MainDialog(QDialog):
         info = self._hold_fail_info
         self._hold_fail_info = None
         action = str((info or {}).get("action") or "")
+        if _TC2_PID and not _CASCADE:
+            c = self.heater_casc
+            if c.engaged():
+                return f"TC2 단독 제어 (SV2 {self._chat_temp(c.sv2)})", True
+            return f"TC2 단독 {c.status_text()} — TC2 제어 아님", False
         if _CASCADE:
             c = self.heater_casc
             if c.engaged():
@@ -2489,7 +2521,7 @@ class MainDialog(QDialog):
         """최종 목표 온도. st['sv'] 는 램프 출발점(= 시작 순간 PV)일 수 있어 그대로 쓰면 안 된다.
         heater_casc.target() → heater_ramp.target() → 레시피 현재 스텝 target_c → st['sv'] 순."""
         try:
-            t = self.heater_casc.target() if _CASCADE else None
+            t = self.heater_casc.target() if _TC2_PID else None
             if t is None:
                 t = self.heater_ramp.target()
             if t is not None:
@@ -2607,8 +2639,9 @@ class MainDialog(QDialog):
             log_message_to_monitor("경고", f"히터 CSV 로그 처리 실패: {e!r}")
 
     def _heater_log_row(self, st: dict) -> None:
-        """히터 CSV 한 행. 캐스케이드면 hold/hold_kind 는 캐스케이드 상태(TC2 제어=1, kind cascade/dac)이고 끝에 캐스케이드 열이 붙는다."""
-        if _CASCADE:
+        """히터 CSV 한 행. cascade·tc2 면 hold/hold_kind 는 캐스케이드 상태(TC2 제어=1, kind cascade/dac)이고 끝에 캐스케이드 열이
+        붙는다(tc2 는 ctrl_mode "tc2", bias 열 빈 칸 — 열 이름·순서는 같다)."""
+        if _TC2_PID:
             c = self.heater_casc
             hold = (1 if (c.engaged() or c.kind == 'dac') else 0, c.dac_value)
             casc = dict(c.log_fields(), engaged=c.engaged())
@@ -2718,7 +2751,7 @@ class MainDialog(QDialog):
                 #  D00020(ramp_rate)은 래더가 열어 둔 상한이라 따로 적는다(2026-09-27: 머리말 12 vs 실제 6).
                 _py_rate, _py_src = None, ""
                 try:
-                    if _CASCADE and self.heater_casc.is_active() and self.heater_casc.rate() > 0:
+                    if _TC2_PID and self.heater_casc.is_active() and self.heater_casc.rate() > 0:
                         _py_rate, _py_src = float(self.heater_casc.rate()), "파이썬 r1"
                     elif self.heater_ramp.is_active():
                         _py_rate, _py_src = float(self.heater_ramp.rate()), "파이썬"
@@ -2741,9 +2774,9 @@ class MainDialog(QDialog):
                       f" · 홀드백 {_n('holdback', unit='°C')}"
                       f" · OT(TC1) {_n('ot_limit', unit='°C')}{_ot2_txt}"
                       f" · 제어 {HEATER_CTRL_MODE} · 유지 모드 {_hold_mode_eff()}")
-                if _CASCADE:
+                if _TC2_PID:
                     c = self.heater_casc
-                    _emit(f"설정(캐스케이드): {c.settings_text()} · {c.bias_source or '-'}")
+                    _emit(f"설정({'TC2 단독' if c.tc2_only else '캐스케이드'}): {c.settings_text()} · {c.bias_source or '-'}")
         except Exception:
             pass
 
@@ -2944,7 +2977,7 @@ class MainDialog(QDialog):
         if state == "RELEASING":
             return "가스 해제중", "#616161"
         if st.get('run'):
-            if _CASCADE and self.heater_casc.is_active():
+            if _TC2_PID and self.heater_casc.is_active():
                 return f"운전 중 · {self.heater_casc.status_text()}", "#2e7d32"
             if self.heater_hold.is_holding():
                 return ("운전 중 · TC2 추종" if self.heater_hold.kind == 'tc2' else "운전 중 · 출력 고정"), "#2e7d32"
@@ -2996,8 +3029,15 @@ class MainDialog(QDialog):
             #  TC2 추종 중: cur_sv(D00016)는 TC2 목표를 비추므로 sv(D00012 = TC1 목표)를 보이고
             #             편차도 TC1 − 최종 목표로 잰다(TC1 600 옆에 SV 1052 가 보이면 안 된다)
             #  캐스케이드 TC2 제어 중: D00016 은 SV2 다. SV 칸과 편차는 TC1 기준값 r1 로(목표·편차는 늘 TC1 기준)
+            #  TC2 단독 제어 중: SV 칸은 r1(TC1 기준 목표), 편차는 제어 대상의 편차 TC2 − SV2(ERP devOk 도 같은 기준)
             tc2_hold = self.heater_hold.is_holding() and self.heater_hold.kind == 'tc2'
-            if _CASCADE and self.heater_casc.engaged() and self.heater_casc.r1 is not None:
+            dev_pv = pv
+            if (_TC2_PID and not _CASCADE and self.heater_casc.engaged() and self.heater_casc.r1 is not None
+                    and self.heater_casc.sv2 is not None):
+                sv_show = float(self.heater_casc.r1)
+                dev_ref = float(self.heater_casc.sv2)
+                dev_pv = st.get('pv2')
+            elif _TC2_PID and self.heater_casc.engaged() and self.heater_casc.r1 is not None:
                 sv_show = float(self.heater_casc.r1)
                 dev_ref = sv_show
             elif tc2_hold:
@@ -3013,8 +3053,8 @@ class MainDialog(QDialog):
                 ui.heater_sv_big.setText(f"{float(sv_show):.1f}")
 
             # 편차 — 정지 중에는 의미가 없으므로 비운다
-            if running and pv is not None and dev_ref is not None:
-                dev = float(pv) - float(dev_ref)
+            if running and dev_pv is not None and dev_ref is not None:
+                dev = float(dev_pv) - float(dev_ref)
                 ui.heater_dev_label.setText(f"\u0394{dev:+.1f}")
                 col = "#2e7d32" if abs(dev) <= HEATER_SOAK_TOLERANCE else "#6b7280"
                 self._erp_heater_dev_ok = abs(dev) <= HEATER_SOAK_TOLERANCE   # ERP: 편차 색 판단
@@ -3656,8 +3696,8 @@ class MainDialog(QDialog):
         if self._heater_stale:
             self._heater_set_stale(False, 0)
 
-        # 2단(캐스케이드) 제어 — 화면·ERP·로그가 이번 폴링의 캐스케이드 상태를 보도록 맨 먼저 돌린다
-        if _CASCADE:
+        # 2단(캐스케이드)·TC2 단독 제어 — 화면·ERP·로그가 이번 폴링의 상태를 보도록 맨 먼저 돌린다
+        if _TC2_PID:
             self.heater_casc.tick(st)
 
         # ERP 리포터용 히터 상세 상태 기록
@@ -3665,11 +3705,12 @@ class MainDialog(QDialog):
             self._erp_heater = dict(st or {})
             h_ = self._hold_view()
             self._erp_heater['hold_kind'] = h_.kind if h_.is_holding() else None
-            if _CASCADE and self.heater_casc.engaged() and self.heater_casc.r1 is not None:
+            if _TC2_PID and self.heater_casc.engaged() and self.heater_casc.r1 is not None:
                 # TC2 제어 중 D00016(cur_sv)은 SV2 다 — ERP 의 curSv 는 TC1 램프 목표(r1)여야 한다
                 self._erp_heater['cur_sv'] = round(float(self.heater_casc.r1), 1)
                 self._erp_heater['sv2_cmd'] = self.heater_casc.sv2
-                self._erp_heater['bias'] = round(self.heater_casc.bias, 2)
+                if _CASCADE:
+                    self._erp_heater['bias'] = round(self.heater_casc.bias, 2)
         except Exception:
             pass
 
@@ -3713,7 +3754,7 @@ class MainDialog(QDialog):
         # --- DAC 포화 감시(유지 모드가 출력을 묶고 있지 않을 때만) → 유지 모드(dac / tc2) ---
         #     캐스케이드면 PID 가 RUN 내내 TC2 를 보므로 포화 감시는 TC1 직접 제어 때와 똑같이 돈다(MV 기준이라 모드 무관).
         #     단 셔터 열림 중 TC2 상실로 캐스케이드가 D00018 을 잡고 있으면 그쪽이 소유자다(dac 유지와 같은 취급).
-        if _CASCADE:
+        if _TC2_PID:
             self.heater_sat.tick(st, *self.heater_casc.sat_hold())
         else:
             self.heater_sat.tick(st, self.heater_hold.is_holding(), self.heater_hold.kind)

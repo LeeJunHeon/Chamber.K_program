@@ -215,7 +215,7 @@ def build_state(src: ErpStateSource) -> dict:
                 "tc2Hold": bool(
                     src.heater_hold() is not None
                     and src.heater_hold().is_holding()
-                    and src.heater_hold().kind in ("tc2", "cascade")),   # cascade = 2단 제어(TC2 PID) 중
+                    and src.heater_hold().kind in ("tc2", "cascade")),   # cascade = TC2 PID 중(cascade·tc2 모드 모두)
                 "badge": src.heater_badge() or "",
             },
             "recipeRunning": bool(

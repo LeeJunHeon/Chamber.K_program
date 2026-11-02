@@ -188,7 +188,7 @@ class HeaterRecipeRunner(QObject):
         self._ramp.request_target.connect(self.request_target)
         self._ramp.request_ramp.connect(self.request_ramp)
         self._ramp.status_message.connect(self.status_message)
-        # 2단(캐스케이드) 제어 — main 이 set_cascade 로 넘겨 준다(HEATER_CTRL_MODE=cascade). None 이면 위 RampProfiler 경로.
+        # 2단(캐스케이드)·TC2 단독 제어 — main 이 set_cascade 로 넘겨 준다(HEATER_CTRL_MODE=cascade·tc2). None 이면 위 RampProfiler 경로.
         #  캐스케이드는 main 의 PLC 폴링이 tick 한다 — 러너는 start/hold/resume/stop 만 부른다(시계는 하나).
         #  캐스케이드가 D00012 를 r1 로 쥐고 있으므로 러너는 운전 중에 D00012 를 직접 쓰지 않는다.
         self._casc_src = None
