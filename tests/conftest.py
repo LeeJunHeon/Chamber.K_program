@@ -77,20 +77,25 @@ def qapp():
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "cascade: HEATER_CTRL_MODE=cascade(2단 제어) 경로로 돌린다 — 표시가 없으면 tc1(롤백 경로)")
+    config.addinivalue_line("markers", "tc2: HEATER_CTRL_MODE=tc2(TC2 단독 제어) 경로로 돌린다")
 
 
 @pytest.fixture(autouse=True)
 def heater_ctrl_mode(request, monkeypatch):
-    """기존 테스트는 롤백 경로(HEATER_CTRL_MODE="tc1", RampProfiler + HeaterHold)를 그대로 검증한다.
-    캐스케이드 경로 테스트는 @pytest.mark.cascade 로 연다. main 은 import 시점에 모드를 상수로 잡으므로 둘 다 덮어쓴다."""
+    """기존 테스트는 롤백 경로(HEATER_CTRL_MODE="tc1", RampProfiler + HeaterHold)를 그대로 검증한다 — 설정 기본값이
+    tc2 로 바뀌어도(2026-11-02) 표시 없는 테스트는 tc1 이다. 캐스케이드 경로는 @pytest.mark.cascade, TC2 단독은
+    @pytest.mark.tc2 로 연다. main 은 import 시점에 모드를 상수로 잡으므로 모두 덮어쓴다(_TC2_PID = cascade·tc2 공통,
+    _CASCADE = cascade 전용). 이미 만든 MainWindow 의 heater_casc.mode 는 테스트가 직접 맞춘다."""
     import importlib
     cascade = request.node.get_closest_marker("cascade") is not None
-    mode = "cascade" if cascade else "tc1"
+    tc2 = request.node.get_closest_marker("tc2") is not None
+    mode = "cascade" if cascade else ("tc2" if tc2 else "tc1")
     PC = importlib.import_module("controller.process_controller")
     monkeypatch.setattr(PC, "HEATER_CTRL_MODE", mode)
     M = importlib.import_module("main")
     monkeypatch.setattr(M, "HEATER_CTRL_MODE", mode)
-    monkeypatch.setattr(M, "_CASCADE", cascade)
+    monkeypatch.setattr(M, "_CASCADE", mode == "cascade")
+    monkeypatch.setattr(M, "_TC2_PID", mode in ("cascade", "tc2"))
     yield mode
 
 
