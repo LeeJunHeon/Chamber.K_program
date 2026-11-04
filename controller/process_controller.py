@@ -642,14 +642,19 @@ class SputterProcessController(QObject):
         )
 
         # ──────────────────────────────────────────────────────────
-        # 압력 step-down 시퀀스: 30(SP4) → 15(SP3) → 5(SP2) → WP(SP1)
+        # 압력 step-down 시퀀스: 30(SP4) → [50(SP5)] → 15(SP3) → 5(SP2) → WP(SP1)
         # 각 단계: SET → ON → WAIT_PRESSURE (실제 압력 도달 대기)
         #
         # WP에 따른 단계 스킵:
-        #   WP >= 15 : SP3, SP2 모두 스킵, SP1만
+        #   WP > 50  : SP5(50) → SP1   (SP3, SP2 스킵)
+        #   WP >= 15 : SP5, SP3, SP2 모두 스킵, SP1만 (WP 가 정확히 50 이면 여기 — 예전과 같다)
         #   WP >= 5  : SP2 스킵, SP3 → SP1
         #   WP < 5   : SP3 → SP2 → SP1 (3단계 모두)
         # ──────────────────────────────────────────────────────────
+
+        # --- SP5 (50.0) : WP > 50 일 때만 (timeout 180s, 도달 못해도 진행) ---
+        if sp1_ui > 50.0:
+            steps.extend(build_pressure_stage_steps(5, 50.0, "Stage0(SP5)"))
 
         # --- SP3 (15.0) : WP < 15 일 때만 (timeout 180s, 도달 못해도 진행) ---
         if sp1_ui < 15.0:
