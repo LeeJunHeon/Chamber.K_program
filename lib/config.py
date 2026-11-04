@@ -743,7 +743,7 @@ MFC_SCALE_FACTORS = {
 
 MFC_PRESSURE_SCALE    = 0.1   # UI ↔ HW 스케일 (UI 2.00 ↔ HW 0.20)
 MFC_PRESSURE_DECIMALS = 2     # UI 표시 소수 자리
-MFC_SP1_VERIFY_TOL    = 0.1   # SP1_SET 검증 허용 오차(장비 단위)
+MFC_SP_VERIFY_TOL     = 0.01  # SP1/2/3/5_SET 검증 허용 오차(장비 단위 % F.S. — UI 로는 ±0.1)
 
 # MFC 명령어 (고정 — 장비 프로토콜)
 MFC_COMMANDS = {
@@ -756,7 +756,11 @@ MFC_COMMANDS = {
     'READ_FLOW':      lambda channel: f"R6{int(channel)}",
     'READ_MFC_ON_OFF_STATUS': "R69",
     'READ_PRESSURE':  "R5",
+    # 세트포인트 값 읽기(GPC3000 매뉴얼 RS-232): SP1~SP3 = R1~R3, SP5 = R10 (R5 는 압력 읽기). 응답 "Sn+값"
     'READ_SP1_VALUE': "R1",
+    'READ_SP2_VALUE': "R2",
+    'READ_SP3_VALUE': "R3",
+    'READ_SP5_VALUE': "R10",
     'READ_VALVE_POSITION': "R6",
     'READ_SYSTEM_STATUS':  "R7",
     'READ_FLOW_SET':  lambda channel: f"R6{4+int(channel)}",
@@ -767,10 +771,12 @@ MFC_COMMANDS = {
     'SP2_ON':  "D2",
     'SP3_ON':  "D3",
     'SP4_ON':  "D4",
+    'SP5_ON':  "D5",
     'SP1_SET': lambda value: f"S1 {value}",
     'SP2_SET': lambda value: f"S2 {value}",
     'SP3_SET': lambda value: f"S3 {value}",
     'SP4_SET': lambda value: f"S4 {value}",
+    'SP5_SET': lambda value: f"S5 {value}",
 }
 
 # === Chamber-K NAS CSV 로그 경로 (고정) ===
