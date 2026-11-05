@@ -224,15 +224,12 @@ def build_gas_intro_steps(channels: List[int],
     return steps
 
 
-def build_pressure_stage_steps(sp_index: int,
-                               sp_value: float,
-                               label: str,
-                               timeout_sec: float = WAIT_TIMEOUT_SEC,
-                               fail_on_timeout: bool = False) -> List[ProcessStep]:
-    """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝
+def build_pressure_set_on_steps(sp_index: int,
+                                sp_value: float,
+                                label: str) -> List[ProcessStep]:
+    """SP{sp_index} = sp_value 설정 → ON 2개 스텝 (압력 도달 판정 없음)
 
-    fail_on_timeout=True 이면 timeout 시 공정 중단 + Google Chat 알림.
-    False 이면 경고 로그만 남기고 다음 단계 진행.
+    build_pressure_stage_steps 의 앞 두 스텝과 같다. SP5 처럼 도달 판정 대신 고정 대기를 쓰는 단계가 쓴다.
     """
     steps: List[ProcessStep] = []
     set_cmd = f"SP{sp_index}_SET"
@@ -255,6 +252,20 @@ def build_pressure_stage_steps(sp_index: int,
             params=(on_cmd, {}),
         )
     )
+    return steps
+
+
+def build_pressure_stage_steps(sp_index: int,
+                               sp_value: float,
+                               label: str,
+                               timeout_sec: float = WAIT_TIMEOUT_SEC,
+                               fail_on_timeout: bool = False) -> List[ProcessStep]:
+    """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝
+
+    fail_on_timeout=True 이면 timeout 시 공정 중단 + Google Chat 알림.
+    False 이면 경고 로그만 남기고 다음 단계 진행.
+    """
+    steps: List[ProcessStep] = build_pressure_set_on_steps(sp_index, sp_value, label)
 
     # 3) WAIT_PRESSURE (실제 압력이 setpoint ±10% 안에 3회 연속 들어올 때까지)
     steps.append(
@@ -644,6 +655,7 @@ class SputterProcessController(QObject):
         # ──────────────────────────────────────────────────────────
         # 압력 step-down 시퀀스: 30(SP4) → [50(SP5)] → 15(SP3) → 5(SP2) → WP(SP1)
         # 각 단계: SET → ON → WAIT_PRESSURE (실제 압력 도달 대기)
+        #   단, SP5 는 예외 — 값 쓰기·확인 후 60초 고정 대기(도달 판정 없음)
         #
         # WP에 따른 단계 스킵:
         #   WP > 50  : SP5(50) → SP1   (SP3, SP2 스킵)
@@ -652,9 +664,16 @@ class SputterProcessController(QObject):
         #   WP < 5   : SP3 → SP2 → SP1 (3단계 모두)
         # ──────────────────────────────────────────────────────────
 
-        # --- SP5 (50.0) : WP > 50 일 때만 (timeout 180s, 도달 못해도 진행) ---
+        # --- SP5 (50.0) : WP > 50 일 때만. 값 쓰기·확인 후 60초 고정 대기(도달 판정 없음) ---
         if sp1_ui > 50.0:
-            steps.extend(build_pressure_stage_steps(5, 50.0, "Stage0(SP5)"))
+            steps.extend(build_pressure_set_on_steps(5, 50.0, "Stage0(SP5)"))
+            steps.append(
+                ProcessStep(
+                    ActionType.DELAY,
+                    "Stage0(SP5): 압력 안정화 대기(60초)",
+                    duration_sec=60,
+                )
+            )
 
         # --- SP3 (15.0) : WP < 15 일 때만 (timeout 180s, 도달 못해도 진행) ---
         if sp1_ui < 15.0:

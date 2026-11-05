@@ -159,14 +159,21 @@ def test_process_sp5_stage(qapp):
     s60 = _steps(60)
     cmds = [p[0] for _, p in s60 if p]
     i4, i5, i1 = cmds.index("SP4_ON"), cmds.index("SP5_SET"), cmds.index("SP1_SET")
-    assert i4 < i5 < i1 and cmds[i5:i5 + 3] == ["SP5_SET", "SP5_ON", "WAIT_PRESSURE"] and i1 == i5 + 3
-    wait = [p for _, p in s60 if p and p[0] == "WAIT_PRESSURE"][0][1]
-    assert wait["target"] == 50.0 and wait["timeout_sec"] == 180.0 and wait["fail_on_timeout"] is False
+    assert i4 < i5 < i1 and cmds[i5:i5 + 2] == ["SP5_SET", "SP5_ON"]
+    # SP5_ON 바로 뒤가 60초 DELAY(도달 판정 없음), 그 다음이 SP1_SET
+    msgs = [m for m, _ in s60]
+    j = msgs.index("Stage0(SP5): SP5_ON")
+    assert msgs[j + 1] == "Stage0(SP5): 압력 안정화 대기(60초)" and s60[j + 1][1] is None
+    assert s60[j + 2][1][0] == "SP1_SET"
+    # SP5 와 SP1 사이 WAIT_PRESSURE 는 SP1 의 것 하나뿐
+    waits = [p[1] for _, p in s60[msgs.index("Stage0(SP5): SP5_SET=50.00 설정"):] if p and p[0] == "WAIT_PRESSURE"]
+    assert len(waits) == 1 and waits[0]["target"] == 60.0 and waits[0]["timeout_sec"] == 300.0
+    assert waits[0]["fail_on_timeout"] is True
+    assert not any(p and p[0] == "WAIT_PRESSURE" and p[1]["target"] == 50.0 for _, p in s60)
     assert "SP3_SET" not in cmds and "SP2_SET" not in cmds
     assert any(m.startswith("Stage0(SP5): SP5_SET=50.00 설정") for m, _ in s60)
     for wp in (2, 8, 20, 50):
-        assert "SP5_SET" not in [p[0] for _, p in _steps(wp) if p]
-    # SP5 3스텝을 빼면 WP 60 의 목록은 SP5 가 없던 때와 같은 모양(SP4 → … → POWER_WAIT → SP1)
-    rest = [p[0] for _, p in s60 if p and not p[0].startswith("SP5_")
-            and not (p[0] == "WAIT_PRESSURE" and p[1]["target"] == 50.0)]
+        assert not any("SP5" in m for m, _ in _steps(wp))
+    # SP5 3스텝(SET·ON·DELAY)을 빼면 WP 60 의 목록은 SP5 가 없던 때와 같은 모양(SP4 → … → POWER_WAIT → SP1)
+    rest = [p[0] for m, p in s60 if p and "SP5" not in m]
     assert rest == [p[0] for _, p in _steps(20) if p]
