@@ -50,6 +50,7 @@ def isolate_logs_and_ports(tmp_path_factory):
     mp.setattr(HL, "NAS_HEATER_LOG_DIR", LG.NAS_HEATER_LOG_DIR)
     # ChK_log.csv(공정 요약, lib.paths → lib.config → lib.logger 가 이름으로 바인딩) 도 NAS 다
     import lib.config as CFG
+    mp.setattr(CFG, "MFC_STATE_LOG_ENABLED", False)   # config_user.json 이 켜 놓아도 시험 창은 시작 때 MFC 를 열지 않는다
     mp.setattr(PA, "CHK_CSV_PATH", str(root / "ChK_log.csv"))
     mp.setattr(CFG, "CHK_CSV_PATH", str(root / "ChK_log.csv"))
     if hasattr(LG, "CHK_CSV_PATH"):

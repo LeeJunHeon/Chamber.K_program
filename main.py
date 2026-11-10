@@ -32,6 +32,9 @@ from lib.logger import (
     process_log_active,
 )
 from lib.paths import DEV_MODE, DEV_MODE_BANNER, DEV_MODE_TITLE_TAG, chat_webhook, erp_settings
+import lib.config as _CFG            # MFC 상태 기록 켜짐 여부는 호출 때 읽는다(시험이 바꿀 수 있게)
+import lib.paths as _PATHS
+from lib.mfc_state_log import MfcStateCsvWriter, make_row as mfc_state_row
 from core.params import (ManualInputs, build_manual_params, build_csv_params, check_rfpulse_range,
                          fmt_base_pressure)
 from core.state import ProcessState
@@ -72,7 +75,8 @@ from lib.config import (PLC_COIL_MAP, DC_POWER_DELAY_SEC,
                         RFPULSE_DUTY_MIN, RFPULSE_DUTY_MAX,
                         heater_est_current,
                         IG_ENABLED, IG_PORT, IG_GAUGE_A_NAME, IG_GAUGE_B_NAME, IG_CSV_ENABLED,
-                        MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts)
+                        MFC_PORT, DC_PORT, PLC_PORT, RFPULSE_PORT, serial_port_conflicts,
+                        MFC_PRESSURE_DECIMALS)
 from lib.recipe_io import load_table
 from controller.heater_recipe import HeaterRecipeRunner
 from controller.heater_hold import HeaterHold
@@ -806,6 +810,9 @@ class MainDialog(QDialog):
         # 이온 게이지(읽기 전용) — 자기 스레드에서 따로 돈다. 공정·다른 장비와 무관.
         self._setup_ion_gauge()
 
+        # MFC 압력·밸브 위치 1초 CSV(저우선 읽기) — 꺼져 있으면(기본) 아무것도 만들지 않는다
+        self._setup_mfc_state_log()
+
         self.ui.Sputter_Stop_Button.setEnabled(False)
 
         # === ERP 원격 명령 실행 (메인 스레드 전용) ===
@@ -1333,6 +1340,74 @@ class MainDialog(QDialog):
             ports["IG_PORT"] = IG_PORT
         for msg in serial_port_conflicts(ports):
             log_message_to_monitor("경고", msg)
+
+    # ==================== MFC 압력·밸브 위치 1초 CSV (저우선 읽기, mfc/MFC_YYYYMMDD.csv) ====================
+    _MFC_ROWS_MAX = 600             # 행 버퍼 상한(쓰기가 계속 막혀도 메모리가 늘지 않게)
+
+    def _setup_mfc_state_log(self, enabled=None, primary_dir=None, local_dir=None) -> None:
+        """MFC_STATE_LOG_ENABLED 일 때만 — 쓰기 작업자·10초 묶음 타이머·시그널 연결을 만들고, MFC 스레드에서 포트를 한 번 열고
+        기록 타이머를 켠다(QueuedConnection — 화면 스레드를 막지 않는다). 꺼져 있으면 아무것도 만들지 않는다.
+        enabled/primary_dir/local_dir 는 시험용(기본은 config·경로 설정)."""
+        self._mfc_log_writer = None
+        self._mfc_log_timer = None
+        self._mfc_log_rows = []
+        on = bool(_CFG.MFC_STATE_LOG_ENABLED if enabled is None else enabled)
+        if not on:
+            return
+        self._mfc_log_writer = MfcStateCsvWriter(primary_dir if primary_dir is not None else _PATHS.NAS_MFC_LOG_DIR,
+                                                 local_dir)
+        self.mfc_controller.state_sample.connect(self._on_mfc_state_sample)
+        self._mfc_log_timer = QTimer(self)
+        self._mfc_log_timer.setInterval(10000)
+        self._mfc_log_timer.timeout.connect(self._flush_mfc_rows)
+        self._mfc_log_timer.start()
+        # 연결은 한 번만 — 끊김 복구는 MFC 의 _watch_connection·ReconnectPolicy 가 맡는다(기록 쪽은 포트를 열고 닫지 않는다)
+        QMetaObject.invokeMethod(self.mfc_controller, "connect_mfc_device", Qt.ConnectionType.QueuedConnection)
+        QMetaObject.invokeMethod(self.mfc_controller, "start_state_log", Qt.ConnectionType.QueuedConnection)
+
+    @Slot(dict)
+    def _on_mfc_state_sample(self, sample: dict):
+        """MFC 스레드가 낸 1샘플 → 행으로 만들어 모은다(파일 쓰기는 10초마다 _flush_mfc_rows → 백그라운드 작업자)."""
+        try:
+            row = mfc_state_row(sample, MFC_PRESSURE_DECIMALS)
+            if row is None:
+                return
+            self._mfc_log_rows.append(row)
+            if len(self._mfc_log_rows) > self._MFC_ROWS_MAX:
+                del self._mfc_log_rows[:-self._MFC_ROWS_MAX]
+        except Exception:
+            pass
+
+    @Slot()
+    def _flush_mfc_rows(self):
+        """모은 행을 작업자에게 넘기고(막지 않는다), 작업자가 센 경고(로컬 저장·버림)는 실행당 1회씩만 모니터에 낸다."""
+        w = getattr(self, "_mfc_log_writer", None)
+        if w is None:
+            return
+        try:
+            rows, self._mfc_log_rows = self._mfc_log_rows, []
+            if rows:
+                w.submit(rows)
+            for msg in w.take_notices():
+                log_message_to_monitor("경고", msg)
+        except Exception:
+            pass
+
+    def _stop_mfc_state_log(self, wait_sec: float = 3.0) -> None:
+        """종료 — 기록 타이머(MFC 스레드)를 먼저 멈추고, 남은 행을 넘기고, 작업자는 wait_sec 안에서만 기다린다(NAS 가 멈춰도 종료는 멈추지 않는다)."""
+        w = getattr(self, "_mfc_log_writer", None)
+        if w is None:
+            return
+        try:
+            if self._mfc_log_timer is not None:
+                self._mfc_log_timer.stop()
+            self._invoke_worker_blocking(self.mfc_controller, "stop_state_log")
+            self._flush_mfc_rows()
+            if not w.shutdown(wait_sec):
+                log_message_to_monitor("경고", f"MFC 상태 CSV 쓰기가 {wait_sec:.0f}초 안에 끝나지 않아 기다리지 않고 종료합니다.")
+        except Exception:
+            pass
+        self._mfc_log_writer = None
 
     # ==================== 이온 게이지 (Terranova 934, 읽기 전용) ====================
     _IG_COLORS = {"ok": "#222222", "warn": "#b35c00", "lost": "#c62828"}
@@ -4805,6 +4880,9 @@ class MainDialog(QDialog):
                 pass
 
         log_message_to_monitor("정보", "프로그램 종료를 시작합니다...")
+
+        # MFC 상태 기록 — 기록 타이머를 먼저 멈추고 남은 행을 넘긴다(꺼져 있으면 아무것도 안 한다)
+        self._stop_mfc_state_log()
 
         # worker 정리를 각 worker 자신의 스레드에서 먼저 수행
         self._invoke_worker_blocking(self.process_controller, "teardown")

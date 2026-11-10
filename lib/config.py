@@ -917,6 +917,37 @@ MFC_GAP_MS       = 1000   # 인터커맨드 간격(ms)
 MFC_DELAY_MS     = 1000   # 검증/재시도 지연(ms)
 MFC_DELAY_MS_VALVE = 5000 # 밸브 대기(ms)
 
+# ── MFC 압력·밸브 상태 1초 CSV(mfc/MFC_YYYYMMDD.csv) — 저우선 읽기(R5·R6), 일반 명령이 있으면 양보한다 ──
+#  기본 꺼짐. 켜면 프로그램 시작 때 MFC 포트를 미리 열고 INTERVAL_S 마다 압력(R5)·밸브 위치(R6)를 읽어 남긴다.
+MFC_STATE_LOG_ENABLED    = get('MFC_STATE_LOG_ENABLED',    False)
+MFC_STATE_LOG_INTERVAL_S = get('MFC_STATE_LOG_INTERVAL_S', 1.0)   # 기록 주기(초). 0.5~60
+MFC_STATE_LOG_GAP_MS     = get('MFC_STATE_LOG_GAP_MS',     100)   # 기록 읽기 뒤 간격(ms). 50~1000 (MFC_GAP_MS 와 별개)
+MFC_STATE_LOG_TIMEOUT_MS = get('MFC_STATE_LOG_TIMEOUT_MS', 500)   # 기록 읽기 응답 대기(ms). 100~MFC_TIMEOUT (MFC_TIMEOUT 과 별개)
+
+
+def _validate_mfc_state_log_config() -> None:
+    """범위를 벗어나거나 형식이 틀리면 안전한 쪽으로 클램프한다. 예외는 던지지 않는다."""
+    global MFC_STATE_LOG_ENABLED, MFC_STATE_LOG_INTERVAL_S, MFC_STATE_LOG_GAP_MS, MFC_STATE_LOG_TIMEOUT_MS
+    MFC_STATE_LOG_ENABLED = MFC_STATE_LOG_ENABLED is True
+    for name, lo, hi, dflt, cast in (
+            ("MFC_STATE_LOG_INTERVAL_S", 0.5, 60.0, 1.0, float),
+            ("MFC_STATE_LOG_GAP_MS", 50, 1000, 100, int),
+            ("MFC_STATE_LOG_TIMEOUT_MS", 100, MFC_TIMEOUT, 500, int)):
+        raw = globals()[name]
+        try:
+            v = cast(raw)
+        except Exception:
+            print(f"[Config] {name} {raw!r} → {dflt} (숫자가 아님)")
+            v = dflt
+        if not (lo <= v <= hi):
+            new = cast(min(max(v, lo), hi))
+            print(f"[Config] {name} {v} → {new} 로 클램프 ({lo}~{hi})")
+            v = new
+        globals()[name] = v
+
+
+_validate_mfc_state_log_config()
+
 MFC_SCALE_FACTORS = {
     1: 1.0,  # Channel 1 (Ar)
     2: 1.0,  # Channel 2 (O2)

@@ -42,12 +42,14 @@ class LogPaths(NamedTuple):
     comm_dir: Path           # COMM_events.csv
     chk_csv_path: str        # 공정 요약 ChK_log.csv
     ig_dir: Path             # 이온 게이지 IG_YYYYMMDD.csv
+    mfc_dir: Path            # MFC 압력·밸브 위치 MFC_YYYYMMDD.csv
 
 
 def resolve_paths(dev_mode: bool) -> LogPaths:
     root = DEV_LOG_ROOT if dev_mode else OPS_NAS_LOG_DIR
     chk_csv = str(DEV_LOG_ROOT / "ChK_log.csv") if dev_mode else OPS_CHK_CSV_PATH
-    return LogPaths(root, root / "process", root / "heater", root / "plc", root / "comm", chk_csv, root / "ig")
+    return LogPaths(root, root / "process", root / "heater", root / "plc", root / "comm", chk_csv, root / "ig",
+                    root / "mfc")
 
 
 def erp_settings(cfg=None, dev_mode: bool = False) -> Tuple[str, str]:
@@ -74,4 +76,5 @@ NAS_HEATER_LOG_DIR = PATHS.heater_dir
 NAS_PLC_LOG_DIR = PATHS.plc_dir
 NAS_COMM_LOG_DIR = PATHS.comm_dir
 NAS_IG_LOG_DIR = PATHS.ig_dir
+NAS_MFC_LOG_DIR = PATHS.mfc_dir
 CHK_CSV_PATH = PATHS.chk_csv_path
