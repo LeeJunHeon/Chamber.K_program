@@ -1,7 +1,11 @@
 """챔버K MFC 드라이버 — ATOVAC GPC3000(ASCII + CR, 값은 %FS). v1 device/MFC.py 를 읽고 다시 쓴 것(import 안 함).
 
-읽기(스냅샷 묶기 소스): R5(압력) 매초 + R60(유량) — MFC_READ_PLAN: full=매초, alternate=격초(짝수 tick),
-  auto=한 번 읽기가 마감의 60 %를 넘거나 실패하면 다음부터 격초. 유량 필드는 자기 품질(own_quality)이라 격초면 stale·나이 1.
+읽기(스냅샷 묶기 소스): R5(압력) 매초 + R60(유량) + R6(밸브 위치) — MFC_READ_PLAN: full=셋 다 매초, alternate=R5 매초·
+  R60 짝수 tick·R6 홀수 tick(tick 마다 질의 둘), auto=한 번 읽기가 마감의 60 %를 넘으면 다음부터 번갈아.
+  유량·밸브 위치 필드는 자기 품질(own_quality)이라 안 읽은 tick 은 stale·나이 1.
+  밸브 위치(mfc.valve_pct, 5-17 — v1 12ecc2d 의 1초 CSV "V" 열)는 기록용 읽기다: 응답이 "V" 로 시작하지 않거나 무응답이면
+  그 tick 의 밸브 값만 비우고(stale) 압력·유량은 그대로 쓴다. 설정 명령(공정 명령)이 진행·대기 중인 tick, 또는 설정 명령에
+  밀려 R6 응답 제한까지 기다리면 읽기 마감을 넘기는 tick 에는 R6 를 보내지 않고 양보한다(v1 원칙 — 기록용 읽기는 공정 명령보다 뒤).
   명령 사이는 MFC_CMD_GAP_MS, 질의 하나는 MFC_QUERY_TIMEOUT_MS.
 단위: 유량 %FS ↔ sccm = %FS/100 × FS(연결 때 R70·R71 로 읽음, 못 읽으면 MFC_AR/O2_FS_SCCM). 읽기·설정 모두 환산.
   FS 가 100 이 아니면 이벤트 fs_not_100(v1 레시피 유량이 %FS 였을 수 있음 — 공정 전에 사용자 확인).
@@ -89,6 +93,13 @@ def parse_sp_reply(line: Optional[str], n: int) -> Optional[float]:
     return parse_pressure(s[2:]) if len(s) > 2 else None
 
 
+def parse_valve(line: Optional[str]) -> Optional[float]:
+    """밸브 위치 R6 응답 "V+값"(0 닫힘 ~ 100 열림 [MFC p.80]) → 값. "V" 로 시작하지 않으면 None — 다른 명령의 응답
+    (v1 12ecc2d parse_valve_reply)."""
+    m = re.match(r"^V\s*" + _NUM + "$", (line or "").strip())
+    return float(m.group(1)) if m else None
+
+
 def parse_r69(line: str) -> str:
     s = (line or "").strip()
     payload = s[2:] if s.startswith("L0") else (s[1:] if s.startswith("L") else s)
@@ -118,6 +129,9 @@ class MfcDriver:
         self.sp_active: Optional[int] = None
         self.sp_mtorr: Optional[float] = None
         self._last_cmd = -1e9
+        self._ops = 0                                   # 진행 중인 설정 명령(_op) 수 — 0 이 아니면 기록용 읽기(R6)가 양보
+        self._ops_until = 0.0                           # 양보 기한 — 끝 콜백을 못 받은 명령이 R6 를 영영 막지 않게(스텝 한도)
+        self.valve_yielded = 0                          # 양보해서 R6 를 보내지 않은 tick 수(시험·점검용)
         worker.on_connect = self._on_connect
 
     def _emit(self, kind: str, detail: str, reason: Optional[str] = None) -> None:
@@ -234,20 +248,44 @@ class MfcDriver:
         if p is None:
             raise MfcError("R5 형식 다름")
         out["mfc.pressure_mtorr"] = round(self.pct_to_mtorr(p), 3)
-        if not self.alternate or seq % 2 == 0:
+        full = not self.alternate
+        if full or seq % 2 == 0:
             vals = parse_r60(self._query(session, "R60"))
             if not vals or len(vals) < 2:
                 raise MfcError("R60 형식 다름")
             out["mfc.ar_sccm"] = round(self.pct_to_sccm(CH_AR, vals[0]), 3)
             out["mfc.o2_sccm"] = round(self.pct_to_sccm(CH_O2, vals[1]), 3)
-            took = self.clock.monotonic() - t0
-            if (self.cfg["MFC_READ_PLAN"] == "auto" and not self.alternate
-                    and took > 0.6 * self.cfg["MFC_READ_DEADLINE_MS"] / 1000.0):
-                self.alternate = True
-                self._emit("read_plan", f"한 번 읽기 {took * 1000:.0f} ms — R60 격초로")
+        slow_ok = True
+        if full or seq % 2 == 1:
+            v = self._read_valve(session)
+            if v is not None:
+                out["mfc.valve_pct"] = v
+            slow_ok = v is not None or self._ops > 0      # R6 무응답(응답 제한까지 기다림)으로 길어진 읽기는 계획을 바꾸지 않는다
+        took = self.clock.monotonic() - t0
+        if (full and slow_ok and self.cfg["MFC_READ_PLAN"] == "auto"
+                and took > 0.6 * self.cfg["MFC_READ_DEADLINE_MS"] / 1000.0):
+            self.alternate = True
+            self._emit("read_plan", f"한 번 읽기 {took * 1000:.0f} ms — R60(유량)·R6(밸브 위치)를 번갈아")
         out.update({"mfc.ar_set": self.ar_set, "mfc.o2_set": self.o2_set, "mfc.sp_active": self.sp_active,
                     "mfc.sp_mtorr": self.sp_mtorr})
         return out
+
+    def _read_valve(self, session) -> Optional[float]:
+        """R6(밸브 위치 %) — 기록용. 설정 명령이 진행·대기 중이면 보내지 않고(양보), 무응답·"V" 아닌 응답이면 None
+        (그 tick 의 밸브 값만 stale — 압력·유량 읽기는 실패로 만들지 않는다). 설정 명령에 밀려 읽기가 늦게 시작해
+        응답 제한까지 기다리면 읽기 마감을 넘길 때도 보내지 않는다 — 압력·유량이 그 행에 제때 들어가게."""
+        now = self.clock.monotonic()
+        late = max(now, self._last_cmd + self.gap_s) + self.q_timeout_s > session.deadline
+        if late or (self._ops > 0 and now < self._ops_until):
+            self.valve_yielded += 1
+            return None
+        try:
+            v = parse_valve(self._query(session, "R6"))
+        except Cancelled:
+            raise
+        except Exception:
+            return None
+        return None if v is None else round(v, 1)
 
     # ───────── 쓰기(v1 재시도 — 한 I/O 씩 worker 요청) ─────────
     def _op(self, name: str, gen, on_done=None) -> None:
@@ -260,11 +298,14 @@ class MfcDriver:
         t0 = self.clock.monotonic()
         guard = MFC_CMD_GUARD_S - 2.0                 # 공정 스텝 한도(MFC_CMD_GUARD_S)보다 먼저 결과를 낸다
         st: Dict[str, Any] = {"nb": None, "results": [], "done": False}
+        self._ops += 1
+        self._ops_until = t0 + MFC_CMD_GUARD_S
 
         def finish(reason: Optional[str]) -> None:
             if st["done"]:
                 return
             st["done"] = True
+            self._ops = max(0, self._ops - 1)
             if reason and reason not in ("BENCH_READ_ONLY", "CANCELLED"):
                 self._emit("verify_mismatch" if reason == "VERIFY_MISMATCH" else "write_failed",
                            f"{name}: {st.get('why') or reason}", reason)

@@ -8,7 +8,7 @@ from v2.common.transport import SimTransport
 from v2.common.worker import Worker
 from v2.chk import params as P
 from v2.chk import snapshot_fields as SF
-from v2.chk.drivers.mfc import CH_AR, CH_O2, MfcDriver, parse_pressure, parse_r60, parse_r69, parse_prefixed
+from v2.chk.drivers.mfc import CH_AR, CH_O2, MfcDriver, parse_pressure, parse_r60, parse_r69, parse_prefixed, parse_valve
 from v2.chk.sim.chamber import Chamber
 from v2.chk.sim.mfc_sim import MfcSim
 
@@ -91,6 +91,96 @@ def test_alternate_read_quality_and_age():
         else:
             assert (x["mfc.ar_sccm.q"], x["mfc.ar_sccm.age_s"]) == ("stale", 1.0)   # 유량은 격초
     assert r.sim.dropped == 0                                           # 명령 간격 150 ms 를 지킴
+    # 밸브 위치(5-17)는 홀수 tick — tick 마다 질의 둘(R5 + R60 또는 R6)
+    for x in rows[2:]:
+        if x["seq"] % 2 == 1:
+            assert (x["mfc.valve_pct"], x["mfc.valve_pct.q"], x["mfc.valve_pct.age_s"]) == (100.0, "ok", 0.0)
+        else:
+            assert (x["mfc.valve_pct"], x["mfc.valve_pct.q"], x["mfc.valve_pct.age_s"]) == (100.0, "stale", 1.0)
+    q = [d.decode().strip() for tt, d in r.sim.received][-12:]
+    assert q.count("R5") == 6 and q.count("R60") == 3 and q.count("R6") == 3
+    r.done()
+
+
+# ───────── 밸브 위치 1초 기록(5-17 — v1 12ecc2d 의 MFC 상태 CSV "V" 열) ─────────
+def test_parse_valve_needs_v_prefix():
+    assert parse_valve("V+100.0") == 100.0 and parse_valve(" V +37.5 ") == 37.5 and parse_valve("V0") == 0.0
+    for bad in ("P+0.20", "+50.0", "50.0", "S1+30.00", "M110", "", None, "V", "Vx"):
+        assert parse_valve(bad) is None
+
+
+def test_valve_position_every_second_in_full_plan():
+    r = Rig()
+    assert "mfc.valve_pct" in [f"mfc.{f.name}" for f in SF.MFC_BLOCK.fields]
+    rows = r.run(4)
+    assert all((x["mfc.q"], x["mfc.valve_pct"], x["mfc.valve_pct.q"], x["mfc.valve_pct.age_s"]) == ("ok", 100.0, "ok", 0.0)
+               for x in rows)                                           # 시작 때 밸브 완전 열림(O)
+    assert not r.d.alternate and r.sim.dropped == 0                     # R5·R60·R6 셋 다 1초 안(auto 가 번갈아로 넘기지 않음)
+    assert r.seq(r.d.set_flow, CH_AR, 20.0) is None and r.seq(r.d.set_onoff, "1000") is None
+    assert r.seq(r.d.set_sp, 1, 5.0) is None and r.seq(r.d.select_sp, 1) is None
+    r.c.wait_until(r.c.monotonic() + 40.0)
+    x = r.run(2)[-1]
+    assert 0.0 < x["mfc.valve_pct"] < 50.0 and x["mfc.valve_pct"] == round(r.sim.valve * 100, 1)   # 압력 제어 — 밸브를 조임
+    r.done()
+
+
+def test_valve_read_failure_does_not_fail_pressure():
+    """R6 응답이 "V" 로 시작하지 않거나 없으면 그 tick 의 밸브 값만 stale — 압력·유량·장비 품질은 ok."""
+    r = Rig()
+    r.sim.canned["R6"] = ["V+100.0", "P+0.20", None, "50.0"]            # 정상 → 접두어 다름 → 무응답 → 접두어 없음 → (평소 응답)
+    rows = r.run(5)
+    assert all(x["mfc.q"] == "ok" and x["mfc.pressure_mtorr"] is not None and x["mfc.ar_sccm.q"] == "ok" for x in rows)
+    assert [x["mfc.valve_pct.q"] for x in rows] == ["ok", "stale", "stale", "stale", "ok"]
+    assert [x["mfc.valve_pct.age_s"] for x in rows] == [0.0, 1.0, 2.0, 3.0, 0.0] and rows[3]["mfc.valve_pct"] == 100.0
+    assert not r.d.alternate and "read_plan" not in r.kinds()           # R6 무응답 한 번이 읽기 계획을 바꾸지 않는다
+    r.done()
+
+
+def test_valve_read_yields_to_pending_command():
+    """v1 원칙 — 기록용 읽기는 공정 명령보다 뒤: 설정 명령이 진행 중인 tick 에는 R6 를 보내지 않는다(압력·유량은 읽는다)."""
+    r = Rig()
+    r.sim.ignore_writes = {"S2"}                                        # 되읽기 불일치 — 1 s 간격 5회(약 5 s) 동안 명령 진행 중
+    box = []
+    t0 = r.c.monotonic()
+    r.d.set_sp(2, 5.0, on_done=lambda n, why, res: box.append(why))
+    rows = r.run(9)
+    assert box == ["VERIFY_MISMATCH"] and r.d._ops == 0
+    busy = [x for x in rows[:4]]
+    assert all(x["mfc.q"] == "ok" and x["mfc.pressure_mtorr"] is not None and x["mfc.ar_sccm.q"] == "ok" for x in rows)
+    assert all(x["mfc.valve_pct.q"] == "stale" and x["mfc.valve_pct"] is None for x in busy) and r.d.valve_yielded >= 4
+    assert rows[-1]["mfc.valve_pct.q"] == "ok" and rows[-1]["mfc.valve_pct"] == 100.0   # 명령이 끝나면 다시 읽는다
+    sent = [d.decode().strip() for tt, d in r.sim.received if tt >= t0]
+    assert sent.count("R6") == 9 - r.d.valve_yielded and sent.count("R5") == 9
+    r.done()
+
+
+def test_valve_read_skipped_when_it_would_miss_read_deadline():
+    """설정 명령 둘(Q1·R65, L0·R69 — 약 0.6 s)이 읽기 앞에 선 tick: R5·R60 뒤 R6 까지 보내면 읽기 마감(900 ms)을 넘긴다 —
+    R6 를 건너뛰어 압력·유량이 그 행에 제때(ok) 들어간다."""
+    r = Rig()
+    box, rows = [], []
+    cb = lambda n, why, res: box.append(why)
+
+    def hook(t):
+        if t.seq == 1:                                                  # tick 1 시작 때 명령 둘 — 쓰기가 읽기보다 먼저 나간다
+            r.d.set_flow(CH_AR, 20.0, on_done=cb)
+            r.d.set_onoff("1000", on_done=cb)
+    bus = SnapshotBus(r.c, (SF.MFC_BLOCK,), [Source("mfc", r.w, r.d.source_read, ("mfc",), r.cfg["MFC_READ_DEADLINE_MS"])],
+                      r.cfg["TICK_DEADLINE_MS"])
+    loop = TickLoop(r.c, bus, [rows.append])
+    loop.tick_hooks.append(hook)
+    loop.run(4)
+    assert box == [None, None]
+    assert [x["mfc.q"] for x in rows] == ["ok"] * 4 and all(x["mfc.ar_sccm.q"] == "ok" for x in rows)
+    assert [x["mfc.valve_pct.q"] for x in rows] == ["ok", "stale", "ok", "ok"] and r.d.valve_yielded == 1
+    r.done()
+
+
+def test_valve_read_not_blocked_forever_by_lost_command():
+    r = Rig()
+    r.d._ops, r.d._ops_until = 1, r.c.monotonic() + 2.0                 # 끝 콜백을 못 받은 명령(가정) — 기한 뒤에는 다시 읽는다
+    rows = r.run(5)
+    assert rows[0]["mfc.valve_pct.q"] != "ok" and rows[-1]["mfc.valve_pct.q"] == "ok"
     r.done()
 
 

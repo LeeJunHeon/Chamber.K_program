@@ -483,8 +483,11 @@ TICK_PLAN: tuple = (
              "트랜잭션당 10~25 ms(스캔·USB latency) → 30~75 ms", "yes",
              "250 ms 내부 폴링 4회 중 정각 회차를 스냅샷에. 실패 시 재시도 1회 후 그 회차 fail",
              "PLC_READ_DEADLINE_MS"),
-    TickPlan("mfc", ("R60", "R5"), 47.0, "장비 처리 미상 — 간격 100~200 ms 면 약 300~500 ms", "bench",
-             "실측에서 1초에 둘 다 안 되면: R5(압력)는 매초, R60(유량)은 짝수 초 — 유량 필드 own_quality",
+    TickPlan("mfc", ("R5", "R60", "R6"), 60.0,
+             "응답 p50 34·p99 62 ms(10/20 bench) + 명령 간격 MFC_CMD_GAP_MS 150 × 2 → 약 400~490 ms(마감 900 의 60 % = 540 안)",
+             "bench",
+             "1초에 셋 다 안 되면(한 번 읽기 > 마감의 60 %): R5(압력)는 매초, R60(유량)은 짝수 초·R6(밸브 위치)은 홀수 초 — "
+             "유량·밸브 위치 필드 own_quality. R6 는 기록용 — 설정 명령이 진행 중인 tick 에는 보내지 않음(양보)",
              "MFC_READ_DEADLINE_MS"),
     TickPlan("dc", ("MEAS:ALL?",), 28.0, "장비 처리 미상 + 쓰기 뒤 500 ms 규칙", "bench",
              "읽기 t0, 제어 쓰기(CURR) t0+약 100 ms → 다음 읽기까지 약 900 ms. 쓰기 직후 읽기 금지",

@@ -739,6 +739,14 @@ DROPPED: tuple = (
             replaced_by="devices.TICK_PLAN"),
     Dropped("HEATER_SV_LOG_MIN_DELTA_C", "기록 줄이기용 — 1초 스냅샷이 SV 를 남긴다", "device/PLC.py:54"),
     Dropped("HEATER_SV_LOG_MIN_INTERVAL_SEC", "기록 줄이기용", "device/PLC.py:55"),
+    Dropped("MFC_STATE_LOG_ENABLED", "v2 는 1초 스냅샷 기록이 대신함 — mfc.pressure_mtorr(R5)·mfc.valve_pct(R6)를 매초 "
+            "SQLite·일별 CSV 에 남긴다(끄는 스위치 없음)", _JSON, replaced_by="스냅샷 mfc.pressure_mtorr·mfc.valve_pct"),
+    Dropped("MFC_STATE_LOG_INTERVAL_S", "v2 는 1초 스냅샷 기록이 대신함 — 주기는 tick 1 s 고정", _JSON,
+            replaced_by="devices.TICK_PLAN"),
+    Dropped("MFC_STATE_LOG_GAP_MS", "v2 는 1초 스냅샷 기록이 대신함 — 읽기 사이 간격은 MFC_CMD_GAP_MS 하나", _JSON,
+            replaced_by="MFC_CMD_GAP_MS"),
+    Dropped("MFC_STATE_LOG_TIMEOUT_MS", "v2 는 1초 스냅샷 기록이 대신함 — 읽기 응답 제한은 MFC_QUERY_TIMEOUT_MS·"
+            "MFC_READ_DEADLINE_MS", _JSON, replaced_by="MFC_QUERY_TIMEOUT_MS"),
     Dropped("_EXC_SUPPRESS_SEC", "미처리 예외 챗 억제 — 챗은 웹 서버로", "main.py:4751"),
 )
 

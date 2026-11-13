@@ -98,6 +98,8 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
     _f("ar_sccm", F, "sccm", "Ar 유량", ".2f", "R60 ch1 × FS/100", own=True, summary="mean"),
     _f("o2_sccm", F, "sccm", "O₂ 유량", ".2f", "R60 ch2 × FS/100", own=True, summary="mean"),
     _f("pressure_mtorr", F, "mTorr", "챔버 압력", ".2f", "R5 (%FS → mTorr)", summary="mean"),
+    _f("valve_pct", F, "%", "밸브 위치", ".1f", "R6 ('V' 접두어 확인)", own=True, summary="mean",
+       desc="압력 조절 밸브 열림 — 0 닫힘 ~ 100 완전 열림. 기록용 읽기(설정 명령 중에는 양보해 앞 값·stale)"),
     _f("ar_set", F, "sccm", "Ar 설정", ".2f", "core"),
     _f("o2_set", F, "sccm", "O₂ 설정", ".2f", "core"),
     _f("sp_active", I, "", "사용 중 설정점", "d", "core(마지막 D 명령)",
