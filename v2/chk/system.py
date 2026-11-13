@@ -174,7 +174,12 @@ class ChkSystem:
         self.guards = {k: GuardedTransport(transports[k], k, mode, c, on_event=self._ev) for k in DEVICES}
         self.workers = {k: Worker(k, self.guards[k], writes_allowed=wr, fail_streak=c[STREAK[k]],
                                   connect_init_timeout_s=c["CONNECT_INIT_TIMEOUT_SEC"],
-                                  connect_retry_pause_s=c["CONNECT_RETRY_PAUSE_MS"] / 1000.0, on_event=self._ev)
+                                  connect_retry_pause_s=c["CONNECT_RETRY_PAUSE_MS"] / 1000.0,
+                                  # 재연결·두절 설정(COMM_*)을 worker 로 — 예전에는 worker 기본값(설정 기본값과 같은 수)만 썼다
+                                  reconnect_start_s=c["COMM_RECONNECT_START_MS"] / 1000.0,
+                                  reconnect_max_s=c["COMM_RECONNECT_MAX_MS"] / 1000.0,
+                                  long_outage_s=float(c["COMM_LONG_OUTAGE_SEC"]), probe_s=c["COMM_PROBE_MS"] / 1000.0,
+                                  log_every_s=float(c["COMM_OUTAGE_LOG_SEC"]), on_event=self._ev)
                         for k in DEVICES}
         self.recorder: Optional[Recorder] = None
         w = self.workers

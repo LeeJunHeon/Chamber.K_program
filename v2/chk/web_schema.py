@@ -35,6 +35,15 @@
                 버전 14: 순서 고치기 기준 목록 state.run.editBase {revision, blocks}(지금 판의 맨 위 블록 정리 목록 — v1 행·장비 앞면
                 시작·한 행 바로 시작도) — PROCESS_EDIT blocks 는 이것을 고친 것, 비교는 정리 모양. 블록 검사가 정리된 목록의
                 "cfg:키"(설정 기본값)를 비운 값과 같게 받음(정리 목록을 그대로 다시 보내도 통과)
+                버전 15: v1 최신(main 12ecc2d) 반영 + 통신 설정. 히터 HEATER_CTRL_MODE 에 tc2(TC2 단독 제어, 기본값)·설정
+                HEATER_TC2_TC1_WARN_C·HEATER_TC2_TC1_WARN_SEC·HEATER_TC2_HOLDBACK_C·규칙 X27, 매핑 600:846·700:982, 기본 램프 6,
+                스냅샷 heater.ctrl_mode enumLabels(tc2)·사유 HEATER_TC2_TC1_DEVIATION, tc2·tc1 기본 템플릿에는 heater_settle 없음.
+                MFC 설정점 5: pressure 블록 sp 1~5·spDefaultKey "5"·상태 PRESSURE_SP5·설정 SP5_MTORR·SP5_STABILIZE_SEC
+                (WP > SP5_MTORR 이면 SP4 → SP5 설정·선택 → 고정 대기 → SP1), MFC_SP1_VERIFY_TOL → MFC_SP_VERIFY_TOL(0.01),
+                스냅샷 mfc.valve_pct(밸브 위치 %, 자기 품질 열)·mfc.sp_active 0~5, dropped MFC_STATE_LOG_*.
+                params[].choices(int 형식의 허용 숫자 목록 — 있으면 숫자 선택 목록으로 그리고 값은 숫자로 보낸다): *_BAUD·
+                PLC_STOPBITS. 새 설치값 PLC_PARITY·PLC_STOPBITS·DC_DELIMITER 와 통신 시간·횟수 키, paramGroups comm_plc·comm_mfc·
+                comm_dc·comm_rfpulse·comm_ig(장비별 통신 묶음), 규칙 X22(꺼진 장비의 포트 제외)·X42
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -71,7 +80,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 14
+EXPORT_VERSION = 15
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
