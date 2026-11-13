@@ -89,9 +89,12 @@ CASES: List[tuple] = [
                                rf_pulse_freq=25, rf_pulse_duty=10), {"RFPULSE_ENABLED": True}),
     ("err_heater_disabled", _row(use_heater=True, heater_temp=200.0), {"HEATER_ENABLED": False}),
     # 셔터 전 히터 정착(5-15, v1 3328872) — 2단 제어·히터·메인·상한 > 0 이면 셔터 딜레이 뒤·메인 앞
-    ("heater_cascade_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {}),
+    # 기본 tc2(5-17, v1 6e0685b)·tc1 에서는 넣지 않는다 — cascade 전용
+    ("heater_cascade_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {"HEATER_CTRL_MODE": "cascade"}),
+    ("heater_tc2_no_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {}),
     ("heater_tc1_no_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {"HEATER_CTRL_MODE": "tc1"}),
-    ("heater_settle_max_zero", _row(use_heater=True, heater_temp=300.0), {"HEATER_SHUTTER_SETTLE_MAX_SEC": 0.0}),
+    ("heater_settle_max_zero", _row(use_heater=True, heater_temp=300.0),
+     {"HEATER_CTRL_MODE": "cascade", "HEATER_SHUTTER_SETTLE_MAX_SEC": 0.0}),
     ("err_missing_working_pressure", _row(working_pressure=None), {}),
     ("warn_dc_delay_without_dc", _row(use_dc=None, dc_power=None, use_rf=True, rf_power=100.0, use_dc_delay=True), {}),
 ]

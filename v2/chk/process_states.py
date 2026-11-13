@@ -79,7 +79,7 @@ STATES: tuple = (
       desc="레시피 시간만큼. DC ±이탈 감시 시작(arm)"),
     S("HEATER_SETTLE", "셔터 전 히터 정착", A, "param", ("HEATER_SHUTTER_SETTLE_TOL_C", "HEATER_SHUTTER_SETTLE_SEC",
       "HEATER_SHUTTER_SETTLE_MAX_SEC", "HEATER_SHUTTER_SETTLE_FAIL_ACTION"), "proceed",
-      skip_if="히터 미사용·HEATER_CTRL_MODE=tc1·process_time = 0·HEATER_SHUTTER_SETTLE_MAX_SEC = 0", v1="pc HEATER_SETTLE(3328872)",
+      skip_if="히터 미사용·HEATER_CTRL_MODE=tc2·tc1(cascade 전용)·process_time = 0·HEATER_SHUTTER_SETTLE_MAX_SEC = 0", v1="pc HEATER_SETTLE(3328872)",
       desc="TC1 이 목표 ±TOL 안에 SEC 연속이면 통과(승온 대기 통과 뒤부터 셈). 상한 초과는 FAIL_ACTION — abort 면 HEATER_SETTLE_FAILED"),
     S("MAIN", "메인 공정", A, skip_if="process_time = 0", v1="pc:659-680", desc="Main 셔터 열기 → 레시피 시간"),
     # 블록 공정(blocks.BLOCK_DEFS)의 기본 상태 이름 — 기본 템플릿은 위의 v1 이름(stage)을 쓴다
@@ -110,7 +110,9 @@ STEP_SEQUENCE: tuple = (
 FORMULAS: dict = {
     "HEATER_RAMP": "min(max(HEATER_WAIT_TIMEOUT_SEC, 예상 램프 초 + HEATER_WAIT_TIMEOUT_MARGIN_SEC), "
                    "HEATER_WAIT_TIMEOUT_MAX_SEC). 예상 램프 = |목표 − PV| / 램프 속도. "
-                   "2단 제어(HEATER_CTRL_MODE=cascade)면 + 2 × HEATER_CASCADE_TI_SEC(바깥 루프 수렴 여유)",
+                   "2단 제어(HEATER_CTRL_MODE=cascade)면 + 2 × HEATER_CASCADE_TI_SEC(바깥 루프 수렴 여유 — tc2·tc1 은 더하지 않음). "
+                   "통과: tc2 = r1 이 목표에 닿고 TC2 가 SV2 ± HEATER_SOAK_TOLERANCE 안에 HEATER_SOAK_TIME_SEC 연속(TC1 은 기록만) / "
+                   "cascade·tc1 = TC1 이 목표 ± HEATER_SOAK_TOLERANCE 안에 그 시간 연속",
     "POWER_WAIT": "min(max(POWER_WAIT_TIMEOUT_SEC, 예상 × POWER_WAIT_EST_FACTOR + POWER_WAIT_EST_MARGIN_SEC), "
                   "POWER_WAIT_TIMEOUT_MAX_SEC). 예상 = max(DC 전류 램프, RF 목표/RF_RAMP_STEP_W + 3×RF_REFP_WAIT_SEC, "
                   "RF Pulse 20 s)",

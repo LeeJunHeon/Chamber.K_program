@@ -173,7 +173,8 @@ BLOCK_DEFS: tuple = (
           desc="상한 초과 시 proceed(경고 후 진행) / abort(HEATER_SETTLE_FAILED)")),
         "HEATER_SETTLE", watch={"dc": True, "rf": True, "rfp": True, "flow": False, "pressure": False},
         steps="HEATER_SETTLE — TC1 이 목표 ±tol_c 안에 sec 연속(승온 대기 통과 뒤부터 셈)", v1="pc HEATER_SETTLE(3328872)",
-        desc="2단 제어(HEATER_CTRL_MODE=cascade)에서 지금 히터 목표(마지막 승온 블록)에 정착할 때까지. 2단 제어가 돌고 있지 않으면 "
+        desc="2단 제어(HEATER_CTRL_MODE=cascade)에서 지금 히터 목표(마지막 승온 블록)에 정착할 때까지. 2단 제어가 돌고 있지 않으면"
+             "(tc2·tc1 모드 포함 — tc2 는 메인 셔터 열기 직전 TC1·TC2 를 한 줄 기록만 한다) "
              "경고 뒤 다음(HEATER_SETTLE_SKIPPED). DC ±이탈 감시(S31C)를 켠다(v1 _arm_dc_power_monitor)"),
     BlockDef("base_wait", "베이스 압력 대기(IG)", (
         P("target_torr", "float", "Torr", required=True, param_min="BASE_PRESSURE_MIN_TORR", param_max="BASE_PRESSURE_MAX_TORR"),),
@@ -724,7 +725,8 @@ def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bo
         out.append(B("wait", f"Shutter Delay {sd}s", "SHUTTER_DELAY", sec=sd, watch={"dc": True}))
     pt = max(0, int(math.ceil(float(p.get("process_time", 0.0) or 0.0) * 60)))
     if float(p.get("process_time", 0.0) or 0.0) > 0:
-        # 셔터 전 히터 정착(v1 3328872) — 셔터 딜레이 뒤·메인 앞. 2단 제어·히터 사용·HEATER_SHUTTER_SETTLE_MAX_SEC > 0 일 때만
+        # 셔터 전 히터 정착(v1 3328872) — 셔터 딜레이 뒤·메인 앞. 2단 제어(cascade)·히터 사용·HEATER_SHUTTER_SETTLE_MAX_SEC > 0
+        # 일 때만. tc2(기본)·tc1 에서는 넣지 않는다(v1 9b7d074 — tc2 는 셔터 직전 기록 한 줄만)
         if heater_used(p) and HC.ctrl_mode(cfg) == "cascade" and float(cfg["HEATER_SHUTTER_SETTLE_MAX_SEC"]) > 0:
             out.append(B("heater_settle", tol_c=None, sec=None, max_sec=None, fail_action=None))
     if float(p.get("process_time", 0.0) or 0.0) > 0 and pt > 0:

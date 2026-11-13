@@ -96,7 +96,7 @@ def test_connect_pushes_heater_limits_and_marker():
     assert "heater_config_ok" in r.kinds() and "marker_written" in r.kinds()
     assert r.sim.reg("heater_sv_limit") == 7000 and r.sim.reg("heater_ot_limit") == 7500
     assert r.sim.reg("heater_ot2_limit") == 11500 and r.sim.reg("heater_mv_limit") == 1200
-    assert r.sim.reg("heater_ramp_rate") == 2 and r.sim.reg("heater_slow_rate") == 10
+    assert r.sim.reg("heater_ramp_rate") == 1 and r.sim.reg("heater_slow_rate") == 10
     assert r.sim.reg("heater_holdback") == 100 and r.sim.reg("heater_slow_zone") == 100
     assert r.read().value["plc.marker_ok"] is True
     r.done()

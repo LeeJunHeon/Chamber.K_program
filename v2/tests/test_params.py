@@ -42,8 +42,8 @@ def _v1_json() -> dict:
     return {k: v for k, v in data.items() if not k.startswith("//")}
 
 
-def test_v1_json_has_99_entries():
-    assert len(_v1_json()) == 99
+def test_v1_json_has_118_entries():
+    assert len(_v1_json()) == 118          # 5-17: main(12ecc2d) 병합 뒤 — 히터 제어 구조 15개 + MFC 상태 기록 4개
 
 
 def test_every_v1_json_key_is_param_or_dropped():
@@ -62,6 +62,9 @@ def test_defaults_equal_v1_operating_values():
         if k in keymap:
             p = defs[keymap[k]]
             want = v * p.v1_period_s if p.v1_period_s else v          # 횟수 → 시간(횟수 × v1 판정 주기)
+            if k == "HEATER_TC2_MAP":                                # v1 [[TC1, TC2], …] ↔ v2 "TC1:TC2,…"(같은 점인지)
+                from v2.chk.heater_cascade import map_text
+                want = map_text(v)
             if p.default != want or isinstance(p.default, bool) != isinstance(v, bool):
                 diff.append((k, v, p.default))
     assert not diff, diff

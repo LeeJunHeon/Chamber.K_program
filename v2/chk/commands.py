@@ -139,6 +139,7 @@ CHK_REASONS: tuple = (
     Reason("ADJUST_SETTLE_TIMEOUT", "공정 중 수정 뒤 새 목표에 한도 안에 못 감 — 이탈 판정 다시 켬", "info"),
     Reason("HEATER_TC2_LOST", "히터 TC2 상실 — TC1 제어로 전환(히터 계속 운전)", "info"),
     Reason("HEATER_SV2_CAPPED", "히터 TC2 목표 상한 때문에 목표 도달 불가", "info"),
+    Reason("HEATER_TC2_TC1_DEVIATION", "히터 TC1 편차 큼(기록용) — TC2 단독 제어 중 TC1 이 목표에서 멀다. 공정은 계속", "info"),
     Reason("HEATER_DEMOTE_FAILED", "히터 출력 상한 고정 실패(직전 출력 없음) — TC1 제어", "info"),
     Reason("HEATER_SETTLE_SKIPPED", "셔터 전 히터 정착 확인 생략 — 2단 제어가 돌고 있지 않음", "info"),
     Reason("HEATER_SETTLE_TIMEOUT", "셔터 전 히터 정착 미달 — 경고 후 셔터 열고 진행", "info"),

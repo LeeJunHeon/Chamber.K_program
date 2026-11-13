@@ -626,10 +626,10 @@ def test_map_interp_and_extrapolation():
     assert m.slope(10) == pytest.approx(420.0 / 275.0)
 
 
-def test_map_param_validation_and_default_is_v1_b0a945a():
+def test_map_param_validation_and_default_is_v1_6e0685b():
     d = defaults(P.PARAMS)
     assert HC.parse_map(d["HEATER_TC2_MAP"]) == [(25, 25), (50, 92), (100, 170), (150, 226), (200, 290), (250, 365),
-                                                 (300, 437), (400, 569), (500, 705), (600, 842)]
+                                                 (300, 437), (400, 569), (500, 705), (600, 846), (700, 982)]
     assert HC.map_problem(d["HEATER_TC2_MAP"]) is None
     assert "2개 이상" in HC.map_problem("25:25")
     assert "증가" in HC.map_problem("25:25,300:445,200:500")
@@ -637,7 +637,7 @@ def test_map_param_validation_and_default_is_v1_b0a945a():
     from v2.common.paramdef import check_config
     errs = check_config(P.PARAMS, P.CROSS_RULES, dict(d, HEATER_TC2_MAP="25:25,300:445,200:500"))
     assert any(e.startswith("[X26]") for e in errs)
-    assert d["HEATER_CTRL_MODE"] == "cascade" and d["HEATER_SHUTTER_SETTLE_MAX_SEC"] == 900.0
+    assert d["HEATER_CTRL_MODE"] == "tc2" and d["HEATER_SHUTTER_SETTLE_MAX_SEC"] == 900.0      # 기본 tc2(v1 6e0685b)
 
 
 def test_snapshot_fields_follow_v1_csv_columns(tmp_path):

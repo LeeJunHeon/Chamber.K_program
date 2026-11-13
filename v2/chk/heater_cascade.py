@@ -21,6 +21,17 @@
 [알림] alert(kind, data): tc1_detached(TC1 탈락 의심) / tc2_lost(TC1 제어 폴백) / demoted(셔터 열림 중 TC2 상실 → DAC 고정) /
   demote_failed / sv2_capped(SV2 상한으로 도달 불가) — HeaterEngine 이 사건(경고)으로 남기고 TC1 탈락 조치를 한다.
 
+[mode = tc2 — TC2 단독 제어(HEATER_CTRL_MODE=tc2, 기본. v1 770e292 · 2026-11-02 사용자 결정)]
+  히터 출력↔TC2 는 안정적이고 TC1↔TC2 는 TC1 을 다시 꽂을 때마다 통째로 이동했다 — 흔들리는 쪽은 TC1 이다. 그래서 바깥 루프를
+  끄고 SV2 = map(r1) 만 쓴다. 안쪽 루프·진입/해제 핸드셰이크·TC2 상실 처리·셔터 열림 중 상승 보류는 cascade 와 같다. 달라지는 것:
+    · ff·b_int 없음(늘 0), 학습 파일을 읽지도 쓰지도 않는다.
+    · r1 출발점 = 켤 때의 TC2 를 매핑 역함수로 바꾼 값(Tc2Map.inverse — TC1 이 떨어져 있어도 맞게, 상온 아래면 상온).
+    · 홀드백은 TC2 기준 — (SV2 지령 − TC2) > slope(map, r1) × HEATER_TC2_HOLDBACK_C 이면 r1 을 세운다. TC1 은 쓰지 않는다
+      (HEATER_HOLDBACK_C = 래더 D00021·cascade 의 TC1 홀드백과 따로).
+    · TC1 탈락 경보(bias 기반) 없음. 대신 "TC1 편차 안내"(기록용) — 셔터 닫힘 · r1 도달 · |TC2 − SV2| ≤ SOAK_TOL 에서
+      |TC1 − 최종 목표| > HEATER_TC2_TC1_WARN_C 가 HEATER_TC2_TC1_WARN_SEC 이상이면 경고 1줄 + alert tc1_deviation(1회, 제어 영향 없음).
+  cascade 의 동작은 바뀌지 않는다(모든 분기는 self.tc2_only 로 갈린다 — 모드는 쓰는 때 cfg 에서 읽는다).
+
 설정은 쓰는 때 읽는다(HeaterEngine 과 같은 cfg 사전 — 웹 설정 적용이 바꾸면 다음 계산부터). 매핑은 운전 시작 때 다시 읽는다.
 """
 from __future__ import annotations
@@ -50,18 +61,25 @@ MV_FLOOR_MARGIN = 5          # 출력이 MV_MIN + 이 값 이하면 "더 내릴 
 LEARNED_FILE = "heater_tc2_map_learned.json"   # 학습 매핑 파일 이름(v1 과 같은 형식 {"points": [{tc1, tc2, t}]})
 
 # 상태 → 화면/로그 문구(스냅샷 heater.casc_state 의 화면 이름)
+STATE_TEXT_TC2 = {"running": "TC2 제어(단독)", "frozen": "TC2 제어(단독) · 셔터 열림(유지)"}   # mode = tc2 에서 바뀌는 것만
 STATE_TEXT = {
     "idle": "꺼짐", "armed": "RUN 대기", "engaging_sv2": "TC2 제어 진입(SV2 확인)",
     "engaging_sel": "TC2 제어 진입(M0004B 확인)", "running": "TC2 제어", "frozen": "TC2 제어 · 셔터 열림(고정)",
     "tc1": "TC1 제어(폴백)", "dac": "DAC 상한 고정(폴백)",
 }
-CTRL_MODES = ("cascade", "tc1")
+CTRL_MODES = ("tc2", "cascade", "tc1")
+DEFAULT_MODE = "tc2"         # v1 lib/config.py(6e0685b) — 틀린 값도 tc2 로
 
 
 def ctrl_mode(cfg) -> str:
     """지금 히터 제어 구조(HEATER_CTRL_MODE). 부르는 쪽은 모듈 속성으로 부른다(HC.ctrl_mode) — 시험이 롤백 경로를 고정한다."""
-    m = str(cfg.get("HEATER_CTRL_MODE", "cascade") or "").strip().lower()
-    return m if m in CTRL_MODES else "cascade"
+    m = str(cfg.get("HEATER_CTRL_MODE", DEFAULT_MODE) or "").strip().lower()
+    return m if m in CTRL_MODES else DEFAULT_MODE
+
+
+def tc2_pid(cfg) -> bool:
+    """PID 가 RUN 내내 TC2 를 보는 두 모드(cascade·tc2) — HeaterCascade 를 쓰는 공통 경로(v1 main._TC2_PID)."""
+    return ctrl_mode(cfg) in ("cascade", "tc2")
 
 
 def parse_map(text) -> List[tuple]:
@@ -116,6 +134,20 @@ class Tc2Map:
     def value(self, t1: float) -> float:
         (x0, y0), _ = self._seg(float(t1))
         return y0 + self.slope(t1) * (float(t1) - x0)
+
+    def inverse(self, t2: float) -> float:
+        """TC2 → TC1 (value 의 역함수). TC2 기준 구간 선형, 범위 밖은 양 끝 구간 기울기로 외삽(TC2 가 증가하는 매핑 전제)."""
+        t2 = float(t2)
+        p = self.points
+        for i in range(len(p) - 1):
+            if t2 <= p[i + 1][1]:
+                (x0, y0), (x1, y1) = p[i], p[i + 1]
+                break
+        else:
+            (x0, y0), (x1, y1) = p[-2], p[-1]
+        if y1 == y0:
+            return x0
+        return x0 + (x1 - x0) / (y1 - y0) * (t2 - y0)
 
     def text(self) -> str:
         return " ".join(f"{a:g}→{b:g}" for a, b in self.points)
@@ -176,6 +208,9 @@ class HeaterCascade:
     soak_sec = _c("HEATER_SOAK_TIME_SEC")
     zone = _c("HEATER_APPROACH_ZONE_C")
     rmin = _c("HEATER_APPROACH_MIN_RATE_C_PER_MIN")
+    tc1_warn_c = _c("HEATER_TC2_TC1_WARN_C")
+    tc1_warn_sec = _c("HEATER_TC2_TC1_WARN_SEC")
+    tc2_holdback = _c("HEATER_TC2_HOLDBACK_C")       # tc2 모드 홀드백 폭(TC1 눈금 — slope 를 곱해 TC2 눈금으로)
 
     def __init__(self, cfg, port, msg: Callable[[str, str], None], alert: Callable[[str, dict], None],
                  clock: Callable[[], float], wallclock: Callable[[], datetime.datetime] = datetime.datetime.now,
@@ -189,6 +224,21 @@ class HeaterCascade:
         self._learn_warned = False
         self.map = Tc2Map(parse_map(cfg["HEATER_TC2_MAP"]))
         self._reset()
+
+    @property
+    def mode(self) -> str:
+        """"tc2"(TC2 단독) 또는 "cascade" — 쓰는 때 cfg 에서 읽는다(v1 은 콜러블)."""
+        return "tc2" if ctrl_mode(self.cfg) == "tc2" else "cascade"
+
+    @property
+    def tc2_only(self) -> bool:
+        """TC2 단독 제어(mode = tc2) — 바깥 루프·학습·TC1 탈락 경보를 쓰지 않는다."""
+        return self.mode == "tc2"
+
+    def _state_text(self) -> str:
+        if self.tc2_only and self._state in STATE_TEXT_TC2:
+            return STATE_TEXT_TC2[self._state]
+        return STATE_TEXT.get(self._state, self._state)
 
     @property
     def alarm_action(self) -> str:
@@ -244,6 +294,8 @@ class HeaterCascade:
         self._integrating = False
         self._r1_lag = None
         self._ref_ema = None
+        self._dev_t0 = 0.0                         # tc2 모드 TC1 편차 안내
+        self._dev_sent = False
 
     @property
     def state(self) -> str:
@@ -322,7 +374,9 @@ class HeaterCascade:
         return False, None
 
     def status_text(self) -> str:
-        base = STATE_TEXT.get(self._state, self._state)
+        base = self._state_text()
+        if self.engaged() and self.tc2_only:
+            return f"{base} · SV2 {self._fmt(self._sv2_cmd)}"
         if self.engaged():
             return f"{base} · bias {self.bias:+.1f}"
         if self._state == "dac" and self._dac_value is not None:
@@ -333,12 +387,17 @@ class HeaterCascade:
         return {"active": self.is_active(), "state": self._state, "engaged": self.engaged(),
                 "final": self._final, "r1": self._r1, "r1_done": self.r1_done(),
                 "sv2": self._sv2_cmd, "bias": self.bias, "bias_ff": self.bias_ff, "bias_int": self._b_int,
-                "bias_src": self._bias_src, "shutter": self._shutter, "held": self._held}
+                "bias_src": self._bias_src, "shutter": self._shutter, "held": self._held, "mode": self.mode}
 
     def fields(self) -> Dict[str, Any]:
         """스냅샷 heater 블록의 캐스케이드 열(v1 히터 CSV 의 캐스케이드 열과 같은 값). 꺼져 있으면 값 없음."""
         on = self.is_active()
         r = lambda v, n=1: None if v is None else round(float(v), n)
+        if self.tc2_only:                              # 열 이름·순서는 그대로, bias 열만 값 없음(v1 log_fields 의 빈 칸)
+            return {"heater.casc_state": self._state,
+                    "heater.r1": r(self._r1), "heater.r1_lag": r(self._r1_lag), "heater.tc1_ema": r(self._ema),
+                    "heater.sv2_map": r(self._sv2_map) if on else None,
+                    "heater.bias": None, "heater.bias_ff": None, "heater.bias_int": None}
         return {"heater.casc_state": self._state,
                 "heater.r1": r(self._r1), "heater.r1_lag": r(self._r1_lag), "heater.tc1_ema": r(self._ema),
                 "heater.sv2_map": r(self._sv2_map) if on else None,
@@ -347,11 +406,14 @@ class HeaterCascade:
                 "heater.bias_int": round(self._b_int, 2) if on else None}
 
     def settings_text(self) -> str:
+        if self.tc2_only:
+            return (f"매핑 {self.map.text()} · SV2 = map(r1) · 홀드백 TC2 기준(slope × {self.tc2_holdback:g}°C)"
+                    f" · TC1 편차 안내 ±{self.tc1_warn_c:g}°C {self.tc1_warn_sec:g}s(기록용)")
         return (f"매핑 {self.map.text()} · TI {self.ti:g}s · LAG {self.lag:g}s · bias 변화율 ≤{self.bias_rate_max:g}°C/min"
                 f" · |bias| ≤{self.bias_limit:g} · 경보 {self.bias_alarm:g}°C({self.alarm_action})")
 
     def _msg(self, level: str, text: str) -> None:
-        self._msg_fn("warn" if "경고" in level else "info", f"[캐스케이드] {text}")
+        self._msg_fn("warn" if "경고" in level else "info", f"[{'TC2 단독' if self.tc2_only else '캐스케이드'}] {text}")
 
     def _alert(self, kind: str, d: dict) -> None:
         self._alert_fn(kind, d)
@@ -374,6 +436,8 @@ class HeaterCascade:
             self._cap_warned = False
             self._cap_t0 = 0.0
             self._soak_t0 = 0.0
+            self._dev_t0 = 0.0
+            self._dev_sent = False
             self._emit_ramp_counts()
             self._msg("히터", f"목표 변경 {old if old is None else f'{old:.1f}'} → {target:.1f}°C"
                              f" · {self._rate:g}°C/min (r1 {self._fmt(self._r1)})")
@@ -384,6 +448,8 @@ class HeaterCascade:
         self._final = target
         self._rate = rate
         self._label = label or ""
+        if self.tc2_only:
+            return self._start_tc2(target, rate, st)
         self._ff, self._bias_src = self._build_ff(target)
         self._b_int = 0.0
         self._emit_ramp_counts()
@@ -398,6 +464,30 @@ class HeaterCascade:
             est = f" · 예상 {ramp_minutes(target - float(pv), rate, self.zone, self.rmin):.1f}분"
         self._msg("히터", f"시작{_lb}: 목표 TC1 {target:.1f}°C · {rate:g}°C/min{est} · {self._bias_src}"
                          f" · {self.settings_text()}")
+        return True
+
+    def _r1_from_tc2(self, pv2) -> float:
+        """TC2 → TC1 기준 출발점(매핑 역함수). 상온(매핑 첫 점 TC1) 아래면 상온."""
+        return max(float(self.map.points[0][0]), float(self.map.inverse(float(pv2))))
+
+    def _start_tc2(self, target: float, rate: float, st: dict) -> bool:
+        """tc2 모드 새 시작 — 학습 파일을 읽지 않는다(ff 0, b_int 0). 출발점은 TC2 를 매핑 역함수로 바꾼 값."""
+        self._b_int = 0.0
+        self._bias_src = "TC2 단독 — 매핑만(ff·적분 보정 없음)"
+        self._emit_ramp_counts()
+        pv, pv2 = st.get("pv"), st.get("pv2")
+        r0 = self._r1_from_tc2(pv2) if pv2 is not None else (float(pv) if pv is not None else None)
+        if r0 is not None:
+            self._r1_cmd = round(float(r0), 1)
+            self.port.target(self._r1_cmd)
+        _lb = (" " + self._label) if self._label else ""
+        est = ""
+        if r0 is not None and rate > 0 and target > float(r0):
+            est = f" · 예상 {ramp_minutes(target - float(r0), rate, self.zone, self.rmin):.1f}분"
+        src = (f"출발 TC2 {self._fmt(pv2)} (TC1 환산 {self._fmt(r0)})" if pv2 is not None
+               else f"출발 TC2 없음 — TC1 {self._fmt(pv)} 에서")
+        self._msg("히터", f"시작{_lb}: 목표 TC1 {target:.1f}°C → SV2 {self.map.value(target):.1f} (매핑)"
+                         f" · {rate:g}°C/min{est} · {src} · TC1 은 기록만 · 매핑 {self.map.text()}")
         return True
 
     def _emit_ramp_counts(self) -> None:
@@ -427,6 +517,11 @@ class HeaterCascade:
             self.port.sv2(0.0, urgent=True)
         if st_ == "dac":
             self.port.mv_limit(int(self.mv_limit))
+        if self.tc2_only:
+            self._msg("히터", f"종료 ({why}) — r1 {self._fmt(self._r1)} / SV2 {self._fmt(self._sv2_cmd)}"
+                             + (" · TC1 제어 복귀" if st_ in ("running", "frozen") else ""))
+            self._reset()
+            return
         self._msg("히터", f"종료 ({why}) — r1 {self._fmt(self._r1)} / bias {self.bias:+.1f}"
                          f" (ff {self.bias_ff:+.1f} / int {self._b_int:+.1f})"
                          + (" · TC1 제어 복귀" if st_ in ("running", "frozen") else ""))
@@ -514,6 +609,15 @@ class HeaterCascade:
         pv = st.get("pv")
 
         if self._state == "armed":
+            if self._r1 is None and self.tc2_only:
+                # 출발점 = TC2 를 매핑 역함수로 바꾼 값(TC1 이 떨어져 있어도 맞게). TC2 가 없으면 TC1(곧 TC1 제어 폴백)
+                pv2 = st.get("pv2")
+                if pv2 is None and pv is None:
+                    return
+                self._r1 = self._r1_from_tc2(pv2) if pv2 is not None else float(pv)
+                self._ema = None if pv is None else float(pv)
+                self._t_calc = now
+                self._ring.append((now, self._r1))
             if self._r1 is None:
                 if pv is None:
                     return
@@ -535,11 +639,18 @@ class HeaterCascade:
             if not bool(st.get("pv_sel_eff")):
                 self._tc2_lost(st, now, "래더가 TC2 제어를 해제(M0004B OFF)")
                 return
-            if self._shutter and self._state == "running":
+            if self._shutter and self._state == "running" and self.tc2_only:
+                self._state = "frozen"
+                self._dev_t0 = 0.0
+                self._msg("히터", f"메인 셔터 열림 — SV2 {self._fmt(self._sv2_cmd)} 유지")
+            elif not self._shutter and self._state == "frozen" and self.tc2_only:
+                self._state = "running"
+                self._msg("히터", "메인 셔터 닫힘 — TC2 제어 재개")
+            elif self._shutter and self._state == "running":
                 self._state = "frozen"
                 self._msg("히터", f"메인 셔터 열림 — bias {self.bias:+.1f} (ff {self.bias_ff:+.1f} / int {self._b_int:+.1f})"
                                  f" · SV2 {self._fmt(self._sv2_cmd)} 고정")
-            elif not self._shutter and self._state == "frozen":
+            elif not self._shutter and self._state == "frozen" and not self.tc2_only:
                 self._state = "running"
                 self._resume_at = now + self.lag + 2.0 * EMA_TAU_SEC
                 self._msg("히터", f"메인 셔터 닫힘 — TC2 제어 재개 (bias 적분은 "
@@ -735,6 +846,16 @@ class HeaterCascade:
         if self._final is not None and self._r1 is not None:
             if self._final < self._r1:
                 self._r1 = float(self._final)
+            elif not self._held and not frozen and self._rate > 0 and self.tc2_only:
+                # 홀드백(TC2 기준, tc2 모드): TC2 가 SV2 지령보다 slope(map, r1) × TC2_HOLDBACK 이상 처지면 r1 을 세운다
+                pv2 = st.get("pv2")
+                ref2 = (self._sv2_cmd if (self.engaged() and self._sv2_cmd is not None)
+                        else self.map.value(self._r1))
+                behind = (pv2 is not None and (float(ref2) - float(pv2)) > self.map.slope(self._r1) * self.tc2_holdback)
+                if not behind:
+                    dist = float(self._final) - self._r1
+                    step = approach_rate(dist, self._rate, self.zone, self.rmin) * dt / 60.0
+                    self._r1 = min(float(self._final), self._r1 + step)
             elif not self._held and not frozen and self._rate > 0:
                 # 홀드백(TC1 기준): TC1 이 '열 지연을 감안한 기준값' r1(t−LAG) 보다 HOLDBACK 이상 처지면 r1 을 세운다
                 ref = self._r1_lag if self._r1_lag is not None else self._r1
@@ -757,10 +878,18 @@ class HeaterCascade:
             self.port.target(self._r1_cmd)
         if self.r1_done() and not self._done_logged:
             self._done_logged = True
-            self._msg("히터", f"r1 목표 도달 {self._final:.1f}°C (TC1 {self._fmt(pv)})")
+            if self.tc2_only:
+                self._msg("히터", f"r1 목표 도달 {self._final:.1f}°C (TC2 {self._fmt(st.get('pv2'))}"
+                                 f" / SV2 {self._fmt(self._sv2_cmd)} · TC1 {self._fmt(pv)} 기록)")
+            else:
+                self._msg("히터", f"r1 목표 도달 {self._final:.1f}°C (TC1 {self._fmt(pv)})")
 
         if not self.engaged():
             self._integrating = False
+            return
+
+        if self.tc2_only:
+            self._calc_tc2(st, now, frozen)
             return
 
         # ── bias 적분 ──
@@ -812,6 +941,59 @@ class HeaterCascade:
                 self.port.sv2(float(sv2_now))
                 self._msg("히터", f"셔터 열림 중 목표 하강 — SV2 {sv2_now:.1f} 로 내림 ({self._parts()}, int 고정)")
         self._logs(st, now)
+
+    def _calc_tc2(self, st: dict, now: float, frozen: bool) -> None:
+        """tc2 모드 1초 계산 — SV2 = map(r1)(ff·b_int 없음). 셔터 열림 중에는 cascade 와 같이 상승 보류·하강 즉시."""
+        self._integrating = False
+        sv2_now, raw, cap = self._sv2_for(st)
+        sv2_now = round(sv2_now, 1)
+        if not frozen:
+            if self._sv2_cmd is None or sv2_now != round(float(self._sv2_cmd), 1):
+                self._sv2_cmd = sv2_now
+                self.port.sv2(float(sv2_now))
+            self._watch_tc2(st, now, raw, cap)
+        else:
+            self._dev_t0 = 0.0
+            if self._sv2_cmd is not None and sv2_now < round(float(self._sv2_cmd), 1) - 0.05:
+                self._sv2_cmd = sv2_now
+                self.port.sv2(float(sv2_now))
+                self._msg("히터", f"셔터 열림 중 목표 하강 — SV2 {sv2_now:.1f} 로 내림 (map)")
+        self._logs(st, now)
+
+    def _watch_tc2(self, st: dict, now: float, raw: float, cap: float) -> None:
+        """tc2 모드(셔터 닫힘) — SV2 상한 안내 / TC1 편차 안내(기록용, 제어에는 영향 없음)."""
+        pv, pv2 = st.get("pv"), st.get("pv2")
+        if raw > cap and self.r1_done():               # SV2 상한 때문에 매핑 SV2 에 못 미친다
+            if not self._cap_t0:
+                self._cap_t0 = now
+            elif (now - self._cap_t0) >= CAP_WARN_SEC and not self._cap_warned:
+                self._cap_warned = True
+                text = (f"TC2 상한 때문에 목표 도달 불가 — 매핑 SV2 {raw:.1f} > 상한 {cap:.1f}"
+                        f"(= min(D00036, OT2−{self.tc2_margin:g})). 공정은 승온 타임아웃이 판단합니다")
+                self._msg("히터(경고)", text)
+                self._alert("sv2_capped", {"text": text, "cap": cap, "pv": pv})
+        else:
+            self._cap_t0 = 0.0
+        # TC1 편차 안내 — 제어가 TC2 를 SV2 에 붙들고 있는데 TC1 이 최종 목표에서 멀다(TC1 위치·접촉 의심)
+        fin = self._final
+        cond = (fin is not None and pv is not None and pv2 is not None and self._sv2_cmd is not None
+                and self.r1_done() and abs(float(pv2) - float(self._sv2_cmd)) <= self.soak_tol
+                and abs(float(pv) - float(fin)) > self.tc1_warn_c)
+        if not cond:
+            self._dev_t0 = 0.0
+            return
+        if not self._dev_t0:
+            self._dev_t0 = now
+            return
+        if (now - self._dev_t0) >= self.tc1_warn_sec and not self._dev_sent:
+            self._dev_sent = True
+            dev = float(pv) - float(fin)
+            text = (f"TC1 편차 큼(기록용) — TC1 {self._fmt(pv)} / 목표 {float(fin):.1f} (Δ{dev:+.1f}°C,"
+                    f" {self.tc1_warn_sec:.0f}초 이상 > ±{self.tc1_warn_c:g}) · TC2 {self._fmt(pv2)} / SV2"
+                    f" {self._fmt(self._sv2_cmd)}. 제어에는 영향 없음 — TC1 위치/접촉 확인")
+            self._msg("히터(경고)", text)
+            self._alert("tc1_deviation", {"text": text, "pv": pv, "pv2": pv2, "sv2": self._sv2_cmd,
+                                          "final": float(fin), "dev": dev})
 
     def _inner_lagging(self, st: dict, e: float) -> bool:
         """캐스케이드 anti-windup — TC2 가 SV2 보다 (TC1 홀드백을 TC2 눈금으로 바꾼 폭) 이상 처져 있으면 같은 방향으로 감지 않는다."""
@@ -879,7 +1061,11 @@ class HeaterCascade:
             self._text_log_key = key
             self._msg("히터", f"TC1 기준 r1 {self._fmt(self._r1)} → SV2 {self._fmt(self._sv2_cmd)}"
                              f" ({self._parts()})")
-        if (now - self._status_log_t) >= STATUS_LOG_SEC:
+        if (now - self._status_log_t) >= STATUS_LOG_SEC and self.tc2_only:
+            self._status_log_t = now
+            self._msg("히터", f"TC2 {self._fmt(st.get('pv2'))} / SV2 {self._fmt(self._sv2_cmd)} / r1 {self._fmt(self._r1)}"
+                             f" / TC1 {self._fmt(st.get('pv'))}(기록) / MV {self._mv_pct_text(st)}")
+        elif (now - self._status_log_t) >= STATUS_LOG_SEC:
             self._status_log_t = now
             self._msg("히터", f"TC1 {self._fmt(st.get('pv'))} / r1 {self._fmt(self._r1)} / TC2 {self._fmt(st.get('pv2'))}"
                              f" / SV2 {self._fmt(self._sv2_cmd)} / {self._parts()} / {STATE_TEXT.get(self._state)}"
@@ -892,7 +1078,22 @@ class HeaterCascade:
             return f"보정 과대 |bias| {abs(self.bias):.1f} ≥ {self.bias_alarm:g}°C (ff {self.bias_ff:+.1f} / int {self._b_int:+.1f})"
         return None
 
+    def _mv_pct_text(self, st: dict) -> str:
+        """출력 % — st 의 mv_pct(HEATER_MV_MIN=0%, 상한=100%), 없으면 mv 로 계산."""
+        try:
+            if st.get("mv_pct") is not None:
+                return f"{float(st['mv_pct']):.0f}%"
+            mv = st.get("mv")
+            lim = float(st.get("mv_limit") or self.mv_limit)
+            if mv is None or lim <= self.mv_min:
+                return "-"
+            return f"{max(0.0, (float(mv) - self.mv_min) / (lim - self.mv_min) * 100.0):.0f}%"
+        except Exception:
+            return "-"
+
     def _parts(self) -> str:
+        if self.tc2_only:
+            return f"map {self._fmt(self._sv2_map)}"
         return f"map {self._fmt(self._sv2_map)} + ff {self.bias_ff:+.1f} + int {self._b_int:+.1f}"
 
     @staticmethod

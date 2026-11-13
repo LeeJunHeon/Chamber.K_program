@@ -12,8 +12,8 @@ from v2.chk import blocks as BK
 from v2.chk import web_schema as W
 from v2.tools import make_web_block_golden as G
 
-# 기본 설정(HEATER_CTRL_MODE=cascade)으로 만든 골든 — 시험 기본 고정(tc1)을 풀어 같은 조건으로 본다(5-15)
-pytestmark = pytest.mark.cascade
+# 기본 설정(HEATER_CTRL_MODE=tc2, 5-17)으로 만든 골든 — 시험 기본 고정(tc1)을 풀어 설정값 그대로 본다(5-15)
+pytestmark = pytest.mark.ctrl_cfg
 
 
 def test_golden_file_matches_current_code():

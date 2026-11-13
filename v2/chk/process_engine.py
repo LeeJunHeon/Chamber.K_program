@@ -807,6 +807,10 @@ class ProcessEngine:
                 v = float(self.overrides.pop("process.main_remaining"))       # 메인 전에 수정한 길이 — 이 메인 블록이 쓴다
                 self.runner.cur.extra["dur"] = v
                 self._adjust_rec("process", "main_remaining", s.duration_sec, v, "scheduled", "applied", None)
+            if (e.kind == "step" and s.action == "PLC_CMD" and tuple(s.params or ()) == ("MS_button", True)
+                    and self.heater.tc2_only and self.heater.owner == "process"):
+                # TC2 단독(tc2) — 셔터 전 정착 단계 대신 메인 셔터 열기 직전 TC1·TC2 한 줄 기록(대기 없음, v1 9b7d074)
+                self._dev_msg("info", self.heater.tc2_before_shutter_text())
         if e.kind == "step":
             self._emit(ProcEvent("step", e.detail))
         elif e.kind == "warn":

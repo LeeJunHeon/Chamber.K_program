@@ -64,8 +64,9 @@ def _run(rig, n, hooks=None):
 def test_manual_on_engage_retarget_off_order_golden_28a(tmp_path):
     """28a(v2 형식): 수동 ON 300 → D00012 ← 지금 TC1(출발점), RUN → D00035 ← SV2 → (되읽기) M0004A → (M0004B) TC2 제어 →
     30 s 뒤 r1 이 6 °C/min 이면 3 °C 오른다(여기는 설정 12 °C/min). 운전 중 목표 250 은 끊지 않고 목표만. 수동 OFF 는
-    M0004A OFF → D00035=0 → RUN OFF 순서."""
-    c, rig = _rig(tmp_path)
+    M0004A OFF → D00035=0 → RUN OFF 순서. 골든은 12 °C/min 으로 만들었다 — 기본값이 6 으로 바뀌어도(5-17, v1 bb2b0a3)
+    이 시험은 12 를 쓴다(v1 conftest TEST_HEATER_RAMP_RATE_C_PER_MIN 과 같은 방법)."""
+    c, rig = _rig(tmp_path, HEATER_RAMP_RATE_C_PER_MIN=12.0)
     plc = rig.sims["plc"]
     rec, mark = [], {}
 

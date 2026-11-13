@@ -58,8 +58,8 @@ class ChkRig(ChkSystem):
         self.scenario = scenario
         out = Path(out_dir)
         c = dict(defaults(P.PARAMS), **(cfg or {}))
-        if HC.ctrl_mode(c) == "cascade":
-            # 2단 제어 시험대 — TC2 가 매핑을 따르게(기존 tc1 시험의 열 모델은 그대로)
+        if HC.tc2_pid(c):
+            # TC2 PID(cascade·tc2) 시험대 — TC2 가 매핑을 따르게(기존 tc1 시험의 열 모델은 그대로)
             self.sims["plc"].tc2_map = sorted(HC.parse_map(c["HEATER_TC2_MAP"]))
         super().__init__(clock, c, out, sim_transports(clock, self.sims), mode=mode,
                          simple_process=simple_process, store=new_store(out / "config"),

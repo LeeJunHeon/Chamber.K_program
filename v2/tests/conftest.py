@@ -63,18 +63,29 @@ def _mb(v) -> str:
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: 오래 걸리는 시험(골든 하니스·전체 공정 sim 등) — 빠른 시험에서 뺀다")
     config.addinivalue_line("markers", "cascade: HEATER_CTRL_MODE=cascade(2단 제어) 경로로 돌린다 — 표시가 없으면 tc1(롤백 경로)")
+    config.addinivalue_line("markers", "ctrl_cfg: HEATER_CTRL_MODE 를 설정값 그대로 읽는다(기본 tc2 — TC2 단독 제어 시험·묶음 골든)")
 
 
 @pytest.fixture(autouse=True)
 def heater_ctrl_mode(request, monkeypatch):
     """기존 시험은 롤백 경로(HEATER_CTRL_MODE=tc1 — RampProfiler + HeaterHold, 템플릿에 셔터 전 정착 없음)를 그대로 검증한다
-    (v1 3f4cdef conftest 와 같은 방법). 2단 제어 시험은 @pytest.mark.cascade 로 연다 — 설정값(기본 cascade)은 그대로 두고
-    제어 구조를 읽는 함수(heater_cascade.ctrl_mode)만 고정한다(묶음·설정 시험이 기본값을 보도록)."""
+    (v1 3f4cdef conftest 와 같은 방법). 설정값은 그대로 두고 제어 구조를 읽는 함수(heater_cascade.ctrl_mode)만 고정한다
+    (묶음·설정 시험이 기본값을 보도록).
+      표시 없음            → tc1 고정
+      @pytest.mark.cascade → 2단 제어 시험(5-15): 기본값이 tc2 로 바뀐 뒤에도(5-17, v1 6e0685b) 그대로 2단으로 돌게
+                             설정이 tc2(기본)면 cascade 로 읽는다. 설정에 tc1 을 적은 시험은 tc1 그대로
+      @pytest.mark.ctrl_cfg → 설정값 그대로(기본 tc2) — TC2 단독 제어 시험, 기본 설정으로 만든 묶음 골든"""
     from v2.chk import heater_cascade as HC
-    cascade = request.node.get_closest_marker("cascade") is not None
-    if not cascade:
-        monkeypatch.setattr(HC, "ctrl_mode", lambda cfg: "tc1")
-    yield "cascade" if cascade else "tc1"
+    if request.node.get_closest_marker("ctrl_cfg") is not None:
+        yield "cfg"
+        return
+    if request.node.get_closest_marker("cascade") is not None:
+        real = HC.ctrl_mode
+        monkeypatch.setattr(HC, "ctrl_mode", lambda cfg: "cascade" if real(cfg) == "tc2" else real(cfg))
+        yield "cascade"
+        return
+    monkeypatch.setattr(HC, "ctrl_mode", lambda cfg: "tc1")
+    yield "tc1"
 
 
 @pytest.hookimpl(hookwrapper=True)

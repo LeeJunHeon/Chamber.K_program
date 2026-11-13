@@ -221,7 +221,7 @@ def rig(tmp_path, **cfg):
 
 @pytest.mark.slow
 def test_rig_manual_ramp_approach_and_hold(tmp_path):
-    c, r = rig(tmp_path, HEATER_HOLD_MODE="dac")
+    c, r = rig(tmp_path, HEATER_HOLD_MODE="dac", HEATER_RAMP_RATE_C_PER_MIN=12.0)   # 시험 조건은 예전 기본 12(5-17 기본 6)
     rows = []
     r.loop.sinks.append(rows.append)
     r.loop.tick_hooks.append(lambda t: t.seq == 2 and r.heater.manual_on(60.0))
