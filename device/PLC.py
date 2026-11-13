@@ -1005,6 +1005,9 @@ class PLCController(QObject):
             'pid_run':   _bit(HEATER_COIL_PID_RUN),
             'pv_sel':     _bit(HEATER_COIL_PV_SEL),
             'pv_sel_eff': _bit(HEATER_COIL_PV_SEL_EFF),
+            # 메인 셔터(M00009 → P00049) — 같은 폴링에서 방금 읽은 코일 값. 공정 스텝·UI 버튼·래더 어느 쪽이 바꿨든
+            #  PLC 가 가진 실제 값이다(캐스케이드가 셔터 열림 동안 bias·SV2 를 고정하는 근거). 아직 못 읽었으면 None
+            'shutter_open': (bool(self._coils_last['MS_button']) if 'MS_button' in self._coils_last else None),
         }
 
         # 래더는 전부 정상(RUN=On, ITL=On, FAULT=Off)인데 PID 블록만 멈춰
@@ -1253,6 +1256,34 @@ class PLCController(QObject):
         finally:
             self._busy = False
             self._mutex.unlock()
+
+    def _write_heater_c_quiet(self, what: str, reg: int, c: float) -> None:
+        """0.1°C 레지스터 쓰기 — 성공 로그 없음(실패만). 캐스케이드가 1초마다 바꾸는 값(D00012 r1 / D00035 SV2)용.
+        무엇을 왜 썼는지는 heater_cascade 가 'TC1 기준 r1 → SV2 (map + bias)' 로 10초 단위로 남긴다."""
+        if self.instrument is None:
+            return
+        if self._link_down_skip(what):
+            return
+        self._busy = True
+        self._mutex.lock()
+        try:
+            raw = max(0, min(32767, int(round(float(c) / HEATER_TEMP_SCALE))))
+            self._mb(what, self.instrument.write_register, reg, raw, functioncode=6)
+        except Exception as e:
+            self.status_message.emit("PLC(오류)", f"{what} 쓰기 실패: {e}")
+        finally:
+            self._busy = False
+            self._mutex.unlock()
+
+    @Slot(float)
+    def set_heater_target_quiet(self, temp_c: float):
+        """캐스케이드 r1 → D00012 (TC2 이상 시 래더 TC1 제어 폴백용 + 화면/로그의 '목표' 의미 유지)."""
+        self._write_heater_c_quiet("히터 SV(r1)", HEATER_REG_SV, temp_c)
+
+    @Slot(float)
+    def set_heater_sv2_quiet(self, c: float):
+        """캐스케이드 SV2 → D00035. 래더가 D00036 으로 한 번 더 클램프한다."""
+        self._write_heater_c_quiet("TC2 목표(SV2)", HEATER_REG_SV2, c)
 
     @Slot(bool)
     def set_heater_pv_sel(self, on: bool):

@@ -14,6 +14,9 @@ from PyQt6.QtCore import (
 from lib.config import (DC_POWER_DELAY_SEC, MFC_DELAY_MS_VALVE,
                         HEATER_RAMP_RATE_C_PER_MIN, HEATER_SOAK_TOLERANCE, HEATER_SOAK_TIME_SEC,
                         HEATER_HOLD_MODE, HEATER_HOLD_WAIT_SEC, HEATER_HOLD_FAIL_ACTION,
+                        HEATER_CTRL_MODE, HEATER_CASCADE_TI_SEC,
+                        HEATER_SHUTTER_SETTLE_TOL_C, HEATER_SHUTTER_SETTLE_SEC,
+                        HEATER_SHUTTER_SETTLE_MAX_SEC, HEATER_SHUTTER_SETTLE_FAIL_ACTION,
                         HEATER_WAIT_TIMEOUT_SEC, POWER_WAIT_TIMEOUT_SEC,
                         POWER_WAIT_TIMEOUT_MAX_SEC, RF_RAMP_STEP, RF_REFP_WAIT_SEC,
                         DC_RAMP_STEP_A,
@@ -66,6 +69,7 @@ class ActionType(str, Enum):
     HEATER_SET    = "HEATER_SET"     # value: 목표 온도(°C)
     HEATER_WAIT   = "HEATER_WAIT"    # value: 목표 온도(°C)
     HEATER_RAMP   = "HEATER_RAMP"    # value: 램프 속도(°C/min)
+    HEATER_SETTLE = "HEATER_SETTLE"  # value: 공정 히터 목표(°C) — 메인 셔터 열기 직전 TC1 정착 확인(캐스케이드만)
     # 이온 게이지 베이스 압력 대기 — 가스 도입 전 고진공 확인
     IG_FILAMENT_ON  = "IG_FILAMENT_ON"   # 필라멘트 ON(이미 켜져 방출 정상이면 생략)
     IG_BASE_WAIT    = "IG_BASE_WAIT"     # value: 목표 베이스 압력(Torr)
@@ -81,6 +85,35 @@ class ProcessStep:
     duration_sec: Optional[int] = None   # DELAY 용
     timer_purpose: Optional[str] = None  # 'shutter' | 'process' | None
     polling: bool = False                # 이 스텝에서만 MFC 폴링 ON
+
+class SettleTracker:
+    """셔터 전 히터 정착 — TC1 이 목표 ±tol 안에 연속으로 머문 시간. TC1 None(센서 이상)·범위 밖·캐스케이드 최종 목표가
+    공정 목표와 다르면 연속이 끊긴다. 시계를 주입받는다(공정은 time.monotonic, 시뮬레이터·시험은 가상 시계)."""
+
+    def __init__(self, target: float, tol: float, need_sec: float, clock: Callable[[], float] = time.monotonic):
+        self.target, self.tol, self.need = float(target), float(tol), float(need_sec)
+        self._now = clock
+        self.since: Optional[float] = None
+        self.last_pv: Optional[float] = None
+
+    def feed(self, pv, final_ok: bool = True) -> None:
+        self.last_pv = None if pv is None else float(pv)
+        if pv is None or not final_ok or abs(float(pv) - self.target) > self.tol:
+            self.since = None
+        elif self.since is None:
+            self.since = self._now()
+
+    def held_sec(self) -> float:
+        return 0.0 if self.since is None else max(0.0, self._now() - self.since)
+
+    def ok(self) -> bool:
+        return self.since is not None and self.held_sec() >= self.need
+
+
+def _mmss(sec: float) -> str:
+    s = max(0, int(round(float(sec))))
+    return f"{s // 60}:{s % 60:02d}"
+
 
 # ===================== 유틸 : 스레드 안전 호출 =====================
 
@@ -191,15 +224,12 @@ def build_gas_intro_steps(channels: List[int],
     return steps
 
 
-def build_pressure_stage_steps(sp_index: int,
-                               sp_value: float,
-                               label: str,
-                               timeout_sec: float = WAIT_TIMEOUT_SEC,
-                               fail_on_timeout: bool = False) -> List[ProcessStep]:
-    """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝
+def build_pressure_set_on_steps(sp_index: int,
+                                sp_value: float,
+                                label: str) -> List[ProcessStep]:
+    """SP{sp_index} = sp_value 설정 → ON 2개 스텝 (압력 도달 판정 없음)
 
-    fail_on_timeout=True 이면 timeout 시 공정 중단 + Google Chat 알림.
-    False 이면 경고 로그만 남기고 다음 단계 진행.
+    build_pressure_stage_steps 의 앞 두 스텝과 같다. SP5 처럼 도달 판정 대신 고정 대기를 쓰는 단계가 쓴다.
     """
     steps: List[ProcessStep] = []
     set_cmd = f"SP{sp_index}_SET"
@@ -222,6 +252,20 @@ def build_pressure_stage_steps(sp_index: int,
             params=(on_cmd, {}),
         )
     )
+    return steps
+
+
+def build_pressure_stage_steps(sp_index: int,
+                               sp_value: float,
+                               label: str,
+                               timeout_sec: float = WAIT_TIMEOUT_SEC,
+                               fail_on_timeout: bool = False) -> List[ProcessStep]:
+    """SP{sp_index} = sp_value 설정 → ON → WAIT_PRESSURE 3개 스텝
+
+    fail_on_timeout=True 이면 timeout 시 공정 중단 + Google Chat 알림.
+    False 이면 경고 로그만 남기고 다음 단계 진행.
+    """
+    steps: List[ProcessStep] = build_pressure_set_on_steps(sp_index, sp_value, label)
 
     # 3) WAIT_PRESSURE (실제 압력이 setpoint ±10% 안에 3회 연속 들어올 때까지)
     steps.append(
@@ -304,6 +348,7 @@ class SputterProcessController(QObject):
     set_heater_ramp_c     = Signal(float)    # ★ 같은 값의 °C/min — 감속 접근 램프용
     heater_reached        = Signal(dict)     # 공정 소유 히터의 승온 대기 통과 {"pv","target","took_sec","next"} → 챗 카드
     heater_hold_failed    = Signal(dict)     # 유지 모드 진입 실패 {"action","reason","state","elapsed","forced"} → main 이 경고 로그+챗 카드
+    heater_settle_failed  = Signal(dict)     # 셔터 전 정착 미달 {"action","reason","pv","target","tol","need","elapsed"} → main 경고·런 이벤트·챗 카드
     request_hold_force  = Signal(str, object)  # ("tc2"|"dac", 현재 MV) → main 이 HeaterHold.force_*_hold 실행. 결과는 스냅샷 force_result
     # 이온 게이지 — main 이 IonGaugeController.filament_on/off 에 QueuedConnection 으로 잇는다(IG 스레드 객체를 직접 부르지 않는다)
     request_ig_filament_on  = Signal()
@@ -371,6 +416,9 @@ class SputterProcessController(QObject):
 
         self._stop_pending = False
         self._active_loops: list[tuple[str, QEventLoop]] = []
+        # 셔터 전 히터 정착(HEATER_SETTLE) — HEATER_WAIT 통과 뒤부터 TC1 범위 안 연속 시간을 센다(구독은 공정 끝에 해제)
+        self._settle_track: Optional[SettleTracker] = None
+        self._settle_clock: Callable[[], float] = time.monotonic
 
         # 램프다운 대기 루프 핸들
         self._rfdown_wait: Optional[QEventLoop] = None
@@ -605,14 +653,27 @@ class SputterProcessController(QObject):
         )
 
         # ──────────────────────────────────────────────────────────
-        # 압력 step-down 시퀀스: 30(SP4) → 15(SP3) → 5(SP2) → WP(SP1)
+        # 압력 step-down 시퀀스: 30(SP4) → [50(SP5)] → 15(SP3) → 5(SP2) → WP(SP1)
         # 각 단계: SET → ON → WAIT_PRESSURE (실제 압력 도달 대기)
+        #   단, SP5 는 예외 — 값 쓰기·확인 후 60초 고정 대기(도달 판정 없음)
         #
         # WP에 따른 단계 스킵:
-        #   WP >= 15 : SP3, SP2 모두 스킵, SP1만
+        #   WP > 50  : SP5(50) → SP1   (SP3, SP2 스킵)
+        #   WP >= 15 : SP5, SP3, SP2 모두 스킵, SP1만 (WP 가 정확히 50 이면 여기 — 예전과 같다)
         #   WP >= 5  : SP2 스킵, SP3 → SP1
         #   WP < 5   : SP3 → SP2 → SP1 (3단계 모두)
         # ──────────────────────────────────────────────────────────
+
+        # --- SP5 (50.0) : WP > 50 일 때만. 값 쓰기·확인 후 60초 고정 대기(도달 판정 없음) ---
+        if sp1_ui > 50.0:
+            steps.extend(build_pressure_set_on_steps(5, 50.0, "Stage0(SP5)"))
+            steps.append(
+                ProcessStep(
+                    ActionType.DELAY,
+                    "Stage0(SP5): 압력 안정화 대기(60초)",
+                    duration_sec=60,
+                )
+            )
 
         # --- SP3 (15.0) : WP < 15 일 때만 (timeout 180s, 도달 못해도 진행) ---
         if sp1_ui < 15.0:
@@ -658,6 +719,18 @@ class SputterProcessController(QObject):
 
         # Main Shutter
         if float(p.get('process_time', 0.0)) > 0:
+            # 셔터 전 히터 정착 확인(cascade 전용) — 캐스케이드는 셔터가 열린 동안 bias 를 고정하므로 TC1 이 목표에 돌아온 뒤 연다.
+            #  tc1·tc2 모드·히터 미사용·메인 공정 없음·HEATER_SHUTTER_SETTLE_MAX_SEC=0 이면 넣지 않는다(tc2 는 셔터 직전 기록 한 줄만).
+            if (self._heater_used and HEATER_CTRL_MODE == "cascade" and self._casc_mode()
+                    and float(HEATER_SHUTTER_SETTLE_MAX_SEC) > 0):
+                steps.append(ProcessStep(
+                    ActionType.HEATER_SETTLE,
+                    f"셔터 전 히터 정착 확인 (TC1 ±{float(HEATER_SHUTTER_SETTLE_TOL_C):g}°C, "
+                    f"{float(HEATER_SHUTTER_SETTLE_SEC):.0f}s 연속, 상한 {float(HEATER_SHUTTER_SETTLE_MAX_SEC):.0f}s)",
+                    value=heater_temp,
+                    polling=True,           # Shutter Delay 와 같이 MFC 폴링 유지
+                    timer_purpose=None,
+                ))
             steps.append(
                 ProcessStep(
                     ActionType.PLC_CMD,
@@ -740,6 +813,8 @@ class SputterProcessController(QObject):
 
             elif step.action == ActionType.PLC_CMD:
                 btn, st = step.params
+                if str(btn) == 'MS_button' and bool(st) and self._heater_used and self._tc2_only_mode():
+                    self._log_tc2_before_shutter()
                 self.update_plc_port.emit(str(btn), bool(st))
                 QTimer.singleShot(800, self._next_step)  # 릴레이/실린더 여유
 
@@ -798,6 +873,9 @@ class SputterProcessController(QObject):
 
             elif step.action == ActionType.HEATER_WAIT:
                 self._heater_wait(float(step.value or 0.0))
+
+            elif step.action == ActionType.HEATER_SETTLE:
+                self._heater_settle(float(step.value or 0.0))
 
             elif step.action == ActionType.IG_FILAMENT_ON:
                 self._ig_filament_on_step()
@@ -1327,6 +1405,13 @@ class SputterProcessController(QObject):
             except Exception:
                 _timeout_sec = float(HEATER_WAIT_TIMEOUT_SEC)
                 _to_why = "계산 실패 → 기본값 HEATER_WAIT_TIMEOUT_SEC"
+        # 2단(캐스케이드) 제어: r1 이 목표에 닿은 뒤 바깥 루프(bias, 적분 시간 TI)가 매핑 오차를 걷어 낼 여유를 더한다
+        #  (cascade 전용 — TC2 단독은 바깥 루프가 없어 더하지 않는다). r1 도달 판정은 TC2 PID 두 모드 공통이다.
+        _casc = self._tc2_pid_mode()
+        _tc2_only = self._tc2_only_mode()
+        if self._casc_mode():
+            _timeout_sec += 2.0 * float(HEATER_CASCADE_TI_SEC)
+            _to_why += f" + 바깥 루프 수렴 여유 {2.0 * float(HEATER_CASCADE_TI_SEC) / 60:.0f}분(TI×2)"
         timeout_ms = int(_timeout_sec * 1000)
 
         loop = QEventLoop()
@@ -1346,6 +1431,37 @@ class SputterProcessController(QObject):
                 loop.quit(); return
 
             pv = st.get('pv')
+            if _tc2_only:
+                # TC2 단독: 판정은 TC2 − SV2 만. TC1 은 기록(없어도 판정에는 영향 없음 — TC1 이상은 래더가 히터를 멈춘다)
+                state['last_pv'] = None if pv is None else float(pv)
+                pv2 = st.get('pv2')
+                state['last_pv2'] = None if pv2 is None else float(pv2)
+                _cc = self._hold_snapshot().get("casc") or {}
+                elapsed_ms = total_clock.elapsed()
+                if elapsed_ms - state['last_report'] >= 60000:
+                    state['last_report'] = elapsed_ms
+                    self.status_message.emit(
+                        "히터",
+                        f"히터 승온 중 — TC2 {self._f1(pv2)} / SV2 {self._f1(_cc.get('sv2'))}"
+                        f" (TC1 {self._f1(pv)} 기록, 목표 {target_c:.1f}°C), {int(elapsed_ms // 60000)}분 경과")
+                try:
+                    ok_ramp = (bool(_cc.get("active")) and bool(_cc.get("r1_done")) and _cc.get("final") is not None
+                               and abs(float(_cc["final"]) - float(target_c)) <= RAMP_DONE_TOL_C)
+                    in_band = (ok_ramp and pv2 is not None and _cc.get("sv2") is not None
+                               and abs(float(pv2) - float(_cc["sv2"])) <= tol)
+                    state['last_sv2'] = _cc.get("sv2")
+                except Exception:
+                    in_band = False
+                if in_band:
+                    if state['in_band_since'] is None:
+                        clock.start()
+                        state['in_band_since'] = True
+                        self.status_message.emit("공정", f"히터 목표 도달(TC2 기준) — {need_sec}s 유지 확인 중")
+                    elif clock.elapsed() >= need_sec * 1000:
+                        loop.quit()
+                else:
+                    state['in_band_since'] = None
+                return
             if pv is None:          # TC 이상
                 state['in_band_since'] = None
                 return
@@ -1362,11 +1478,17 @@ class SputterProcessController(QObject):
 
             # 램프가 아직 최종 목표에 닿지 않았으면 도달로 보지 않는다.
             #  (허용오차만으로 판정하면 유지 구간이 목표보다 낮은 온도에서 시작된다)
+            #  캐스케이드면 D00019 는 SV2(TC2 목표)라 쓸 수 없다 — 캐스케이드의 r1(TC1 기준값)이 최종 목표에 닿았는지를 본다.
             _ramp_done = True
+            _c = (self._hold_snapshot().get("casc") or {}) if _casc else {}
             try:
-                _svr = st.get('sv_ramp')
-                if _svr is not None:
-                    _ramp_done = abs(float(_svr) - float(target_c)) <= RAMP_DONE_TOL_C
+                if _c.get("active"):
+                    _ramp_done = (bool(_c.get("r1_done")) and _c.get("final") is not None
+                                  and abs(float(_c["final"]) - float(target_c)) <= RAMP_DONE_TOL_C)
+                else:
+                    _svr = st.get('sv_ramp')
+                    if _svr is not None:
+                        _ramp_done = abs(float(_svr) - float(target_c)) <= RAMP_DONE_TOL_C
             except Exception:
                 _ramp_done = True      # 값을 못 읽으면 기존 동작(온도만으로 판정)
 
@@ -1419,10 +1541,15 @@ class SputterProcessController(QObject):
         self.status_message.emit("정보", "히터 온도 도달 완료.")
         _took = int(total_clock.elapsed() // 1000)
         _pv = state.get('last_pv')
-        self.status_message.emit(
-            "히터",
-            f"히터 도달 — {('%.1f' % _pv) if _pv is not None else '--.-'}°C, "
-            f"승온 소요 {_took // 60}분 {_took % 60}초")
+        _record = None
+        if _tc2_only:
+            _record = self._tc2_record_text(state.get('last_pv2'), state.get('last_sv2'), _pv, target_c)
+            self.status_message.emit("히터", f"히터 도달 — {_record}, 승온 소요 {_took // 60}분 {_took % 60}초")
+        else:
+            self.status_message.emit(
+                "히터",
+                f"히터 도달 — {('%.1f' % _pv) if _pv is not None else '--.-'}°C, "
+                f"승온 소요 {_took // 60}분 {_took % 60}초")
         try:
             _nxt = self._steps[self._idx + 1].message if 0 <= self._idx + 1 < len(self._steps) else ""
         except Exception:
@@ -1431,8 +1558,146 @@ class SputterProcessController(QObject):
             _pv2 = (self.plc.get_heater_status() or {}).get('pv2')
         except Exception:
             _pv2 = None
-        self.heater_reached.emit({"pv": _pv, "pv2": _pv2, "target": float(target_c), "took_sec": _took, "next": _nxt})
+        _d = {"pv": _pv, "pv2": _pv2, "target": float(target_c), "took_sec": _took, "next": _nxt}
+        if _record:
+            _d["record"] = _record
+        self.heater_reached.emit(_d)
+        if any(s.action == ActionType.HEATER_SETTLE for s in self._steps[self._idx + 1:]):
+            self._settle_track_start(target_c)
         self._next_step()
+
+    # ==================== 셔터 전 히터 정착(HEATER_SETTLE) ====================
+    def _settle_track_start(self, target_c: float) -> None:
+        """HEATER_WAIT 통과 뒤부터 TC1 범위 안 연속 시간을 센다 — HEATER_SETTLE 에 들어갈 때 이미 맞으면 기다리지 않는다."""
+        self._settle_track_stop()
+        self._settle_track = SettleTracker(target_c, float(HEATER_SHUTTER_SETTLE_TOL_C),
+                                           float(HEATER_SHUTTER_SETTLE_SEC), clock=self._settle_clock)
+        try:
+            self.plc.update_heater_status.connect(self._on_settle_status)
+        except Exception as e:
+            self.status_message.emit("히터(경고)", f"셔터 전 정착 추적 시작 실패: {e!r}")
+
+    def _settle_track_stop(self) -> None:
+        if self._settle_track is None:
+            return
+        self._settle_track = None
+        try:
+            self.plc.update_heater_status.disconnect(self._on_settle_status)
+        except Exception:
+            pass
+
+    def _on_settle_status(self, st: dict) -> None:
+        tr = self._settle_track
+        if tr is None:
+            return
+        c = self._hold_snapshot().get("casc") or {}
+        try:
+            final_ok = c.get("final") is not None and abs(float(c["final"]) - tr.target) <= RAMP_DONE_TOL_C
+        except Exception:
+            final_ok = False
+        tr.feed(st.get('pv'), final_ok=final_ok)
+
+    @staticmethod
+    def _settle_bias_text(c: dict) -> str:
+        try:
+            return (f"bias {float(c.get('bias') or 0.0):+.1f} (ff {float(c.get('bias_ff') or 0.0):+.1f}"
+                    f" / int {float(c.get('bias_int') or 0.0):+.1f})")
+        except Exception:
+            return "bias -"
+
+    def _heater_settle(self, target_c: float) -> None:
+        """메인 셔터 열기 직전 — TC1 이 목표 ±HEATER_SHUTTER_SETTLE_TOL_C 안에 HEATER_SHUTTER_SETTLE_SEC 이상 연속이면 통과.
+        연속 시간은 HEATER_WAIT 통과 뒤부터 센다(이미 맞으면 바로 통과). 상한 초과는 HEATER_SHUTTER_SETTLE_FAIL_ACTION.
+        이 단계 동안 MFC 폴링(step.polling)·DC 파워 감시·STOP/ALL STOP 은 Shutter Delay 와 같다."""
+        tol = float(HEATER_SHUTTER_SETTLE_TOL_C)
+        need = float(HEATER_SHUTTER_SETTLE_SEC)
+        max_sec = float(HEATER_SHUTTER_SETTLE_MAX_SEC)
+        self._arm_dc_power_monitor()
+        c = self._hold_snapshot().get("casc") or {}
+        if not self._casc_mode() or not c.get("active"):
+            self._settle_track_stop()
+            self.status_message.emit("히터(경고)", f"셔터 전 히터 정착 확인 생략 — 캐스케이드가 활성이 아님"
+                                                f" (상태 {c.get('state') or '-'}, 공정이 히터를 소유하지 않음)")
+            self._next_step()
+            return
+        if self._settle_track is None or abs(self._settle_track.target - float(target_c)) > RAMP_DONE_TOL_C:
+            self._settle_track_start(target_c)          # HEATER_WAIT 를 거치지 않은 경우 — 지금부터 센다
+        tr = self._settle_track
+
+        def _pass(waited: float) -> None:
+            pv = tr.last_pv
+            dev = "-" if pv is None else f"{pv - tr.target:+.1f}"
+            self.status_message.emit("히터", f"셔터 전 히터 정착 확인 — TC1 {self._f1(pv)} (목표 {tr.target:.1f}, 편차 {dev})"
+                                            f" · 대기 {_mmss(waited)}")
+            self._settle_track_stop()
+            self._next_step()
+
+        if tr.ok():
+            _pass(0.0)
+            return
+
+        loop = QEventLoop()
+        res = {'fault': False, 'ok': False, 'last_log': -1e9, 'last_stage': -1e9}
+        t0 = self._settle_clock()
+
+        def _on_status(st: dict):
+            if not self._running or self._stop_pending:
+                loop.quit(); return
+            if st.get('fault'):
+                res['fault'] = True; loop.quit(); return
+            if tr.ok():                                  # tr 은 _on_settle_status 가 먼저(먼저 연결) 갱신했다
+                res['ok'] = True; loop.quit(); return
+            el = self._settle_clock() - t0
+            txt = (f"셔터 전 히터 정착 대기 — TC1 {self._f1(st.get('pv'))} / 목표 {tr.target:.1f}"
+                   f" (±{tol:g}, {need:.0f}초 연속 필요, 지금 {tr.held_sec():.0f}초) · "
+                   f"{self._settle_bias_text(self._hold_snapshot().get('casc') or {})}"
+                   f" · 경과 {_mmss(el)} / 상한 {_mmss(max_sec)}")
+            if el - res['last_stage'] >= 1.0:
+                res['last_stage'] = el
+                self.stage_monitor.emit(f"[{self._idx + 1}/{len(self._steps)}] {txt}")
+            if el - res['last_log'] >= 30.0:
+                res['last_log'] = el
+                self.status_message.emit("히터", txt)
+
+        self.plc.update_heater_status.connect(_on_status)
+        self._active_loops = [("heater_settle", loop)]
+        self.status_message.emit("히터", f"셔터 전 히터 정착 대기 시작 — 목표 {float(target_c):.1f}°C ±{tol:g}, "
+                                        f"{need:.0f}초 연속 (지금 {tr.held_sec():.0f}초), 상한 {_mmss(max_sec)}")
+        self._exec_loop_with_timeout(loop, int(max_sec * 1000))
+        try:
+            self.plc.update_heater_status.disconnect(_on_status)
+        except Exception:
+            pass
+        self._active_loops = []
+        waited = self._settle_clock() - t0
+
+        if not self._running or self._stop_pending:
+            return
+        if res['fault']:
+            self._settle_track_stop()
+            self._abort_with_error(f"{self._step_tag()} | 히터 이상 발생(셔터 전 정착 대기 중)")
+            return
+        if res['ok'] or tr.ok():
+            _pass(waited)
+            return
+
+        action = str(HEATER_SHUTTER_SETTLE_FAIL_ACTION)
+        pv = tr.last_pv
+        reason = (f"셔터 전 정착 미달 — TC1 {self._f1(pv)} / 목표 {tr.target:.1f} ±{tol:g}, "
+                  f"{need:.0f}초 연속 못 채움(최장 지금 {tr.held_sec():.0f}초) · 상한 {_mmss(max_sec)} 초과")
+        self._settle_track_stop()
+        self.heater_settle_failed.emit({"action": action, "reason": reason, "pv": pv, "target": float(tr.target),
+                                        "tol": tol, "need": need, "elapsed": int(round(waited))})
+        if action == "abort":
+            self.status_message.emit("히터(경고)", f"{reason} — 공정 중단(HEATER_SHUTTER_SETTLE_FAIL_ACTION=abort)")
+            self._abort_with_error(f"{self._step_tag()} | {reason}")
+            return
+        self.status_message.emit("히터(경고)", f"{reason} — 경고 후 셔터를 열고 진행(HEATER_SHUTTER_SETTLE_FAIL_ACTION=proceed)")
+        self._next_step()
+
+    @staticmethod
+    def _f1(v) -> str:
+        return "--.-" if v is None else f"{float(v):.1f}"
 
     def _hold_snapshot(self) -> dict:
         try:
@@ -1445,6 +1710,8 @@ class SputterProcessController(QObject):
         """온도 조건 통과 뒤, 유지 모드(HeaterHold)가 holding 이 될 때까지 최대 HEATER_HOLD_WAIT_SEC 기다린다.
         True 면 다음으로 진행, False 면 이미 중단(_abort_with_error) 했거나 stop 중이다.
         mode "off" / WAIT 0 / 주입 없음 → 즉시 통과(이전 동작). 어떤 경우에도 무알림 진행은 없다."""
+        if self._tc2_pid_mode():
+            return self._casc_hold_wait(target_c)
         wait_sec = float(HEATER_HOLD_WAIT_SEC)
         snap = self._hold_snapshot()
         mode = str(snap.get("mode") or HEATER_HOLD_MODE or "off")
@@ -1537,6 +1804,99 @@ class SputterProcessController(QObject):
             return True
         self.status_message.emit("히터(경고)", f"유지 모드 진입 실패 — 공정 중단: {reason2}")
         self._abort_with_error(f"{self._step_tag()} | 유지 모드 진입 실패 — {reason2}")
+        return False
+
+    def _casc_mode(self) -> bool:
+        """cascade 전용(바깥 루프·셔터 전 정착)으로 도는가 — main 이 스냅샷 제공자를 주입한 경우에만(단독 테스트는 기존 경로)."""
+        return HEATER_CTRL_MODE == "cascade" and self._hold_state is not None
+
+    def _tc2_pid_mode(self) -> bool:
+        """PID 가 TC2 를 보는 두 모드(cascade·tc2) 공통 경로인가 — r1 도달 판정, TC2 제어 진입 확인."""
+        return HEATER_CTRL_MODE in ("cascade", "tc2") and self._hold_state is not None
+
+    def _tc2_only_mode(self) -> bool:
+        """TC2 단독 제어(tc2) — 승온 판정은 TC2 − SV2, TC1 은 기록만."""
+        return HEATER_CTRL_MODE == "tc2" and self._hold_state is not None
+
+    def _tc2_record_text(self, pv2, sv2, pv, target_c) -> str:
+        """ "TC2 x (SV2 y) · TC1 z (목표 대비 ±d, 기록용)" """
+        try:
+            d = "" if pv is None else f"목표 대비 {float(pv) - float(target_c):+.1f}, "
+        except Exception:
+            d = ""
+        return f"TC2 {self._f1(pv2)} (SV2 {self._f1(sv2)}) · TC1 {self._f1(pv)} ({d}기록용)"
+
+    def _log_tc2_before_shutter(self) -> None:
+        """TC2 단독 — 메인 셔터 열기 직전 TC1·TC2 를 한 줄 남긴다(대기 없음)."""
+        try:
+            st = self.plc.get_heater_status() or {}
+        except Exception:
+            st = {}
+        c = self._hold_snapshot().get("casc") or {}
+        self.status_message.emit("히터", f"셔터 열기 직전 기록 — TC2 {self._f1(st.get('pv2'))} (SV2 {self._f1(c.get('sv2'))})"
+                                        f" · TC1 {self._f1(st.get('pv'))}")
+
+    def _casc_hold_wait(self, target_c: float) -> bool:
+        """캐스케이드: PID 가 이미 TC2 를 보고 있으면(M0004B 확인) 즉시 통과. HeaterHold 의 완화 tc2 / dac 폴백은 타지 않는다.
+        TC2 제어가 아니면(TC2 상실·래더 미지원) HEATER_HOLD_WAIT_SEC 동안 기다리고, 그래도 아니면 HEATER_HOLD_FAIL_ACTION."""
+        def _c():
+            return self._hold_snapshot().get("casc") or {}
+
+        def _desc(c):
+            if c.get("sv2") is not None and c.get("mode") == "tc2":
+                return f"SV2 {float(c['sv2']):.1f}°C, TC2 단독"
+            return (f"SV2 {float(c['sv2']):.1f}°C, bias {float(c.get('bias') or 0.0):+.1f}°C"
+                    if c.get("sv2") is not None else f"상태 {c.get('state')}")
+        c = _c()
+        if c.get("engaged"):
+            self.status_message.emit("히터", f"캐스케이드 TC2 제어 확인 ({_desc(c)})")
+            return True
+        wait_sec = float(HEATER_HOLD_WAIT_SEC)
+        res = {'engaged': None, 'fault': False}
+        if wait_sec > 0:
+            loop = QEventLoop()
+            clock = QElapsedTimer(); clock.start()
+
+            def _on_status(st: dict):
+                if not self._running or self._stop_pending:
+                    loop.quit(); return
+                if st.get('fault'):
+                    res['fault'] = True; loop.quit(); return
+                cc = _c()
+                if cc.get("engaged"):
+                    res['engaged'] = cc; loop.quit()
+
+            self.plc.update_heater_status.connect(_on_status)
+            self._active_loops = [("heater_casc", loop)]
+            self.status_message.emit("히터", f"목표 도달 — 캐스케이드 TC2 제어 대기 (상태 {c.get('state')}, 상한 {wait_sec:.0f}s)")
+            self._exec_loop_with_timeout(loop, int(wait_sec * 1000))
+            try:
+                self.plc.update_heater_status.disconnect(_on_status)
+            except Exception:
+                pass
+            self._active_loops = []
+            if not self._running or self._stop_pending:
+                return False
+            if res['fault']:
+                self._abort_with_error(f"{self._step_tag()} | 히터 이상 발생(TC2 제어 대기 중)")
+                return False
+            if res['engaged']:
+                self.status_message.emit("히터", f"캐스케이드 TC2 제어 확인 ({_desc(res['engaged'])})")
+                return True
+        c = _c()
+        reason = f"캐스케이드가 TC2 제어가 아님(상태 {c.get('state')}) — TC1 제어(래더 기본 경로)로 도달"
+        if wait_sec <= 0:
+            self.status_message.emit("히터(경고)", f"{reason} — HEATER_HOLD_WAIT_SEC=0 이라 그대로 진행")
+            return True
+        action = str(HEATER_HOLD_FAIL_ACTION)
+        info = {"reason": reason, "elapsed": int(wait_sec), "target": float(target_c), "action": action,
+                "state": c.get("state"), "forced": False, "tc2_why": "TC2 제어 아님", "dac_why": "캐스케이드 모드"}
+        self.heater_hold_failed.emit(info)
+        if action == "proceed":
+            self.status_message.emit("히터(경고)", f"{reason} — 경고만 내고 진행(HEATER_HOLD_FAIL_ACTION=proceed)")
+            return True
+        self.status_message.emit("히터(경고)", f"{reason} — 공정 중단")
+        self._abort_with_error(f"{self._step_tag()} | {reason}")
         return False
 
     def _hold_force(self, mode: str, mv, wait_holding_sec: float):
@@ -1649,15 +2009,7 @@ class SputterProcessController(QObject):
         #   - 일반 공정: Shutter Delay에서 arm
         #   - shutter_delay=0 공정: Process Time에서 arm (안전망)
         if purpose in ('shutter', 'process'):
-            try:
-                params = getattr(self, 'current_params', None) or getattr(self, 'params', None) or {}
-                if float((params or {}).get('dc_power', 0.0) or 0.0) > 0.0:
-                    QMetaObject.invokeMethod(
-                        self.dc, 'arm_power_monitor',
-                        Qt.ConnectionType.QueuedConnection
-                    )
-            except Exception as e:
-                self.status_message.emit("DCpower", f"arm_power_monitor 호출 예외: {e!r}")
+            self._arm_dc_power_monitor()
 
         # 모노토닉 시계 시작
         self._delay_clock = QElapsedTimer()
@@ -1673,6 +2025,18 @@ class SputterProcessController(QObject):
         else:
             self.status_message.emit("오류", "타이머 초기화 누락")
             self._next_step()
+
+    def _arm_dc_power_monitor(self) -> None:
+        """DC 파워 ±% abort 감시 활성화(Shutter Delay·Process Time·셔터 전 히터 정착 시작 때). 이미 armed 면 DC 쪽이 무시한다."""
+        try:
+            params = getattr(self, 'current_params', None) or getattr(self, 'params', None) or {}
+            if float((params or {}).get('dc_power', 0.0) or 0.0) > 0.0:
+                QMetaObject.invokeMethod(
+                    self.dc, 'arm_power_monitor',
+                    Qt.ConnectionType.QueuedConnection
+                )
+        except Exception as e:
+            self.status_message.emit("DCpower", f"arm_power_monitor 호출 예외: {e!r}")
 
     def _on_tick(self):
         try:
@@ -1740,6 +2104,7 @@ class SputterProcessController(QObject):
         if self._timer and self._timer.isActive():
             self._timer.stop()
         self._ig_cancel(send_off=False)
+        self._settle_track_stop()
 
         self._stop_rfdown_timeout_timer()
 
@@ -1790,6 +2155,7 @@ class SputterProcessController(QObject):
                 self._timer.stop()
             # 베이스 압력 대기 즉시 정리 + 이번 공정에서 켠 필라멘트를 1회 끄기(best-effort)
             self._ig_cancel(send_off=True)
+            self._settle_track_stop()           # 셔터 전 정착 추적 구독 해제
             self._delay_clock = None
             self._delay_total_sec = 0
             self._timer_purpose = None

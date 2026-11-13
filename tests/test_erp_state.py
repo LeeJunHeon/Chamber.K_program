@@ -74,6 +74,7 @@ class FakeSrc:
     def heater_dev_ok(self): self._r("heater_dev_ok"); return self.dev_ok
     def heater_hold(self): self._r("heater_hold"); return self.hold
     def heater_badge(self): self._r("heater_badge"); return self.badge
+    def heater_tc2_text(self): self._r("heater_tc2_text"); return getattr(self, "tc2", "")
     def heater_recipe(self): self._r("heater_recipe"); return self.recipe
     def indicators(self): self._r("indicators"); return self.ind
     def plc_bits(self): self._r("plc_bits"); return self.bits
@@ -162,7 +163,7 @@ def test_target_groups():
 def test_heater_block_lcd_and_tc2_hold():
     info = {"cur_sv": 512.5, "pid_err": 3, "ot_limit": 650, "run": 1, "fault": 0, "tc_err": None, "wd_err": 1, "ot": 0}
     src = FakeSrc(info=info, dev_ok=1, hold=Hold(True, "tc2"), badge=None, recipe=Recipe(True, {"state": "RAMPING"}),
-                  texts={"heater_sv_big": "600.0", "heater_pv2_label": "TC2 880.0 °C"}, checks={"heater_onoff_button": True})
+                  texts={"heater_sv_big": "600.0"}, tc2="TC2 880.0 °C", checks={"heater_onoff_button": True})
     st = build_state(src)
     h = st["heater"]
     assert (h["curSv"], h["pidErr"], h["otLimit"], h["run"], h["fault"], h["tcErr"], h["wdErr"], h["ot"]) == \

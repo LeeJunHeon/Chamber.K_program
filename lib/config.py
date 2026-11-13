@@ -201,6 +201,125 @@ def _validate_heater_hold_config() -> None:
 
 _validate_heater_hold_config()
 
+# ── 히터 제어 구조(controller/heater_cascade.HeaterCascade) ──
+#  "cascade": 2단 제어. 히터 RUN 동안 처음부터 끝까지 PLC PID 는 TC2 를 본다(M0004A, SV2=D00035).
+#             파이썬이 TC1 기준값 r1 을 램프로 만들고 SV2 = map(r1) + bias 로 내려 준다. bias 는 TC1 이 r1 을
+#             따라가도록 느린 적분으로만 보정한다(비례항 없음). 메인 셔터가 열려 있는 동안은 bias·SV2 고정.
+#             2026-10-27 300°C 런 2건: TC1 직접 제어(Kp 3 / Ti 300)가 TC1 288↔311°C(주기 약 260 s)로 진동해
+#             HEATER_WAIT 90분 타임아웃. 히터→TC2 약 40 s, TC2→TC1 약 65 s 지연이라 고정 Kp 하나로는 전 온도 범위를
+#             안정시킬 수 없다. TC2 루프는 유지 모드 실측 표준편차 0.15~0.2°C 로 안정하다.
+#  "tc1"    : 기존 TC1 직접 제어(RampProfiler + HeaterHold) 그대로 — 롤백용.
+#  "tc2"    : TC2 단독 제어(기본, 2026-11-02 사용자 결정). PID 는 RUN 내내 TC2 를 보고 SV2 = map(r1) 만 쓴다 —
+#             바깥 루프(bias 적분)·학습 보정·TC1 탈락 경보·셔터 전 정착(HEATER_SETTLE)은 쓰지 않는다. TC1 은 기록·안내만.
+#             103개 히터 로그: 히터 출력↔TC2 는 9월부터 안정, TC1↔TC2 는 TC1 을 시료대에 다시 꽂을 때마다 통째로 이동
+#             (TC1 600°C 에 필요한 TC2: 9월 852~860, 10월 초 814~822, 10/27 이후 838~848). 흔들리는 쪽은 TC1 이다.
+#             최근 2단 제어 7런(10/28~11/02)은 250~600°C 에서 TC2 ≈ 1.36 × TC1 + 25, 런 간 ±1~2°C.
+#  되돌리기: config_user.json 의 HEATER_CTRL_MODE 를 "cascade" 또는 "tc1" 로 바꾸고 프로그램을 다시 켠다.
+HEATER_CTRL_MODE = get('HEATER_CTRL_MODE', "tc2")
+# TC1→TC2 기본 매핑 [[TC1, TC2], ...]. 점 사이 선형 보간, 범위 밖은 양 끝 구간 기울기로 외삽.
+#  2026-10-28~29 캐스케이드 3런(수동 300°C, CeO2 #8-3, #8-4)에서 TC2(t) 와 TC1(t+약 75 s) 를 짝지어 구한 평형 관계.
+#  300°C 는 수동 유지 실측 437 과 일치. 600°C 는 두 런(838, 847) 평균.
+#  (예전 값 [[25,25],[300,445],[400,570],[500,695],[600,825]] 은 100~150°C 에서 실제보다 20~40°C, 600°C 에서 13~22°C 낮았다)
+#  2026-11-02: 600 은 2026-10-28~11-02 2단 제어 런의 정상 상태 실측 중앙값 846. 700 은 실측 없음 — 250~600 실측 직선
+#  (기울기 1.36)으로 외삽. 700 위는 마지막 구간 기울기로 외삽(Tc2Map 기존 동작). tc2·cascade 두 모드가 이 매핑을 쓴다.
+HEATER_TC2_MAP = get('HEATER_TC2_MAP', [[25, 25], [50, 92], [100, 170], [150, 226], [200, 290], [250, 365], [300, 437], [400, 569], [500, 705], [600, 846], [700, 982]])
+HEATER_CASCADE_TI_SEC        = get('HEATER_CASCADE_TI_SEC',        600)    # 바깥 루프 적분 시간 [s]
+HEATER_CASCADE_LAG_SEC       = get('HEATER_CASCADE_LAG_SEC',       90)     # TC1 비교 기준 지연 [s] — e = r1(t−LAG) − TC1_ema
+HEATER_CASCADE_BIAS_RATE_MAX = get('HEATER_CASCADE_BIAS_RATE_MAX', 3.0)    # bias 최대 변화율 [°C/min, TC2 기준]
+HEATER_CASCADE_BIAS_LIMIT_C  = get('HEATER_CASCADE_BIAS_LIMIT_C',  150.0)  # |bias| 상한 [°C]
+HEATER_CASCADE_BIAS_ALARM_C  = get('HEATER_CASCADE_BIAS_ALARM_C',  100.0)  # |bias| 가 이 이상 60 s 지속 → TC1 탈락 의심
+# TC1 탈락 의심 시: "abort"(공정 소유면 공정 중단, 히터 레시피면 레시피 중단, 수동이면 경고) | "warn"(경고만)
+HEATER_CASCADE_ALARM_ACTION  = get('HEATER_CASCADE_ALARM_ACTION',  "abort")
+# tc2 모드 TC1 편차 안내(기록용 — 제어에는 영향 없음): 셔터 닫힘 · r1 도달 · |TC2 − SV2| ≤ HEATER_SOAK_TOLERANCE 에서
+#  |TC1 − 최종 목표| > WARN_C 가 WARN_SEC 이상 지속되면 경고 1줄 + 런 이벤트 + 챗 카드 1장(공정은 멈추지 않는다)
+HEATER_TC2_TC1_WARN_C   = get('HEATER_TC2_TC1_WARN_C',   15.0)   # [°C] 허용 3~100
+HEATER_TC2_TC1_WARN_SEC = get('HEATER_TC2_TC1_WARN_SEC', 120)    # [s]  허용 30~1800
+# tc2 모드 홀드백 폭 [°C, TC1 눈금] — (SV2 − TC2) > slope(map, r1) × 이 값이면 r1 을 세운다. HEATER_HOLDBACK_C(D00021) 와 따로 둔다:
+#  램프 중 PLC PI 가 SV2 를 14~27°C 뒤처져 따라가(시뮬레이터) 10 이면 r1 이 오래 멈춰 HEATER_WAIT 타임아웃을 넘었다.
+HEATER_TC2_HOLDBACK_C   = get('HEATER_TC2_HOLDBACK_C',   20.0)   # 허용 2~100
+
+
+def _validate_heater_cascade_config() -> None:
+    """설정이 틀려도 프로그램은 떠야 한다 — 클램프/기본값 복귀만 하고 예외는 던지지 않는다."""
+    global HEATER_CTRL_MODE, HEATER_TC2_MAP, HEATER_CASCADE_ALARM_ACTION
+    _m = str(HEATER_CTRL_MODE or "").strip().lower()
+    if _m not in ("tc2", "cascade", "tc1"):
+        print(f"[Config] HEATER_CTRL_MODE {HEATER_CTRL_MODE!r} → \"tc2\" (허용: tc2 / cascade / tc1)")
+        _m = "tc2"
+    HEATER_CTRL_MODE = _m
+    _def_map = [[25.0, 25.0], [50.0, 92.0], [100.0, 170.0], [150.0, 226.0], [200.0, 290.0], [250.0, 365.0],
+                [300.0, 437.0], [400.0, 569.0], [500.0, 705.0], [600.0, 846.0], [700.0, 982.0]]
+    try:
+        pts = [[float(a), float(b)] for a, b in HEATER_TC2_MAP]
+        ok = len(pts) >= 2 and all(pts[i + 1][0] > pts[i][0] and pts[i + 1][1] > pts[i][1]
+                                   for i in range(len(pts) - 1))
+    except Exception:
+        pts, ok = None, False
+    if not ok:
+        print(f"[Config] HEATER_TC2_MAP {HEATER_TC2_MAP!r} → 기본값 (점 2개 이상, TC1·TC2 모두 증가해야 함)")
+        pts = _def_map
+    HEATER_TC2_MAP = pts
+    for _name, _lo, _hi, _def in (("HEATER_CASCADE_TI_SEC", 60.0, 7200.0, 600.0),
+                                  ("HEATER_CASCADE_LAG_SEC", 0.0, 600.0, 90.0),
+                                  ("HEATER_CASCADE_BIAS_RATE_MAX", 0.1, 60.0, 3.0),
+                                  ("HEATER_CASCADE_BIAS_LIMIT_C", 10.0, 500.0, 150.0),
+                                  ("HEATER_CASCADE_BIAS_ALARM_C", 10.0, 500.0, 100.0),
+                                  ("HEATER_TC2_TC1_WARN_C", 3.0, 100.0, 15.0),
+                                  ("HEATER_TC2_TC1_WARN_SEC", 30.0, 1800.0, 120.0),
+                                  ("HEATER_TC2_HOLDBACK_C", 2.0, 100.0, 20.0)):
+        _raw = globals()[_name]
+        try:
+            _v = float(_raw)
+        except Exception:
+            print(f"[Config] {_name} {_raw!r} → {_def:g}"); _v = _def
+        _c = min(max(_v, _lo), _hi)
+        if _c != _v:
+            print(f"[Config] {_name} {_v:g} → {_c:g} 로 클램프 (허용 {_lo:g}~{_hi:g})")
+        globals()[_name] = _c
+    _a = str(HEATER_CASCADE_ALARM_ACTION or "").strip().lower()
+    if _a not in ("abort", "warn"):
+        print(f"[Config] HEATER_CASCADE_ALARM_ACTION {HEATER_CASCADE_ALARM_ACTION!r} → \"abort\" (허용: abort / warn)")
+        _a = "abort"
+    HEATER_CASCADE_ALARM_ACTION = _a
+
+
+_validate_heater_cascade_config()
+
+# ── 메인 셔터 열기 직전 히터 정착 확인(공정 스텝 HEATER_SETTLE, 캐스케이드 모드에서만) ──
+#  HEATER_WAIT 통과 뒤 가스 도입·압력·파워 동안 TC1 이 내려간 채 셔터가 열리면, 셔터가 열린 동안은 bias 적분을 멈추는
+#  설계라 그 부족분이 증착 내내 남는다(2026-10-28 CeO2 #8-3: 가스 도입 뒤 TC1 598.6 → 594.8, 594.8°C 에서 SV2 고정).
+#  TC1 이 목표 ±TOL 안에 SEC 이상 연속이면 셔터를 연다. 연속 시간은 HEATER_WAIT 통과 뒤부터 센다(이미 맞으면 바로 통과).
+HEATER_SHUTTER_SETTLE_TOL_C       = get('HEATER_SHUTTER_SETTLE_TOL_C',       2.0)        # 허용 폭 ±[°C]
+HEATER_SHUTTER_SETTLE_SEC         = get('HEATER_SHUTTER_SETTLE_SEC',         60)         # 범위 안 연속 시간 [s]
+HEATER_SHUTTER_SETTLE_MAX_SEC     = get('HEATER_SHUTTER_SETTLE_MAX_SEC',     900)        # 대기 상한 [s] — 0 이면 단계 없음
+HEATER_SHUTTER_SETTLE_FAIL_ACTION = get('HEATER_SHUTTER_SETTLE_FAIL_ACTION', "proceed")  # 상한 초과: proceed | abort
+
+
+def _validate_heater_shutter_settle_config() -> None:
+    """설정이 틀려도 프로그램은 떠야 한다 — 클램프/기본값 복귀만 하고 예외는 던지지 않는다."""
+    global HEATER_SHUTTER_SETTLE_FAIL_ACTION
+    for _name, _lo, _hi, _def in (("HEATER_SHUTTER_SETTLE_TOL_C", 0.5, 10.0, 2.0),
+                                  ("HEATER_SHUTTER_SETTLE_SEC", 10.0, 600.0, 60.0),
+                                  ("HEATER_SHUTTER_SETTLE_MAX_SEC", 0.0, 3600.0, 900.0)):
+        _raw = globals()[_name]
+        try:
+            _v = float(_raw)
+        except Exception:
+            print(f"[Config] {_name} {_raw!r} → {_def:g}"); _v = _def
+        _c = min(max(_v, _lo), _hi)
+        if _c != _v:
+            print(f"[Config] {_name} {_v:g} → {_c:g} 로 클램프 (허용 {_lo:g}~{_hi:g})")
+        globals()[_name] = _c
+    _a = str(HEATER_SHUTTER_SETTLE_FAIL_ACTION or "").strip().lower()
+    if _a not in ("proceed", "abort"):
+        print(f"[Config] HEATER_SHUTTER_SETTLE_FAIL_ACTION {HEATER_SHUTTER_SETTLE_FAIL_ACTION!r} → \"proceed\""
+              f" (허용: proceed / abort)")
+        _a = "proceed"
+    HEATER_SHUTTER_SETTLE_FAIL_ACTION = _a
+
+
+_validate_heater_shutter_settle_config()
+
 # 인터락 기준값/공정 파라미터 등
 INTERLOCK_CHECK_INTERVAL = 0.2  # sec
 
@@ -798,6 +917,37 @@ MFC_GAP_MS       = 1000   # 인터커맨드 간격(ms)
 MFC_DELAY_MS     = 1000   # 검증/재시도 지연(ms)
 MFC_DELAY_MS_VALVE = 5000 # 밸브 대기(ms)
 
+# ── MFC 압력·밸브 상태 1초 CSV(mfc/MFC_YYYYMMDD.csv) — 저우선 읽기(R5·R6), 일반 명령이 있으면 양보한다 ──
+#  기본 꺼짐. 켜면 프로그램 시작 때 MFC 포트를 미리 열고 INTERVAL_S 마다 압력(R5)·밸브 위치(R6)를 읽어 남긴다.
+MFC_STATE_LOG_ENABLED    = get('MFC_STATE_LOG_ENABLED',    False)
+MFC_STATE_LOG_INTERVAL_S = get('MFC_STATE_LOG_INTERVAL_S', 1.0)   # 기록 주기(초). 0.5~60
+MFC_STATE_LOG_GAP_MS     = get('MFC_STATE_LOG_GAP_MS',     100)   # 기록 읽기 뒤 간격(ms). 50~1000 (MFC_GAP_MS 와 별개)
+MFC_STATE_LOG_TIMEOUT_MS = get('MFC_STATE_LOG_TIMEOUT_MS', 500)   # 기록 읽기 응답 대기(ms). 100~MFC_TIMEOUT (MFC_TIMEOUT 과 별개)
+
+
+def _validate_mfc_state_log_config() -> None:
+    """범위를 벗어나거나 형식이 틀리면 안전한 쪽으로 클램프한다. 예외는 던지지 않는다."""
+    global MFC_STATE_LOG_ENABLED, MFC_STATE_LOG_INTERVAL_S, MFC_STATE_LOG_GAP_MS, MFC_STATE_LOG_TIMEOUT_MS
+    MFC_STATE_LOG_ENABLED = MFC_STATE_LOG_ENABLED is True
+    for name, lo, hi, dflt, cast in (
+            ("MFC_STATE_LOG_INTERVAL_S", 0.5, 60.0, 1.0, float),
+            ("MFC_STATE_LOG_GAP_MS", 50, 1000, 100, int),
+            ("MFC_STATE_LOG_TIMEOUT_MS", 100, MFC_TIMEOUT, 500, int)):
+        raw = globals()[name]
+        try:
+            v = cast(raw)
+        except Exception:
+            print(f"[Config] {name} {raw!r} → {dflt} (숫자가 아님)")
+            v = dflt
+        if not (lo <= v <= hi):
+            new = cast(min(max(v, lo), hi))
+            print(f"[Config] {name} {v} → {new} 로 클램프 ({lo}~{hi})")
+            v = new
+        globals()[name] = v
+
+
+_validate_mfc_state_log_config()
+
 MFC_SCALE_FACTORS = {
     1: 1.0,  # Channel 1 (Ar)
     2: 1.0,  # Channel 2 (O2)
@@ -805,7 +955,7 @@ MFC_SCALE_FACTORS = {
 
 MFC_PRESSURE_SCALE    = 0.1   # UI ↔ HW 스케일 (UI 2.00 ↔ HW 0.20)
 MFC_PRESSURE_DECIMALS = 2     # UI 표시 소수 자리
-MFC_SP1_VERIFY_TOL    = 0.1   # SP1_SET 검증 허용 오차(장비 단위)
+MFC_SP_VERIFY_TOL     = 0.01  # SP1/2/3/5_SET 검증 허용 오차(장비 단위 % F.S. — UI 로는 ±0.1)
 
 # MFC 명령어 (고정 — 장비 프로토콜)
 MFC_COMMANDS = {
@@ -818,7 +968,11 @@ MFC_COMMANDS = {
     'READ_FLOW':      lambda channel: f"R6{int(channel)}",
     'READ_MFC_ON_OFF_STATUS': "R69",
     'READ_PRESSURE':  "R5",
+    # 세트포인트 값 읽기(GPC3000 매뉴얼 RS-232): SP1~SP3 = R1~R3, SP5 = R10 (R5 는 압력 읽기). 응답 "Sn+값"
     'READ_SP1_VALUE': "R1",
+    'READ_SP2_VALUE': "R2",
+    'READ_SP3_VALUE': "R3",
+    'READ_SP5_VALUE': "R10",
     'READ_VALVE_POSITION': "R6",
     'READ_SYSTEM_STATUS':  "R7",
     'READ_FLOW_SET':  lambda channel: f"R6{4+int(channel)}",
@@ -829,10 +983,12 @@ MFC_COMMANDS = {
     'SP2_ON':  "D2",
     'SP3_ON':  "D3",
     'SP4_ON':  "D4",
+    'SP5_ON':  "D5",
     'SP1_SET': lambda value: f"S1 {value}",
     'SP2_SET': lambda value: f"S2 {value}",
     'SP3_SET': lambda value: f"S3 {value}",
     'SP4_SET': lambda value: f"S4 {value}",
+    'SP5_SET': lambda value: f"S5 {value}",
 }
 
 # === Chamber-K NAS CSV 로그 경로 (lib/paths.py 에서 정한다. 개발 모드면 저장소 _dev_logs) ===

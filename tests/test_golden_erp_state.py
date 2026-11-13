@@ -18,7 +18,7 @@ from test_golden_process import H, check_golden   # noqa: F401
 
 _BUTTONS = ("MV_button", "Ar_Button", "Door_Button", "G1_checkbox", "G2_checkbox")
 _TEXTS = ("G1_edit", "G2_edit", "heater_pv_edit", "heater_status_label", "heater_sv_big",
-          "heater_dev_label", "heater_pv2_label")
+          "heater_dev_label", "heater_pv2_edit", "heater_sv2_label")
 
 
 def _quiet_reset(h):
@@ -35,6 +35,7 @@ def _quiet_reset(h):
         (t.setPlainText if hasattr(t, "setPlainText") else t.setText)("")
         t.blockSignals(False)
     w.ui.heater_sv_edit.setText("")
+    w._heater_tc2_text = ""                            # ERP lcd.tc2(예전 TC2 한 줄 라벨을 비우던 것과 같게)
     w._erp_heater = {}
     w._erp_heater_dev_ok = False
     w._heater_badge = None
