@@ -18,9 +18,12 @@ V1_MFC = {
     "MFC_ZEROING": lambda channel: f"L{4+channel} 1",                 # config.py:815
     "FLOW_SET": lambda channel, value: f"Q{channel} {value}",          # config.py:816 — value = float(params["value"]), MFC.py:609
     "VALVE_OPEN": "O", "VALVE_CLOSE": "C", "PS_ZEROING": "Z1",         # config.py:825-827
-    "SP1_ON": "D1", "SP2_ON": "D2", "SP3_ON": "D3", "SP4_ON": "D4",    # config.py:828-831
+    "SP1_ON": "D1", "SP2_ON": "D2", "SP3_ON": "D3", "SP4_ON": "D4", "SP5_ON": "D5",   # config.py MFC_COMMANDS(SP5 — fa85e15)
     "SP1_SET": lambda value: f"S1 {value}", "SP2_SET": lambda value: f"S2 {value}",   # config.py:832-835
     "SP3_SET": lambda value: f"S3 {value}", "SP4_SET": lambda value: f"S4 {value}",
+    "SP5_SET": lambda value: f"S5 {value}",                            # fa85e15
+    # 설정점 값 읽기: SP1~SP3 = R1~R3, SP5 = R10(R5 는 압력) — fa85e15
+    "READ_SP1_VALUE": "R1", "READ_SP2_VALUE": "R2", "READ_SP3_VALUE": "R3", "READ_SP5_VALUE": "R10", "READ_PRESSURE": "R5",
 }
 V1_MFC_PRESSURE_SCALE, V1_MFC_PRESSURE_DECIMALS = 0.1, 2              # config.py:806-807
 
@@ -56,8 +59,8 @@ def test_mfc_flow_set_same_as_v1(ch, value):
     assert cmd == V1_MFC["FLOW_SET"](channel=ch, value=float(value))
 
 
-@pytest.mark.parametrize("n", [1, 2, 3, 4])
-@pytest.mark.parametrize("mtorr", SPS)
+@pytest.mark.parametrize("n", [1, 2, 3, 4, 5])
+@pytest.mark.parametrize("mtorr", SPS + [50.0])
 def test_mfc_sp_set_same_as_v1(n, mtorr):
     cmd, _ = sp_cmd(n, mtorr, 1.0)                                     # FS 1 Torr(E11·F01, 10/20 bench)
     assert cmd == V1_MFC[f"SP{n}_SET"](value=v1_sp_value(mtorr))

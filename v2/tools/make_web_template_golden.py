@@ -27,7 +27,7 @@ CFG_KEYS: tuple = (
     "RFPULSE_MAX_POWER", "RFPULSE_DUTY_MIN", "RFPULSE_DUTY_MAX", "RFPULSE_PULSE_FREQ_MIN_HZ", "RFPULSE_PULSE_FREQ_MAX_HZ",
     "RFPULSE_PULSE_MIN_EDGE_US", "RFPULSE_ENABLED", "IG_ENABLED", "HEATER_ENABLED", "HEATER_MAX_TEMP",
     "HEATER_RECIPE_RAMP_MAX_C_PER_MIN", "HEATER_RAMP_RATE_C_PER_MIN", "RF_CAL_OFFSET", "RF_CAL_GAIN",
-    "GAS_STABILIZE_SEC", "SP2_MTORR", "SP3_MTORR", "DC_POWER_DELAY_SEC",
+    "GAS_STABILIZE_SEC", "SP2_MTORR", "SP3_MTORR", "SP5_MTORR", "SP5_STABILIZE_SEC", "DC_POWER_DELAY_SEC",
     "HEATER_CTRL_MODE", "HEATER_SHUTTER_SETTLE_MAX_SEC",
 )
 
@@ -75,6 +75,10 @@ CASES: List[tuple] = [
     ("wp_below_sp2", _row(working_pressure=2.0), {}),
     ("wp_between_sp2_sp3", _row(working_pressure=8.0), {}),
     ("wp_above_sp3", _row(working_pressure=20.0), {}),
+    # SP5 단계(5-17, v1 a78b5ce·f5780ca) — WP > SP5_MTORR 일 때만: SP5 설정·선택 → 고정 대기 → SP1. WP = SP5_MTORR 은 단계 없음
+    ("wp_above_sp5", _row(working_pressure=60.0), {}),
+    ("wp_equal_sp5_no_stage", _row(working_pressure=50.0), {}),
+    ("wp_above_sp5_cfg", _row(working_pressure=45.0), {"SP5_MTORR": 40.0, "SP5_STABILIZE_SEC": 30.0}),
     ("dc_delay", _row(use_dc_delay=True), {}),
     ("dc_delay_zero_cfg", _row(use_dc_delay=True), {"DC_POWER_DELAY_SEC": 0}),
     ("shutter_delay", _row(shutter_delay=1.5), {}),

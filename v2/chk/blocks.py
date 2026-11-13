@@ -59,7 +59,7 @@ COND_FIELDS: tuple = (
 COND_OPS: tuple = (("le", "≤ 값"), ("ge", "≥ 값"), ("near", "값 ± 허용"))
 
 SHUTTERS: tuple = (("g1", "S1_button", "Gun Shutter 1"), ("g2", "S2_button", "Gun Shutter 2"), ("ms", "MS_button", "Main Shutter"))
-SP_DEFAULT_KEY = {2: "SP2_MTORR", 3: "SP3_MTORR", 4: "SP4_MTORR"}
+SP_DEFAULT_KEY = {2: "SP2_MTORR", 3: "SP3_MTORR", 4: "SP4_MTORR", 5: "SP5_MTORR"}
 
 AUTO_END_STOP_LABEL = "자동 끝 정지"
 HEATER_RAMP_MIN = 6.0                  # °C/min — 래더 분해능(0 < 값 < 6 은 6 으로, 경고)
@@ -189,9 +189,9 @@ BLOCK_DEFS: tuple = (
         "GAS_INTRO", steps="MFC_ZEROING · PS_ZEROING · 차단밸브 열기 · FLOW_SET · FLOW_ON(유량 안정화)",
         v1="pc:560 build_gas_intro_steps"),
     BlockDef("pressure", "압력 설정", (
-        P("sp", "int", "", required=True, min=1, max=4, desc="설정점 번호"),
+        P("sp", "int", "", required=True, min=1, max=5, desc="설정점 번호"),
         P("value", "float", "mTorr", None, min=0.0, max=1000.0, min_exclusive=True,
-          desc="비우면 SP2·SP3·SP4 는 SP2_MTORR·SP3_MTORR·SP4_MTORR, SP1 은 필요(레시피 작업 압력)"),
+          desc="비우면 SP2·SP3·SP4·SP5 는 SP2_MTORR·SP3_MTORR·SP4_MTORR·SP5_MTORR, SP1 은 필요(레시피 작업 압력)"),
         P("set", "bool", default=True, desc="S{n} 쓰기(되읽기)"), P("select", "bool", default=True, desc="D{n} 선택(R7 확인)"),
         P("wait", "bool", default=True, desc="도달 대기"),
         P("tol_ratio", "float", "비율", "cfg:PRESSURE_WAIT_TOL_RATIO", min=0.01, max=0.5),
@@ -199,7 +199,7 @@ BLOCK_DEFS: tuple = (
         P("timeout_sec", "float", "s", None, min=0.0, max=7200.0, min_exclusive=True,
           desc="비우면 SP1 은 SP1_TIMEOUT_SEC, 그 밖은 PRESSURE_STAGE_TIMEOUT_SEC"),
         P("on_timeout", "enum", "", None, enum=_ON_TIMEOUT, desc="비우면 SP1 은 abort(SP1_TIMEOUT), 그 밖은 continue(경고)")),
-        "PRESSURE_SP1", ("PRESSURE_SP2", "PRESSURE_SP3", "PRESSURE_SP4", "GAS_STABILIZE"),
+        "PRESSURE_SP1", ("PRESSURE_SP2", "PRESSURE_SP3", "PRESSURE_SP4", "PRESSURE_SP5", "GAS_STABILIZE"),
         steps="SPn_SET · SPn_ON · WAIT_PRESSURE", v1="pc:565-630", desc="stage 를 비우면 PRESSURE_SP{n}"),
     BlockDef("valve", "MFC 밸브", (P("action", "enum", "", required=True, enum=("open", "close", "hold"),
                                     desc="O 열기 / C 닫기 / H 그 자리 정지 [MFC p.74]"),),
@@ -229,7 +229,7 @@ BLOCK_DEFS: tuple = (
         "GAS_OFF", steps="FLOW_OFF · 차단밸브 닫기", v1="heater_atmosphere 해제 순서"),
     BlockDef("heater_off", "히터 끄기", (), "HEATER_OFF", steps="HEATER_OFF(RUN=0·램프 원복)", v1="pc _heater_off"),
     BlockDef("wait", "대기", (P("sec", "float", "s", required=True, min=0.0, max=7 * 86400.0), _WATCH(None)),
-        "WAIT", ("GAS_STABILIZE", "DC_DELAY", "SHUTTER_DELAY"), watch=dict(WATCH_DEFAULT), steps="DELAY",
+        "WAIT", ("GAS_STABILIZE", "PRESSURE_SP5", "DC_DELAY", "SHUTTER_DELAY"), watch=dict(WATCH_DEFAULT), steps="DELAY",
         v1="pc:565-579·632-657", desc="공정 중 수정 process.skip_wait 로 바로 끝낼 수 있다"),
     BlockDef("main", "메인", (
         P("sec", "float", "s", required=True, min=0.0, max=7 * 86400.0, min_exclusive=True),
@@ -296,8 +296,8 @@ _UI: Dict[str, tuple] = {
         "o2": ("O₂ 사용", ""), "o2_flow": ("O₂ 유량", "O₂ 를 쓰면 필요. 상한은 O₂ MFC 풀스케일"),
         "zero": ("영점 맞추기", "가스를 넣기 전에 MFC 유량·압력 영점을 맞춤", _ADV)}),
     "pressure": ("gas", "MFC 압력 설정점에 값을 쓰고 그 설정점으로 제어한 뒤, 압력이 들어올 때까지 기다립니다", ("sp", "value"), {
-        "sp": ("설정점 번호", "1 = 작업 압력(SP1), 2·3·4 = 중간 단계 압력"),
-        "value": ("압력", "비우면 SP2·SP3·SP4 는 설정의 단계 압력. SP1 은 설정점에 값을 쓸 때 값이 필요"),
+        "sp": ("설정점 번호", "1 = 작업 압력(SP1), 2·3·4·5 = 중간 단계 압력"),
+        "value": ("압력", "비우면 SP2·SP3·SP4·SP5 는 설정의 단계 압력. SP1 은 설정점에 값을 쓸 때 값이 필요"),
         "set": ("설정점에 값 쓰기", "끄면 설정점에 들어 있는 값을 그대로 씀", _ADV),
         "select": ("이 설정점으로 제어", "끄면 값만 써 두고 제어 설정점은 그대로", _ADV),
         "wait": ("도달 대기", "끄면 압력이 들어오기를 기다리지 않고 다음 블록으로"),
@@ -466,7 +466,7 @@ STAGE_TO_TYPE: Dict[str, str] = {
     "PRE_CLEAN": "pre_clean", "GAS_PRE": "gas_prep", "HEATER_RAMP": "heater_wait", "HEATER_HOLD_WAIT": "heater_wait",
     "BASE_WAIT": "base_wait", "GAS_INTRO": "gas_intro", "GAS_STABILIZE": "wait", "GUN_SHUTTER": "shutter",
     "POWER_WAIT": "power_on", "PRESSURE_SP1": "pressure", "PRESSURE_SP2": "pressure", "PRESSURE_SP3": "pressure",
-    "PRESSURE_SP4": "pressure", "DC_DELAY": "wait", "SHUTTER_DELAY": "wait", "MAIN": "main", "WAIT": "wait",
+    "PRESSURE_SP4": "pressure", "PRESSURE_SP5": "pressure", "DC_DELAY": "wait", "SHUTTER_DELAY": "wait", "MAIN": "main", "WAIT": "wait",
     "COND_WAIT": "cond_wait", "VALVE": "valve", "SHUTTER": "shutter", "POWER_OFF": "power_off", "GAS_OFF": "gas_off",
     "HEATER_OFF": "heater_off", "HEATER_SETTLE": "heater_settle",
 }
@@ -710,6 +710,14 @@ def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bo
     out.append(B("power_on", dc_power=dc_w or None, rf_power=rf_w or None, rfp_power=rfp_w or None,
                  rfp_freq_khz=(fhz / 1000.0) if (rfp_w and fhz is not None) else None,
                  rfp_duty=p.get("rf_pulse_duty") if rfp_w else None, wait=True, timeout_sec=None))
+    # SP5(v1 a78b5ce·f5780ca): WP > SP5_MTORR(50) 일 때만 — SP5 값 쓰기(R10 되읽기)·선택 뒤 SP5_STABILIZE_SEC 고정 대기
+    #   (압력 도달 판정 없음). WP 가 정확히 SP5_MTORR 이면 넣지 않는다(v1 과 같게). WP ≤ SP5_MTORR 의 블록 목록은 그대로.
+    sp5 = float(cfg["SP5_MTORR"])
+    if sp1 > sp5:
+        hold = int(round(cfg["SP5_STABILIZE_SEC"]))
+        out.append(B("pressure", "Stage0(SP5)", "PRESSURE_SP5", sp=5, value=sp5, set=True, select=True, wait=False,
+                     tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
+        out.append(B("wait", f"Stage0(SP5): 압력 안정화 대기({hold}초)", "PRESSURE_SP5", sec=hold, watch=None))
     sp3, sp2 = float(cfg["SP3_MTORR"]), float(cfg["SP2_MTORR"])
     for n, spv, lab in ((3, sp3, "Stage1(SP3)"), (2, sp2, "Stage2(SP2)")):
         if sp1 < spv:
@@ -995,7 +1003,7 @@ ADJUST_ITEMS: tuple = (
                                                   required=True),
                "Q2 쓰기 → R66 되읽기(MfcDriver.set_flow)", "Ch2 유량을 이미 설정했으면", ("S38A",)),
     AdjustItem("mfc", "wp", "mfc.wp", P("value", "float", "mTorr", min=0.0, max=1000.0, min_exclusive=True, required=True),
-               "S1 쓰기 → R1 되읽기 5회(MfcDriver.set_sp). SP1 도달 대기 중이면 목표·안정 시간 다시",
+               "S1 쓰기 → R1 되읽기(MfcDriver.set_sp — MFC_VERIFY_TRIES 회). SP1 도달 대기 중이면 목표·안정 시간 다시",
                "SP1 을 이미 썼으면", ("S38B",)),
     AdjustItem("dc", "power", "dc.power", P("value", "float", "W", min=0.0, min_exclusive=True, param_max="DC_MAX_POWER",
                                             required=True),

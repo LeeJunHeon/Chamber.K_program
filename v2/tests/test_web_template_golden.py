@@ -38,7 +38,7 @@ def test_golden_cases_cover_and_cfg_keys_exact():
     d = G.build(read)
     assert read == set(G.CFG_KEYS)                                       # 검사·템플릿이 읽는 설정 키 = 파일의 cfg 키
     cases = d["cases"]
-    assert 20 <= len(cases) <= 45 and len({c["name"] for c in cases}) == len(cases)
+    assert 20 <= len(cases) <= 50 and len({c["name"] for c in cases}) == len(cases)
     ok = [c for c in cases if not c["checkErrors"]]
     bad = [c for c in cases if c["checkErrors"]]
     assert len(bad) >= 5 and all(c["params"] is None and c["blocks"] is None for c in bad)
@@ -57,6 +57,13 @@ def test_golden_cases_cover_and_cfg_keys_exact():
     assert any("main" not in types(c) for c in ok)                       # 공정 시간 0
     sp = [sum(1 for b in c["blocks"] if b["type"] == "pressure") for c in ok]
     assert {2, 3, 4} <= set(sp)                                          # SP4 + (SP3·SP2 중 0~2) + SP1
+    # SP5 단계(5-17) — WP > SP5_MTORR 일 때만 SP5 블록(도달 대기 없음) + 고정 대기 블록, 그 다음이 SP1. WP = SP5_MTORR 은 없음
+    stg = lambda n: [(b["type"], b["stage"], b["params"].get("sp"), b["params"].get("wait"), b["params"].get("sec"))
+                     for b in by[n]["blocks"] if b["stage"].startswith("PRESSURE_SP")]
+    assert stg("wp_above_sp5") == [("pressure", "PRESSURE_SP5", 5, False, None), ("wait", "PRESSURE_SP5", None, None, 60),
+                                   ("pressure", "PRESSURE_SP1", 1, True, None)]
+    assert stg("wp_above_sp5_cfg")[1] == ("wait", "PRESSURE_SP5", None, None, 30)
+    assert [s[1] for s in stg("wp_equal_sp5_no_stage")] == ["PRESSURE_SP1"] == [s[1] for s in stg("wp_above_sp3")]
 
 
 def test_template_blocks_pass_block_check_as_is():

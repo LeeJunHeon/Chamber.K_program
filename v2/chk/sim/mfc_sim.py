@@ -1,7 +1,7 @@
 """MFC 컨트롤러 시뮬레이터 — ATOVAC GPC3000(RS-232 9600 8N1, ASCII 명령 + CR, 값은 %FS).
 
 질의(응답 한 줄 + CR LF): R60 → "Q0+aa.a+bb.b+cc.c+dd.d"(채널 유량 %FS), R61~R64 → "Q1+…", R65~R68 → "Q5+…"(설정 유량),
-  R69 → "L0 bbbb"(ON/OFF), R5 → "P+x.xx"(압력 %FS), R1~R4 → "S1+x.xx"(설정점), R6 → "V+vvv.v"(밸브 위치 %),
+  R69 → "L0 bbbb"(ON/OFF), R5 → "P+x.xx"(압력 %FS), R1~R4·R10 → "S1+x.xx"·"S5+x.xx"(설정점 — SP5 는 R10, R5 는 압력), R6 → "V+vvv.v"(밸브 위치 %),
   R7 → "MXYZ"(X 선택 설정점, Y 0 제어·2 열림·4 닫힘, Z 압력 >10 %FS 면 1), R70~R73 → "W1+fff.f"(채널 FS sccm),
   R74~R77 → "W5+1"(단위 1 = SCCM).
 설정(응답 없음): Q1~Q4 v, L0 bbbb, L1~L4 0|1, L5~L8 1(영점), S1~S5 v, D1~D5(설정점 선택 → 압력 제어), O·C·H(밸브), Z1.
@@ -35,7 +35,7 @@ class MfcSim(SimDevice):
         self.set_pct = [0.0] * 4
         # 매뉴얼 표 11 [MFC p.80-88] 의 나머지 질의 응답(가정 — 실제 값은 bench 로 읽는다). R33 E03 = 1, R34 F0 = Torr → FS 1 Torr
         # 10/20 bench 실측 형식: R33 'E11'(1000)·R34 'F01'(mTorr) → FS 1 Torr, R37 'M006'(R38 은 매뉴얼 형식 그대로 — 실물 'H1.00' 은 inventory 가 "형식 다름"으로 남긴다)
-        self.info = {0: "S0+0.00", 10: "S5+0.00", 11: "P1+0.00", 12: "P2+100.00", 13: "P3+0.00", 14: "P4+100.00",
+        self.info = {0: "S0+0.00", 11: "P1+0.00", 12: "P2+100.00", 13: "P3+0.00", 14: "P4+100.00",
                      23: "J1", 25: "T01", 26: "T11", 27: "T21", 28: "T31", 29: "T41", 30: "T51", 32: "N0", 33: "E11",
                      34: "F01", 37: "M006", 38: "H3 1.00", 51: "V1"}
         self.info.update({40 + i: f"X{i}+0.0" for i in range(1, 6)})
@@ -51,6 +51,7 @@ class MfcSim(SimDevice):
         self.received = sim_log()               # 받은 요청(시험용, 길이 제한)
         self.dropped = 0
         self.ignore_writes: set = set()         # 시험: 이 접두어의 쓰기를 무시(되읽기 불일치)
+        self.canned: Dict[str, list] = {}       # 시험: 질의별 정해 둔 응답(앞에서부터 하나씩, None = 무응답) — 다 쓰면 평소 응답
 
     # ───────── 시각 ─────────
     def _advance(self, now: float) -> None:
@@ -107,7 +108,8 @@ class MfcSim(SimDevice):
     def handle(self, data: bytes, now: float) -> Optional[bytes]:
         cmd = data.decode("ascii", errors="replace").strip()
         if cmd.startswith("R"):
-            ans = self._query(cmd)
+            q = self.canned.get(cmd)
+            ans = q.pop(0) if q else self._query(cmd)
             return None if ans is None else (ans + "\r\n").encode()
         if any(cmd.startswith(p) for p in self.ignore_writes):
             return None
@@ -131,6 +133,8 @@ class MfcSim(SimDevice):
             return f"P{self.pressure_pct():+.2f}"
         if 1 <= n <= 4:
             return f"S{n}{self.sp[n - 1]:+07.2f}"                         # bench 'S2+000.50'
+        if n == 10:
+            return f"S5{self.sp[4]:+07.2f}"                               # SP5 값 [MFC p.80] — R5 는 압력
         if n == 6:
             return f"V{self.valve * 100:+.1f}"
         if n == 7:

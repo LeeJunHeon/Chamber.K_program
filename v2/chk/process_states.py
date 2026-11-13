@@ -66,6 +66,9 @@ STATES: tuple = (
     S("POWER_WAIT", "파워 목표 도달 대기", A, "formula", ("POWER_WAIT_TIMEOUT_SEC", "POWER_WAIT_TIMEOUT_MAX_SEC",
       "POWER_WAIT_EST_FACTOR", "POWER_WAIT_EST_MARGIN_SEC", "DC_RAMP_STEP_A", "RF_RAMP_STEP_W", "RF_REFP_WAIT_SEC"),
       "abort:POWER_WAIT_TIMEOUT", v1="pc:941-997", desc="DC·RF·RF Pulse 를 함께 시작, 모두 도달할 때까지"),
+    S("PRESSURE_SP5", "압력 0단계(SP5)", A, "param", ("SP5_MTORR", "SP5_STABILIZE_SEC"), "proceed",
+      skip_if="WP ≤ SP5_MTORR", v1="pc Stage0(SP5) (a78b5ce·f5780ca)",
+      desc="SP5 값 쓰기(R10 되읽기)·선택 뒤 SP5_STABILIZE_SEC 고정 대기 — 압력 도달 판정 없음"),
     S("PRESSURE_SP3", "압력 1단계(SP3)", A, "param", ("PRESSURE_STAGE_TIMEOUT_SEC", "SP3_MTORR",
       "PRESSURE_WAIT_TOL_RATIO", "PRESSURE_WAIT_STABLE_SEC"), "proceed", skip_if="WP ≥ SP3_MTORR", v1="pc:617-619"),
     S("PRESSURE_SP2", "압력 2단계(SP2)", A, "param", ("PRESSURE_STAGE_TIMEOUT_SEC", "SP2_MTORR",
@@ -103,7 +106,7 @@ STATES: tuple = (
 # 기본 템플릿(v1 행)의 진행 순서 — skip_if 가 맞으면 건너뛴다. 블록 레시피는 블록 순서대로(순서 규칙 없음)
 STEP_SEQUENCE: tuple = (
     "PRE_CLEAN", "GAS_PRE", "HEATER_RAMP", "HEATER_HOLD_WAIT", "BASE_WAIT", "GAS_INTRO", "GAS_STABILIZE",
-    "GUN_SHUTTER", "POWER_WAIT", "PRESSURE_SP3", "PRESSURE_SP2", "PRESSURE_SP1", "DC_DELAY", "SHUTTER_DELAY",
+    "GUN_SHUTTER", "POWER_WAIT", "PRESSURE_SP5", "PRESSURE_SP3", "PRESSURE_SP2", "PRESSURE_SP1", "DC_DELAY", "SHUTTER_DELAY",
     "HEATER_SETTLE", "MAIN",
 )
 

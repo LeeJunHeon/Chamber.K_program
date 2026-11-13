@@ -50,7 +50,8 @@ MFC_BENCH_R = (0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 14, 23, 25, 26, 27, 28, 2
 # 46개, 채널 1·2 만 [MFC p.80-88]. "현재 지원 안 함" R24·R31·R35·R36 과 없는 채널 3·4(R63·R64·R67·R68·R72·R73·R76·R77)는 보내지 않음
 MFC_BENCH = tuple(f"R{n}" for n in MFC_BENCH_R)
 MFC_PROD_WRITES = (re.compile(rf"Q[1-4] {_NUM}"), re.compile(r"L0[01]{4}"), re.compile(r"L[5-8] 1"), re.compile(r"Z1"),
-                   re.compile(rf"S[1-4] {_NUM}"), re.compile(r"D[1-4]"), re.compile(r"[OCH]"))
+                   re.compile(rf"S[1-5] {_NUM}"), re.compile(r"D[1-5]"), re.compile(r"[OCH]"))
+# S5·D5(설정점 5 값·선택 [MFC p.73])는 SP5 단계(v1 a78b5ce)가 쓴다. 되읽기 R10(SP5 값)은 위 질의 목록에 이미 있다 — bench 는 질의만
 MFC_FORBIDDEN = (
     (re.compile(r"[EF]"), "E·F(압력 레인지·단위 설정) [MFC p.74] — IG 의 E·F 와 다르다"),
     (re.compile(r"[GJATBNUXMVWPY]"), "센서·밸브·제어 설정(G·J·A·T·B·N·U·X·M·V·W·P·Y) [p.74-77]"),

@@ -2,7 +2,7 @@
 
 - FLOW_ON 유량 안정화(v1 device/MFC.py:1128-1139·1236-1270)
 - CSV 리스트: 행 끝 정지 순서 중의 STOP·이상 중단·ALL STOP 이 리스트를 끝낸다(v1 core/process_service.py:725-727·868·938-943·1026)
-- MFC 쓰기 재시도(v1 MFC.py:1058-1211, 질의 재시도 354·448-454, 재연결 대기 365-366), SP2·SP3 되읽기는 경고만
+- MFC 쓰기 재시도(v1 MFC.py:1058-1211, 질의 재시도 354·448-454, 재연결 대기 365-366), SP4 되읽기는 경고만(SP1·2·3·5 는 5-17 한 검증 경로)
 - HEATER_RAMP 스텝이 래더 램프 속도 D00020 를 쓴다(v1 process_controller.py:786)
 - 베이스 대기: 재점등 필라멘트도 공정 소유(v1 pc:1092-1094·1254), IG_SETTLE 은 첫 방출 시각부터
 - 정지 순서: DC OFF·RF Pulse OFF 는 보내 놓고 RF 램프다운(켰을 때만, v1 pc:1924-1981), DC OFF 경고는 켠 적 있을 때만(DCpower.py:356-359)
@@ -117,12 +117,22 @@ def test_mfc_l0_resent_once():
     r.done()
 
 
-def test_mfc_sp2_readback_mismatch_is_warning_only():
+def test_mfc_sp2_readback_mismatch_fails_after_resends():
+    """5-17(v1 fa85e15): SP2·SP3·SP5 도 SP1 과 같은 검증 경로 — 값이 다르면 S2 를 다시 쓰고 5회 뒤 실패(예전: 경고만)."""
     r = MfcRig()
     r.sim.ignore_writes = {"S2"}
-    assert r.seq(r.d.set_sp, 2, 5.0) is None                 # v1 은 SP2 를 되읽지 않고 확인(MFC.py:666-670)
+    assert r.seq(r.d.set_sp, 2, 5.0) == "VERIFY_MISMATCH"
+    assert r.sim.set_commands_seen().count("S2 0.50") == 5   # 첫 전송 + 값 불일치 4번 재전송(5회째 불일치는 실패)
+    assert len([e for e in r.events if e.kind == "sp_readback"]) == 5
+    r.done()
+
+
+def test_mfc_sp4_readback_mismatch_is_warning_only():
+    r = MfcRig()                                             # SP4 는 v2 결정 SP4_FROM_CONFIG 그대로 — R4 한 번, 경고만
+    r.sim.ignore_writes = {"S4"}
+    assert r.seq(r.d.set_sp, 4, 30.0) is None
     ev = [e for e in r.events if e.kind == "sp_readback"]
-    assert ev and ev[0].reason == "VERIFY_MISMATCH"
+    assert len(ev) == 1 and ev[0].reason == "VERIFY_MISMATCH"
     r.done()
 
 

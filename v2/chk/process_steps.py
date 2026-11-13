@@ -5,7 +5,7 @@ ProcessStep 이 된다(build_process_steps = 기본 템플릿 펼치기). 스텝
 골든 비교 단위(unit)에 넣지 않는다 — internal 스텝(END_STOP·NOP)은 스텝 목록 기록에서도 뺀다.
 스텝 목록은 v1 과 같은 순서·같은 동작·같은 인자로 만든다(골든 시험이 v1 기록과 비교한다). 바뀐 곳(의도된 차이):
 - WAIT_PRESSURE: v1 "stable_count 3회 연속"(1 s 간격 + 명령 간격 ≈ 6 s) → "stable_sec PRESSURE_WAIT_STABLE_SEC 동안"(횟수→시간, 4-3).
-- 숫자 상수는 파라미터로: SP3_MTORR·SP2_MTORR·PRESSURE_WAIT_TOL_RATIO·PRESSURE_STAGE_TIMEOUT_SEC·SP1_TIMEOUT_SEC·
+- 숫자 상수는 파라미터로: SP5_MTORR·SP5_STABILIZE_SEC·SP3_MTORR·SP2_MTORR·PRESSURE_WAIT_TOL_RATIO·PRESSURE_STAGE_TIMEOUT_SEC·SP1_TIMEOUT_SEC·
   GAS_STABILIZE_SEC·PRE_POWER_OFF_SETTLE_SEC·DC_POWER_DELAY_SEC(기본값 = v1 값).
 각 스텝에는 process_states 의 상태 이름(state)을 붙인다 — 상태 전이·상태 한도는 이것으로 센다.
 
@@ -384,9 +384,9 @@ class StepRunner:
                 m.zero("Z1", on_done=cb)
             elif cmd == "FLOW_SET":
                 m.set_flow(int(a["channel"]), float(self.resolve(s, a["value"])), on_done=cb)
-            elif cmd in ("SP1_SET", "SP2_SET", "SP3_SET", "SP4_SET"):
+            elif cmd in ("SP1_SET", "SP2_SET", "SP3_SET", "SP4_SET", "SP5_SET"):
                 m.set_sp(int(cmd[2]), float(self.resolve(s, a["value"])), on_done=cb)
-            elif cmd in ("SP1_ON", "SP2_ON", "SP3_ON", "SP4_ON"):
+            elif cmd in ("SP1_ON", "SP2_ON", "SP3_ON", "SP4_ON", "SP5_ON"):
                 m.select_sp(int(cmd[2]), on_done=cb)
             else:
                 return ("fail", "MFC_CMD_FAILED")

@@ -96,6 +96,21 @@ PARAMS: tuple = (
           src="v2 (사용자 결정 2026-10-15, v1 1000 ms)", desc="명령(질의·설정) 사이 최소 간격 — bench 실측으로 맞춘다"),
     _inst("MFC_QUERY_TIMEOUT_MS", "MFC 질의 응답 제한", I, 300, lo=50, hi=2000, unit="ms",
           src="v2 (사용자 결정 2026-10-15, v1 1000 ms)", desc="bench 실측으로 맞춘다"),
+    _inst("MFC_QUERY_RETRIES", "MFC 무응답 질의 다시 보내기 횟수", I, 5, lo=0, hi=10, unit="회",
+          src="device/MFC.py enqueue(retries_left=5)",
+          desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 설정 명령의 되읽기 질의 하나가 무응답이면 이 횟수만큼 다시 보낸다 — "
+               "다 쓰면 '응답 없음'으로 판정"),
+    _inst("MFC_VERIFY_RETRY_MS", "MFC 되읽기 다시 하기 전 대기", I, 1000, lo=200, hi=5000, unit="ms",
+          src="lib/config.py MFC_DELAY_MS(1000)",
+          desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 설정 명령(유량·설정점·설정점 선택·밸브·ON/OFF) 되읽기가 다르면 이만큼 뒤 "
+               "다시 확인. 하한 200 ms — 명령 간격(MFC_CMD_GAP_MS 기본 150 ms)보다 길게"),
+    _inst("MFC_VERIFY_TRIES", "MFC 되읽기 확인 횟수", I, 5, lo=1, hi=10, unit="회",
+          src="device/MFC.py max_attempts=5 (FLOW_SET·SPn_SET·SPn_ON·밸브)",
+          desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 이 횟수 안에 되읽기가 맞지 않으면 그 명령 실패(VERIFY_MISMATCH). "
+               "횟수 × 대기가 공정 스텝 한도(60 s)를 넘지 않게 상한 10"),
+    _inst("MFC_LINK_RETRY_MS", "MFC 재연결 대기 중 다시 내는 간격", I, 1000, lo=200, hi=5000, unit="ms",
+          src="v2 (4-2 drivers/mfc.py LINK_RETRY_S, v1 은 큐에서 기다림)",
+          desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 포트가 끊긴 동안 설정 명령을 이 간격으로 다시 낸다(공정 스텝 한도 안에서)"),
     _inst("MFC_AR_FS_SCCM", "MFC Ar 채널 풀스케일(못 읽을 때)", F, 100.0, lo=1.0, hi=100000.0, unit="sccm",
           src="v2 (사용자 결정 2026-10-15)", desc="연결 때 R70 으로 읽은 FS 를 우선 — 못 읽으면 이 값. 100 이면 %FS = sccm"),
     _inst("MFC_O2_FS_SCCM", "MFC O2 채널 풀스케일(못 읽을 때)", F, 100.0, lo=1.0, hi=100000.0, unit="sccm",
@@ -194,8 +209,10 @@ PARAMS: tuple = (
             "(FLOW_STABILIZE_TIMEOUT, v1 '유량 안정화 시간 초과')"),
     _p("MFC_VALVE_SETTLE_SEC", "mfc", "MFC 밸브 이동 대기", "s", F, 5.0, 0.5, 60.0, safety=L,
        src="lib/config.py:799 (MFC_DELAY_MS_VALVE)", desc="O·C 뒤 R6 로 위치를 확인하기까지"),
-    _p("MFC_SP1_VERIFY_TOL", "mfc", "SP1 설정 확인 허용 오차", "장비 단위", F, 0.1, 0.01, 1.0, safety=L,
-       src="lib/config.py:808 (고정값)"),
+    _p("MFC_SP_VERIFY_TOL", "mfc", "압력 설정점(SP1·2·3·5) 설정 확인 허용 오차", "장비 단위", F, 0.01, 0.0, 1.0, safety=L,
+       src="lib/config.py MFC_SP_VERIFY_TOL (fa85e15, 고정값 — 예전 MFC_SP1_VERIFY_TOL 0.1)",
+       desc="Sn 쓰기 뒤 읽은 값(R1~R3·R10, %FS)과 보낸 값의 차이가 이 값 이하면 통과. 0.01 %FS = 0.1 mTorr(FS 1 Torr) — "
+            "장비가 소수 둘째 자리까지 저장한다"),
 
     # ───────────── DC Power ─────────────
     _p("DC_MAX_VOLTAGE", "dc", "DC 전압 상한", "V", F, 600.0, 0.0, 1000.0, safety=H,
@@ -503,6 +520,12 @@ PARAMS: tuple = (
        src="controller/process_controller.py:619", desc="WP < 이 값일 때만 거친다"),
     _p("SP2_MTORR", "process", "압력 2단계(SP2)", "mTorr", F, 5.0, 0.5, 100.0,
        src="controller/process_controller.py:623"),
+    _p("SP5_MTORR", "process", "압력 0단계(SP5)", "mTorr", F, 50.0, 1.0, 1000.0,
+       src="controller/process_controller.py (a78b5ce — 고정값 50.0)",
+       desc="WP > 이 값일 때만 거친다: SP4 → 파워 → SP5(이 값) 설정·선택 → SP5_STABILIZE_SEC 고정 대기 → SP1(WP)"),
+    _p("SP5_STABILIZE_SEC", "process", "SP5 ON 뒤 고정 대기", "s", F, 60.0, 0.0, 600.0,
+       src="controller/process_controller.py (f5780ca — 고정값 60 s)",
+       desc="SP5 단계는 압력 도달 판정 없이 이 시간만 기다린다"),
     _p("SP4_MTORR", "process", "가스 안정화 설정점(SP4)", "mTorr", F, 30.0, 0.5, 1000.0,
        src="v2 (10/20 bench 장비 저장값 S4 3.00 %FS = 30 mTorr — v1 은 S4 를 쓰지 않음)",
        desc="기본 템플릿의 가스 안정화 단계가 S4 로 쓰고 R4 로 되읽은 뒤 D4(사용자 결정 2026-10-20)"),

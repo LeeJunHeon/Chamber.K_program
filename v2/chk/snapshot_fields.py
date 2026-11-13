@@ -100,7 +100,8 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
     _f("pressure_mtorr", F, "mTorr", "챔버 압력", ".2f", "R5 (%FS → mTorr)", summary="mean"),
     _f("ar_set", F, "sccm", "Ar 설정", ".2f", "core"),
     _f("o2_set", F, "sccm", "O₂ 설정", ".2f", "core"),
-    _f("sp_active", I, "", "사용 중 설정점", "d", "core(마지막 D 명령)", desc="0~5"),
+    _f("sp_active", I, "", "사용 중 설정점", "d", "core(마지막 D 명령)",
+       desc="0~5 — 0 은 밸브 직접 조작(열기·닫기·정지), 1 작업 압력, 2·3·5 단계 압력, 4 가스 안정화"),
     _f("sp_mtorr", F, "mTorr", "압력 설정", ".2f", "core"),
 ), desc="GPC3000")
 

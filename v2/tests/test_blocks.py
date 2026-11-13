@@ -175,7 +175,7 @@ def test_any_order_is_accepted_only_values_checked():
     ok, errs, _ = _chk(bl)
     assert errs == [] and [b["type"] for b in ok] == ["power_on", "gas_intro", "pre_clean", "heater_wait", "wait"]
     bad = [{"type": "power_on", "params": {"dc_power": 5000.0}},
-           {"type": "pressure", "params": {"sp": 5, "value": 5}},
+           {"type": "pressure", "params": {"sp": 6, "value": 5}},              # 설정점은 1~5(5-17: SP5 추가)
            {"type": "gas_intro", "params": {"ar": True}},
            {"type": "wait", "params": {"sec": "x"}},
            {"type": "shutter", "params": {"action": "open", "targets": ["g3"]}},

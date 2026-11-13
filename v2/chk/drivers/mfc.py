@@ -11,10 +11,15 @@
   - FLOW ON/OFF: R69 로 지금 마스크 → 그 채널만 바꿔 L0 → R69 확인, 다르면 L0 1회 다시(v1 1084-1170). R69 를 못 읽으면 실패
     (v1 의 "0000" 대체값은 다른 채널을 끌 수 있어 옮기지 않음 — v1 1086)
   - O·C(밸브): MFC_VALVE_SETTLE_SEC 뒤 R6 확인 5회, 2·4번째 뒤 다시 보내고 밸브 대기(v1 1172-1211, 닫힘 < 1·열림 > 99)
-  - S1: R1 확인 1 s 간격 5회(v1 953-981). D1~D4: R7 확인 1 s 간격 5회(v1 983-1021)
-  - S2·S3·S4: v1 은 되읽기 없이 확인(666-670·689-692) — v2 는 R2~R4 를 한 번 읽어 다르면 경고만(실패 아님)
-  - 질의 하나는 무응답이면 5회 다시(v1 enqueue retries_left=5, 354·448-454). 링크가 없으면(재연결 중) MFC_CMD_GUARD_S 안에서
-    기다렸다 다시(v1 365-366 — 포트가 닫혀 있으면 큐에서 기다림). 영점(L5~L8 1, Z1)은 되읽기 없음.
+  - S1·S2·S3·S5: 한 검증 경로(v1 fa85e15 _sp_set_start·_sp_set_verify) — "Sn 값" 쓰기 → 읽기(SP1~SP3 = R1~R3, SP5 = R10 —
+    R5 는 압력) → 응답이 "Sn" 으로 시작하고 |값 − 기대| ≤ MFC_SP_VERIFY_TOL 이면 통과. 값이 읽혔는데 다르면 Sn 을 다시 쓰고,
+    무응답·형식 다름(접두어 다름 포함)이면 다시 읽기만. MFC_VERIFY_RETRY_MS 간격 최대 MFC_VERIFY_TRIES 회. 매 시도의 원본 응답을
+    sp_readback 이벤트로 남기고, 실패 사유에 기대값·마지막 원본 응답을 넣는다(VERIFY_MISMATCH).
+  - S4: v2 의 기존 결정(SP4_FROM_CONFIG) 그대로 — 설정 SP4_MTORR 를 S4 로 쓰고 R4 를 한 번 읽어 다르면 경고만(v1 은 D4 만)
+  - D1~D5: R7 응답 'MXYZ' 의 두 번째 글자(X) 확인, MFC_VERIFY_RETRY_MS 간격 MFC_VERIFY_TRIES 회(v1 _verify_simple_async SPn_ON)
+  - 질의 하나는 무응답이면 MFC_QUERY_RETRIES 회 다시(v1 enqueue retries_left=5). 링크가 없으면(재연결 중) MFC_CMD_GUARD_S 안에서
+    MFC_LINK_RETRY_MS 마다 다시(v1 — 포트가 닫혀 있으면 큐에서 기다림). 영점(L5~L8 1, Z1)은 되읽기 없음.
+  횟수·간격 4개(MFC_QUERY_RETRIES·MFC_VERIFY_RETRY_MS·MFC_VERIFY_TRIES·MFC_LINK_RETRY_MS)는 설치값 — 기본값 = v1 값.
 bench: 질의(R…)만 — 설정 명령은 worker 거부 + 드라이버 이중 보호.
 """
 from __future__ import annotations
@@ -28,11 +33,9 @@ from v2.common.worker import Request, Result, Status, Worker
 from v2.chk.process_steps import MFC_CMD_GUARD_S
 
 CH_AR, CH_O2 = 1, 2
-QUERY_RETRIES = 5          # v1 device/MFC.py:354 enqueue(retries_left=5) — 무응답 질의를 다시 보내는 횟수
-VERIFY_RETRY_S = 1.0       # v1 MFC_DELAY_MS(lib/config.py:798) — 되읽기 다시 하기 전 대기
-VERIFY_TRIES = 5           # v1 max_attempts=5 (FLOW_SET·SP1·SPn_ON·밸브)
 L0_TRIES = 2               # v1 _set_onoff_mask_and_verify max_attempts=2
-LINK_RETRY_S = 1.0         # 재연결을 기다리며 다시 내는 간격
+SP_READ_CMD = {1: "R1", 2: "R2", 3: "R3", 4: "R4", 5: "R10"}     # 설정점 값 읽기 [MFC p.80] — R5 는 압력
+SP_VERIFIED = (1, 2, 3, 5)  # 한 검증 경로(v1 SP_SET_COMMANDS) — SP4 는 v2 결정 SP4_FROM_CONFIG(경고만)
 _NUM = r"([+\-]?\d+(?:\.\d+)?)"
 
 
@@ -78,6 +81,14 @@ def parse_pressure(line: str) -> Optional[float]:
     return float(nums[-1]) if nums else None
 
 
+def parse_sp_reply(line: Optional[str], n: int) -> Optional[float]:
+    """설정점 읽기 응답 "Sn+값"(앞뒤 공백 무시) → 값. 접두어가 "Sn" 이 아니면 None — 다른 명령의 응답(v1 _parse_sp_reply)."""
+    s = (line or "").strip()
+    if not s.upper().startswith(f"S{int(n)}"):
+        return None
+    return parse_pressure(s[2:]) if len(s) > 2 else None
+
+
 def parse_r69(line: str) -> str:
     s = (line or "").strip()
     payload = s[2:] if s.startswith("L0") else (s[1:] if s.startswith("L") else s)
@@ -92,6 +103,10 @@ class MfcDriver:
         self.on_event = on_event
         self.gap_s = cfg["MFC_CMD_GAP_MS"] / 1000.0
         self.q_timeout_s = cfg["MFC_QUERY_TIMEOUT_MS"] / 1000.0
+        self.query_retries = int(cfg["MFC_QUERY_RETRIES"])            # 무응답 질의를 다시 보내는 횟수(v1 retries_left=5)
+        self.verify_retry_s = cfg["MFC_VERIFY_RETRY_MS"] / 1000.0     # 되읽기 다시 하기 전 대기(v1 MFC_DELAY_MS)
+        self.verify_tries = int(cfg["MFC_VERIFY_TRIES"])              # 되읽기 최대 횟수(v1 max_attempts=5)
+        self.link_retry_s = cfg["MFC_LINK_RETRY_MS"] / 1000.0         # 재연결을 기다리며 다시 내는 간격
         self.fs = {CH_AR: cfg["MFC_AR_FS_SCCM"], CH_O2: cfg["MFC_O2_FS_SCCM"]}
         self.fs_source = "param"
         self.scale_mismatch: Optional[str] = None      # 연결 때 R33·R34·R74·R75·R37 대조 — 다르면 공정 시작 거부
@@ -292,13 +307,13 @@ class MfcDriver:
             if r.status == Status.OK:
                 advance(r.value if item[0] == "q" else None)
             elif r.status == Status.TIMEOUT and item[0] == "q":
-                if tries < QUERY_RETRIES:
+                if tries < self.query_retries:
                     issue(item, tries + 1)            # v1: 무응답 질의는 다시(재연결 뒤)
                 else:
                     advance(None)                     # v1: 재시도 소진 — 응답 없음(None)으로 판정
             elif r.status in (Status.LINK_DOWN, Status.EXPIRED) or r.reason == "LINK_DOWN":
                 if self.clock.monotonic() - t0 < guard:
-                    issue(item, tries, self.clock.monotonic() + LINK_RETRY_S)     # 재연결 중 — 기다렸다 다시
+                    issue(item, tries, self.clock.monotonic() + self.link_retry_s)     # 재연결 중 — 기다렸다 다시
                 else:
                     st["why"] = f"{item[1]}: 링크 없음 {guard:.0f} s"
                     finish("LINK_DOWN")
@@ -312,7 +327,7 @@ class MfcDriver:
         advance(None)
 
     def _verify_loop(self, name: str, query: str, check: Callable[[Optional[str]], bool], tries: int,
-                     resend: Optional[str] = None, resend_on=None, resend_wait: float = VERIFY_RETRY_S):
+                     resend: Optional[str] = None, resend_on=None, resend_wait: float = 0.0):
         """되읽기 × tries — 맞으면 끝. resend 가 있으면 resend_on 회차(None = 매번) 뒤 다시 보내고 resend_wait 대기."""
         seen: List[str] = []
         for k in range(1, tries + 1):
@@ -324,9 +339,9 @@ class MfcDriver:
             if k < tries:
                 if resend and (resend_on is None or k in resend_on):
                     yield ("w", resend)
-                    yield ("sleep", max(VERIFY_RETRY_S, resend_wait))
+                    yield ("sleep", max(self.verify_retry_s, resend_wait))
                 else:
-                    yield ("sleep", VERIFY_RETRY_S)
+                    yield ("sleep", self.verify_retry_s)
         raise MfcVerifyError(f"{name}: {query} = " + "/".join(seen))
 
     def set_flow(self, ch: int, sccm: float, on_done=None) -> None:
@@ -338,7 +353,7 @@ class MfcDriver:
             yield from self._verify_loop(
                 f"flow{ch}", f"R6{4 + ch}",
                 lambda a: (v := parse_prefixed(a or "", f"Q{4 + ch}")) is not None and abs(v - pct) < 0.1,
-                VERIFY_TRIES, resend=cmd)
+                self.verify_tries, resend=cmd)
             if ch == CH_AR:
                 self.ar_set = sccm
             elif ch == CH_O2:
@@ -377,34 +392,51 @@ class MfcDriver:
         self._op(name, gen(), on_done)
 
     def set_sp(self, n: int, mtorr: float, on_done=None) -> None:
-        """SP1: R1 확인 1 s 간격 5회(v1 _verify_simple_async). SP2~SP4: v1 은 되읽기 없이 확인 — R(n) 1회 읽어 다르면 경고만."""
-        cmd, hw = sp_cmd(n, mtorr, float(self.cfg["MFC_PRESSURE_FS_TORR"]))
-        tol = max(float(self.cfg["MFC_SP1_VERIFY_TOL"]), 1e-9)
-
-        def ok(a):
-            v = parse_pressure(a) if a is not None else None
-            return v is not None and abs(v - hw) <= tol
+        """SP1·SP2·SP3·SP5: 한 검증 경로(v1 fa85e15) — Sn 쓰기 → 읽기(R1~R3·R10) → "Sn" 접두어·값(±MFC_SP_VERIFY_TOL) 확인.
+        값이 읽혔는데 다르면 Sn 다시 쓰기, 무응답·형식 다름이면 다시 읽기만, MFC_VERIFY_RETRY_MS 간격 최대 MFC_VERIFY_TRIES 회.
+        SP4: v2 결정 SP4_FROM_CONFIG 그대로 — S4 쓰기 뒤 R4 한 번 읽어 다르면 경고만."""
+        if n not in SP_READ_CMD:
+            raise ValueError(n)
+        cmd, _ = sp_cmd(n, mtorr, float(self.cfg["MFC_PRESSURE_FS_TORR"]))
+        hw = float(cmd.split(" ", 1)[1])                       # 장비에 보낸 글자(소수 둘째 자리)와 비교 — v1 float(val_str)
+        tol = float(self.cfg["MFC_SP_VERIFY_TOL"])
+        rd, tries = SP_READ_CMD[n], self.verify_tries
 
         def gen():
             yield ("w", cmd)
-            if n == 1:
-                yield from self._verify_loop("S1", "R1", ok, VERIFY_TRIES)
-                self.sp_mtorr = mtorr
-            else:
-                ans = yield ("q", f"R{n}")
-                if ok(ans):
-                    self._emit("verify_ok", f"S{n}: R{n}={ans}")
+            if n not in SP_VERIFIED:
+                ans = yield ("q", rd)
+                v = parse_sp_reply(ans, n)
+                if v is not None and abs(v - hw) <= tol + 1e-9:
+                    self._emit("verify_ok", f"S{n}: {rd}={ans}")
                 else:
-                    self._emit("sp_readback", f"S{n}: {cmd} 뒤 R{n} = {ans!r} — 경고만(v1 은 되읽기 없이 진행)",
+                    self._emit("sp_readback", f"S{n}: {cmd} 뒤 {rd} = {ans!r} — 경고만(v1 은 되읽기 없이 진행)",
                                "VERIFY_MISMATCH")
+                return
+            for k in range(1, tries + 1):
+                ans = yield ("q", rd)
+                v = parse_sp_reply(ans, n)
+                self._emit("sp_readback", f"S{n} 검증 {k}/{tries}: {rd} 응답={ans!r}")      # 매 시도의 원본 응답
+                if v is not None and abs(v - hw) <= tol + 1e-9:
+                    self._emit("verify_ok", f"S{n}: {rd}={ans} ({k}회째)")
+                    if n == 1:
+                        self.sp_mtorr = mtorr
+                    return
+                if k >= tries:
+                    raise MfcVerifyError(f"SP{n} 설정 확인 실패 — 기대 {cmd}({mtorr:.2f} mTorr), 마지막 응답 {ans!r} ({tries}회)")
+                yield ("sleep", self.verify_retry_s)
+                if v is not None:
+                    yield ("w", cmd)                           # 값이 읽혔는데 다름 → 다시 쓰기(무응답·형식 다름은 다시 읽기만)
         self._op(f"S{n}", gen(), on_done)
 
     def select_sp(self, n: int, on_done=None) -> None:
-        """D1~D4 → R7 확인 1 s 간격 5회(v1 _verify_simple_async SPn_ON, MFC.py:983-1021)."""
+        """D1~D5 → R7 'MXYZ' 의 두 번째 글자 확인, MFC_VERIFY_RETRY_MS 간격 MFC_VERIFY_TRIES 회(v1 _verify_simple_async SPn_ON)."""
+        if n not in SP_READ_CMD:
+            raise ValueError(n)
         def gen():
             yield ("w", f"D{n}")
             yield from self._verify_loop(
-                f"D{n}", "R7", lambda a: bool(a) and a.startswith("M") and len(a) > 1 and a[1] == str(n), VERIFY_TRIES)
+                f"D{n}", "R7", lambda a: bool(a) and a.startswith("M") and len(a) > 1 and a[1] == str(n), self.verify_tries)
             self.sp_active = n
         self._op(f"D{n}", gen(), on_done)
 
@@ -421,7 +453,7 @@ class MfcDriver:
         def gen():
             yield ("w", cmd)
             yield ("sleep", settle)
-            yield from self._verify_loop(f"valve_{cmd}", "R6", pos_ok, VERIFY_TRIES, resend=cmd, resend_on=(2, 4),
+            yield from self._verify_loop(f"valve_{cmd}", "R6", pos_ok, self.verify_tries, resend=cmd, resend_on=(2, 4),
                                          resend_wait=settle)
             self.sp_active = 0
         self._op(f"valve_{cmd}", gen(), on_done)

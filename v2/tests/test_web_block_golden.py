@@ -92,7 +92,8 @@ def test_numbers_follow_param_type():
 def test_bundle_has_what_block_check_needs():
     b = W.definitions()["blocks"]
     assert b["valueRules"] == [r.public() for r in BK.VALUE_RULES]
-    assert b["blockKeys"] == list(BK.BLOCK_KEYS) and b["spDefaultKey"] == {"2": "SP2_MTORR", "3": "SP3_MTORR", "4": "SP4_MTORR"}
+    assert b["blockKeys"] == list(BK.BLOCK_KEYS) and b["spDefaultKey"] == {"2": "SP2_MTORR", "3": "SP3_MTORR", "4": "SP4_MTORR",
+                                                                         "5": "SP5_MTORR"}
     assert b["heaterRampMin"] == BK.HEATER_RAMP_MIN and b["autoEndStopLabel"] == BK.AUTO_END_STOP_LABEL
     assert b["limits"] == {"repeatMax": BK.REPEAT_MAX, "maxDepth": BK.MAX_DEPTH, "maxExpandedSteps": BK.MAX_EXPANDED_STEPS,
                            "labelMax": BK.LABEL_MAX}

@@ -42,7 +42,7 @@ CFG_KEYS: tuple = (
     "IG_ENABLED", "MFC_AR_FS_SCCM", "MFC_O2_FS_SCCM", "PRESSURE_STAGE_TIMEOUT_SEC", "PRESSURE_WAIT_STABLE_SEC",
     "PRESSURE_WAIT_TOL_RATIO", "PRE_POWER_OFF_SETTLE_SEC", "RFPULSE_DUTY_MAX", "RFPULSE_DUTY_MIN", "RFPULSE_ENABLED",
     "RFPULSE_MAX_POWER", "RFPULSE_PULSE_FREQ_MAX_HZ", "RFPULSE_PULSE_FREQ_MIN_HZ", "RFPULSE_PULSE_MIN_EDGE_US", "RF_MAX_POWER",
-    "SP1_TIMEOUT_SEC", "SP2_MTORR", "SP3_MTORR", "SP4_MTORR",
+    "SP1_TIMEOUT_SEC", "SP2_MTORR", "SP3_MTORR", "SP4_MTORR", "SP5_MTORR",
     "HEATER_SHUTTER_SETTLE_TOL_C", "HEATER_SHUTTER_SETTLE_SEC", "HEATER_SHUTTER_SETTLE_MAX_SEC",
     "HEATER_SHUTTER_SETTLE_FAIL_ACTION",
 )
@@ -99,6 +99,10 @@ CASES: List[tuple] = [
     ("pressure_custom_abort", [B("pressure", sp=2, value=12.5, tol_ratio=0.1, stable_sec=3.0, timeout_sec=90.0,
                                  on_timeout="abort"), B("pressure", sp=1, value=3.0, on_timeout="continue")], {}, []),
     ("pressure_sp_int_as_float", [B("pressure", sp=2.0)], {}, []),
+    # SP5 단계(5-17, v1 a78b5ce·f5780ca) — 값을 비우면 SP5_MTORR, 도달 대기 없이 대기 블록(stage PRESSURE_SP5)으로 고정 대기
+    ("pressure_sp5_stage", [B("pressure", sp=5, label="Stage0(SP5)", stage="PRESSURE_SP5", wait=False),
+                            B("wait", sec=60, label="Stage0(SP5): 압력 안정화 대기(60초)", stage="PRESSURE_SP5"),
+                            B("pressure", sp=5, value=45.0)], {"SP5_MTORR": 40.0}, ["defaults"]),
     # 셔터 전 히터 정착(5-15) — 비우면 설정값, 상한 0 이면 할 일 없음(NOP)
     ("heater_settle_defaults", [B("heater_ramp", target_c=300.0), B("heater_settle"), B("main", sec=10.0)], {}, ["defaults"]),
     ("heater_settle_custom", [B("heater_ramp", target_c=300.0),
@@ -185,7 +189,7 @@ CASES: List[tuple] = [
     # ── 범위 ──
     ("err_range_min", [B("wait", sec=-1), B("cond_wait", field="dc.p", op="near", value=1.0, tol=-0.00001, timeout_sec=1.0),
                        B("pressure", sp=0, value=3.0), B("pressure", sp=2, tol_ratio=0.001)], {}, ["range.min"]),
-    ("err_range_max", [B("wait", sec=7 * 86400 + 1), B("pressure", sp=5, value=3.0), B("pressure", sp=1, value=1000.5),
+    ("err_range_max", [B("wait", sec=7 * 86400 + 1), B("pressure", sp=6, value=3.0), B("pressure", sp=1, value=1000.5),
                        B("cond_wait", field="dc.p", op="ge", value=1.0, stable_sec=3601, timeout_sec=1.0),
                        B("pre_clean", settle_sec=31)], {}, ["range.max"]),
     ("err_range_min_exclusive", [B("main", sec=0), B("gas_intro", ar=True, ar_flow=0.0), B("heater_ramp", target_c=0),
