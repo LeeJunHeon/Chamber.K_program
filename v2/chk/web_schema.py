@@ -103,7 +103,11 @@ EVENTS: tuple = (
 
 # 설정 묶음(params[].group) → 화면 이름
 PARAM_GROUPS: tuple = (
-    ("install", "설치·장비"), ("secret", "비밀값"), ("tick", "1초 읽기"), ("comm", "통신"), ("plc", "PLC"),
+    ("install", "설치·장비"), ("secret", "비밀값"),
+    # 장비별 통신(5-17): 포트·속도·패리티·종결 문자·응답 시간·재시도 — params.COMM_GROUPS
+    ("comm_plc", "PLC 통신"), ("comm_mfc", "MFC 통신"), ("comm_dc", "DC Power 통신"), ("comm_rfpulse", "RF Pulse 통신"),
+    ("comm_ig", "이온 게이지 통신"), ("comm", "통신 공통(포트 열기·재연결·두절)"),
+    ("tick", "1초 읽기"), ("plc", "PLC"),
     ("mfc", "MFC"), ("dc", "DC Power"), ("rf", "RF Power"), ("stop", "정지 순서"), ("rfpulse", "RF Pulse"),
     ("ig", "이온 게이지"), ("heater", "히터"), ("heater_plc", "히터 PLC 설정"), ("heater_ramp", "히터 승온"),
     ("heater_hold", "히터 유지 모드"), ("heater_recipe", "히터 레시피"), ("heater_gas", "히터 가스"),
@@ -183,6 +187,7 @@ def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any],
         ov = p.key in overridden
     return {"key": p.key, "label": p.label, "group": p.group, "unit": p.unit, "type": p.type.value,
             "min": p.min, "max": p.max, "enum": list(p.enum) if p.enum else None, "pattern": p.pattern,
+            "choices": list(p.choices) if p.choices else None,
             "default": None if secret else p.default,
             "current": None if (secret or values is None) else values.get(p.key),
             "stored": st, "overridden": ov,

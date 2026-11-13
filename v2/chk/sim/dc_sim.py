@@ -22,10 +22,11 @@ BAUD = 9600
 
 class DcSim(SimDevice):
     def __init__(self, chamber: Optional[Chamber] = None, idn: str = "ODA Technologies,EX-Series,2.1-1.0-1.6",
-                 last_sta: str = "DIS", errors: Optional[List[str]] = None) -> None:
+                 last_sta: str = "DIS", errors: Optional[List[str]] = None, delimiter: bytes = b"\n") -> None:
         super().__init__("dc", latency_s=0.0)
         self.chamber = chamber or Chamber()
         self.idn = idn
+        self.delimiter = delimiter                      # 앞면 I/O 메뉴의 Delimiter(LF 출고값·CR·CRLF) — 이것으로 끝나지 않은 명령은 버린다
         self.out = False
         self.v_set, self.i_set = 0.0, 0.0
         self.ovp, self.ocp = 660.0, 2.2                 # 10/20 bench OVP 660 V·OCP 2.2 A
@@ -62,6 +63,8 @@ class DcSim(SimDevice):
         return v, i
 
     def handle(self, data: bytes, now: float) -> Optional[bytes]:
+        if not data.endswith(self.delimiter):
+            return None                                       # 종결 문자가 다르면 장비는 명령이 끝난 것으로 보지 않는다(무응답)
         cmd = data.decode("ascii", errors="replace").strip()
         u = cmd.upper()
         if u.endswith("?"):
@@ -72,7 +75,7 @@ class DcSim(SimDevice):
             if ans is None:
                 self.errors.append('-113,"Undefined header"')
                 return None
-            return (ans + "\n").encode()
+            return ans.encode() + self.delimiter
         self.busy_until = now + BUSY_S
         if not self._set(u):
             self.errors.append('-113,"Undefined header"')

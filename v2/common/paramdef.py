@@ -74,6 +74,7 @@ class ParamDef:
     note: str = ""
     v1_period_s: Optional[float] = None   # v1 판정 주기 — v1 은 횟수, v2 기본값 = v1 횟수 × 이 주기(초, 시간 기반 판정)
     web_locked: bool = False        # 웹에서 바꾸지 않는 키(CONFIG_APPLY·ROLLBACK 에 지금 값과 다른 값 → CONFIG_LOCKED_KEY)
+    choices: Optional[tuple] = None  # INT·FLOAT 전용 허용 숫자 목록(통신 속도처럼 장비가 받는 값만) — 형식은 숫자 그대로
 
     def public_dict(self) -> dict:
         """웹으로 보내는 정의. secret 은 기본값을 싣지 않는다."""
@@ -87,6 +88,7 @@ class ParamDef:
             "safety": self.safety.value, "apply": self.apply.value,
             "scope": self.scope.value, "role": self.role.value,
             "pendingConfirm": self.pending_confirm, "webLocked": self.web_locked,
+            "choices": list(self.choices) if self.choices else None,
         }
         return d
 
@@ -138,6 +140,8 @@ def check_value(p: ParamDef, v: Any) -> Optional[str]:
         return f"{p.key}: {v} < 최소 {p.min}"
     if p.max is not None and v > p.max:
         return f"{p.key}: {v} > 최대 {p.max}"
+    if p.choices and v not in p.choices:
+        return f"{p.key}: 허용값 {list(p.choices)} 중 하나여야 함 (받은 값 {v!r})"
     return None
 
 

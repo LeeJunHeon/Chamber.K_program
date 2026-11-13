@@ -103,12 +103,29 @@ DC_SPEC: tuple = (("EX 600-1", 630.0, 1.1, "[DC p.105] — 사용자 제공"),
                   ("EX 600-2", 630.0, 2.1, "[DC p.105] — 10/20 bench OVL 630 V·OCL 2.1 A(기본값 = 설정 가능한 최대)와 일치"))
 
 
+# ───────────── 시리얼 통신 허용값(5-17) — 장비가 실제로 받는 값만. params 의 *_BAUD(choices)·패리티·정지 비트·종결 문자가 쓴다 ─────────────
+# 사용자가 매뉴얼에서 확인(2026-11-13): PLC·DC·CESAR·IG. MFC 는 다시 확인하지 못해 이 표의 기존 근거([MFC p.72, p.54]) 그대로.
+PLC_BAUDS: tuple = (1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200)   # XGB 내장 Cnet(Modbus RTU 서버) — XG5000 기본 파라미터 Cnet
+PLC_PARITIES: tuple = ("none", "even", "odd")                               # 데이터 비트는 RTU 라 8 고정
+PLC_STOPBITS: tuple = (1, 2)
+MFC_BAUDS: tuple = (9600, 19200, 38400, 57600, 115200)                      # [MFC p.72, p.54] 9600 기본, 9600~115200 선택, 8N1 고정
+DC_BAUDS: tuple = (9600, 19200, 38400, 57600, 115200, 230400)               # [DC p.38-40] 8N1 고정
+DC_DELIMITERS: tuple = ("LF", "CR", "CRLF")                                 # [DC p.49] 출고값 LF
+DC_DELIMITER_BYTES = {"LF": b"\n", "CR": b"\r", "CRLF": b"\r\n"}
+CESAR_BAUDS: tuple = (9600, 19200, 38400, 57600, 115200)                    # [CESAR 4-32~4-37] 앞면에서 선택, 8O1 고정
+IG_BAUDS: tuple = (1200, 2400, 4800, 9600)                                  # [IG p.15, p.18] DIP S1-1·S1-2, 출고 9600, 8N1
+IG_CHAR_GAP_MIN_MS = 50          # [IG p.52-53] 글자 사이 50 ms 이상, 초당 약 2글자보다 빠르게 보내지 않는다
+CESAR_HOST_ACK_WINDOW_MS = 100   # [CESAR 4-32~4-37] 장비는 응답을 보낸 뒤 100 ms 안에 호스트 응답이 없으면 ACK 로 본다
+
+
 # ═════════════ 1. PLC — LS XGB(형명 미확인), 내장 Modbus RTU ═════════════
 PLC = Device(
     key="plc", name="PLC", model="LS XGB 계열(CPU 형명 미확인 — XBF-DV04A·XBO-TC02A 확장)", model_confirmed=False,
     manual="PLC_HELP",
     serial="COM9, 115200 8N1, 국번 1, Modbus RTU (v1 lib/config.py:21-26). XG5000 기본 파라미터 'MODBUS 설정'"
-           " — 국번 0~63, 7/8비트, 패리티, 속도, RTU/ASCII, DI·DO·AI·AO 시작 주소 [PLC_HELP txt p.358 / 9-6]",
+           " — 국번 0~63, 7/8비트, 패리티, 속도, RTU/ASCII, DI·DO·AI·AO 시작 주소 [PLC_HELP txt p.358 / 9-6]. "
+           "내장 Cnet(Modbus RTU 서버) 속도 1200/2400/4800/9600/19200/38400/57600/115200, 패리티 none·even·odd, 정지 비트 1·2, "
+           "데이터 비트는 RTU 라 8 고정(사용자 매뉴얼 확인 2026-11-13) — PC 쪽은 설정 PLC_BAUD·PLC_PARITY·PLC_STOPBITS",
     framing="Modbus RTU. 코일 = M워드(10진)×16 + 비트(16진), 레지스터 = D번호. FC1·FC3·FC5·FC6·FC15",
     commands=(
         Cmd("FC1 0..95", "코일 M00000~M0005F 한 번에(밸브·셔터·MV_INTERLOCK·히터 코일·이오나이저)", "비트",
@@ -156,7 +173,8 @@ MFC = Device(
     key="mfc", name="MFC 컨트롤러", model="ATOVAC GPC3000 (MFC 2채널 Ar/O2 + 압력 제어)", model_confirmed=True,
     manual="MFC",
     serial="RS-232 DB9 male: 2 TX, 3 RX, 5 GND [MFC p.25 표9]. 9600 기본(9600~115200 선택), 8N1 고정 [p.72, p.54]. "
-           "원격 제어는 [CTRL Mode]=Remote [p.54, p.71] — R37 X=1 로 읽어 확인. 핸드셰이크 선 없음(DTR/RTS 손대지 않음)",
+           "원격 제어는 [CTRL Mode]=Remote [p.54, p.71] — R37 X=1 로 읽어 확인. 핸드셰이크 선 없음(DTR/RTS 손대지 않음). "
+           "PC 쪽 속도는 설정 MFC_BAUD(9600/19200/38400/57600/115200 — 이번에 매뉴얼로 다시 확인하지 못해 이 표의 근거 그대로)",
     framing="ASCII 명령 + CR, R 명령 외에는 파라미터 필수 [p.72]. 값은 %FS",
     commands=(
         Cmd("R60", "모든 채널 유량", "Q0+100.0+100.0+100.0+100.0 (%FS, 채널당 6바이트)", "[MFC p.86]"),
@@ -216,7 +234,8 @@ DC = Device(
     serial="RS-232C/RS-485/TCP(옵션), 9600 기본(9600~230400), 8N1 고정 [DC p.13/15, p.36-37/38-39]. "
            "Delimiter LF/CR/CRLF 선택 [p.47/49], 'Response' 메뉴 Yes/No(공장 No) [p.49] — 명령에 응답을 돌려줄지 정하는 앞면 설정"
            "(명령으로 읽을 수 없음, v1 에서 설정 명령 무응답 → No 로 보임). RS-232 RJ45 3 RX · 7 TX · 5 GND [p.41], "
-           "핸드셰이크 선 없음(DTR/RTS 손대지 않음)",
+           "핸드셰이크 선 없음(DTR/RTS 손대지 않음). 속도 9600/19200/38400/57600/115200/230400, 데이터 8·정지 1·패리티 없음 고정 "
+           "[DC p.38-40], 종결 문자 LF(출고값)·CR·CRLF [p.49](사용자 매뉴얼 확인 2026-11-13) — PC 쪽은 설정 DC_BAUD·DC_DELIMITER",
     framing="SCPI 텍스트 + Delimiter, 명령 최대 40바이트 [p.84/86]",
     commands=(
         Cmd("MEAS:ALL?", "출력 전압·전류 측정", "\"10.0000,1.0000\" (V,A)", "[DC p.90/92]"),
@@ -302,7 +321,10 @@ RFPULSE = Device(
     key="rfpulse", name="RF Pulse", model="AE CESAR 1310 13.56 MHz 1 kW (변형 61300050/61300053 미확인)", model_confirmed=True,
     manual="CESAR",
     serial="DB9 female: 2 TXD, 3 RXD, 5 COM, 핸드셰이크 없음 [CESAR p.78 / 4-44]. 9600~115200, 홀수 패리티 8O1 "
-           "[p.78-79 / 4-44~45]. 주소 1~31(0 = 브로드캐스트, 응답 없음), RS-232 는 사실상 1 [p.80 / 4-46, p.120 / 4-86]",
+           "[p.78-79 / 4-44~45]. 주소 1~31(0 = 브로드캐스트, 응답 없음), RS-232 는 사실상 1 [p.80 / 4-46, p.120 / 4-86]. "
+           "속도 9600/19200/38400/57600/115200 은 앞면에서 선택, 홀수 패리티·8 데이터·1 정지 고정. 장비는 응답을 보낸 뒤 100 ms 안에 "
+           "호스트 응답이 없으면 ACK 로 본다. 판 57023916-00B 에는 'unit address is always 1' [CESAR 4-32~4-37]"
+           "(사용자 매뉴얼 확인 2026-11-13)",
     framing="AE Bus: Header(bit3~7 주소, bit0~2 길이 0~6, 7 이면 길이 바이트 추가) + Command + Data(LSB 먼저) + "
             "XOR 체크섬. ACK 0x06 / NAK 0x15. 1~127 설정(CSR 응답), 128~255 읽기 [p.79-83 / 4-45~49, p.96-97 / 4-62~63]",
     commands=(
@@ -350,7 +372,8 @@ IG = Device(
     key="ig", name="이온 게이지", model="Duniway Terranova 934 (MOXA UPort 1410 경유 COM12)", model_confirmed=True,
     manual="IG",
     serial="DB9 female: 2 TX(934→PC), 3 RX, 7 GND, 핸드셰이크 없음 [IG p.35]. 1200~9600(공장 9600, DIP S1-1/S1-2), "
-           "8N1 [IG p.18, p.36, p.52]. 주소 없음(1:1)",
+           "8N1 [IG p.18, p.36, p.52]. 주소 없음(1:1). 속도 1200/2400/4800/9600, 글자 사이 50 ms 이상·초당 약 2글자보다 빠르게 "
+           "보내지 않는다 [IG p.15, p.18, p.35-36, p.52-53](사용자 매뉴얼 확인 2026-11-13) — PC 쪽은 설정 IG_BAUD·IG_CHAR_GAP_MS",
     framing="대문자 ASCII 한 글자, 종단 없음. E 응답 26항목 CR 구분(실측 LF CR). 압력 'xy z' = xy×10^z [IG p.53-54]",
     commands=(
         Cmd("E", "상태 26항목: 2 필라멘트, 3 방출, 5 에러 코드, 24 이온, 25·26 게이지 A/B", "26줄", "[IG p.53-54 표 3.4]"),

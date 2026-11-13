@@ -222,8 +222,9 @@ class App:
     def build(self) -> ChkSystem:
         mode = RunMode(self.cfg["RUN_MODE"])
         if mode is RunMode.SIM:
-            from v2.chk.sim.rig import make_sims, sim_transports
+            from v2.chk.sim.rig import make_sims, sim_transports, sims_follow_config
             _, self.sims = make_sims(self.clock.monotonic(), log_keep=SIM_APP_LOG_KEEP)
+            sims_follow_config(self.sims, self.cfg)
             tr = sim_transports(self.clock, self.sims)
         else:
             tr = serial_transports(self.clock, self.cfg, serial_factory=self.serial_factory)

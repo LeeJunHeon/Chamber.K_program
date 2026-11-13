@@ -26,10 +26,10 @@ from v2.common.worker import Request, Result, Worker
 
 RF_OFF, RF_ON, SET_MODE, SET_SETPOINT, SET_CONTROL, SET_PULSING, SET_AUTO_OFF, SET_FREQ, SET_DUTY = 1, 2, 3, 8, 14, 27, 33, 93, 96
 Q_MODEL, Q_CAPACITY, Q_AUTO_OFF, Q_CONTROL, Q_STATUS, Q_FWD, Q_REF, Q_FREQ, Q_DUTY, Q_SW = 128, 130, 152, 155, 162, 165, 166, 193, 196, 198
-ACK_TIMEOUT_S = 2.0          # v1 RFPULSE_ACK_TIMEOUT_MS(lib/config.py:649) — 설정 명령 CSR 대기
-RF_ONOFF_TIMEOUT_S = 2.5     # v1 max(RFPULSE_ACK_TIMEOUT_MS, 2500) — RF ON·OFF
-RF_ON_SETTLE_S = 0.8         # v1 RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS(lib/config.py:657)
-START_RETRIES = 3            # v1 _make_cmd(retries=3)
+# 통신 시간·횟수는 설정(5-17): RFPULSE_ACK_TIMEOUT_MS(2000 — v1 lib/config.py:649, 설정 명령 CSR 대기) ·
+# RFPULSE_ONOFF_TIMEOUT_MS(2500 — v1 max(RFPULSE_ACK_TIMEOUT_MS, 2500), RF ON·OFF) ·
+# RFPULSE_ON_SETTLE_MS(800 — v1 RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS) · RFPULSE_CMD_RETRIES(3 — v1 _make_cmd(retries=3)).
+# 그대로 고정: 사전 RF OFF 뒤 200 ms·재시도 백오프 max(150 ms, 간격)·CSR 5 max(간격 × 1.5, 1200 ms) — v1 시작 순서 그대로.
 BENCH_QUERIES = frozenset({Q_STATUS, Q_FWD, Q_REF, Q_CONTROL, Q_MODEL, Q_CAPACITY, Q_SW, Q_AUTO_OFF})   # 152: 명령 33 현재 값(읽기만)
 CSR_TEXT = {0: "accepted", 1: "wrong control mode(Host 아님)", 2: "RF output is on", 4: "data out of range",
             5: "User Port RF signal off", 7: "active fault(s)", 9: "data byte count", 19: "recipe mode",
@@ -79,6 +79,10 @@ class RfPulseDriver:
         self.addr = cfg["RFPULSE_ADDR"]
         self.gap_s = cfg["RFPULSE_CMD_GAP_MS"] / 1000.0
         self.q_timeout_s = cfg["RFPULSE_QUERY_TIMEOUT_MS"] / 1000.0
+        self.ack_timeout_s = cfg["RFPULSE_ACK_TIMEOUT_MS"] / 1000.0
+        self.onoff_timeout_s = cfg["RFPULSE_ONOFF_TIMEOUT_MS"] / 1000.0
+        self.on_settle_s = cfg["RFPULSE_ON_SETTLE_MS"] / 1000.0
+        self.cmd_retries = int(cfg["RFPULSE_CMD_RETRIES"])
         self.alternate = cfg["RFPULSE_READ_PLAN"] == "alternate"
         self.model: Optional[str] = None
         self.set_w: Optional[float] = None
@@ -226,31 +230,33 @@ class RfPulseDriver:
                 advance(("err", r.error or r.reason or r.status))
         advance(None)
 
-    def _exec_retry(self, name: str, cmd: int, data: bytes = b"", limit: float = ACK_TIMEOUT_S, off_fix: bool = True):
+    def _exec_retry(self, name: str, cmd: int, data: bytes = b"", limit: Optional[float] = None, off_fix: bool = True):
         """설정 명령 한 단계 — v1 _make_cmd(retries=3)·_fail_inflight·_try_csr_recovery:
         실패(무응답·NAK·CSR ≠ 0)면 max(150 ms, 간격) 뒤(CSR 5 는 max(간격 × 1.5, 1200 ms)) 다시, 3회.
         CSR 1(Host 아님) → 14 Host 뒤, CSR 2(RF ON 중) → 1 RF OFF 뒤 다시 — 이것도 재시도 한 번을 쓴다.
         off_fix=False(공정 중 수정 — RF 를 켠 채 바꾸는 것)면 CSR 2 에 RF OFF 를 하지 않고 실패로."""
         tries = 0
+        if limit is None:
+            limit = self.ack_timeout_s
         while True:
             r = yield ("x", cmd, data, limit)
             csr = (r[1][0] if r[1] else -1) if r[0] == "ok" else None
             if csr == 0:
                 return
-            if (csr == 1 or (csr == 2 and off_fix)) and cmd not in (SET_CONTROL, RF_OFF) and tries < START_RETRIES:
+            if (csr == 1 or (csr == 2 and off_fix)) and cmd not in (SET_CONTROL, RF_OFF) and tries < self.cmd_retries:
                 fix = SET_CONTROL if csr == 1 else RF_OFF
-                f = yield ("x", fix, b"\x02" if fix == SET_CONTROL else b"", RF_ONOFF_TIMEOUT_S if fix == RF_OFF else ACK_TIMEOUT_S)
+                f = yield ("x", fix, b"\x02" if fix == SET_CONTROL else b"", self.onoff_timeout_s if fix == RF_OFF else self.ack_timeout_s)
                 self._emit("csr_recovery", f"{name}: CSR {csr}({CSR_TEXT[csr]}) → 명령 {fix} 뒤 다시 ({f[0]})")
                 tries += 1
                 yield ("sleep", max(0.2, self.gap_s))
                 continue
-            if tries >= START_RETRIES:
+            if tries >= self.cmd_retries:
                 if csr is None:
                     raise RfpError(f"{name}: 명령 {cmd} 응답 없음·오류({r[1]})")
                 raise RfpCsr(cmd, csr)
             tries += 1
             backoff = max(self.gap_s * 1.5, 1.2) if csr == 5 else max(0.15, self.gap_s)
-            self._emit("retry", f"{name}: 명령 {cmd} {'CSR ' + str(csr) if csr is not None else r[1]} — {tries}/{START_RETRIES} 다시")
+            self._emit("retry", f"{name}: 명령 {cmd} {'CSR ' + str(csr) if csr is not None else r[1]} — {tries}/{self.cmd_retries} 다시")
             yield ("sleep", backoff)
 
     def start(self, target_w: float, freq_hz: Optional[int] = None, duty: Optional[int] = None,
@@ -270,7 +276,7 @@ class RfPulseDriver:
 
         def gen():
             yield from self._exec_retry("Host", SET_CONTROL, b"\x02")
-            yield from self._exec_retry("사전 RF OFF", RF_OFF, b"", RF_ONOFF_TIMEOUT_S)   # RF 가 켜진 채 설정이 바뀌지 않게
+            yield from self._exec_retry("사전 RF OFF", RF_OFF, b"", self.onoff_timeout_s)   # RF 가 켜진 채 설정이 바뀌지 않게
             yield ("sleep", 0.2)
             yield from self._exec_retry("조절 모드", SET_MODE, b"\x06")
             yield from self._exec_retry("셋포인트", SET_SETPOINT, aebus.le(sp, 2))
@@ -279,9 +285,9 @@ class RfPulseDriver:
             if duty is not None:
                 yield from self._exec_retry("듀티", SET_DUTY, aebus.le(int(duty), 2))
             yield from self._exec_retry("펄싱", SET_PULSING, b"\x01")
-            yield from self._exec_retry("RF ON", RF_ON, b"", RF_ONOFF_TIMEOUT_S)
+            yield from self._exec_retry("RF ON", RF_ON, b"", self.onoff_timeout_s)
             self.set_w = float(target_w)
-            yield ("sleep", RF_ON_SETTLE_S)
+            yield ("sleep", self.on_settle_s)
             fb = yield from query_retry(Q_FREQ, 3)
             db = yield from query_retry(Q_DUTY, 2)
             f = aebus.u24(fb) if fb is not None else None
@@ -300,7 +306,7 @@ class RfPulseDriver:
                     bad.append(f"듀티 요청 {duty} → {d}")
             if bad:
                 if self.cfg["RFPULSE_VERIFY_PULSE_CONFIG"]:
-                    yield ("x", RF_OFF, b"", RF_ONOFF_TIMEOUT_S)
+                    yield ("x", RF_OFF, b"", self.onoff_timeout_s)
                     self.set_w = 0.0
                     self._emit("config_readback", "펄스 설정 되읽기 불일치 — RF OFF: " + ", ".join(bad), "RFP_CONFIG_MISMATCH")
                     raise RfpConfigMismatch(", ".join(bad))
@@ -372,11 +378,11 @@ class RfPulseDriver:
         def fn(s):
             for attempt in (1, 2):
                 try:
-                    csr = self._exec(s, RF_OFF, b"", RF_ONOFF_TIMEOUT_S)
+                    csr = self._exec(s, RF_OFF, b"", self.onoff_timeout_s)
                     if csr == 1:
-                        hc = self._exec(s, SET_CONTROL, b"\x02", ACK_TIMEOUT_S)
+                        hc = self._exec(s, SET_CONTROL, b"\x02", self.ack_timeout_s)
                         self._emit("csr_recovery", f"RF OFF: CSR 1(Host 아님) → 명령 14 뒤 다시 (CSR {hc})")
-                        csr = self._exec(s, RF_OFF, b"", RF_ONOFF_TIMEOUT_S)
+                        csr = self._exec(s, RF_OFF, b"", self.onoff_timeout_s)
                     st = parse_status(self._x(s, Q_STATUS))
                     if csr == 0 and not st["out_on"]:
                         self.set_w = 0.0
@@ -390,5 +396,5 @@ class RfPulseDriver:
             raise RfpError("RF OFF 확인 실패")
         self.worker.submit(Request("safety", fn, deadline=self.clock.monotonic() + 3.0, on_done=on_done,
                                    name="rfp:RF OFF", purge=True,
-                                   exec_timeout_s=4 * (RF_ONOFF_TIMEOUT_S + self.gap_s) + 2 * (self.q_timeout_s + self.gap_s),
+                                   exec_timeout_s=4 * (self.onoff_timeout_s + self.gap_s) + 2 * (self.q_timeout_s + self.gap_s),
                                    confirms_link=False))

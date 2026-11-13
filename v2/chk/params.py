@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from dataclasses import replace as _dc_replace
 from typing import Any, Mapping, Optional
 
 from v2.common.paramdef import (
@@ -32,20 +33,35 @@ _COM = r"COM[1-9][0-9]{0,2}"
 
 def _p(key, group, label, unit, type_, default, lo=None, hi=None, *, safety=M, apply=IDLE,
        scope=Scope.PROCESS, role=None, desc="", enum=None, pattern=None, v1_key=None,
-       v1_default=None, src=_JSON, pending=False, note="", v1_period=None, locked=False) -> ParamDef:
+       v1_default=None, src=_JSON, pending=False, note="", v1_period=None, locked=False, choices=None) -> ParamDef:
+    if choices is not None:                     # 허용 숫자 목록 — 범위(min·max)는 목록의 양 끝(목록을 모르는 화면도 범위는 맞게)
+        lo, hi = min(choices), max(choices)
     if role is None:
         role = Role.ADMIN if (safety is H or scope is not Scope.PROCESS) else Role.OPERATOR
     return ParamDef(key=key, group=group, label=label, desc=desc or label, unit=unit, type=type_,
                     default=default, min=lo, max=hi, enum=enum, pattern=pattern, safety=safety,
                     apply=apply, scope=scope, role=role, v1_key=v1_key, v1_default=v1_default,
-                    v1_source=src, pending_confirm=pending, note=note, v1_period_s=v1_period, web_locked=locked)
+                    v1_source=src, pending_confirm=pending, note=note, v1_period_s=v1_period, web_locked=locked,
+                    choices=tuple(choices) if choices is not None else None)
 
 
 def _inst(key, label, type_, default, *, desc="", pattern=None, lo=None, hi=None, enum=None,
-          safety=M, v1_key=None, src=_JSON, unit="", v1_default=None, locked=False) -> ParamDef:
+          safety=M, v1_key=None, src=_JSON, unit="", v1_default=None, locked=False, choices=None) -> ParamDef:
     return _p(key, "install", label, unit, type_, default, lo, hi, safety=safety, apply=RESTART,
               scope=Scope.INSTALL, desc=desc, pattern=pattern, enum=enum, v1_key=v1_key, src=src,
-              v1_default=v1_default, locked=locked)
+              v1_default=v1_default, locked=locked, choices=choices)
+
+
+# 통신 설정 설명에 붙는 말(5-17) — 이 값은 PC 쪽 설정일 뿐이고 장비 쪽은 사람이 따로 맞춘다
+def _pc(where: str) -> str:
+    return f" PC 쪽 설정이다. 장비 쪽도 같은 값이어야 한다(장비에서 바꾸는 곳: {where})."
+
+
+_AT_PLC = "XG5000 기본 파라미터 Cnet"
+_AT_MFC = "장비 메뉴"
+_AT_DC = "앞면 I/O 메뉴"
+_AT_RFP = "앞면"
+_AT_IG = "내부 DIP S1"
 
 
 PARAMS: tuple = (
@@ -55,29 +71,50 @@ PARAMS: tuple = (
     _inst("RUN_MODE", "실행 모드", E, "sim", enum=("sim", "bench", "prod"), safety=H, src=_V2, locked=True,
           desc="sim=가짜 장비·외부 연결 없음 / bench=실장비 읽기 전용 / prod=운전. "
                "로컬 파일이 없으면 sim. prod 는 명시적으로만"),
-    _inst("PLC_PORT", "PLC 포트", S, "COM9", pattern=_COM, safety=H),
-    _inst("PLC_BAUD", "PLC 통신 속도", I, 115200, lo=9600, hi=115200, unit="bps",
-          src="lib/config.py:24 (고정값)"),
-    _inst("PLC_SLAVE_ID", "PLC Modbus 국번", I, 1, lo=1, hi=247, src="lib/config.py:25 (고정값)"),
-    _inst("MFC_PORT", "MFC 포트", S, "COM10", pattern=_COM),
-    _inst("MFC_BAUD", "MFC 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L),
-    _inst("DC_PORT", "DC Power 포트", S, "COM11", pattern=_COM),
-    _inst("DC_BAUD", "DC Power 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L,
-          v1_key="DC_BAUDRATE"),
+    _inst("PLC_PORT", "PLC 포트", S, "COM9", pattern=_COM, safety=H,
+          desc="PLC 가 물린 PC 의 COM 포트(장치 관리자에서 확인)"),
+    _inst("PLC_BAUD", "PLC 통신 속도", I, 115200, choices=dev.PLC_BAUDS, unit="bps",
+          src="lib/config.py:24 (고정값) · XGB 내장 Cnet 매뉴얼(사용자 확인 2026-11-13)",
+          desc="XGB 내장 Cnet(Modbus RTU 서버)이 받는 속도만 고른다. 지금 장비 115200 8N1." + _pc(_AT_PLC)),
+    _inst("PLC_PARITY", "PLC 패리티", E, "none", enum=dev.PLC_PARITIES,
+          src="v2 (5-17 — XGB 내장 Cnet 매뉴얼, 사용자 확인 2026-11-13. v1 은 8N1 고정)",
+          desc="데이터 비트는 Modbus RTU 라 8 고정. 지금 장비 none." + _pc(_AT_PLC)),
+    _inst("PLC_STOPBITS", "PLC 정지 비트", I, 1, choices=dev.PLC_STOPBITS, unit="bit",
+          src="v2 (5-17 — XGB 내장 Cnet 매뉴얼, 사용자 확인 2026-11-13. v1 은 8N1 고정)",
+          desc="지금 장비 1." + _pc(_AT_PLC)),
+    _inst("PLC_SLAVE_ID", "PLC Modbus 국번", I, 1, lo=1, hi=247, src="lib/config.py:25 (고정값)",
+          desc="지금 장비 국번 1." + _pc(_AT_PLC)),
+    _inst("MFC_PORT", "MFC 포트", S, "COM10", pattern=_COM, desc="MFC 컨트롤러가 물린 PC 의 COM 포트"),
+    _inst("MFC_BAUD", "MFC 통신 속도", I, 9600, choices=dev.MFC_BAUDS, unit="bps", safety=L,
+          src="config_user.json · [MFC p.72, p.54] (9600 기본, 9600~115200 선택 — 장비 사실 표 근거 그대로)",
+          desc="GPC3000 이 받는 속도만 고른다. 데이터 8·패리티 없음·정지 1 은 장비 고정(8N1)." + _pc(_AT_MFC)),
+    _inst("DC_PORT", "DC Power 포트", S, "COM11", pattern=_COM, desc="DC Power 가 물린 PC 의 COM 포트"),
+    _inst("DC_BAUD", "DC Power 통신 속도", I, 9600, choices=dev.DC_BAUDS, unit="bps", safety=L,
+          v1_key="DC_BAUDRATE", src="config_user.json · [DC p.38-40] (사용자 확인 2026-11-13)",
+          desc="ODA EX 가 받는 속도만 고른다. 데이터 8·정지 1·패리티 없음은 장비 고정(8N1)." + _pc(_AT_DC)),
+    _inst("DC_DELIMITER", "DC Power 종결 문자", E, "LF", enum=dev.DC_DELIMITERS,
+          src="v2 (5-17 — [DC p.49], 출고값 LF. v1 은 LF 고정 송신)",
+          desc="명령 끝에 붙이고 응답 끝으로 읽는 문자(LF·CR·CRLF). 다르면 장비가 명령이 끝난 것으로 보지 않아 "
+               "무응답이 된다." + _pc(_AT_DC)),
     _inst("RFPULSE_ENABLED", "RF Pulse 사용", B, False, v1_default=True, src=_V2,
           desc="false 면 포트를 열지 않고 rfp 블록 품질 off, RF Pulse 를 쓰는 레시피는 DEVICE_DISABLED 로 시작 거부"
                "(지금 미연결 — 사용자 2026-10-16)"),
-    _inst("RFPULSE_PORT", "RF Pulse 포트", S, "COM13", pattern=_COM),
-    _inst("RFPULSE_BAUD", "RF Pulse 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L),
+    _inst("RFPULSE_PORT", "RF Pulse 포트", S, "COM13", pattern=_COM, desc="RF Pulse(CESAR)가 물린 PC 의 COM 포트"),
+    _inst("RFPULSE_BAUD", "RF Pulse 통신 속도", I, 9600, choices=dev.CESAR_BAUDS, unit="bps", safety=L,
+          src="config_user.json · [CESAR 4-32~4-37] (사용자 확인 2026-11-13)",
+          desc="CESAR 가 받는 속도만 고른다. 8 데이터·1 정지는 장비 고정." + _pc(_AT_RFP)),
     _inst("RFPULSE_ADDR", "RF Pulse AE Bus 주소", I, 1, lo=0, hi=31,
-          desc="AE Bus 주소 0~31(v1 은 32 이상이면 응답 비교가 영원히 불일치)"),
+          desc="AE Bus 주소 0~31(v1 은 32 이상이면 응답 비교가 영원히 불일치). 매뉴얼 판 57023916-00B 에는 "
+               "'unit address is always 1' 이라고 나온다 — 기본 1 을 그대로 쓴다." + _pc(_AT_RFP)),
     _inst("RFPULSE_PARITY", "RF Pulse 패리티", E, "odd", enum=("none", "odd", "even"),
-          desc="CESAR RS-232 규격은 홀수 패리티(8O1). 다르면 NAK 만 돌아온다"),
+          desc="CESAR RS-232 규격은 홀수 패리티(8O1) — 장비는 홀수 고정이라 odd 로 둔다. 다르면 NAK 만 돌아온다." + _pc(_AT_RFP)),
     _inst("IG_ENABLED", "이온 게이지 사용", B, True, v1_default=False,
           desc="false 면 base_pressure 가 있는 공정은 시작을 거부한다(v1 은 경고만 하고 대기를 건너뜀)"),
-    _inst("IG_PORT", "이온 게이지 포트", S, "COM12", pattern=r"(" + _COM + r")?", v1_default=""),
-    _inst("IG_BAUD", "이온 게이지 통신 속도", I, 9600, lo=1200, hi=115200, unit="bps", safety=L,
-          src="lib/config.py:735"),
+    _inst("IG_PORT", "이온 게이지 포트", S, "COM12", pattern=r"(" + _COM + r")?", v1_default="",
+          desc="이온 게이지가 물린 PC 의 COM 포트(MOXA UPort 경유)"),
+    _inst("IG_BAUD", "이온 게이지 통신 속도", I, 9600, choices=dev.IG_BAUDS, unit="bps", safety=L,
+          src="lib/config.py:735 · [IG p.15, p.18] (DIP S1-1·S1-2, 출고 9600 — 사용자 확인 2026-11-13)",
+          desc="Terranova 934 가 받는 속도만 고른다. 8N1 은 장비 고정." + _pc(_AT_IG)),
     _inst("HEATER_ENABLED", "히터 기능 사용", B, True, safety=H,
           desc="false 면 히터 명령·레시피 히터 행을 거부한다. 워치독 하트비트는 항상 쓴다"),
     _inst("PLC_FAIL_STREAK", "PLC 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="v2 (3단계 worker 기본값)",
@@ -89,9 +126,23 @@ PARAMS: tuple = (
     _inst("PLC_TXN_TIMEOUT_MS", "PLC 트랜잭션 응답 제한", I, 150, lo=30, hi=1000, unit="ms",
           src="v2 (4-1 drivers/plc.py TXN_TIMEOUT_S, v1 0.5 s)",
           desc="Modbus 트랜잭션 하나의 응답 제한 — bench 실측(회선 + 스캔 + USB 지연)으로 맞춘다"),
+    _inst("PLC_WRITE_DEADLINE_MS", "PLC 쓰기 요청 한도", I, 2000, lo=500, hi=10000, unit="ms",
+          src="v2 (4-1 drivers/plc.py submit_write 의 고정값 2.0 s)",
+          desc="쓰기 요청 하나(대기열 기다림 + 트랜잭션 + 재시도 전부)의 한도 — 넘으면 그 쓰기는 실패로 끝낸다"),
     _inst("DC_WRITE_QUERY_GAP_MS", "DC 쓰기 뒤 질의 금지 시간", I, 500, lo=100, hi=3000, unit="ms",
           src="device/DCpower.py:36 (2026-09-28 실측)",
           desc="ODA EX 는 직전 명령을 처리하는 동안 들어온 질의에 답하지 않는다 — 쓰기 뒤 이만큼 질의하지 않는다"),
+    _inst("DC_START_GAP_MS", "DC 출력 켜기 명령 간격", I, 120, lo=120, hi=2000, unit="ms",
+          src="device/DCpower.py:829-833 (_send 의 msleep(120))",
+          desc="*RST → *CLS → APPLy → OUTP ON 사이 간격. v1 실측값 120 ms 보다 짧게는 못 둔다"),
+    _inst("DC_STEP_TIMEOUT_MS", "DC 켜기·끄기 단계 응답 제한", I, 1500, lo=1500, hi=10000, unit="ms",
+          src="device/DCpower.py (OUTP? 1.5 s)", safety=H,
+          desc="출력 켜기·OFF 확인 순서에서 단계 하나(OUTP? 질의 포함)의 한도. OFF 확인이 일찍 포기하지 않게 1500 ms 보다 "
+               "짧게는 못 둔다"),
+    _inst("DC_CURR_WRITE_DELAY_MS", "DC 측정 뒤 전류 쓰기까지", I, 100, lo=100, hi=400, unit="ms",
+          src="v2 (사용자 결정 2026-10-15, drivers/dc.py CURR_WRITE_DELAY_S)",
+          desc="1초 읽기(MEAS:ALL?)를 보낸 뒤 CURR 쓰기(와 출력 켜기 시작)까지. 이 값 + DC_WRITE_QUERY_GAP_MS 가 1000 ms 를 "
+               "넘으면 다음 초의 측정이 질의 금지 시간에 걸린다(X42)"),
     _inst("MFC_CMD_GAP_MS", "MFC 명령 간격", I, 150, lo=20, hi=2000, unit="ms",
           src="v2 (사용자 결정 2026-10-15, v1 1000 ms)", desc="명령(질의·설정) 사이 최소 간격 — bench 실측으로 맞춘다"),
     _inst("MFC_QUERY_TIMEOUT_MS", "MFC 질의 응답 제한", I, 300, lo=50, hi=2000, unit="ms",
@@ -124,9 +175,33 @@ PARAMS: tuple = (
           src="[CESAR p.174 / 6-4] (v1 1500 ms)", desc="응답을 받은 뒤 다음 명령까지 — 매뉴얼: 핸드셰이크 또는 50 ms"),
     _inst("RFPULSE_QUERY_TIMEOUT_MS", "RF Pulse 질의 응답 제한", I, 250, lo=50, hi=3000, unit="ms",
           src="v2 (사용자 결정 2026-10-15, v1 4500~9000 ms)", desc="질의 하나(162·165·166 각각)의 제한"),
+    _inst("RFPULSE_ACK_TIMEOUT_MS", "RF Pulse 설정 명령 응답 제한", I, 2000, lo=500, hi=10000, unit="ms",
+          src="lib/config.py:649 (RFPULSE_ACK_TIMEOUT_MS 2000, 고정값)",
+          desc="설정 명령(모드·셋포인트·주파수·듀티·Host 전환)의 CSR 응답을 기다리는 시간"),
+    _inst("RFPULSE_ONOFF_TIMEOUT_MS", "RF Pulse RF ON·OFF 응답 제한", I, 2500, lo=2500, hi=10000, unit="ms", safety=H,
+          src="device/RFpulse.py:927-956 (max(RFPULSE_ACK_TIMEOUT_MS, 2500))",
+          desc="RF ON·RF OFF 의 CSR 응답을 기다리는 시간. RF OFF 를 일찍 포기하지 않게 2500 ms 보다 짧게는 못 둔다"),
+    _inst("RFPULSE_ON_SETTLE_MS", "RF Pulse RF ON 뒤 되읽기까지", I, 800, lo=0, hi=5000, unit="ms",
+          src="lib/config.py:657 (RFPULSE_POLL_START_DELAY_AFTER_RF_ON_MS 800, 고정값)",
+          desc="RF ON 뒤 펄스 설정(193·196)을 되읽기 전에 기다리는 시간"),
+    _inst("RFPULSE_CMD_RETRIES", "RF Pulse 시작 명령 재시도 횟수", I, 3, lo=1, hi=10, unit="회",
+          src="device/RFpulse.py (_make_cmd(retries=3))",
+          desc="시작 순서의 설정 명령 하나가 무응답·NAK·CSR ≠ 0 일 때 다시 보내는 횟수"),
     _inst("RFPULSE_READ_PLAN", "RF Pulse 읽기 계획", E, "auto", enum=("auto", "full", "alternate"),
           src="v2 (사용자 결정 2026-10-15)",
           desc="full=매초 162·165·166, alternate=166 매초·165/162 번갈아, auto=질의 하나가 250 ms 를 넘으면 번갈아"),
+    _inst("IG_CHAR_GAP_MS", "이온 게이지 글자 사이 간격", I, 50, lo=dev.IG_CHAR_GAP_MIN_MS, hi=1000, unit="ms",
+          src="v2 (5-17 — [IG p.52-53] 글자 사이 50 ms 이상, 초당 약 2글자보다 빠르게 보내지 않는다)",
+          desc="명령 글자(E·F·A·B)를 보낸 뒤 다음 글자를 보내기까지 최소 간격. 평소에는 E 를 1초에 한 번만 보내 걸리지 않는다"),
+    _inst("IG_FILAMENT_E_BLOCK_MS", "필라멘트 명령 뒤 E 금지 시간", I, 1000, lo=500, hi=5000, unit="ms",
+          src="device/IonGauge.py (e_block_sec 1.0)",
+          desc="A(켜기)·B(끄기)를 보낸 뒤 이만큼은 상태 질의 E 를 보내지 않는다(초당 약 2글자 제한 — 500 ms 보다 짧게는 못 둔다)"),
+    _inst("PORT_WRITE_TIMEOUT_SEC", "포트 쓰기 제한 시간", F, 1.0, lo=0.2, hi=10.0, unit="s",
+          src="v2 (3단계 transport.SerialSettings.write_timeout 1.0)",
+          desc="시리얼 포트에 바이트를 쓰는 호출 하나의 한도(USB-시리얼이 사라졌을 때 쓰기가 막히지 않게) — 다섯 장비 공통"),
+    _inst("CONNECT_RETRY_PAUSE_MS", "연결 초기화 다시 하기 전 쉼", I, 300, lo=100, hi=5000, unit="ms",
+          src="v2 (3단계 worker.CONNECT_RETRY_PAUSE_S 0.3)",
+          desc="연결 직후 첫 질의에 답이 없으면 포트를 닫지 않고 이만큼 쉰 뒤 입력을 비우고 초기화를 한 번 더 한다"),
     _inst("PORT_OPEN_TIMEOUT_SEC", "포트 열기 제한 시간", F, 2.0, lo=0.5, hi=30.0, unit="s", src="lib/serial_guard.py (v1 2 s)",
           desc="포트 열기를 별도 스레드에서 이만큼만 기다린다(2026-09-16 사고)"),
     _inst("CONNECT_INIT_TIMEOUT_SEC", "연결 직후 초기화 제한 시간", F, 5.0, lo=1.0, hi=60.0, unit="s", src="v2 (3단계 worker 상수)",
@@ -581,6 +656,30 @@ PARAMS: tuple = (
 )
 
 
+# ───────────── 장비별 통신 묶음(5-17) ─────────────
+# 포트·속도·패리티·종결 문자·응답 시간·재시도가 같은 장비끼리 한 묶음에 보이게 한다(화면 묶음 params[].group 만 바뀐다 —
+# scope·적용 시점·역할은 그대로). 표에 있는데 PARAMS 에 없는 키는 그냥 지나간다.
+COMM_GROUPS: tuple = (
+    ("comm_plc", ("PLC_PORT", "PLC_BAUD", "PLC_PARITY", "PLC_STOPBITS", "PLC_SLAVE_ID", "PLC_FAIL_STREAK",
+                  "PLC_TXN_TIMEOUT_MS", "PLC_WRITE_DEADLINE_MS", "PLC_RETRY_COUNT", "PLC_RETRY_DELAY_MS",
+                  "PLC_READ_DEADLINE_MS")),
+    ("comm_mfc", ("MFC_PORT", "MFC_BAUD", "MFC_FAIL_STREAK", "MFC_CMD_GAP_MS", "MFC_QUERY_TIMEOUT_MS",
+                  "MFC_QUERY_RETRIES", "MFC_VERIFY_RETRY_MS", "MFC_VERIFY_TRIES", "MFC_LINK_RETRY_MS",
+                  "MFC_READ_PLAN", "MFC_READ_DEADLINE_MS")),
+    ("comm_dc", ("DC_PORT", "DC_BAUD", "DC_DELIMITER", "DC_FAIL_STREAK", "DC_WRITE_QUERY_GAP_MS", "DC_START_GAP_MS",
+                 "DC_STEP_TIMEOUT_MS", "DC_CURR_WRITE_DELAY_MS", "DC_READ_DEADLINE_MS")),
+    ("comm_rfpulse", ("RFPULSE_ENABLED", "RFPULSE_PORT", "RFPULSE_BAUD", "RFPULSE_PARITY", "RFPULSE_ADDR",
+                      "RFPULSE_FAIL_STREAK", "RFPULSE_CMD_GAP_MS", "RFPULSE_QUERY_TIMEOUT_MS", "RFPULSE_ACK_TIMEOUT_MS",
+                      "RFPULSE_ONOFF_TIMEOUT_MS", "RFPULSE_ON_SETTLE_MS", "RFPULSE_CMD_RETRIES", "RFPULSE_READ_PLAN",
+                      "RFPULSE_READ_DEADLINE_MS", "RFPULSE_COMM_REOPEN_SEC")),
+    ("comm_ig", ("IG_ENABLED", "IG_PORT", "IG_BAUD", "IG_FAIL_STREAK", "IG_CHAR_GAP_MS", "IG_FILAMENT_E_BLOCK_MS",
+                 "IG_RESPONSE_LIMIT_MS")),
+    ("comm", ("PORT_OPEN_TIMEOUT_SEC", "PORT_WRITE_TIMEOUT_SEC", "CONNECT_INIT_TIMEOUT_SEC", "CONNECT_RETRY_PAUSE_MS")),
+)
+_GROUP_OF = {k: g for g, keys in COMM_GROUPS for k in keys}
+PARAMS = tuple(_dc_replace(p, group=_GROUP_OF[p.key]) if p.key in _GROUP_OF else p for p in PARAMS)
+
+
 # ───────────── 키 사이 규칙 ─────────────
 def _r(id_, keys, desc, fn) -> CrossRule:
     return CrossRule(id=id_, keys=tuple(keys), desc=desc, check=fn)
@@ -664,8 +763,14 @@ CROSS_RULES: tuple = (
        lambda v: _need(v["HEATER_HOLD_MV_ARRIVE_TOL_C"] <= v["HEATER_HOLD_MV_ENTER_TOL_C"], "도착 범위가 더 넓다")),
     _r("X21", ("IG_PORT", "IG_ENABLED"), "이온 게이지를 쓰면 포트 필요",
        lambda v: _need((not v["IG_ENABLED"]) or bool(v["IG_PORT"]), "IG_ENABLED 인데 IG_PORT 가 비었다")),
-    _r("X22", ("PLC_PORT", "MFC_PORT", "DC_PORT", "RFPULSE_PORT", "IG_PORT"), "시리얼 포트 중복 없음",
-       lambda v: _need(_ports_unique(v), "같은 COM 포트를 두 장비가 쓴다")),
+    _r("X22", ("PLC_PORT", "MFC_PORT", "DC_PORT", "RFPULSE_PORT", "IG_PORT", "RFPULSE_ENABLED", "IG_ENABLED"),
+       "시리얼 포트 중복 없음(꺼진 장비 RFPULSE_ENABLED·IG_ENABLED = false 의 포트는 보지 않는다)",
+       lambda v: _port_clash(v)),
+    _r("X42", ("DC_CURR_WRITE_DELAY_MS", "DC_WRITE_QUERY_GAP_MS"),
+       "DC 전류 쓰기 지연 + 쓰기 뒤 질의 금지 시간 ≤ 1000 ms(다음 초의 측정이 금지 시간에 걸리지 않게)",
+       lambda v: _need(v["DC_CURR_WRITE_DELAY_MS"] + v["DC_WRITE_QUERY_GAP_MS"] <= 1000,
+                       f"DC_CURR_WRITE_DELAY_MS {v['DC_CURR_WRITE_DELAY_MS']} + DC_WRITE_QUERY_GAP_MS "
+                       f"{v['DC_WRITE_QUERY_GAP_MS']} > 1000 ms")),
     _r("X24", ("RFPULSE_REFP_AUTO_OFF_SEC", "RFPULSE_REFP_SEC"), "장비 반사 자동 차단(명령 33) > 소프트웨어 반사파 판정",
        lambda v: _need(v["RFPULSE_REFP_AUTO_OFF_SEC"] > v["RFPULSE_REFP_SEC"],
                        "명령 33 시간이 소프트웨어 판정보다 짧다 — 평소에도 장비가 먼저 끈다")),
@@ -693,10 +798,27 @@ def _tc2_cap_problem(v: Mapping[str, Any]) -> Optional[str]:
                               f"(OT2 − TC2_MARGIN)")
 
 
+_PORT_KEYS = (("PLC_PORT", None, "PLC"), ("MFC_PORT", None, "MFC"), ("DC_PORT", None, "DC Power"),
+              ("RFPULSE_PORT", "RFPULSE_ENABLED", "RF Pulse"), ("IG_PORT", "IG_ENABLED", "이온 게이지"))
+
+
+def _port_clash(v: Mapping[str, Any]) -> Optional[str]:
+    """같은 COM 포트를 쓰는 두 장비(켜진 것만) — 없으면 None."""
+    seen: dict = {}
+    for key, en, name in _PORT_KEYS:
+        if en is not None and not v[en]:
+            continue                                   # 꺼진 장비는 포트를 열지 않는다
+        port = str(v[key]).strip().upper()
+        if not port:
+            continue
+        if port in seen:
+            return f"같은 COM 포트를 두 장비가 쓴다: {port} — {seen[port]}·{name}"
+        seen[port] = name
+    return None
+
+
 def _ports_unique(v: Mapping[str, Any]) -> bool:
-    ps = [str(v[k]).strip().upper() for k in ("PLC_PORT", "MFC_PORT", "DC_PORT", "RFPULSE_PORT", "IG_PORT")]
-    ps = [p for p in ps if p]
-    return len(ps) == len(set(ps))
+    return _port_clash(v) is None
 
 
 # X23 은 RUN_MODE 기본값이 sim 이라 기본값에서 통과한다(UPLINK_URL 기본 "").

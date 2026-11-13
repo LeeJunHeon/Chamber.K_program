@@ -8,7 +8,7 @@
 필라멘트: A·B 에는 응답이 없다(confirms_link=False) — 결과는 다음 E 의 2번(필라멘트)·3번(방출)·5번(오류)으로 판정,
   기한(켜기 IG_FILAMENT_ON_TIMEOUT_SEC, 끄기 IG_FILAMENT_OFF_TIMEOUT_SEC)을 넘으면 실패 이벤트.
   A·B 뒤 IG_FILAMENT_SWITCH_QUIET_SEC 동안은 무응답을 실패로 세지 않는다(worker 억제 → 스냅샷 품질 suppressed),
-  A·B 뒤 1 s 는 E 를 보내지 않는다. B 뒤 IG_RELIGHT_LOCKOUT_SEC 안의 A 는 그만큼 늦춘다.
+  A·B 뒤 IG_FILAMENT_E_BLOCK_MS(1 s)는 E 를 보내지 않는다. 글자 사이는 IG_CHAR_GAP_MS(50 ms, 매뉴얼) 이상 띄운다. B 뒤 IG_RELIGHT_LOCKOUT_SEC 안의 A 는 그만큼 늦춘다.
 연결: F 로 신원 확인('가수 지수' 한 줄) — 아니면 연결 실패.
 bench: A·B 는 worker 가 BENCH_READ_ONLY 로 거부, E·F 는 허용.
 """
@@ -23,7 +23,9 @@ from v2.common.worker import Request, Result, Worker
 QUERY_COMMANDS = frozenset({"E", "F", "G", "H"})       # 질의 [IG p.53-54] — G·H 는 게이지 A·B(bench 설정 읽기)
 FILAMENT_COMMANDS = frozenset({"A", "B"})
 E_ITEM_COUNT = 26
-E_BLOCK_S = 1.0          # A·B 뒤 E 를 보내지 않는 시간(v1 e_block_sec)
+# A·B 뒤 E 를 보내지 않는 시간은 설정 IG_FILAMENT_E_BLOCK_MS(1000 — v1 e_block_sec), 글자 사이 간격은 IG_CHAR_GAP_MS(50 — 매뉴얼)
+SEND_DEADLINE_S = 2.0    # 외부 질의(send_command) 요청 하나의 한도 — 대기열 기다림 포함(구현 상수)
+FILAMENT_SUBMIT_S = 5.0  # A·B 쓰기 요청이 대기열에서 기다릴 수 있는 시간(구현 상수)
 GAUGE_NEG_OK_TORR = -5.0e-3
 GAUGE_MIN_TORR = 1.0e-3
 
@@ -183,6 +185,9 @@ class IgDriver:
         self.last_result: Optional[tuple] = None    # (on/off, 성공, 문구, 시각) — 마지막 필라멘트 결과
         self.emission_since: Optional[float] = None    # 방출이 처음 확인된 벽시계 시각(베이스 판정의 안정화 기준)
         self._e_block_until = -1.0
+        self.char_gap_s = cfg["IG_CHAR_GAP_MS"] / 1000.0          # 글자 사이 최소 간격 [IG p.52-53]
+        self.e_block_s = cfg["IG_FILAMENT_E_BLOCK_MS"] / 1000.0
+        self._last_char = -1e9
         self._last_b: Optional[float] = None
         self._expect: Optional[str] = None              # "on" / "off"
         self._deadline: Optional[float] = None
@@ -202,13 +207,17 @@ class IgDriver:
         """외부에서 글자 하나를 보내려는 경로 — 질의(E·F)만, A·B 는 filament_on/off 로만, 그 밖은 거부.
         거부는 포트에 닿기 전에(worker 에 넣지도 않는다)."""
         self.check_command(ch)
-        self.worker.submit(Request("read", lambda s: self._query(s, ch), deadline=self.clock.monotonic() + 2.0,
+        self.worker.submit(Request("read", lambda s: self._query(s, ch), deadline=self.clock.monotonic() + SEND_DEADLINE_S,
                                    name=f"ig:{ch}"))
 
     # ───────── 읽기 ─────────
     def _write(self, session, ch: str, allowed) -> None:
         self.check_command(ch, allowed)
+        ready = self._last_char + self.char_gap_s
+        if ready > self.clock.monotonic():                 # 앞 글자와 너무 붙지 않게(평소에는 걸리지 않는다)
+            self.clock.sleep_until(min(ready, session.deadline))
         session.write(ch.encode("ascii"))
+        self._last_char = self.clock.monotonic()
 
     def _query(self, session, ch: str) -> List[str]:
         self.check_command(ch, QUERY_COMMANDS)
@@ -273,7 +282,7 @@ class IgDriver:
             self._write(session, ch, FILAMENT_COMMANDS)
             t = self.clock.monotonic()
             self._sent = True
-            self._e_block_until = t + E_BLOCK_S
+            self._e_block_until = t + self.e_block_s
             self.worker.suppress(t + self.cfg["IG_FILAMENT_SWITCH_QUIET_SEC"],
                                  "필라멘트 시동 중" if ch == "A" else "필라멘트 끄는 중")
             if ch == "B":
@@ -288,7 +297,7 @@ class IgDriver:
             if on_done:
                 on_done(res)
 
-        self.worker.submit(Request("write", fn, deadline=(not_before or now) + 5.0, on_done=done, name=f"ig:{ch}",
+        self.worker.submit(Request("write", fn, deadline=(not_before or now) + FILAMENT_SUBMIT_S, on_done=done, name=f"ig:{ch}",
                                    not_before=not_before, confirms_link=False))
 
     def _judge(self, r: IgReading) -> None:

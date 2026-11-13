@@ -77,7 +77,7 @@ class WorkerEvent:
     t: float
 
 
-CONNECT_RETRY_PAUSE_S = 0.3        # 연결 초기화 무응답 뒤 다시 하기 전 쉼
+CONNECT_RETRY_PAUSE_S = 0.3        # 연결 초기화 무응답 뒤 다시 하기 전 쉼(기본 — Worker(connect_retry_pause_s=…)로 바꾼다)
 
 class Session:
     """드라이버가 요청 하나 동안 쓰는 입출력. deadline·취소가 자동으로 걸린다."""
@@ -178,7 +178,8 @@ class Worker:
                  long_outage_s: float = 600.0, probe_s: float = 60.0, log_every_s: float = 600.0,
                  on_event: Optional[Callable[[WorkerEvent], None]] = None,
                  on_connect: Optional[Callable[[Session], None]] = None,
-                 connect_init_timeout_s: float = 5.0) -> None:
+                 connect_init_timeout_s: float = 5.0,
+                 connect_retry_pause_s: float = CONNECT_RETRY_PAUSE_S) -> None:
         self.name = name
         self.transport = transport
         self.clock = transport.clock
@@ -188,6 +189,7 @@ class Worker:
         self.on_event = on_event
         self.on_connect = on_connect
         self.connect_init_timeout_s = connect_init_timeout_s
+        self.connect_retry_pause_s = connect_retry_pause_s      # 챔버K 는 설정 CONNECT_RETRY_PAUSE_MS
         self.queue = ClockQueue(self.clock)
         self.connected = False
         self.last_ok: Optional[float] = None
@@ -341,9 +343,9 @@ class Worker:
                         raise
                     # 초기화 중 받은 바이트가 하나도 없이 시간 초과 — 연결 직후 첫 질의를 장비가 놓친 경우(10/16 bench DC).
                     # 포트를 닫지 않고 0.3 s 뒤 입력을 비우고 초기화를 1회 다시. 그래도 안 되면 끊고 백오프
-                    self._emit("connect_retry", "초기화 첫 질의 무응답 — 0.3 s 뒤 1회 다시"
+                    self._emit("connect_retry", f"초기화 첫 질의 무응답 — {self.connect_retry_pause_s:g} s 뒤 1회 다시"
                                + (f" (받다 만 바이트 {e.partial.hex(' ')})" if e.partial else ""))
-                    self.clock.wait_until(self.clock.monotonic() + CONNECT_RETRY_PAUSE_S, lambda: cancel.is_set())
+                    self.clock.wait_until(self.clock.monotonic() + self.connect_retry_pause_s, lambda: cancel.is_set())
                     self.transport.reset_input()
                     sess = Session(self.transport, self.clock.monotonic() + self.connect_init_timeout_s, cancel)
                     self.on_connect(sess)

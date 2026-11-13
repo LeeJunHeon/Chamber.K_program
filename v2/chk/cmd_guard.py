@@ -87,10 +87,15 @@ def _line(data: bytes, term: bytes) -> Optional[str]:
         return None
 
 
-def dc_check(data: bytes, mode: str, protection: bool = False) -> Optional[str]:
-    s = _line(data, b"\n")
-    if s is None:
-        return f"형식(LF 로 끝나는 ASCII 한 줄) 아님: {data!r}"
+_DC_TERM = {"LF": b"\n", "CR": b"\r", "CRLF": b"\r\n"}      # devices.DC_DELIMITER_BYTES 와 같다(시험이 확인)
+_TERM_NAME = {b"\n": "LF", b"\r": "CR", b"\r\n": "CRLF"}
+
+
+def dc_check(data: bytes, mode: str, protection: bool = False, term: bytes = b"\n") -> Optional[str]:
+    """term = 설정 DC_DELIMITER 의 종결 문자(기본 LF) — 형식만 그 종결로 보고, 허용·금지 목록은 종결과 상관없이 같다."""
+    s = _line(data, term)
+    if s is None or "\r" in s or "\n" in s:
+        return f"형식({_TERM_NAME.get(term, repr(term))} 로 끝나는 ASCII 한 줄) 아님: {data!r}"
     if mode == "bench":
         return None if s in DC_BENCH else f"bench 허용 질의 아님: {s}"
     for rx, why in DC_FORBIDDEN:
@@ -177,7 +182,8 @@ def rfp_check(data: bytes, mode: str, addr: int) -> Optional[str]:
 
 def checker(device: str, mode: str, cfg: Dict[str, Any]) -> Callable[[bytes], Optional[str]]:
     if device == "dc":
-        return lambda b: dc_check(b, mode, bool(cfg.get("DC_SET_PROTECTION")))
+        term = _DC_TERM[cfg.get("DC_DELIMITER", "LF")]
+        return lambda b: dc_check(b, mode, bool(cfg.get("DC_SET_PROTECTION")), term)
     if device == "mfc":
         return lambda b: mfc_check(b, mode)
     if device == "ig":

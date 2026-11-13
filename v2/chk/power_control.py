@@ -1,7 +1,7 @@
 """전원 제어 루프 — v1 동작 그대로(결정 5-2-1).
 
 DcControl: v1 device/DCpower.py 정전류 제어(_tick_ramping_up·_tick_maintaining·_apply_current_step) + lib/dc_control.py.
-  MEAS:ALL? 응답 직후(DC worker) ΔI 를 계산하고 CURR 는 측정 시작 + CURR_WRITE_DELAY_S 에 쓴다(v1: 같은 1초 틱 안에서 읽고 씀).
+  MEAS:ALL? 응답 직후(DC worker) ΔI 를 계산하고 CURR 는 측정 시작 + DC_CURR_WRITE_DELAY_MS 에 쓴다(v1: 같은 1초 틱 안에서 읽고 씀).
   측정이 없거나 형식이 틀리면 그 틱은 건너뛴다(v1 과 같게 0 W 로 위장하지 않음).
   옮기지 않은 것(SafetyEngine 이 시간 기반으로 판정): 램프업 무출력(S31A)·저전류(S31B)·파워 이탈(S31C) 중단.
   남긴 것: 전류·전압 상한에 걸린 채 DC_LIMIT_STALL_SEC 이면 유지 단계로 넘김(원래 시간 기반, 4-3).
@@ -15,7 +15,6 @@ import threading
 from typing import Any, Callable, Dict, Optional
 
 from v2.chk import devices as D
-from v2.chk.drivers.dc import CURR_WRITE_DELAY_S
 
 
 def power_step_current(diff_w: float, now_v: float, gain: float, up_max: float, down_max: float) -> float:
@@ -132,7 +131,7 @@ class DcControl:
         if abs(new - self.current) < 1e-9:
             return                                      # 상·하한에 붙었으면 다시 보내지 않는다(CAP/HOLD)
         self.current = new
-        self.dc.set_current(new, not_before=t0 + CURR_WRITE_DELAY_S)
+        self.dc.set_current(new, not_before=t0 + self.cfg["DC_CURR_WRITE_DELAY_MS"] / 1000.0)
 
     def _enter_maintaining(self, msg: str) -> None:
         self.state, self.stall_since, self.reached = self.MAINTAINING, None, True

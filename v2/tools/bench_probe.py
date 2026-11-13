@@ -114,7 +114,8 @@ class BenchProbe:
         streak = {"plc": "PLC_FAIL_STREAK", "mfc": "MFC_FAIL_STREAK", "dc": "DC_FAIL_STREAK",
                   "rfpulse": "RFPULSE_FAIL_STREAK", "ig": "IG_FAIL_STREAK"}
         self.w = {k: Worker(k, self.rec[k], writes_allowed=False, fail_streak=c[streak[k]],
-                            connect_init_timeout_s=c["CONNECT_INIT_TIMEOUT_SEC"], on_event=self._ev) for k in DEVICES}
+                            connect_init_timeout_s=c["CONNECT_INIT_TIMEOUT_SEC"],
+                            connect_retry_pause_s=c["CONNECT_RETRY_PAUSE_MS"] / 1000.0, on_event=self._ev) for k in DEVICES}
         self.plc = PlcDriver(self.clock, self.w["plc"], c, False, on_event=self._ev)
         self.mfc = MfcDriver(self.clock, self.w["mfc"], c, False, on_event=self._ev)
         self.dc = DcDriver(self.clock, self.w["dc"], c, False, on_event=self._ev)

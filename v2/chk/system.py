@@ -46,6 +46,7 @@ DEVICES = ("plc", "mfc", "dc", "rfpulse", "ig")
 ENABLE_KEY = {"rfpulse": "RFPULSE_ENABLED", "ig": "IG_ENABLED"}
 STREAK = {"plc": "PLC_FAIL_STREAK", "mfc": "MFC_FAIL_STREAK", "dc": "DC_FAIL_STREAK",
           "rfpulse": "RFPULSE_FAIL_STREAK", "ig": "IG_FAIL_STREAK"}
+PARITY_CHAR = {"none": "N", "odd": "O", "even": "E"}      # 설정 글자 → pyserial
 EVENTS_KEEP = 20000                # 최근 내부 이벤트(링 버퍼) — 시험 하니스 기본
 
 
@@ -73,12 +74,15 @@ def serial_settings(cfg: Dict[str, Any], ports: Optional[Dict[str, str]] = None)
     """장비별 포트 설정 — 포트 이름은 ports(있으면) 아니면 설정의 *_PORT."""
     pt = dict({"plc": cfg["PLC_PORT"], "mfc": cfg["MFC_PORT"], "dc": cfg["DC_PORT"], "rfpulse": cfg["RFPULSE_PORT"],
                "ig": cfg["IG_PORT"]}, **(ports or {}))
-    par = {"none": "N", "odd": "O", "even": "E"}[cfg["RFPULSE_PARITY"]]
-    return {"plc": SerialSettings(pt["plc"], cfg["PLC_BAUD"]),
-            "mfc": SerialSettings(pt["mfc"], cfg["MFC_BAUD"]),
-            "dc": SerialSettings(pt["dc"], cfg["DC_BAUD"]),
-            "rfpulse": SerialSettings(pt["rfpulse"], cfg["RFPULSE_BAUD"], parity=par),
-            "ig": SerialSettings(pt["ig"], cfg["IG_BAUD"])}
+    # 장비가 고정인 항목(DC·MFC·IG 8N1, RF Pulse 8 데이터·1 정지, PLC 8 데이터)은 설정이 아니라 여기 기본값(8·N·1) 그대로.
+    wt = float(cfg["PORT_WRITE_TIMEOUT_SEC"])
+    return {"plc": SerialSettings(pt["plc"], cfg["PLC_BAUD"], parity=PARITY_CHAR[cfg["PLC_PARITY"]],
+                                  stopbits=cfg["PLC_STOPBITS"], write_timeout=wt),
+            "mfc": SerialSettings(pt["mfc"], cfg["MFC_BAUD"], write_timeout=wt),
+            "dc": SerialSettings(pt["dc"], cfg["DC_BAUD"], write_timeout=wt),
+            "rfpulse": SerialSettings(pt["rfpulse"], cfg["RFPULSE_BAUD"], parity=PARITY_CHAR[cfg["RFPULSE_PARITY"]],
+                                      write_timeout=wt),
+            "ig": SerialSettings(pt["ig"], cfg["IG_BAUD"], write_timeout=wt)}
 
 
 def serial_transports(clock, cfg: Dict[str, Any], ports: Optional[Dict[str, str]] = None,
@@ -169,7 +173,8 @@ class ChkSystem:
         # 가드는 포트(전송) 바로 위
         self.guards = {k: GuardedTransport(transports[k], k, mode, c, on_event=self._ev) for k in DEVICES}
         self.workers = {k: Worker(k, self.guards[k], writes_allowed=wr, fail_streak=c[STREAK[k]],
-                                  connect_init_timeout_s=c["CONNECT_INIT_TIMEOUT_SEC"], on_event=self._ev)
+                                  connect_init_timeout_s=c["CONNECT_INIT_TIMEOUT_SEC"],
+                                  connect_retry_pause_s=c["CONNECT_RETRY_PAUSE_MS"] / 1000.0, on_event=self._ev)
                         for k in DEVICES}
         self.recorder: Optional[Recorder] = None
         w = self.workers

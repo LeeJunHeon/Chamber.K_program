@@ -44,6 +44,12 @@ def make_sims(start: float = 0.0, log_keep: Optional[int] = None):
     return chamber, sims
 
 
+def sims_follow_config(sims, cfg: Dict[str, Any]) -> None:
+    """설정대로 시뮬레이터를 맞춘다 — 가짜 장비의 '장비 쪽 설정'(DC 앞면 Delimiter)이 PC 쪽 설정과 같게."""
+    from v2.chk.devices import DC_DELIMITER_BYTES
+    sims["dc"].delimiter = DC_DELIMITER_BYTES[cfg["DC_DELIMITER"]]
+
+
 def sim_transports(clock, sims) -> Dict[str, SimTransport]:
     return {k: SimTransport(clock, x) for k, x in sims.items()}
 
@@ -58,6 +64,7 @@ class ChkRig(ChkSystem):
         self.scenario = scenario
         out = Path(out_dir)
         c = dict(defaults(P.PARAMS), **(cfg or {}))
+        sims_follow_config(self.sims, c)
         if HC.tc2_pid(c):
             # TC2 PID(cascade·tc2) 시험대 — TC2 가 매핑을 따르게(기존 tc1 시험의 열 모델은 그대로)
             self.sims["plc"].tc2_map = sorted(HC.parse_map(c["HEATER_TC2_MAP"]))

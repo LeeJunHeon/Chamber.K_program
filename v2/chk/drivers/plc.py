@@ -329,7 +329,8 @@ class PlcDriver:
     # ───────── 쓰기(타입 있음) ─────────
     def submit_write(self, name: str, fn: Callable, kind: str = "write", purge: bool = False,
                      on_done: Optional[Callable[[Result], None]] = None) -> None:
-        self.worker.submit(Request(kind, fn, deadline=self.clock.monotonic() + 2.0, on_done=on_done,
+        self.worker.submit(Request(kind, fn, deadline=self.clock.monotonic() + self.cfg["PLC_WRITE_DEADLINE_MS"] / 1000.0,
+                                   on_done=on_done,
                                    name=f"plc:{name}", purge=purge))
 
     def set_button(self, name: str, on: bool, on_done=None) -> None:
