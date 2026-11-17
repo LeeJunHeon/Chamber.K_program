@@ -907,6 +907,22 @@ FLOW_ERROR_TOLERANCE  = get('FLOW_ERROR_TOLERANCE',  0.10)  # 유량 이탈 허�
 FLOW_ERROR_MAX_COUNT  = get('FLOW_ERROR_MAX_COUNT',  5)     # 이탈 연속 횟수 → 채팅 알림
 MFC_PRESSURE_WARN_RATIO = get('MFC_PRESSURE_WARN_RATIO', 0.10)  # 압력 이탈 허용 비율(10%)
 MFC_PRESSURE_WARN_COUNT = get('MFC_PRESSURE_WARN_COUNT', 5)     # 이탈 연속 횟수 → 채팅 알림
+MFC_STABILIZATION_TIMEOUT_S = get('MFC_STABILIZATION_TIMEOUT_S', 100)   # FLOW_ON 후 유량 안정화 대기 한도(초). 10~600
+
+
+def _validate_mfc_stabilization_timeout() -> None:
+    """숫자가 아니거나 10~600 을 벗어나면 기본값 100 을 쓴다. 예외는 던지지 않는다."""
+    global MFC_STABILIZATION_TIMEOUT_S
+    raw, dflt = MFC_STABILIZATION_TIMEOUT_S, 100
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        print(f"[Config] MFC_STABILIZATION_TIMEOUT_S {raw!r} → {dflt} (숫자가 아님)")
+        MFC_STABILIZATION_TIMEOUT_S = dflt
+    elif not (10 <= raw <= 600):
+        print(f"[Config] MFC_STABILIZATION_TIMEOUT_S {raw} → {dflt} (허용 10~600)")
+        MFC_STABILIZATION_TIMEOUT_S = dflt
+
+
+_validate_mfc_stabilization_timeout()
 
 # 고정값 (타이밍/간격)
 MFC_POLLING_INTERVAL_MS       = 2000   # polling 주기(ms)
