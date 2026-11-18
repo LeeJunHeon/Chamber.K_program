@@ -47,6 +47,7 @@
                 버전 16(5-18): 스냅샷 필드 enumLabelsBy {column: 기준 열, labels: {기준 값: {값: 이름}}} — 기준 열 값에 따라 바뀌는
                 이름(그 줄에 없는 값은 enumLabels). heater.casc_state 는 heater.ctrl_mode = tc2 이면 running "TC2 제어(단독)"·
                 frozen "TC2 제어(단독) · 셔터 열림(유지)"(v1 STATE_TEXT_TC2). enumLabels 는 그대로(옛 화면은 예전처럼 보인다)
+                설정 MFC_READ_PLAN 설명을 드라이버와 같게(R5·R60·R6, 번갈아 = R60 짝수 초·R6 홀수 초, R6 양보)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다

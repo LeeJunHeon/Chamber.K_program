@@ -170,7 +170,10 @@ PARAMS: tuple = (
           src="lib/config.py:806 (MFC_PRESSURE_SCALE 0.1 = FS 1 Torr 가정)",
           desc="압력 %FS ↔ mTorr 환산. bench 에서 레인지 코드(E)로 확인"),
     _inst("MFC_READ_PLAN", "MFC 읽기 계획", E, "auto", enum=("auto", "full", "alternate"), src="v2 (사용자 결정 2026-10-15)",
-          desc="full=매초 R5+R60, alternate=R5 매초·R60 격초, auto=한 번 읽기가 마감의 60 %를 넘거나 실패하면 격초로"),
+          desc="full=매초 R5(압력)·R60(유량)·R6(밸브 위치), alternate=R5 매초·R60 짝수 초·R6 홀수 초, "
+               "auto=셋 다 읽은 한 번이 MFC_READ_DEADLINE_MS 의 60 %를 넘으면 그다음부터 alternate(R6 무응답으로 길어진 것은 "
+               "세지 않음 — 읽기 실패로는 바꾸지 않는다). R6 는 기록용이라 설정 명령이 진행 중이거나 R6 를 기다리면 마감을 넘길 "
+               "초에는 보내지 않는다(양보 — 밸브 값만 stale)"),
     _inst("RFPULSE_CMD_GAP_MS", "RF Pulse 명령 간격", I, 50, lo=0, hi=2000, unit="ms",
           src="[CESAR p.174 / 6-4] (v1 1500 ms)", desc="응답을 받은 뒤 다음 명령까지 — 매뉴얼: 핸드셰이크 또는 50 ms"),
     _inst("RFPULSE_QUERY_TIMEOUT_MS", "RF Pulse 질의 응답 제한", I, 250, lo=50, hi=3000, unit="ms",

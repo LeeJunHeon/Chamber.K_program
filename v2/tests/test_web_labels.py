@@ -247,3 +247,14 @@ def test_casc_state_label_matches_engine_text():
             assert screen(mode, st) == want
 
 
+# 5-18 — MFC 읽기 계획 설명이 드라이버 동작(R5·R60·R6, 번갈아 읽기, R6 양보)과 같은 말
+def test_mfc_read_plan_desc_matches_driver():
+    from v2.chk import devices as D
+    d = P.by_key()["MFC_READ_PLAN"].desc
+    for w in ("R5", "R60", "R6", "짝수 초", "홀수 초", "60 %", "양보"):
+        assert w in d, w
+    assert "R5+R60" not in d and "실패하면" not in d
+    plan = [t for t in D.TICK_PLAN if t.device == "mfc"][0]
+    assert plan.reads == ("R5", "R60", "R6") and plan.deadline_param == "MFC_READ_DEADLINE_MS"
+    for w in ("짝수 초", "홀수 초", "양보", "마감을 넘길"):
+        assert w in plan.plan, w
