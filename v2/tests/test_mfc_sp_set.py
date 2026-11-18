@@ -283,11 +283,22 @@ def _run_process(tmp_path, wp, n):
     row = {"process_name": f"WP{wp:g}", "ar": True, "ar_flow": 20.0, "working_pressure": float(wp), "process_time": 0.1,
            "shutter_delay": 0.1, "use_dc": True, "dc_power": 100.0, "gun1": True}
     r.on(3, r.cmd("PROCESS_START", {"row": row}))
+    r.rows = []                                         # 행마다 (공정 상태, sp_active, sp_sel_mtorr, sp_mtorr) — 5-18
+    r.rig.loop.sinks.append(lambda x: r.rows.append((r.rig.process.state, x["mfc.sp_active"], x["mfc.sp_sel_mtorr"],
+                                                     x["mfc.sp_mtorr"])))
     r.run(n)
     assert all(x.ok for x in r.results), r.results
     assert [e.data["status"] for e in r.ev("run_end")] == ["done"]
     sent = [d.decode().strip() for _, d in r.rig.sims["mfc"].received]
     return r, r.states(), [x for x in sent if not x.startswith("R")], [x for x in sent if x.startswith("R")]
+
+
+def _last_by_state(rows):
+    """상태마다 그 상태 마지막 행의 (sp_active, sp_sel_mtorr, sp_mtorr) — 단계 안에서 선택·확인이 끝난 뒤의 값."""
+    out = {}
+    for st, *v in rows:
+        out[st] = tuple(v)
+    return out
 
 
 def test_full_process_wp60_has_sp5_stage(tmp_path):
@@ -303,10 +314,57 @@ def test_full_process_wp60_has_sp5_stage(tmp_path):
 
 
 def test_full_process_wp5_unchanged(tmp_path):
-    _, st, writes, queries = _run_process(tmp_path, 5, 200)
+    r, st, writes, queries = _run_process(tmp_path, 5, 200)
     assert [s for s, _ in st] == ["PRE_CLEAN", "GAS_PRE", "GAS_INTRO", "GAS_STABILIZE", "GUN_SHUTTER", "POWER_WAIT",
                                   "PRESSURE_SP3", "PRESSURE_SP1", "SHUTTER_DELAY", "MAIN", "STOPPING", "DONE", "IDLE"]
     i = writes.index("S4 3.00")
     assert writes[i:i + 6] == ["S4 3.00", "D4", "S3 1.50", "D3", "S1 0.50", "D1"]
     assert "R10" not in queries and not any(w.startswith(("S5", "D5")) for w in writes)
     assert queries.count("R3") == 1                                                  # SP3 도 한 검증 경로(R3 되읽기)
+
+
+# (g) 화면용 압력 목표 mfc.sp_sel_mtorr(5-18) — 지금 선택된 설정점에 마지막으로 쓴 값. mfc.sp_mtorr(SP1 확인값)는 (f) 그대로
+def test_sp_sel_follows_selected_setpoint():
+    r = Rig()
+    assert r.d.sp_sel_mtorr() is None                                   # 선택 전
+    for n, ui in ((4, 30.0), (5, 50.0), (3, 15.0), (2, 5.0), (1, 2.0)):
+        assert _set(r, n, ui)[0] is None and r.seq(r.d.select_sp, n) is None
+        assert r.d.sp_active == n and r.d.sp_sel_mtorr() == ui
+    assert r.d.sp_mtorr == 2.0 and r.d.sp_written == {1: 2.0, 2: 5.0, 3: 15.0, 4: 30.0, 5: 50.0}
+    assert r.seq(r.d.select_sp, 4) is None and r.d.sp_sel_mtorr() == 30.0  # 다시 고르면 그 설정점의 마지막 값
+    row = r.run(1)[-1]
+    assert row["mfc.sp_active"] == 4 and row["mfc.sp_sel_mtorr"] == 30.0 and row["mfc.sp_mtorr"] == 2.0
+    assert r.seq(r.d.valve, True) is None and r.d.sp_active == 0 and r.d.sp_sel_mtorr() is None   # 밸브 직접 조작 = 선택 없음
+    assert r.run(1)[-1]["mfc.sp_sel_mtorr"] is None
+    r.done()
+
+
+def test_sp_sel_unknown_until_verified():
+    """쓰기를 시작하면 그 설정점 값은 모름 — 확인 실패면 값 없음(예전 값을 보이지 않는다). SP4 는 경고만 경로라 쓴 값."""
+    r = Rig()
+    assert _set(r, 3, 15.0)[0] is None and r.seq(r.d.select_sp, 3) is None and r.d.sp_sel_mtorr() == 15.0
+    r.sim.canned["R3"] = ["S3+9.99"] * 5
+    assert _set(r, 3, 10.0)[0] == "VERIFY_MISMATCH" and r.d.sp_active == 3 and r.d.sp_sel_mtorr() is None
+    r.sim.canned["R4"] = ["S4+9.99"]
+    assert _set(r, 4, 30.0)[0] is None and [e for e in r.events if e.kind == "sp_readback" and "S4" in e.detail]
+    assert r.seq(r.d.select_sp, 4) is None and r.d.sp_sel_mtorr() == 30.0
+    r.done()
+
+
+def test_full_process_sp_sel_by_stage_wp60(tmp_path):
+    r, *_ = _run_process(tmp_path, 60, 260)
+    last = _last_by_state(r.rows)
+    assert last["GAS_STABILIZE"] == (4, 30.0, None)
+    assert last["PRESSURE_SP5"] == (5, 50.0, None)
+    assert last["PRESSURE_SP1"] == last["MAIN"] == (1, 60.0, 60.0)
+    assert last["IDLE"][:2] == (0, None)                                # 정지 순서가 밸브를 열면 선택 없음
+    assert all(sel is None for st, act, sel, _ in r.rows if not act)
+
+
+def test_full_process_sp_sel_by_stage_wp5(tmp_path):
+    r, *_ = _run_process(tmp_path, 5, 200)
+    last = _last_by_state(r.rows)
+    assert last["GAS_STABILIZE"] == (4, 30.0, None)
+    assert last["PRESSURE_SP3"] == (3, 15.0, None)
+    assert last["PRESSURE_SP1"] == last["MAIN"] == (1, 5.0, 5.0)
+    assert last["IDLE"][:2] == (0, None)

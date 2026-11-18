@@ -127,7 +127,10 @@ class MfcDriver:
         self.ar_set: Optional[float] = None
         self.o2_set: Optional[float] = None
         self.sp_active: Optional[int] = None
-        self.sp_mtorr: Optional[float] = None
+        self.sp_mtorr: Optional[float] = None           # SP1 되읽기 확인값(뜻 그대로 — 공정 중 수정·시험이 본다)
+        # 설정점마다 마지막으로 쓴 값(mTorr, 5-18) — SP1·SP2·SP3·SP5 는 되읽기 확인된 값, SP4 는 쓴 SP4_MTORR 값(경고만 경로).
+        # 쓰기를 시작하면 그 설정점 값은 지우고(모름), 확인되면 넣는다. 스냅샷 mfc.sp_sel_mtorr = 지금 선택된 설정점(sp_active)의 값
+        self.sp_written: Dict[int, float] = {}
         self._last_cmd = -1e9
         self._ops = 0                                   # 진행 중인 설정 명령(_op) 수 — 0 이 아니면 기록용 읽기(R6)가 양보
         self._ops_until = 0.0                           # 양보 기한 — 끝 콜백을 못 받은 명령이 R6 를 영영 막지 않게(스텝 한도)
@@ -267,8 +270,12 @@ class MfcDriver:
             self.alternate = True
             self._emit("read_plan", f"한 번 읽기 {took * 1000:.0f} ms — R60(유량)·R6(밸브 위치)를 번갈아")
         out.update({"mfc.ar_set": self.ar_set, "mfc.o2_set": self.o2_set, "mfc.sp_active": self.sp_active,
-                    "mfc.sp_mtorr": self.sp_mtorr})
+                    "mfc.sp_mtorr": self.sp_mtorr, "mfc.sp_sel_mtorr": self.sp_sel_mtorr()})
         return out
+
+    def sp_sel_mtorr(self) -> Optional[float]:
+        """지금 선택된 설정점(sp_active 1~5)에 마지막으로 쓴 값 — 선택이 없거나(0·None) 그 설정점 값을 모르면 None(5-18)."""
+        return self.sp_written.get(self.sp_active) if self.sp_active else None
 
     def _read_valve(self, session) -> Optional[float]:
         """R6(밸브 위치 %) — 기록용. 설정 명령이 진행·대기 중이면 보내지 않고(양보), 무응답·"V" 아닌 응답이면 None
@@ -444,6 +451,7 @@ class MfcDriver:
         rd, tries = SP_READ_CMD[n], self.verify_tries
 
         def gen():
+            self.sp_written.pop(n, None)                       # 쓰는 동안·확인 못 하면 그 설정점 값은 모름
             yield ("w", cmd)
             if n not in SP_VERIFIED:
                 ans = yield ("q", rd)
@@ -453,6 +461,7 @@ class MfcDriver:
                 else:
                     self._emit("sp_readback", f"S{n}: {cmd} 뒤 {rd} = {ans!r} — 경고만(v1 은 되읽기 없이 진행)",
                                "VERIFY_MISMATCH")
+                self.sp_written[n] = mtorr                     # SP4: 경고만 경로 — 쓴 값(SP4_MTORR)을 화면 목표로
                 return
             for k in range(1, tries + 1):
                 ans = yield ("q", rd)
@@ -462,6 +471,7 @@ class MfcDriver:
                     self._emit("verify_ok", f"S{n}: {rd}={ans} ({k}회째)")
                     if n == 1:
                         self.sp_mtorr = mtorr
+                    self.sp_written[n] = mtorr
                     return
                 if k >= tries:
                     raise MfcVerifyError(f"SP{n} 설정 확인 실패 — 기대 {cmd}({mtorr:.2f} mTorr), 마지막 응답 {ans!r} ({tries}회)")

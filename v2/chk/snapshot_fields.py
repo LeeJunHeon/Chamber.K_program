@@ -108,7 +108,12 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
     _f("o2_set", F, "sccm", "O₂ 설정", ".2f", "core"),
     _f("sp_active", I, "", "사용 중 설정점", "d", "core(마지막 D 명령)",
        desc="0~5 — 0 은 밸브 직접 조작(열기·닫기·정지), 1 작업 압력, 2·3·5 단계 압력, 4 가스 안정화"),
-    _f("sp_mtorr", F, "mTorr", "압력 설정", ".2f", "core"),
+    _f("sp_mtorr", F, "mTorr", "작업 압력 설정(SP1)", ".2f", "core", detail=True,
+       desc="SP1 을 쓰고 되읽어 확인한 값(공정 중 수정·기록용 — 단계 압력 SP2~SP5 를 쓸 때는 바뀌지 않는다). "
+            "지금 목표는 mfc.sp_sel_mtorr"),
+    _f("sp_sel_mtorr", F, "mTorr", "압력 설정", ".2f", "core(선택된 설정점에 쓴 값)",
+       desc="지금 선택된 설정점(사용 중 설정점 1~5)에 마지막으로 쓴 값 — SP1·SP2·SP3·SP5 는 되읽기 확인값, SP4 는 쓴 SP4_MTORR. "
+            "선택이 없으면(밸브 직접 조작) 값 없음(5-18)"),
 ), desc="GPC3000")
 
 DC_BLOCK = DeviceBlock("dc", "DC Power", (
