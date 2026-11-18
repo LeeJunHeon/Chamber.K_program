@@ -217,3 +217,33 @@ def test_device_names_dc_power_rf_power():
     labels = [p.label for p in P.PARAMS] + [b_.label for b_ in SF.BLOCKS] + [d.name for d in D.DEVICES]
     assert not [x for x in labels if "DC 전원" in x or "RF 전원" in x]
     assert next(p.label for p in P.PARAMS if p.key == "DC_PORT") == "DC Power 포트"
+
+
+# 5-18(묶음 16) — 제어 구조에 따라 바뀌는 히터 상태 이름(enumLabelsBy). v1 controller/heater_cascade.py STATE_TEXT_TC2 와 같은 글
+def test_casc_state_labels_by_ctrl_mode():
+    from v2.chk.heater_cascade import CTRL_MODES, STATE_TEXT, STATE_TEXT_TC2
+    f = {x["column"]: x for b in W.snapshot()["blocks"] for x in b["fields"]}
+    cs = f["heater.casc_state"]
+    assert cs["enumLabels"] == STATE_TEXT                                   # 옛 웹이 보던 것은 그대로
+    by = cs["enumLabelsBy"]
+    assert by == {"column": "heater.ctrl_mode",
+                  "labels": {"tc2": {"running": "TC2 제어(단독)", "frozen": "TC2 제어(단독) · 셔터 열림(유지)"}}}
+    assert by["labels"]["tc2"] == STATE_TEXT_TC2 and by["column"] in f
+    assert set(by["labels"]) <= set(CTRL_MODES) == set(f["heater.ctrl_mode"]["enumLabels"])
+    assert all(set(m) <= set(STATE_TEXT) for m in by["labels"].values())   # 바뀌는 값만 — 모두 enumLabels 에 있는 값
+    assert all(x["enumLabelsBy"] is None for c, x in f.items() if c != "heater.casc_state")
+
+
+def test_casc_state_label_matches_engine_text():
+    """화면 규칙(enumLabelsBy → enumLabels)으로 고른 이름 = 장비 HeaterCascade.state_text(로그·이벤트 문구)."""
+    from v2.chk import heater_cascade as HC
+    cs = {x["column"]: x for b in W.snapshot()["blocks"] for x in b["fields"]}["heater.casc_state"]
+
+    def screen(mode, st):
+        return cs["enumLabelsBy"]["labels"].get(mode, {}).get(st) or cs["enumLabels"][st]
+    for mode in HC.CTRL_MODES:
+        for st in HC.STATE_TEXT:
+            want = HC.STATE_TEXT_TC2[st] if mode == "tc2" and st in HC.STATE_TEXT_TC2 else HC.STATE_TEXT[st]
+            assert screen(mode, st) == want
+
+

@@ -8,15 +8,16 @@ from __future__ import annotations
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType, row_columns
 from v2.chk.drivers.ig import GAUGE_STATES, ION_STATES
-from v2.chk.heater_cascade import STATE_TEXT
+from v2.chk.heater_cascade import STATE_TEXT, STATE_TEXT_TC2
 
 F, I, B, S = FType.FLOAT, FType.INT, FType.BOOL, FType.STR
 
 
 def _f(name, type_, unit, label, fmt="", source="", own=False, summary="last", detail=False, desc="",
-       enum_labels=None, state="") -> FieldDef:
+       enum_labels=None, state="", enum_labels_by=None) -> FieldDef:
     return FieldDef(name=name, type=type_, unit=unit, label=label, fmt=fmt, source=source,
-                    own_quality=own, summary=summary, detail=detail, desc=desc, enum_labels=enum_labels, state=state)
+                    own_quality=own, summary=summary, detail=detail, desc=desc, enum_labels=enum_labels, state=state,
+                    enum_labels_by=enum_labels_by)
 
 
 def _bit(name, label, addr=None, detail=False, desc="") -> FieldDef:
@@ -25,6 +26,8 @@ def _bit(name, label, addr=None, detail=False, desc="") -> FieldDef:
 # 히터 제어 구조(HEATER_CTRL_MODE)·캐스케이드 상태(heater_cascade.STATE_TEXT) 화면용 이름
 CTRL_MODE_LABELS = (("tc2", "TC2 단독 제어"), ("cascade", "2단 제어(TC2 + TC1 보정)"), ("tc1", "TC1 직접 제어"))
 CASC_STATE_LABELS = tuple(STATE_TEXT.items())
+# 제어 구조에 따라 바뀌는 상태 이름(5-18, v1 controller/heater_cascade.py STATE_TEXT_TC2) — ctrl_mode = tc2 이면 running·frozen 만
+CASC_STATE_LABELS_BY = ("ctrl_mode", (("tc2", tuple(STATE_TEXT_TC2.items())),))
 
 # 유지 모드(heater_engine.HeaterEngine.hold_label: off / arming / holding_<kind>, kind = dac·tc2) 화면용 이름
 HOLD_LABELS = (("off", "꺼짐"), ("arming", "진입 대기"), ("holding_dac", "DAC 고정 유지"), ("holding_tc2", "TC2 추종 유지"))
@@ -71,9 +74,10 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
     _f("ctrl_mode", S, "", "제어 구조", source="core", detail=True, enum_labels=CTRL_MODE_LABELS,
        desc="HEATER_CTRL_MODE — tc2(기본, TC2 단독) / cascade(2단) / tc1(롤백)"),
     _f("casc_state", S, "", "TC2 제어 상태", source="core", enum_labels=CASC_STATE_LABELS,
+       enum_labels_by=CASC_STATE_LABELS_BY,
        desc="heater_cascade.HeaterCascade.state — v1 casc_state 열. tc2·cascade 두 모드 공통(상태 값은 같다). "
             "ctrl_mode = tc2 면 running 은 'TC2 제어(단독)', frozen 은 'TC2 제어(단독) · 셔터 열림(유지)'"
-            "(heater_cascade.STATE_TEXT_TC2)"),
+            "(heater_cascade.STATE_TEXT_TC2 — 묶음 enumLabelsBy)"),
     _f("r1", F, "°C", "TC1 기준값", ".1f", "core",
        desc="r1 — 감속 접근 램프(v1 r1_c). 홀드백은 cascade = TC1 기준, tc2 = TC2 기준. TC2 제어 중 화면 목표 칸"),
     _f("bias", F, "°C", "보정", ".2f", "core", desc="ff + 적분 보정(SV2 = 매핑값 + 보정, v1 bias_c). tc2 모드는 값 없음"),

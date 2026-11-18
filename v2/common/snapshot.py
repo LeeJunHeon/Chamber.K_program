@@ -51,6 +51,10 @@ class FieldDef:
     desc: str = ""            # 개발용 설명(레지스터 등) — 화면은 '상세'에서만
     enum_labels: Optional[tuple] = None   # str 값 → 화면용 이름 ((값, 이름), ...)
     state: str = ""           # 같은 블록의 상태 열 이름(5-14). 값이 비어 있고 상태가 ok 가 아니면 화면은 그 상태 이름을 보인다
+    # 다른 필드 값에 따라 바뀌는 화면용 이름(5-18) — (같은 블록 필드 이름, ((그 필드 값, ((값, 이름), ...)), ...)).
+    # 그 필드 값이 표에 있고 이 값이 그 줄에 있으면 그 이름, 아니면 enum_labels(예: heater.casc_state 는 ctrl_mode = tc2 이면
+    # running·frozen 이 '(단독)' 이름 — v1 heater_cascade.STATE_TEXT_TC2). 없는 값만 enum_labels 로 — 바뀌는 것만 적는다
+    enum_labels_by: Optional[tuple] = None
 
 
 @dataclass(frozen=True)

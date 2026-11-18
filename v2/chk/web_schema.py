@@ -44,6 +44,9 @@
                 params[].choices(int 형식의 허용 숫자 목록 — 있으면 숫자 선택 목록으로 그리고 값은 숫자로 보낸다): *_BAUD·
                 PLC_STOPBITS. 새 설치값 PLC_PARITY·PLC_STOPBITS·DC_DELIMITER 와 통신 시간·횟수 키, paramGroups comm_plc·comm_mfc·
                 comm_dc·comm_rfpulse·comm_ig(장비별 통신 묶음), 규칙 X22(꺼진 장비의 포트 제외)·X42
+                버전 16(5-18): 스냅샷 필드 enumLabelsBy {column: 기준 열, labels: {기준 값: {값: 이름}}} — 기준 열 값에 따라 바뀌는
+                이름(그 줄에 없는 값은 enumLabels). heater.casc_state 는 heater.ctrl_mode = tc2 이면 running "TC2 제어(단독)"·
+                frozen "TC2 제어(단독) · 셔터 열림(유지)"(v1 STATE_TEXT_TC2). enumLabels 는 그대로(옛 화면은 예전처럼 보인다)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -61,6 +64,7 @@
                 ownQuality 필드는 <column>.q·<column>.age_s 품질 열을 더 갖는다. 열 집합 = hello.snapshotColumns.
                 stateColumn(값 열) = 같은 블록 상태 열 — 화면 규칙: 값이 비어 있고 그 상태가 ok 가 아니면 상태 열의
                 enumLabels 이름을 값 자리에 보인다(장비 종류를 따로 보지 않는다)
+                enumLabelsBy(버전 16) = 다른 열 값에 따라 바뀌는 이름 — 화면 규칙: labels[그 열 값][이 값] 이 있으면 그것, 없으면 enumLabels
 범위가 파라미터 값에 묶인 항목(paramMin·paramMax·paramScale)은 웹이 params 의 현재값으로 계산한다.
 hash 는 정의만으로 계산한다(현재값·대기값 제외) — 내용이 바뀌면 시험(test_web_schema)이 알고 EXPORT_VERSION 을 올리게 한다.
 """
@@ -80,7 +84,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 15
+EXPORT_VERSION = 16
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -228,7 +232,16 @@ def _field(f, column: str) -> dict:
     return {"column": column, "name": f.name, "type": f.type.value, "unit": f.unit, "label": f.label, "fmt": f.fmt,
             "summary": f.summary, "ownQuality": f.own_quality, "detail": f.detail, "desc": f.desc,
             "enumLabels": dict(f.enum_labels) if f.enum_labels else None,
-            "stateColumn": f"{column.rsplit('.', 1)[0]}.{f.state}" if f.state else None}
+            "stateColumn": f"{column.rsplit('.', 1)[0]}.{f.state}" if f.state else None,
+            "enumLabelsBy": _labels_by(f, column)}
+
+
+def _labels_by(f, column: str) -> Optional[dict]:
+    """FieldDef.enum_labels_by → {"column": 기준 열, "labels": {기준 값: {값: 이름}}} — 5-18(버전 16)."""
+    if not f.enum_labels_by:
+        return None
+    by, rows = f.enum_labels_by
+    return {"column": f"{column.rsplit('.', 1)[0]}.{by}", "labels": {k: dict(v) for k, v in rows}}
 
 
 def snapshot() -> Dict[str, Any]:
