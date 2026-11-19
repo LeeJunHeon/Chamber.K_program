@@ -142,7 +142,8 @@ class PortGuard:
                     self._stuck += 1
                 raise TransportError(f"포트 열기 {timeout_s:g}s 초과")
         if box["err"] is not None:
-            raise TransportError(f"포트 열기 실패: {box['err']!r}")
+            # 원래 예외를 __cause__ 로 남긴다 — 시작 보호(chk.startup_guard.port_in_use)가 '사용 중'·'없음'을 가른다(5-19 ②)
+            raise TransportError(f"포트 열기 실패: {box['err']!r}") from box["err"]
         return box["obj"]
 
     @staticmethod

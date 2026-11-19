@@ -5,8 +5,18 @@
     RUN_MODE 는 설정에서만(기본 sim, prod 는 local_override.json 에 명시). 설정을 쓸 수 없으면 시작 거부(종료 코드 2).
   2 로컬 서버 포트 바인드(127.0.0.1:LOCAL_HMI_PORT) — 실패 = 이미 실행 중 → 알리고 끝(종료 코드 3). 장비 포트를 열기 전에.
   3 로그(LOCAL_DATA_DIR\\logs 회전 로그 — 콘솔에는 시작 줄·경고·오류만)
-  4 조립(system.ChkSystem — sim: 시뮬레이터, bench·prod: SerialTransport + 그 모드 가드) → worker 시작 → tick 스레드 → 서버.
-    bench·prod 에서 포트가 사용 중이거나 없으면 죽지 않고 worker 재연결로 계속 시도(링크 끊김으로 보임).
+  4 조립(system.ChkSystem — sim: 시뮬레이터, bench·prod: SerialTransport + 그 모드 가드) → 시작 보호 → worker 시작 →
+    (bench) 첫 읽기 안전 확인 → tick 스레드 → 서버.
+    시작 보호(5-19 ②, chk.startup_guard — bench 실측 도구와 같은 것): v1 이 켜진 채 v2 가 v1 이 잠깐 놓은 포트를 잡지 않게.
+    - bench: 켜진 장비의 포트를 PLC → MFC → 이온 게이지 → RF Pulse → DC 순서로 한 번씩 연다. 하나라도 못 열면 연 포트를
+      닫고 어느 장비·포트인지와 "v1 프로그램이 켜져 있거나 포트 번호가 다를 수 있음" 을 남기고 끝(종료 코드 5, 다시 시도 안 함).
+      모두 열리면 연 채로 worker 에 넘긴다. 연결 뒤 첫 읽기로 PLC 못 읽음·히터 RUN·RF 출력(D40 > 0 또는 순방향 ≥ 5 W)·
+      DC 출력 ON·RF Pulse 출력 ON·가스 유량 > 0.1 sccm 이면 이유를 남기고 포트·웹 연결·로컬 서버를 닫고 끝(종료 코드 5).
+      장비에는 아무것도 쓰지 않는다.
+    - prod: 같은 순서로 첫 열기를 한 번 해 본다. '다른 프로그램이 사용 중'(윈도우 접근 거부)이면 bench 와 같이 끝(종료 코드 5),
+      '포트 없음' 등 다른 실패는 지금처럼 worker 재연결로 계속.
+    - 시작에 성공한 뒤의 재연결은 bench·prod 모두 예전 그대로(포트가 사용 중이거나 없으면 죽지 않고 worker 재연결로 계속 시도
+      — 링크 끊김으로 보임). sim 은 시작 보호가 없다.
   5 웹 연결(uplink — 계약은 common.messages): prod·bench 는 연결, sim 은 안 함. UPLINK_IN_SIM 이면 sim 도 — 이때 EQUIPMENT_ID 가
     -SIM 으로 끝나야 한다(아니면 1 단계에서 시작 거부, 종료 코드 2). UPLINK_URL 이 비면 경고만(웹 연결 없이 운전).
     주소는 호스트만 콘솔·로그에, 토큰은 어디에도. http 주소면 시작 때 경고 한 번. 조립 뒤·worker 시작 전에 붙는다(hello 부터 받게).
@@ -41,6 +51,8 @@ from typing import Any, Callable, Dict, List, Optional
 from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
+from v2.common.transport import TransportError
+from v2.chk import startup_guard as SG
 from v2.chk.local_server import LocalServer
 from v2.chk.system import APP_RETENTION, ChkSystem, new_store, serial_transports
 
@@ -54,6 +66,7 @@ FORCE_DEADLINE_S = 3.5             # 강제 종료: 이 시간 안에 끝낸다(
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
 EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
+EXIT_GUARD = 5                     # 시작 보호(5-19 ②): 포트 사용 중·열기 실패(bench)·첫 읽기 안전 확인(bench)에서 멈춤
 CTRL_C, CTRL_BREAK, CTRL_CLOSE, CTRL_LOGOFF, CTRL_SHUTDOWN = 0, 1, 2, 5, 6
 CTRL_NAMES = {CTRL_CLOSE: "CTRL_CLOSE", CTRL_LOGOFF: "CTRL_LOGOFF", CTRL_SHUTDOWN: "CTRL_SHUTDOWN"}
 WM_QUERYENDSESSION, WM_ENDSESSION = 0x0011, 0x0016
@@ -251,6 +264,9 @@ class App:
             self.log.info("로그오프·윈도우 종료 신호 수신 가능: %s",
                           "확인 못 함" if u32 is None else ("아니오(user32 로드됨)" if u32 else "예"))
             s = self.build()
+            if not self.guard_ports(s):                    # 시작 보호(5-19 ②) — worker·웹 연결·tick 전에
+                self._teardown()
+                return EXIT_GUARD
             self._start_log_consumer()
             self.start_uplink(s)
             s.start(ready_timeout_s=float(self.cfg["CONNECT_INIT_TIMEOUT_SEC"]) + 3.0)
@@ -259,6 +275,13 @@ class App:
                                          for k in s.workers if s.enabled[k])
             self.say(msg)
             (self.log.warning if down else self.log.info)(msg)
+            if RunMode(self.cfg["RUN_MODE"]) is RunMode.BENCH:
+                why = self.bench_first_read(s)             # 첫 읽기 안전 확인(5-19 ②) — tick·서버 전에, 읽기만
+                if why:
+                    self._stop_line(f"[중지] {why}")
+                    self._stop_line("        bench 시작 보호 — 장비에 아무것도 쓰지 않고 포트·웹 연결·로컬 서버를 닫고 끝냅니다.")
+                    self._teardown()
+                    return EXIT_GUARD
             self._tick_thread = self.clock.start_thread(s.loop.run, "tick")
             self.server.attach(s)
             self.server.start()
@@ -269,6 +292,51 @@ class App:
             self._teardown()
             return EXIT_START
         return EXIT_OK
+
+    # ───────── 시작 보호(5-19 ②) ─────────
+    def _stop_line(self, line: str) -> None:
+        self.say(line)
+        self.log.info(line)
+
+    def _port_of(self, k: str) -> str:
+        return str(self.cfg[{"plc": "PLC_PORT", "mfc": "MFC_PORT", "dc": "DC_PORT", "ig": "IG_PORT",
+                             "rfpulse": "RFPULSE_PORT"}[k]])
+
+    def guard_ports(self, s: ChkSystem) -> bool:
+        """worker 를 시작하기 전 포트 열기. 계속하면 True. 연 포트는 연 채로 worker 에 넘긴다(닫았다 다시 열지 않음)."""
+        mode = RunMode(self.cfg["RUN_MODE"])
+        if mode is RunMode.SIM:
+            return True
+        order = [k for k in SG.APP_OPEN_ORDER if s.enabled[k]]
+        if mode is RunMode.BENCH:
+            _, fail = SG.open_ports(s.guards, order)
+            if fail:
+                k, e = fail
+                self._stop_line(f"[중지] {SG.DEVICE_NAMES[k]} 포트 {self._port_of(k)} 를 열 수 없음: {e}")
+                self._stop_line(f"        {SG.PORT_HINT}. 다시 시도하지 않고 끝냅니다(bench 시작 보호).")
+                return False
+            self.log.info("시작 보호: 포트 열기 " + ", ".join(f"{k}={self._port_of(k)}" for k in order))
+            return True
+        opened = []                                        # prod — 첫 시도에서 '사용 중'만 멈춘다
+        for k in order:
+            try:
+                s.guards[k].open()
+                opened.append(k)
+            except TransportError as e:
+                if SG.port_in_use(e):
+                    for o in opened:
+                        s.guards[o].close()
+                    self._stop_line(f"[중지] {SG.DEVICE_NAMES[k]} 포트 {self._port_of(k)} 를 다른 프로그램이 사용 중: {e}")
+                    self._stop_line(f"        {SG.PORT_HINT}. 다시 시도하지 않고 끝냅니다(시작 보호).")
+                    return False
+                self.log.warning("%s 포트 %s 첫 열기 실패 — 재연결로 계속 시도: %s", SG.DEVICE_NAMES[k], self._port_of(k), e)
+        return True
+
+    def bench_first_read(self, s: ChkSystem) -> Optional[str]:
+        """bench 첫 읽기 안전 확인 — bench 실측 도구 safety_check 와 같은 조건. 멈춰야 하면 이유."""
+        ready = {k: bool(s.enabled[k] and s.workers[k].ready) for k in s.workers}
+        return SG.first_read_check(lambda k, fn: SG.read_once(self.clock, s.workers[k], fn), s.plc, s.dc, s.rfp, s.mfc,
+                                   ready, self._stop_line, self._stop_line)
 
     def start_uplink(self, s: ChkSystem) -> None:
         if not self.uplink_wanted():

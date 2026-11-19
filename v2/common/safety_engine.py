@@ -18,6 +18,8 @@
 - PROCESS_ABORT 는 엔진이 처리: 공정 쪽 on_abort(reason) 를 부르고 정지 순서를 실행.
 - 정지 순서(StepRunner): 단계마다 결과를 이벤트로. 단계에서 예외·실패가 나면 must=False 단계는 건너뛰고,
   must=True 단계는 반드시 실행한다. 단계 한도(timeout)를 넘으면 기다리지 않고 다음 단계로.
+  bench 에서 단계가 BENCH_READ_ONLY 로 거절되면 실패가 아니라 "bench — 보내지 않음"(info) — 다음 단계를 건너뛰지 않는다(5-19 ②).
+  prod·sim 의 단계 실패 기록(error)은 그대로.
   nowait 단계는 보내기만 하고(결과 "sent") 바로 다음 단계로 — 결과는 뒤의 AWAIT 단계(Act("AWAIT", {"no": n}))가
   그 단계 한도까지 기다려 받는다(v1 정지 순서: DC OFF·RF Pulse OFF 를 보내 놓고 RF 램프다운, 그 뒤 RF Pulse 완료 대기).
 """
@@ -79,16 +81,27 @@ class Step:
     nowait: bool = False                              # 보내기만 하고 다음 단계로 — 결과는 AWAIT 단계가 받는다
 
 
+BENCH_SKIP = "bench — 보내지 않음"                    # 정지 순서 단계가 bench 에서 BENCH_READ_ONLY 로 거절됨(info)
+
+
 class StepRunner:
     """정지 순서 실행 — 단계마다 handlers[act.kind](args, done) 를 부르고 done(err) 또는 한도까지 기다린다."""
 
-    def __init__(self, clock, handlers: Dict[str, Callable], emit: Callable[[SafetyEvent], None]) -> None:
+    def __init__(self, clock, handlers: Dict[str, Callable], emit: Callable[[SafetyEvent], None],
+                 bench: Callable[[], bool] = lambda: False) -> None:
         self.clock, self.handlers, self.emit = clock, handlers, emit
+        self.bench = bench                                # bench(장비 쓰기 금지)인가 — 엔진이 정한다(5-19 ②)
 
     def _status(self, box: List[Optional[str]], got: bool) -> str:
         if not got:
             return "timeout"
+        if box[0] == "BENCH_READ_ONLY" and self.bench():
+            return BENCH_SKIP                             # bench 에서 거절 = 실패 아님(조치 bench_skip 과 같은 취급, 5-19 ②)
         return "ok" if box[0] is None else f"error:{box[0]}"
+
+    @staticmethod
+    def _level(status: str) -> str:
+        return "info" if status in ("ok", "sent", BENCH_SKIP) else "error"
 
     def run(self, name: str, steps: Sequence[Step]) -> List[tuple]:
         results: List[tuple] = []
@@ -105,11 +118,11 @@ class StepRunner:
                     continue
                 got = self.clock.wait_until(self.clock.monotonic() + s.timeout_s, lambda b=box_: bool(b))
                 status = self._status(box_, got)
-                if status != "ok":
+                if status not in ("ok", BENCH_SKIP):
                     failed = True
                 results.append((s.no, "AWAIT", status))
                 self.emit(SafetyEvent("step", name, "AWAIT", f"{s.no}. {s.desc or f'{no}단계 결과'} → {status}",
-                                      "info" if status == "ok" else "error", self.clock.wall()))
+                                      self._level(status), self.clock.wall()))
                 continue
             if failed and not s.must:
                 results.append((s.no, s.act.kind, "skipped"))
@@ -142,11 +155,11 @@ class StepRunner:
                     status = self._status(box, got)
             except Exception as e:
                 status = f"error:{type(e).__name__}: {e}"
-            if status not in ("ok", "sent"):
+            if status not in ("ok", "sent", BENCH_SKIP):
                 failed = True
             results.append((s.no, s.act.kind, status))
             self.emit(SafetyEvent("step", name, s.act.kind, f"{s.no}. {s.desc or s.act.kind} → {status}",
-                                  "info" if status in ("ok", "sent") else "error", self.clock.wall()))
+                                  self._level(status), self.clock.wall()))
         self.emit(SafetyEvent("seq_done", name, "", ", ".join(f"{n}:{st}" for n, _, st in results),
                               "info" if not failed else "warn", self.clock.wall()))
         return results
@@ -170,7 +183,7 @@ class SafetyEngine:
         self._lock = threading.Lock()
         self.run_reason: Optional[str] = None      # 이번 공정의 run_end 사유(처음 걸린 중단)
         self.stopping: Optional[str] = None        # None · "stop" · "abort" · "all_stop"
-        self.runner = StepRunner(clock, handlers, self._emit)
+        self.runner = StepRunner(clock, handlers, self._emit, bench=lambda: self.bench)
         self.last_fire_t: Dict[str, float] = {}
         self.seq_results: Dict[str, List[tuple]] = {}
         self._threads: "collections.deque[Any]" = collections.deque(maxlen=64)   # 최근 정지 순서 스레드

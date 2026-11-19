@@ -33,13 +33,14 @@ from v2.common.clock import RealClock
 from v2.common.paramdef import defaults
 from v2.common.recorder import Recorder
 from v2.common.snapshot_bus import SnapshotBus, Source, TickLoop, iso_local
-from v2.common.transport import RecordingTransport, SerialSettings, SerialTransport, TransportError, save_exchanges
-from v2.common.worker import Request, Status, Worker
+from v2.common.transport import RecordingTransport, SerialSettings, SerialTransport, save_exchanges
+from v2.common.worker import Worker
 from v2.chk import cmd_guard as G
 from v2.chk import devices as D
 from v2.chk import inventory as INV
 from v2.chk import params as P
 from v2.chk import snapshot_fields as SF
+from v2.chk import startup_guard as SG
 from v2.chk.drivers.dc import DcDriver
 from v2.chk.drivers.ig import E_ITEM_COUNT, IgDriver, pressure_text
 from v2.chk.drivers.mfc import MfcDriver
@@ -150,17 +151,12 @@ class BenchProbe:
 
     # ───────── 단계 ─────────
     def open_ports(self) -> bool:
-        opened = []
-        for k in self.active:
-            try:
-                self.rec[k].open()
-                opened.append(k)
-            except TransportError as e:
-                self.say(f"[중지] {k} 포트 {self.ports[k]} 를 열 수 없음: {e}")
-                self.say("        v1 프로그램이 켜져 있거나 포트 번호가 다를 수 있습니다. 다시 시도하지 않고 끝냅니다.")
-                for o in opened:
-                    self.rec[o].close()
-                return False
+        _, fail = SG.open_ports(self.rec, self.active)          # 공통 시작 보호(5-19 ②) — 문구·순서는 예전 그대로
+        if fail:
+            k, e = fail
+            self.say(f"[중지] {k} 포트 {self.ports[k]} 를 열 수 없음: {e}")
+            self.say(f"        {SG.PORT_HINT}. 다시 시도하지 않고 끝냅니다.")
+            return False
         self.say("포트 열기: " + ", ".join(f"{k}={self.ports[k]}" for k in self.active)
                  + "".join(f" · {k} {why}" for k, why in self.excluded.items()))
         return True
@@ -176,43 +172,15 @@ class BenchProbe:
 
     def _read_once(self, k: str, fn, wait_s: float = 4.0):
         """(값, 상태). 무응답·실패면 값 None."""
-        box = []
-        self.w[k].submit(Request("read", fn, deadline=self.clock.monotonic() + 2.0,
-                                 on_done=lambda r: (box.append(r), self.clock.notify())))
-        self.clock.wait_until(self.clock.monotonic() + wait_s, lambda: bool(box))
-        if box and box[0].status == Status.OK:
-            return box[0].value, Status.OK
-        return None, (box[0].status if box else "timeout")
+        return SG.read_once(self.clock, self.w[k], fn, wait_s)
 
     def safety_check(self, ready: Dict[str, bool]) -> Optional[str]:
-        """멈춰야 하면 이유, 아니면 None. 읽기만 한다. RF 값은 판정과 상관없이 출력."""
-        plc, _ = self._read_once("plc", lambda s: self.plc.source_read(s, 0)) if ready.get("plc") else (None, None)
-        if plc is None:
-            return "PLC 를 읽을 수 없음 — 히터 RUN 상태를 확인할 수 없어 멈춥니다"
-        self.first_poll = self.plc.last
-        dac, fwd, ref, en = plc.get("rf.dac"), plc.get("rf.fwd_w"), plc.get("rf.ref_w"), plc.get("rf.dac_enable")
-        self.say(f"RF(PLC 아날로그): D40 {dac} · 순방향 {fwd} W · 반사 {ref} W · enable(M00200) {int(bool(en))}")
-        if plc["heater.run"]:
-            return ("PLC 히터 RUN 이 켜져 있음 — bench 는 하트비트를 쓰지 않아 10 s 뒤 PLC 가 히터를 끕니다. "
-                    "히터를 끈 뒤 다시 실행하세요")
-        if (dac or 0) > 0 or (fwd or 0.0) >= 5.0:
-            return f"RF 출력이 있음(D40 {dac} · 순방향 {fwd} W) — 공정 진행 중으로 보입니다"
-        if en:
-            self.notes.append(f"[참고] M00200 켜짐 · D40 {dac} · 순방향 {fwd} W — v1 정상 종료 흔적(출력 없음)")
-            self.say(self.notes[-1])
-        if ready.get("dc"):
-            outp, _ = self._read_once("dc", lambda s: self.dc._query(s, "OUTP?"))
-            if outp == "1":
-                return "DC 출력(OUTP?)이 켜져 있음 — 공정 진행 중으로 보입니다"
-        if ready.get("rfpulse"):
-            r, _ = self._read_once("rfpulse", lambda s: self.rfp.source_read(s, 0))
-            if r and r.get("rfp.out_on"):
-                return "RF Pulse 출력이 켜져 있음 — 공정 진행 중으로 보입니다"
-        if ready.get("mfc"):
-            m, _ = self._read_once("mfc", lambda s: self.mfc.source_read(s, 0))
-            if m and max(m.get("mfc.ar_sccm") or 0.0, m.get("mfc.o2_sccm") or 0.0) > 0.1:
-                return f"가스 유량이 있음(Ar {m.get('mfc.ar_sccm')} · O2 {m.get('mfc.o2_sccm')} sccm) — 공정 진행 중으로 보입니다"
-        return None
+        """멈춰야 하면 이유, 아니면 None. 읽기만 한다. RF 값은 판정과 상관없이 출력(공통 시작 보호 — 5-19 ②)."""
+        def note(msg: str) -> None:
+            self.notes.append(msg)
+            self.say(msg)
+        return SG.first_read_check(self._read_once, self.plc, self.dc, self.rfp, self.mfc, ready, self.say, note,
+                                   on_plc=lambda: setattr(self, "first_poll", self.plc.last))
 
     # ───────── 설정 전부 읽기 ─────────
     def _q(self, k: str, fn):
