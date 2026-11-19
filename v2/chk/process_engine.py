@@ -433,6 +433,9 @@ class ProcessEngine:
             why = self._device_guard(u) or self._plc_guard()
             if why:
                 return why
+            why = self._template_guard(ok)
+            if why:
+                return why
             self.list_active, self.csv_index = False, -1
             self._start_row(ok, name.strip() or str(ok.get("process_name") or "").strip() or "Single CHK")
             return None
@@ -450,7 +453,7 @@ class ProcessEngine:
                 return "HEATER_RECIPE_CONFLICT"
             for r in self.rows:
                 if r.get("delay_s") is None:
-                    why = self._device_guard(self._row_uses(r))
+                    why = self._device_guard(self._row_uses(r)) or self._template_guard(r)
                     if why:
                         return why
             why = self._plc_guard()
@@ -725,18 +728,42 @@ class ProcessEngine:
                 self._set_state("CSV_DELAY")
                 return
             n, i = len(self.rows), self.csv_index + 1
+            why = self._template_guard(r)                 # 장비 값 출처 단계의 장비 값을 그사이 모르게 됐으면(5-19 ③)
+            if why:
+                self._emit(ProcEvent("warn", f"{i}행: {self.reject_detail}", why))
+                self._cancel_list(why)
+                return
             self._start_row(r, f"CSV {i}/{n} - {r.get('process_name') or f'STEP{i}'}")
             return
+
+    def _template_guard(self, row: Dict[str, Any]) -> Optional[str]:
+        """v1 행의 기본 템플릿을 지금 장비 값으로 만들 수 있는가 — 장비 값 출처 단계의 장비 값을 모르면 사유 코드(5-19 ③)."""
+        if "blocks" in row or row.get("delay_s") is not None:
+            return None
+        try:
+            BK.template_blocks(row_to_params(row, self.cfg), self.cfg, ig_enabled=bool(self.cfg["IG_ENABLED"]),
+                               rfpulse_present=bool(self.cfg["RFPULSE_ENABLED"]), dev_sp=self._dev_sp())
+        except BK.TemplateError as e:
+            return self._reject(e.code, e.detail)[1]
+        return None
+
+    def _dev_sp(self) -> Dict[int, float]:
+        return dict(getattr(self.mfc, "sp_device", None) or {})
 
     def _start_row(self, row: Dict[str, Any], name: str) -> None:
         """행 시작 — 블록 행은 그 블록, v1 행은 기본 템플릿 블록(blocks.template_blocks)."""
         ig_en, rfp_en = bool(self.cfg["IG_ENABLED"]), bool(self.cfg["RFPULSE_ENABLED"])
+        sp_expect: Dict[int, float] = {}
         if "blocks" in row:
             blocks = row["blocks"]
             params = BK.params_summary(blocks, row.get("process_name") or "", self.cfg)
         else:
             params = row_to_params(row, self.cfg)
-            blocks = BK.template_blocks(params, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
+            dev_sp = self._dev_sp()
+            blocks = BK.template_blocks(params, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en, dev_sp=dev_sp)
+            # 장비 값 단계 — 만들 때 쓴 장비 값(단계에 들어가 다시 읽은 값과 비교해 다르면 경고, 5-19 ③)
+            sp_expect = {b["params"]["sp"]: dev_sp[b["params"]["sp"]] for b in blocks
+                         if b["type"] == "pressure" and b["params"].get("set") is False and b["params"]["sp"] in dev_sp}
             # 순서 고치기 기준(state.run.editBase)·비교는 정리된 모양 — 블록 행(적재 때 check_blocks)과 같게(5-16)
             clean, _, _ = BK.check_blocks(blocks, self.cfg)    # 템플릿은 늘 통과(test_template_blocks_pass_block_check_as_is)
             if clean is not None:
@@ -763,6 +790,7 @@ class ProcessEngine:
              "HEATER_OFF": self._h_heater_off, "END_STOP": self._h_end_stop, "HEATER_SETTLE": self._h_heater_settle}
         self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, h, self._step_event, cfg=self.cfg,
                                  resolve=self._resolve, on_step_done=self._on_step_done)
+        self.runner.sp_expect = sp_expect
         if self.safety is not None:
             self.safety.engine.new_run()
         self._emit(ProcEvent("run_start", name, data={"name": name, "params": dict(params), "run_id": self.run_id,

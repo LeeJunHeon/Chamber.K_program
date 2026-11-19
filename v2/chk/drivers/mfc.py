@@ -57,7 +57,7 @@ class MfcVerifyError(MfcError):
 
 @dataclass(frozen=True)
 class MfcEvent:
-    kind: str     # fs / fs_not_100 / verify_ok / verify_mismatch / read_plan
+    kind: str     # fs / fs_not_100 / verify_ok / verify_mismatch / read_plan / sp_device(장비 설정점 값, 5-19)
     detail: str
     reason: Optional[str] = None
 
@@ -131,6 +131,13 @@ class MfcDriver:
         # 설정점마다 마지막으로 쓴 값(mTorr, 5-18) — SP1·SP2·SP3·SP5 는 되읽기 확인된 값, SP4 는 쓴 SP4_MTORR 값(경고만 경로).
         # 쓰기를 시작하면 그 설정점 값은 지우고(모름), 확인되면 넣는다. 스냅샷 mfc.sp_sel_mtorr = 지금 선택된 설정점(sp_active)의 값
         self.sp_written: Dict[int, float] = {}
+        # 설정점마다 장비에 저장된 값(mTorr, 5-19 ③) — R1·R2·R3·R4·R10 을 parse_sp_reply 로 푼 값. 못 읽었거나 형식이 다르면 없음(모름).
+        # 읽는 때: ㉠ 연결 직후 한 번씩 ㉡ 선택(D{n}·R7 확인)했는데 이번 연결에서 그 설정점에 확인된 쓴 값이 없을 때 한 번
+        # ㉢ 값을 쓰고 확인이 끝나면 그 확인값 ㉣ 공정이 돌지 않는 동안 MFC_SP_REFRESH_SEC 마다(한 tick 에 하나씩, R6 처럼 양보)
+        self.sp_device: Dict[int, float] = {}
+        self.idle: Callable[[], bool] = lambda: True     # 공정이 돌지 않는가 — 조립(system)이 공정 엔진으로 바꾼다(㉣)
+        self._sp_refresh_t = -1e18                       # 마지막 주기 갱신을 끝낸 시각
+        self._sp_refresh_todo: List[int] = []            # 이번 주기 갱신에서 남은 설정점
         self._last_cmd = -1e9
         self._ops = 0                                   # 진행 중인 설정 명령(_op) 수 — 0 이 아니면 기록용 읽기(R6)가 양보
         self._ops_until = 0.0                           # 양보 기한 — 끝 콜백을 못 받은 명령이 R6 를 영영 막지 않게(스텝 한도)
@@ -191,6 +198,16 @@ class MfcDriver:
                 self.fs[ch] = self.cfg[key]
         self._emit("fs", f"FS Ar {self.fs[CH_AR]:g} sccm · O2 {self.fs[CH_O2]:g} sccm ({self.fs_source})")
         self._check_scale(session)
+        self.sp_written.clear()                           # '이번 연결에서 확인된 쓴 값' — 새 연결이면 처음부터(5-19 ③ ㉡)
+        for n in SP_READ_CMD:                             # ㉠ 연결 직후 장비에 저장된 설정점 값(질의만 — bench 허용 목록)
+            try:
+                ans = self._query(session, SP_READ_CMD[n])
+            except Cancelled:
+                raise
+            except Exception:
+                ans = None
+            self._store_device_sp(n, ans, "연결")
+        self._sp_refresh_t = self.clock.monotonic()
         try:                                              # 연결 때 ON/OFF(S51 남은 가스 판단 — 읽기만)
             self.onoff_at_connect = parse_r69(self._query(session, "R69"))
         except Cancelled:
@@ -269,13 +286,59 @@ class MfcDriver:
                 and took > 0.6 * self.cfg["MFC_READ_DEADLINE_MS"] / 1000.0):
             self.alternate = True
             self._emit("read_plan", f"한 번 읽기 {took * 1000:.0f} ms — R60(유량)·R6(밸브 위치)를 번갈아")
+        self._refresh_sp(session, self.clock.monotonic())  # ㉣ 계획 판단(took) 뒤 — 갱신 읽기는 번갈아 읽기 판단에 넣지 않는다
         out.update({"mfc.ar_set": self.ar_set, "mfc.o2_set": self.o2_set, "mfc.sp_active": self.sp_active,
                     "mfc.sp_mtorr": self.sp_mtorr, "mfc.sp_sel_mtorr": self.sp_sel_mtorr()})
+        out.update({f"mfc.sp{n}_dev_mtorr": self.sp_device.get(n) for n in SP_READ_CMD})
         return out
 
     def sp_sel_mtorr(self) -> Optional[float]:
-        """지금 선택된 설정점(sp_active 1~5)에 마지막으로 쓴 값 — 선택이 없거나(0·None) 그 설정점 값을 모르면 None(5-18)."""
-        return self.sp_written.get(self.sp_active) if self.sp_active else None
+        """지금 선택된 설정점(sp_active 1~5)의 값 — 이번 연결에서 쓰고 확인한 값이 있으면 그 값, 없으면 장비에서 읽은 값
+        (5-19 ③). 선택이 없거나(0·None) 그 설정점 값을 모르면 None."""
+        if not self.sp_active:
+            return None
+        n = self.sp_active
+        return self.sp_written[n] if n in self.sp_written else self.sp_device.get(n)
+
+    def _store_device_sp(self, n: int, ans: Optional[str], when: str) -> Optional[float]:
+        """설정점 읽기 응답 → 장비 값(mTorr). 못 읽었거나 형식이 다르면 '모름'으로 두고 원문 응답을 이벤트로(다른 값으로 채우지 않는다)."""
+        v = parse_sp_reply(ans, n)
+        if v is None:
+            self.sp_device.pop(n, None)
+            self._emit("sp_device", f"SP{n} 장비 값을 읽지 못함({when}): {SP_READ_CMD[n]} 응답={ans!r} — 모름으로 둠")
+            return None
+        self.sp_device[n] = round(self.pct_to_mtorr(v), 3)
+        return self.sp_device[n]
+
+    def _refresh_sp(self, session, now: float) -> None:
+        """㉣ 공정이 돌지 않는 동안 MFC_SP_REFRESH_SEC 마다 장비 설정점 값을 다시 읽는다 — 한 tick 에 하나, 설정 명령이 진행 중이거나
+        응답을 기다리면 읽기 마감을 넘길 tick 에는 보내지 않는다(R6 처럼 양보). 0 이면 하지 않는다."""
+        period = float(self.cfg["MFC_SP_REFRESH_SEC"])
+        if period <= 0:
+            return
+        if not self._sp_refresh_todo:
+            if now - self._sp_refresh_t < period:
+                return
+            self._sp_refresh_todo = list(SP_READ_CMD)
+        late = max(now, self._last_cmd + self.gap_s) + self.q_timeout_s > session.deadline
+        if late or (self._ops > 0 and now < self._ops_until) or not self.idle():
+            return
+        n = self._sp_refresh_todo.pop(0)
+        try:
+            ans = self._query(session, SP_READ_CMD[n])
+        except Cancelled:
+            raise
+        except Exception:
+            ans = None
+        if n in self.sp_written:                          # 이번 연결에서 쓴 값이 있으면 장비 값은 그 확인값과 같아야 한다 — 다르면 알림
+            v = parse_sp_reply(ans, n)
+            if v is not None and abs(self.pct_to_mtorr(v) - self.sp_written[n]) > self.pct_to_mtorr(
+                    float(self.cfg["MFC_SP_VERIFY_TOL"])) + 1e-9:
+                old = self.sp_written.pop(n)              # 장비 쪽에서 바뀜(앞면 조작 등) — 장비 값을 따른다
+                self._emit("sp_device", f"SP{n} 장비 값이 바뀜(쓴 값 {old:.2f} → 장비 {self.pct_to_mtorr(v):.2f} mTorr) — 장비 값을 따름")
+        self._store_device_sp(n, ans, "주기 갱신")
+        if not self._sp_refresh_todo:
+            self._sp_refresh_t = now
 
     def _read_valve(self, session) -> Optional[float]:
         """R6(밸브 위치 %) — 기록용. 설정 명령이 진행·대기 중이면 보내지 않고(양보), 무응답·"V" 아닌 응답이면 None
@@ -452,10 +515,12 @@ class MfcDriver:
 
         def gen():
             self.sp_written.pop(n, None)                       # 쓰는 동안·확인 못 하면 그 설정점 값은 모름
+            self.sp_device.pop(n, None)                        # 장비 값도(쓰는 중 — 확인되면 그 확인값, 5-19 ③ ㉢)
             yield ("w", cmd)
             if n not in SP_VERIFIED:
                 ans = yield ("q", rd)
                 v = parse_sp_reply(ans, n)
+                self._store_device_sp(n, ans, "쓴 뒤 되읽기")      # SP4(경고만 경로): 되읽은 값이 장비 값
                 if v is not None and abs(v - hw) <= tol + 1e-9:
                     self._emit("verify_ok", f"S{n}: {rd}={ans}")
                 else:
@@ -472,6 +537,7 @@ class MfcDriver:
                     if n == 1:
                         self.sp_mtorr = mtorr
                     self.sp_written[n] = mtorr
+                    self._store_device_sp(n, ans, "쓴 뒤 확인")         # ㉢ 확인값
                     return
                 if k >= tries:
                     raise MfcVerifyError(f"SP{n} 설정 확인 실패 — 기대 {cmd}({mtorr:.2f} mTorr), 마지막 응답 {ans!r} ({tries}회)")
@@ -489,6 +555,9 @@ class MfcDriver:
             yield from self._verify_loop(
                 f"D{n}", "R7", lambda a: bool(a) and a.startswith("M") and len(a) > 1 and a[1] == str(n), self.verify_tries)
             self.sp_active = n
+            if n not in self.sp_written:                   # ㉡ 이번 연결에서 쓴 값이 없으면 장비에 저장된 값을 한 번 읽는다(v1 에 없는 질의)
+                ans = yield ("q", SP_READ_CMD[n])
+                self._store_device_sp(n, ans, "선택")
         self._op(f"D{n}", gen(), on_done)
 
     def valve(self, open_: bool, on_done=None) -> None:

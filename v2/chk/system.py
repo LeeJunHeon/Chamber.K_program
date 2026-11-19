@@ -186,6 +186,7 @@ class ChkSystem:
         self.plc = PlcDriver(clock, w["plc"], c, wr, on_event=self._ev,
                              blackbox_sink=lambda name, rows: self.recorder.put_blackbox(name, rows))
         self.mfc = MfcDriver(clock, w["mfc"], c, wr, on_event=self._ev)
+        self.mfc.idle = lambda: not getattr(self, "process", None) or not self.process.active   # 장비 설정점 주기 갱신(5-19 ③ ㉣)
         self.dc = DcDriver(clock, w["dc"], c, wr, on_event=self._ev)
         self.rfp = RfPulseDriver(clock, w["rfpulse"], c, wr, on_event=self._ev)
         self.ig = IgDriver(clock, w["ig"], c, wr, on_event=self._ev)

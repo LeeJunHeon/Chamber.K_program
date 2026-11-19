@@ -131,9 +131,9 @@ def test_mfc_sp2_readback_mismatch_fails_after_resends():
 
 
 def test_mfc_sp4_readback_mismatch_is_warning_only():
-    r = MfcRig()                                             # SP4 는 v2 결정 SP4_FROM_CONFIG 그대로 — R4 한 번, 경고만
+    r = MfcRig()                                             # SP4_SOURCE = 프로그램 값일 때(5-19 ③): S4 쓰기·R4 한 번, 다르면 경고만
     r.sim.ignore_writes = {"S4"}
-    assert r.seq(r.d.set_sp, 4, 30.0) is None
+    assert r.seq(r.d.set_sp, 4, 20.0) is None              # 장비에 남은 SP4 는 3.00 %FS(30 mTorr — 5-19 시뮬레이터)
     ev = [e for e in r.events if e.kind == "sp_readback"]
     assert len(ev) == 1 and ev[0].reason == "VERIFY_MISMATCH"
     r.done()

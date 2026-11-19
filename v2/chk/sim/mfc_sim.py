@@ -42,7 +42,9 @@ class MfcSim(SimDevice):
         self.info.update({45 + i: f"M{i}+100" for i in range(1, 6)})
         self.on = [False] * 4
         self.flow_pct = [0.0] * 4
-        self.sp = [0.0] * 5                     # 설정점 %FS
+        # 설정점 %FS — SP4 는 장비에 저장된 값 3.00(10/20 bench R4 'S4+003.00' = 30 mTorr — v1 이 D4 만 보내고 쓰던 값,
+        # 5-19 ③ 기본 SP4_SOURCE = 장비 값). 나머지는 모름 → 0
+        self.sp = [0.0, 0.0, 0.0, 3.0, 0.0]
         self.sp_sel = 0
         self.valve_mode = "open"                # open / closed / hold / control
         self.valve = 1.0

@@ -75,6 +75,7 @@ class ParamDef:
     v1_period_s: Optional[float] = None   # v1 판정 주기 — v1 은 횟수, v2 기본값 = v1 횟수 × 이 주기(초, 시간 기반 판정)
     web_locked: bool = False        # 웹에서 바꾸지 않는 키(CONFIG_APPLY·ROLLBACK 에 지금 값과 다른 값 → CONFIG_LOCKED_KEY)
     choices: Optional[tuple] = None  # INT·FLOAT 전용 허용 숫자 목록(통신 속도처럼 장비가 받는 값만) — 형식은 숫자 그대로
+    enum_labels: Optional[tuple] = None  # ENUM 값 → 화면 이름 ((값, 이름), ...) — 웹 묶음에만(설정 정의 해시에는 넣지 않음, 5-19)
 
     def public_dict(self) -> dict:
         """웹으로 보내는 정의. secret 은 기본값을 싣지 않는다."""

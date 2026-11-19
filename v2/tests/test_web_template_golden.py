@@ -29,7 +29,7 @@ def test_check_over_rejects_wrong_type(over):
 
 
 def test_check_over_accepts_cases():
-    for n, _, o in G.CASES:
+    for n, _, o, *_ in G.CASES:
         G.check_over(n, o)
 
 
@@ -38,9 +38,12 @@ def test_golden_cases_cover_and_cfg_keys_exact():
     d = G.build(read)
     assert read == set(G.CFG_KEYS)                                       # 검사·템플릿이 읽는 설정 키 = 파일의 cfg 키
     cases = d["cases"]
-    assert 20 <= len(cases) <= 50 and len({c["name"] for c in cases}) == len(cases)
-    ok = [c for c in cases if not c["checkErrors"]]
+    assert 20 <= len(cases) <= 60 and len({c["name"] for c in cases}) == len(cases)
+    ok = [c for c in cases if not c["checkErrors"] and not c.get("templateError")]
     bad = [c for c in cases if c["checkErrors"]]
+    terr = [c for c in cases if c.get("templateError")]                   # 5-19 ③ — 장비 값 모름: params 는 있고 blocks 없음
+    assert len(terr) >= 2 and all(c["blocks"] is None and c["params"] is not None
+                                  and c["templateError"]["code"] == "SP_DEVICE_VALUE_UNKNOWN" for c in terr)
     assert len(bad) >= 5 and all(c["params"] is None and c["blocks"] is None for c in bad)
     types = lambda c: [b["type"] for b in c["blocks"]]
     assert any("heater_ramp" in types(c) for c in ok) and any("heater_ramp" not in types(c) for c in ok)
@@ -72,8 +75,8 @@ def test_template_blocks_pass_block_check_as_is():
     from v2.chk import blocks as BK
     from v2.chk import process_steps as PSt
     n = 0
-    for (name, _, over), c in zip(G.CASES, G.build()["cases"]):
-        if c["checkErrors"]:
+    for (name, _, over, *_), c in zip(G.CASES, G.build()["cases"]):
+        if c["checkErrors"] or c.get("templateError"):                  # 5-19: 장비 값 모름 — 템플릿 없음(시작 거부)
             continue
         cfg = dict(defaults(G.P.PARAMS), **over)
         ig, rfp = c["igEnabled"], c["rfpulsePresent"]
@@ -82,8 +85,9 @@ def test_template_blocks_pass_block_check_as_is():
         bare = [{k: v for k, v in b.items() if k not in ("label", "stage") or v} for b in c["blocks"]]
         assert BK.check_blocks(bare, cfg)[0] == clean, name                # "" = 값 없음 — 정리된 모양이 같다
         got, _ = BK.expand(clean, cfg, ig_enabled=ig, rfpulse_present=rfp)
+        dev = {int(k): v for k, v in (c.get("devSp") or {}).items()}
         assert [s for s in got if not s.internal] == PSt.build_process_steps(c["params"], cfg, ig_enabled=ig,
-                                                                             rfpulse_present=rfp), name
+                                                                             rfpulse_present=rfp, dev_sp=dev), name
         assert got == BK.expand(c["blocks"], cfg, ig_enabled=ig, rfpulse_present=rfp)[0], name
         n += 1
     assert n >= 25

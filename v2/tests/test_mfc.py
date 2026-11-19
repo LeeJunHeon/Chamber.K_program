@@ -37,6 +37,7 @@ class Rig:
         self.d = MfcDriver(self.c, self.w, self.cfg, writes, on_event=self.events.append)
         self.w.start()
         self.c.wait_until(1.5)
+        self.c.wait_until(30.0, lambda: self.w.ready)      # 연결 초기화(5-19: 장비 설정점 R1~R4·R10 읽기 포함)가 끝날 때까지
 
     def kinds(self):
         return [e.kind for e in self.events]

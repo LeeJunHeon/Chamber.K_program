@@ -99,6 +99,7 @@ CHK_REASONS: tuple = (
     Reason("HEATER_GAS_FAILED", "히터 가스 준비 실패", "abort"),
     Reason("COND_WAIT_TIMEOUT", "조건 대기 한도 초과(공정 중단)", "abort"),
     Reason("PRESSURE_WAIT_TIMEOUT", "압력 블록(SP2~SP4) 도달 한도 초과(공정 중단)", "abort"),
+    Reason("SP_DEVICE_VALUE_UNKNOWN", "압력 설정점: 장비에 저장된 값을 읽지 못함(장비 값 출처 — 시작 거부·그 단계 실패)", "abort"),
     Reason("HEATER_TC1_DETACHED", "히터 TC1 탈락 의심 — 2단 제어 보정이 오래 너무 큼", "abort"),
     Reason("HEATER_SETTLE_FAILED", "셔터 전 히터 정착 미달 — 대기 상한 초과(공정 중단 설정)", "abort"),
     Reason("PAUSE_TIMEOUT", "일시정지가 한도를 넘음 — 정지 순서", "abort"),
@@ -107,6 +108,7 @@ CHK_REASONS: tuple = (
     # 경고·정보
     Reason("FLOW_DEVIATION", "가스 유량 이탈(경고만)", "info"),
     Reason("PRESSURE_DEVIATION", "압력 이탈(경고만)", "info"),
+    Reason("SP_DEVICE_CHANGED", "압력 설정점 장비 값이 시작 때와 다름 — 새로 읽은 값을 목표로", "info"),
     Reason("DC_OFF_UNCONFIRMED", "DC OFF 확인 안 됨 — 재시도 중", "info"),
     Reason("RFP_OFF_UNCONFIRMED", "RF Pulse OFF 확인 안 됨", "info"),
     Reason("HEATER_SATURATED", "히터 DAC 포화 — 상한 클램프", "info"),

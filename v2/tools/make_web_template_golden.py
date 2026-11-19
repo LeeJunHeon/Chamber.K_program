@@ -29,6 +29,7 @@ CFG_KEYS: tuple = (
     "HEATER_RECIPE_RAMP_MAX_C_PER_MIN", "HEATER_RAMP_RATE_C_PER_MIN", "RF_CAL_OFFSET", "RF_CAL_GAIN",
     "GAS_STABILIZE_SEC", "SP2_MTORR", "SP3_MTORR", "SP5_MTORR", "SP5_STABILIZE_SEC", "DC_POWER_DELAY_SEC",
     "HEATER_CTRL_MODE", "HEATER_SHUTTER_SETTLE_MAX_SEC",
+    "SP2_SOURCE", "SP3_SOURCE", "SP4_SOURCE", "SP5_SOURCE",
 )
 
 _BASE = {"process_name": "base", "ar": True, "ar_flow": 20.0, "working_pressure": 3.0, "process_time": 10.0,
@@ -45,7 +46,7 @@ def _row(**kw) -> Dict[str, Any]:
     return r
 
 
-# (이름, 행, 설정 바꿈)
+# (이름, 행, 설정 바꿈[, 장비에 저장된 설정점 값 {번호: mTorr} — 5-19 ③ 장비 값 출처 단계의 비교])
 CASES: List[tuple] = [
     ("dc_ar_gun1", _row(), {}),
     ("o2_only_gun2", _row(ar=None, ar_flow=None, o2=True, o2_flow=8.5, gun1=None, gun2=True), {}),
@@ -94,6 +95,18 @@ CASES: List[tuple] = [
     ("err_heater_disabled", _row(use_heater=True, heater_temp=200.0), {"HEATER_ENABLED": False}),
     # 셔터 전 히터 정착(5-15, v1 3328872) — 2단 제어·히터·메인·상한 > 0 이면 셔터 딜레이 뒤·메인 앞
     # 기본 tc2(5-17, v1 6e0685b)·tc1 에서는 넣지 않는다 — cascade 전용
+    # 압력 설정점 값 출처(5-19 ③) — 기본 SP4 = 장비 값(D4 만), 나머지 프로그램 값. 장비 값 단계는 set=false·값 비움,
+    # 넣을지 비교는 장비 값(devSp)으로, 모르면 templateError(시작 거부)
+    ("sp4_program", _row(working_pressure=3.0), {"SP4_SOURCE": "program"}),
+    ("sp3_device_includes", _row(working_pressure=18.0), {"SP3_SOURCE": "device"}, {3: 20.0}),
+    ("sp3_device_excludes", _row(working_pressure=12.0), {"SP3_SOURCE": "device"}, {3: 10.0}),
+    ("sp2_device", _row(working_pressure=6.0), {"SP2_SOURCE": "device"}, {2: 7.0}),
+    ("sp5_device_includes", _row(working_pressure=45.0), {"SP5_SOURCE": "device"}, {5: 40.0}),
+    ("all_device", _row(working_pressure=2.0),
+     {"SP2_SOURCE": "device", "SP3_SOURCE": "device", "SP4_SOURCE": "device", "SP5_SOURCE": "device"},
+     {1: 1.0, 2: 6.0, 3: 12.0, 4: 30.0, 5: 50.0}),
+    ("err_sp5_device_unknown", _row(working_pressure=60.0), {"SP5_SOURCE": "device"}, {4: 30.0}),
+    ("err_sp3_device_unknown_dev_empty", _row(working_pressure=3.0), {"SP3_SOURCE": "device"}, {}),
     ("heater_cascade_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {"HEATER_CTRL_MODE": "cascade"}),
     ("heater_tc2_no_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {}),
     ("heater_tc1_no_settle", _row(use_heater=True, heater_temp=300.0, shutter_delay=1.0), {"HEATER_CTRL_MODE": "tc1"}),
@@ -136,25 +149,32 @@ class _Track(dict):
         return super().get(k, default)
 
 
-def one(name: str, row: Dict[str, Any], over: Dict[str, Any], track: set = None) -> Dict[str, Any]:
+def one(name: str, row: Dict[str, Any], over: Dict[str, Any], track: set = None, dev_sp=None) -> Dict[str, Any]:
     check_over(name, over)
     full = _Track(defaults(P.PARAMS), **over)
     ig, rfp = bool(full["IG_ENABLED"]), bool(full["RFPULSE_ENABLED"])
     clean, errs, warns = RC.check_process_row(row, full)
-    params = blocks = None
+    params = blocks = terr = None
     if not errs:
         params = PSt.row_to_params(clean, full)
-        blocks = BK.template_blocks(params, full, ig_enabled=ig, rfpulse_present=rfp)
+        try:
+            blocks = BK.template_blocks(params, full, ig_enabled=ig, rfpulse_present=rfp, dev_sp=dev_sp)
+        except BK.TemplateError as e:                    # 장비 값 출처 단계의 장비 값을 모름 — 시작 거부(5-19 ③)
+            terr = {"code": e.code, "detail": e.detail}
     if track is not None:
         track |= full.read
-    return {"name": name, "row": row, "cfg": {k: dict.__getitem__(full, k) for k in CFG_KEYS},
-            "igEnabled": ig, "rfpulsePresent": rfp, "checkErrors": list(errs), "checkWarnings": list(warns),
-            "params": params, "blocks": blocks}
+    out = {"name": name, "row": row, "cfg": {k: dict.__getitem__(full, k) for k in CFG_KEYS},
+           "igEnabled": ig, "rfpulsePresent": rfp, "checkErrors": list(errs), "checkWarnings": list(warns),
+           "params": params, "blocks": blocks}
+    if dev_sp is not None:                               # 5-19 — 장비 값(웹은 스냅샷 mfc.sp{n}_dev_mtorr)·템플릿 오류
+        out["devSp"] = {str(k): float(v) for k, v in sorted(dev_sp.items())}
+        out["templateError"] = terr
+    return out
 
 
 def build(track: set = None) -> Dict[str, Any]:
     return {"_설명": "기본 템플릿 골든(v2.tools.make_web_template_golden 이 만든다 — 손으로 고치지 않음). 웹 W-4 TS 계산 확인용",
-            "cases": [one(n, r, o, track) for n, r, o in CASES]}
+            "cases": [one(c[0], c[1], c[2], track, c[3] if len(c) > 3 else None) for c in CASES]}
 
 
 def to_json(d: Dict[str, Any]) -> str:

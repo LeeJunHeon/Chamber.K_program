@@ -52,6 +52,15 @@
                 확인값, SP4 는 쓴 SP4_MTORR, 선택이 없으면 값 없음 — 화면의 압력 목표). mfc.sp_mtorr 는 뜻 그대로(SP1 확인값)·
                 이름 "작업 압력 설정(SP1)"·detail
                 버전 17(5-19): 설정 MFC_FLOW_STABLE_TIMEOUT_SEC 기본 30 → 100 s·범위 5~600(v1 563f772 MFC_STABILIZATION_TIMEOUT_S)
+                압력 설정점 값 출처(5-19 ③): 설정 SP2_SOURCE·SP3_SOURCE·SP4_SOURCE·SP5_SOURCE(enum program·device, params[].enumLabels
+                {"program": "프로그램 값", "device": "장비 값"} — 기본 SP4 = device, 나머지 program, v1 과 같게), MFC_SP_REFRESH_SEC(comm_mfc).
+                기본 템플릿: 장비 값 단계는 set=false·value 비움, 넣을지 비교(WP < SP3·WP < SP2·WP > SP5)는 장비 값(스냅샷
+                mfc.sp{n}_dev_mtorr)으로 — 모르면 시작 거부 SP_DEVICE_VALUE_UNKNOWN("SP{n}: 장비에 저장된 값을 읽지 못함"). 골든
+                web_template_cases 의 경우에 devSp({번호: mTorr})·templateError({code, detail}) — 기본(SP4 장비 값)으로 기존 경우의
+                SP4 블록 set 이 false. pressure 블록: set 이름 "프로그램 값을 장비에 쓰기"(고급 아님), set=false 면 도달 대기 목표 =
+                장비 값(펼친 WAIT_PRESSURE args device_sp·target null, 문구 "target=장비 값 SP{n}"), valueRules 에 kind "empty"
+                (조건이면 그 값을 비워야)·조건 "<값>=false" — device_sp_no_value. 스냅샷 mfc.sp1_dev_mtorr~sp5_dev_mtorr(detail),
+                mfc.sp_sel_mtorr = 쓴 값 → 없으면 장비 값. 사유 SP_DEVICE_VALUE_UNKNOWN·SP_DEVICE_CHANGED, eventKinds mfc sp_device
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -177,6 +186,7 @@ EVENT_KINDS: tuple = (
     ("mfc", "fs", "풀스케일", _D), ("mfc", "fs_not_100", "풀스케일 100 아님", _M), ("mfc", "scale", "눈금", _D),
     ("mfc", "verify_ok", "되읽기 확인", _D), ("mfc", "verify_mismatch", "되읽기 다름", _M),
     ("mfc", "sp_readback", "설정점 되읽기", _D), ("mfc", "remote_state", "원격 상태", _D),
+    ("mfc", "sp_device", "설정점 장비 값", _D),
     ("mfc", "read_plan", "읽기 계획", _D),
     ("dc", "identity", "장비 식별", _D), ("dc", "syst_err", "자기 진단", _D), ("dc", "last_state", "마지막 상태", _D),
     ("dc", "protection", "보호 설정", _D), ("dc", "trip", "보호 트립", _M), ("dc", "out_check", "출력 확인", _D),
@@ -206,6 +216,7 @@ def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any],
     return {"key": p.key, "label": p.label, "group": p.group, "unit": p.unit, "type": p.type.value,
             "min": p.min, "max": p.max, "enum": list(p.enum) if p.enum else None, "pattern": p.pattern,
             "choices": list(p.choices) if p.choices else None,
+            "enumLabels": dict(p.enum_labels) if p.enum_labels else None,     # 5-19 — 고르는 값의 화면 이름
             "default": None if secret else p.default,
             "current": None if (secret or values is None) else values.get(p.key),
             "stored": st, "overridden": ov,

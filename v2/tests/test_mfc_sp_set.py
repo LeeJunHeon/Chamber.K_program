@@ -168,7 +168,12 @@ def test_sp_on_r7(n):
     r = Rig()
     t0 = r.c.monotonic()
     assert r.seq(r.d.select_sp, n) is None and r.d.sp_active == n
-    assert _io(r, t0) == [f"D{n}", "R7"] and r.sim._query("R7")[:2] == f"M{n}"
+    # 5-19 ③ ㉡: 이번 연결에서 그 설정점에 쓴 값이 없으면 장비 값을 한 번 읽는다(R{n}·SP5 는 R10 — v1 에 없는 질의, 의도된 차이)
+    assert _io(r, t0) == [f"D{n}", "R7", SP_READ_CMD[n]] and r.sim._query("R7")[:2] == f"M{n}"
+    assert r.d.sp_device[n] == pytest.approx(r.d.pct_to_mtorr(r.sim.sp[n - 1]))
+    t1 = r.c.monotonic()
+    assert _set(r, n, 7.0)[0] is None and r.seq(r.d.select_sp, n) is None   # 쓴 값이 있으면 읽지 않는다(통신 순서 그대로)
+    assert _io(r, t1)[-2:] == [f"D{n}", "R7"]
     r.done()
 
 
@@ -307,9 +312,13 @@ def test_full_process_wp60_has_sp5_stage(tmp_path):
                                   "PRESSURE_SP5", "PRESSURE_SP1", "SHUTTER_DELAY", "MAIN", "STOPPING", "DONE", "IDLE"]
     t = dict(st)
     assert t["PRESSURE_SP1"] - t["PRESSURE_SP5"] == pytest.approx(62, abs=1.6)       # S5·R10·D5·R7 + 고정 대기 60 s
-    i = writes.index("S4 3.00")
-    assert writes[i:i + 6] == ["S4 3.00", "D4", "S5 5.00", "D5", "S1 6.00", "D1"]
-    assert queries.count("R10") == 1 and queries.count("R1") == 1 and queries.count("R4") == 1
+    i = writes.index("D4")                                                       # 5-19 ③: SP4 기본 = 장비 값(v1 과 같게 D4 만)
+    assert writes[i:i + 5] == ["D4", "S5 5.00", "D5", "S1 6.00", "D1"] and not any(w.startswith("S4") for w in writes)
+    io = [x for x in (d.decode().strip() for _, d in r.rig.sims["mfc"].received) if x not in ("R5", "R60", "R6")]  # tick 읽기 빼고
+    j = io.index("D4")
+    assert io[j:j + 3] == ["D4", "R7", "R4"]                     # 선택 뒤 장비 값 한 번(이번 연결에서 쓴 SP4 없음 — v1 에 없는 질의)
+    k = io.index("S5 5.00")
+    assert io[k:k + 4] == ["S5 5.00", "R10", "D5", "R7"]         # 쓴 값이 있으면 선택 뒤 읽지 않는다(통신 순서 그대로)
     assert not [e for e in r.rig.safety.engine.events if e.kind in ("fired", "abort", "also") and e.rule != "S44"]
 
 
@@ -317,10 +326,12 @@ def test_full_process_wp5_unchanged(tmp_path):
     r, st, writes, queries = _run_process(tmp_path, 5, 200)
     assert [s for s, _ in st] == ["PRE_CLEAN", "GAS_PRE", "GAS_INTRO", "GAS_STABILIZE", "GUN_SHUTTER", "POWER_WAIT",
                                   "PRESSURE_SP3", "PRESSURE_SP1", "SHUTTER_DELAY", "MAIN", "STOPPING", "DONE", "IDLE"]
-    i = writes.index("S4 3.00")
-    assert writes[i:i + 6] == ["S4 3.00", "D4", "S3 1.50", "D3", "S1 0.50", "D1"]
-    assert "R10" not in queries and not any(w.startswith(("S5", "D5")) for w in writes)
-    assert queries.count("R3") == 1                                                  # SP3 도 한 검증 경로(R3 되읽기)
+    i = writes.index("D4")
+    assert writes[i:i + 5] == ["D4", "S3 1.50", "D3", "S1 0.50", "D1"] and not any(w.startswith("S4") for w in writes)
+    assert not any(w.startswith(("S5", "D5")) for w in writes)
+    io = [x for x in (d.decode().strip() for _, d in r.rig.sims["mfc"].received) if x not in ("R5", "R60", "R6")]  # tick 읽기 빼고
+    k = io.index("S3 1.50")
+    assert io[k:k + 4] == ["S3 1.50", "R3", "D3", "R7"]          # SP3 도 한 검증 경로(R3 되읽기)
 
 
 # (g) 화면용 압력 목표 mfc.sp_sel_mtorr(5-18) — 지금 선택된 설정점에 마지막으로 쓴 값. mfc.sp_mtorr(SP1 확인값)는 (f) 그대로

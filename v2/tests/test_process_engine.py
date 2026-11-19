@@ -78,7 +78,7 @@ def test_full_process_sim(tmp_path):
     assert t["SHUTTER_DELAY"] - t["PRESSURE_SP1"] >= 6.0                # 압력 안정 6 s 이상
     assert t["MAIN"] - t["SHUTTER_DELAY"] == pytest.approx(60, abs=1.1)
     assert t["STOPPING"] - t["MAIN"] == pytest.approx(60 + 0.8, abs=1.1)  # Main 셔터 0.8 s + 60 s
-    # SP4_SET(S4 쓰기·R4 되읽기 — 5-4 ④ SP4_FROM_CONFIG) + SP4 ON + 안정화 60 s
+    # SP4 ON(D4·R7 확인 + 장비 값 R4 한 번 — 5-19 ③ 기본 SP4_SOURCE = 장비 값) + 안정화 60 s
     assert t["GUN_SHUTTER"] - t["GAS_STABILIZE"] == pytest.approx(62, abs=1.1)
     ends = r.ev("run_end")
     assert len(ends) == 1 and ends[0].data["status"] == "done"

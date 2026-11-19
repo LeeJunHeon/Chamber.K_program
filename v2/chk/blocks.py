@@ -14,7 +14,10 @@
 
 기본 템플릿(template_blocks): v1 행(recipe.PROCESS_COLUMNS) → v1 _build_steps(controller/process_controller.py:486-682)와
 같은 순서의 블록 목록. 펼치면 지금(5-3)과 같은 스텝이 나온다 — 골든이 이 템플릿으로 비교한다.
-다른 곳은 가스 안정화의 SP4_SET 하나(S4 = SP4_MTORR 쓰기·R4 되읽기, 의도된 차이 SP4_FROM_CONFIG — 5-4 ④).
+압력 단계(SP2~SP5)는 설정 SPn_SOURCE(5-19 ③)를 따른다: 프로그램 값 = set=true·value SPn_MTORR(쓰고 되읽어 확인),
+장비 값 = set=false·value 비움(장비에 저장된 값을 고르고 읽은 값을 목표로). 기본값은 v1 과 같다(SP4 = 장비 값 — D4 만,
+SP2·SP3·SP5 = 프로그램 값). 단계를 넣을지 비교(WP < SP3·WP < SP2·WP > SP5)는 장비 값 단계면 장비에서 읽은 값(dev_sp)으로 하고,
+그 값을 모르면 TemplateError(SP_DEVICE_VALUE_UNKNOWN — 시작 거부).
 
 펼치기(expand): 블록 → process_steps.ProcessStep 목록(실행은 지금 StepRunner·드라이버 경로 그대로).
   스텝마다 block(블록 순번 — insts 의 번호)과 ref(공정 중 수정 항목 키 — 5-4 ③)를 단다.
@@ -191,8 +194,11 @@ BLOCK_DEFS: tuple = (
     BlockDef("pressure", "압력 설정", (
         P("sp", "int", "", required=True, min=1, max=5, desc="설정점 번호"),
         P("value", "float", "mTorr", None, min=0.0, max=1000.0, min_exclusive=True,
-          desc="비우면 SP2·SP3·SP4·SP5 는 SP2_MTORR·SP3_MTORR·SP4_MTORR·SP5_MTORR, SP1 은 필요(레시피 작업 압력)"),
-        P("set", "bool", default=True, desc="S{n} 쓰기(되읽기)"), P("select", "bool", default=True, desc="D{n} 선택(R7 확인)"),
+          desc="set 이면: 비우면 SP2·SP3·SP4·SP5 는 SP2_MTORR·SP3_MTORR·SP4_MTORR·SP5_MTORR, SP1 은 필요(레시피 작업 압력). "
+               "set=false 면 비워야 한다(장비에 저장된 값을 읽어 씀)"),
+        P("set", "bool", default=True, desc="S{n} 쓰기(되읽기). 끄면 장비에 저장된 값 — 선택(D{n})만 하고 도달 대기 목표는 "
+                                          "장비에서 읽은 값(R{n}·SP5 는 R10), 못 읽으면 그 단계 실패 SP_DEVICE_VALUE_UNKNOWN(5-19)"),
+        P("select", "bool", default=True, desc="D{n} 선택(R7 확인)"),
         P("wait", "bool", default=True, desc="도달 대기"),
         P("tol_ratio", "float", "비율", "cfg:PRESSURE_WAIT_TOL_RATIO", min=0.01, max=0.5),
         P("stable_sec", "float", "s", "cfg:PRESSURE_WAIT_STABLE_SEC", min=0.0, max=600.0),
@@ -297,8 +303,9 @@ _UI: Dict[str, tuple] = {
         "zero": ("영점 맞추기", "가스를 넣기 전에 MFC 유량·압력 영점을 맞춤", _ADV)}),
     "pressure": ("gas", "MFC 압력 설정점에 값을 쓰고 그 설정점으로 제어한 뒤, 압력이 들어올 때까지 기다립니다", ("sp", "value"), {
         "sp": ("설정점 번호", "1 = 작업 압력(SP1), 2·3·4·5 = 중간 단계 압력"),
-        "value": ("압력", "비우면 SP2·SP3·SP4·SP5 는 설정의 단계 압력. SP1 은 설정점에 값을 쓸 때 값이 필요"),
-        "set": ("설정점에 값 쓰기", "끄면 설정점에 들어 있는 값을 그대로 씀", _ADV),
+        "value": ("압력", "비우면 SP2·SP3·SP4·SP5 는 설정의 단계 압력. SP1 은 설정점에 값을 쓸 때 값이 필요. "
+                           "프로그램 값을 장비에 쓰지 않으면 비워 둠"),
+        "set": ("프로그램 값을 장비에 쓰기", "끄면 장비에 저장된 값을 그대로 쓰고, 그 값을 읽어 목표로 삼습니다"),
         "select": ("이 설정점으로 제어", "끄면 값만 써 두고 제어 설정점은 그대로", _ADV),
         "wait": ("도달 대기", "끄면 압력이 들어오기를 기다리지 않고 다음 블록으로"),
         "tol_ratio": ("허용 범위", "목표 대비 비율 — 0.1 이면 ±10 %. 비우면 설정값", _ADV),
@@ -425,8 +432,10 @@ def by_type() -> Dict[str, BlockDef]:
 class BRule:
     id: str
     blocks: tuple                      # 적용 블록 종류
-    kind: str                          # need(조건이면 key 값 필요) / device(설정 key 가 false 면 오류) / pulse_edge / warn
-    when: str                          # 조건 — "·" 로 이은 것이 모두 참: "<값>=true" · "<값>:num"(숫자) · "<값>^=<접두>" ·
+    kind: str                          # need(조건이면 key 값 필요) / empty(조건이면 key 값을 비워야 — 5-19) /
+                                       #   device(설정 key 가 false 면 오류) / pulse_edge / warn
+    when: str                          # 조건 — "·" 로 이은 것이 모두 참: "<값>=true" · "<값>=false"(5-19) · "<값>:num"(숫자) ·
+                                       #   "<값>^=<접두>" ·
                                        #   "sp∉spDefaultKey" · "0<<값><heaterRampMin". 빈 문자열 = 늘
     key: str                           # need = 값 이름, device·pulse_edge = 설정 키
     msg: str                           # 문구(앞에 "블록 <번호>(<종류>): ") — {값 이름}·{edge}(펄스 위반 문구)를 채운다
@@ -434,7 +443,7 @@ class BRule:
     @property
     def uses(self) -> tuple:
         """조건·문구가 쓰는 블록 값 이름 — 이 중 하나라도 빠졌거나(필수) 틀리면 규칙을 건너뛴다(그 값의 오류만 낸다)."""
-        names = re.findall(r"\{(\w+)\}", self.msg) + [re.split(r"=true|:num|\^=|∉|<heaterRampMin", c)[0].removeprefix("0<")
+        names = re.findall(r"\{(\w+)\}", self.msg) + [re.split(r"=true|=false|:num|\^=|∉|<heaterRampMin", c)[0].removeprefix("0<")
                                                        for c in filter(None, self.when.split("·"))]
         return tuple(dict.fromkeys(n for n in names if n != "edge"))
 
@@ -447,6 +456,8 @@ VALUE_RULES: tuple = (
     BRule("need_ar_flow", ("gas_intro",), "need", "ar=true", "ar_flow", "ar_flow: ar 이면 값 필요"),
     BRule("need_o2_flow", ("gas_intro",), "need", "o2=true", "o2_flow", "o2_flow: o2 이면 값 필요"),
     BRule("need_sp_value", ("pressure",), "need", "set=true·sp∉spDefaultKey", "value", "value: SP{sp} 이면 값 필요"),
+    BRule("device_sp_no_value", ("pressure",), "empty", "set=false", "value",
+          "value: 프로그램 값을 장비에 쓰지 않으면(set=false) 비워야 함 — 장비에 저장된 SP{sp} 값을 읽어 목표로 삼음"),
     BRule("heater_disabled", ("heater_ramp", "heater_wait", "heater_off"), "device", "", "HEATER_ENABLED",
           "히터: HEATER_ENABLED=false"),
     BRule("ig_disabled_base", ("base_wait",), "device", "", "IG_ENABLED",
@@ -511,6 +522,8 @@ def _when(when: str, out: Mapping[str, Any]) -> bool:
             ok = _num(v) and 0 < v < HEATER_RAMP_MIN
         elif c.endswith("=true"):
             ok = out[c[:-5]] is True
+        elif c.endswith("=false"):
+            ok = out[c[:-6]] is False
         elif c.endswith(":num"):
             ok = _num(out[c[:-4]])
         elif "^=" in c:
@@ -612,6 +625,8 @@ def _check_one(b: Any, path: str, cfg: Mapping[str, Any], depth: int, errs: list
             continue
         if r.kind == "need" and _empty(out[r.key]):
             errs.append(f"{pre}: {r.msg.format(**out)}")
+        elif r.kind == "empty" and not _empty(out[r.key]):
+            errs.append(f"{pre}: {r.msg.format(**out)}")
         elif r.kind == "device" and not cfg.get(r.key, True):
             errs.append(f"{pre}: {r.msg.format(**out)}")
         elif r.kind == "pulse_edge":
@@ -678,8 +693,40 @@ def uses_of(blocks: List[dict]) -> Dict[str, Any]:
 
 
 # ───────────── 기본 템플릿(v1 행) ─────────────
-def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bool, rfpulse_present: bool = True) -> List[dict]:
-    """v1 행 params(process_steps.row_to_params) → 기본 템플릿 블록 목록. v1 _build_steps(486-682)의 순서·조건 그대로."""
+SP_SOURCE_KEY = {2: "SP2_SOURCE", 3: "SP3_SOURCE", 4: "SP4_SOURCE", 5: "SP5_SOURCE"}   # 압력 설정점 값 출처(5-19 ③)
+SP_DEVICE_UNKNOWN = "SP_DEVICE_VALUE_UNKNOWN"
+
+
+class TemplateError(Exception):
+    """기본 템플릿을 만들 수 없음 — 장비 값 출처 단계의 장비 값을 모름(시작 거부, 5-19 ③)."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code, self.detail = code, detail
+
+
+def sp_device_text(n: int) -> str:
+    """장비 값을 모를 때 문구(시작 거부·그 단계 실패 — 웹 recipe.ts 와 같은 글)."""
+    return f"SP{n}: 장비에 저장된 값을 읽지 못함"
+
+
+def sp_from_device(cfg: Mapping[str, Any], n: int) -> bool:
+    """SPn 값 출처가 장비 값인가 — 설정이 없으면(옛 설정 묶음) 프로그램 값(예전 템플릿 그대로)."""
+    return str(cfg.get(SP_SOURCE_KEY[n], "program")) == "device"
+
+
+def template_device_sp(cfg: Mapping[str, Any], dev_sp: Optional[Mapping[int, Any]], n: int) -> float:
+    """장비 값 단계의 비교 값 — 모르면 TemplateError."""
+    v = (dev_sp or {}).get(n)
+    if v is None:
+        raise TemplateError(SP_DEVICE_UNKNOWN, sp_device_text(n))
+    return float(v)
+
+
+def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bool, rfpulse_present: bool = True,
+                    dev_sp: Optional[Mapping[int, Any]] = None) -> List[dict]:
+    """v1 행 params(process_steps.row_to_params) → 기본 템플릿 블록 목록. v1 _build_steps(486-682)의 순서·조건 그대로.
+    dev_sp = 장비에 저장된 설정점 값(mTorr, {번호: 값}) — 장비 값 출처 단계의 비교에만 쓴다(5-19 ③)."""
     B = lambda t, label="", stage="", **params: {"type": t, "params": params, "label": label, "stage": stage}
     channels, _ = channels_of(p)
     ar, o2 = 1 in channels, 2 in channels
@@ -697,9 +744,9 @@ def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bo
     out.append(B("gas_intro", ar=ar, ar_flow=float(p.get("ar_flow", default_flow) or 0.0) if ar else None,
                  o2=o2, o2_flow=float(p.get("o2_flow", default_flow) or 0.0) if o2 else None, zero=True))
     stab = int(round(cfg["GAS_STABILIZE_SEC"]))
-    # SP4: 설정 SP4_MTORR 를 S4 로 쓰고 R4 로 되읽은 뒤 D4(사용자 결정 2026-10-20 — v1 은 D4 만, 의도된 차이 SP4_FROM_CONFIG)
-    out.append(B("pressure", "SP4", "GAS_STABILIZE", sp=4, value=None, set=True, select=True, wait=False,
-                 tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
+    # SP4: 값 출처 SP4_SOURCE — 장비 값(기본, v1 과 같게 D4 만) / 프로그램 값(SP4_MTORR 를 S4 로 쓰고 R4 로 되읽은 뒤 D4)
+    out.append(B("pressure", "SP4", "GAS_STABILIZE", sp=4, value=None, set=not sp_from_device(cfg, 4), select=True,
+                 wait=False, tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
     out.append(B("wait", f"압력 안정화 대기({stab}초)", "GAS_STABILIZE", sec=stab, watch=None))
     guns = [g for g, k in (("g1", "use_g1"), ("g2", "use_g2")) if p.get(k)]
     if guns:
@@ -712,17 +759,21 @@ def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bo
                  rfp_duty=p.get("rf_pulse_duty") if rfp_w else None, wait=True, timeout_sec=None))
     # SP5(v1 a78b5ce·f5780ca): WP > SP5_MTORR(50) 일 때만 — SP5 값 쓰기(R10 되읽기)·선택 뒤 SP5_STABILIZE_SEC 고정 대기
     #   (압력 도달 판정 없음). WP 가 정확히 SP5_MTORR 이면 넣지 않는다(v1 과 같게). WP ≤ SP5_MTORR 의 블록 목록은 그대로.
-    sp5 = float(cfg["SP5_MTORR"])
+    #   장비 값 출처(SP5_SOURCE)면 비교도 장비에서 읽은 SP5 로, 블록은 set=false·값 비움.
+    dev5 = sp_from_device(cfg, 5)
+    sp5 = template_device_sp(cfg, dev_sp, 5) if dev5 else float(cfg["SP5_MTORR"])
     if sp1 > sp5:
         hold = int(round(cfg["SP5_STABILIZE_SEC"]))
-        out.append(B("pressure", "Stage0(SP5)", "PRESSURE_SP5", sp=5, value=sp5, set=True, select=True, wait=False,
-                     tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
+        out.append(B("pressure", "Stage0(SP5)", "PRESSURE_SP5", sp=5, value=None if dev5 else sp5, set=not dev5, select=True,
+                     wait=False, tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
         out.append(B("wait", f"Stage0(SP5): 압력 안정화 대기({hold}초)", "PRESSURE_SP5", sec=hold, watch=None))
-    sp3, sp2 = float(cfg["SP3_MTORR"]), float(cfg["SP2_MTORR"])
+    dev = {n: sp_from_device(cfg, n) for n in (3, 2)}
+    sp3 = template_device_sp(cfg, dev_sp, 3) if dev[3] else float(cfg["SP3_MTORR"])
+    sp2 = template_device_sp(cfg, dev_sp, 2) if dev[2] else float(cfg["SP2_MTORR"])
     for n, spv, lab in ((3, sp3, "Stage1(SP3)"), (2, sp2, "Stage2(SP2)")):
         if sp1 < spv:
-            out.append(B("pressure", lab, f"PRESSURE_SP{n}", sp=n, value=spv, set=True, select=True, wait=True,
-                         tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
+            out.append(B("pressure", lab, f"PRESSURE_SP{n}", sp=n, value=None if dev[n] else spv, set=not dev[n], select=True,
+                         wait=True, tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
     out.append(B("pressure", f"Stage3(SP1={sp1:.2f})", "PRESSURE_SP1", sp=1, value=sp1, set=True, select=True, wait=True,
                  tol_ratio=None, stable_sec=None, timeout_sec=None, on_timeout=None))
     dcd = int(cfg["DC_POWER_DELAY_SEC"])
@@ -865,7 +916,9 @@ def _expand_block(ctx: _Ctx, b: dict, no: str) -> None:
     elif t == "pressure":
         n = int(p["sp"])
         v = p["value"]
-        if _empty(v) and n in SP_DEFAULT_KEY:
+        if p["set"] is False:                            # 장비에 저장된 값(5-19 ③) — 쓰지 않고, 도달 목표는 그때 읽은 장비 값
+            v = None
+        elif _empty(v) and n in SP_DEFAULT_KEY:
             v = c[SP_DEFAULT_KEY[n]]
         v = None if _empty(v) else float(v)
         ref = "mfc.wp" if n == 1 else ""
@@ -881,11 +934,15 @@ def _expand_block(ctx: _Ctx, b: dict, no: str) -> None:
                          (f"SP{n}_SET", {"value": v}), ref=ref))
         if p["select"]:
             out.append(S("MFC_CMD", f"SP{n} ON" if bare else f"{tag}: SP{n}_ON", (f"SP{n}_ON", {})))
-        if p["wait"] and v is not None:
+        dev = p["set"] is False
+        if p["wait"] and (v is not None or dev):
             a = {"target": v, "tolerance_ratio": tol, "stable_sec": stable, "timeout_sec": to, "fail_on_timeout": fail}
+            if dev:
+                a["device_sp"] = n                       # 목표 = 그때 장비에서 읽은 SPn(드라이버 sp_device) — 모르면 그 단계 실패
             if fail and n != 1:
                 a["fail_code"] = "PRESSURE_WAIT_TIMEOUT"
-            out.append(S("MFC_CMD", f"{tag}: 압력 도달 대기 (target={v:.2f}, ±{tol * 100:.0f}%, timeout={int(to)}s"
+            tgt = f"장비 값 SP{n}" if dev else f"{v:.2f}"
+            out.append(S("MFC_CMD", f"{tag}: 압력 도달 대기 (target={tgt}, ±{tol * 100:.0f}%, timeout={int(to)}s"
                          + (", FAIL ON TIMEOUT" if fail else "") + ")", ("WAIT_PRESSURE", a), ref=ref))
     elif t == "valve":
         cmd = {"open": "VALVE_OPEN", "close": "VALVE_CLOSE", "hold": "VALVE_HOLD"}[p["action"]]

@@ -113,7 +113,10 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
             "지금 목표는 mfc.sp_sel_mtorr"),
     _f("sp_sel_mtorr", F, "mTorr", "압력 설정", ".2f", "core(선택된 설정점에 쓴 값)",
        desc="지금 선택된 설정점(사용 중 설정점 1~5)에 마지막으로 쓴 값 — SP1·SP2·SP3·SP5 는 되읽기 확인값, SP4 는 쓴 SP4_MTORR. "
-            "선택이 없으면(밸브 직접 조작) 값 없음(5-18)"),
+            "선택이 없으면(밸브 직접 조작) 값 없음(5-18). 5-19: 이번 연결에서 쓴 값이 없으면 장비에서 읽은 값"),
+    *(_f(f"sp{n}_dev_mtorr", F, "mTorr", f"SP{n} 장비 값", ".2f", f"R{10 if n == 5 else n}(parse_sp_reply)", detail=True,
+         desc=f"장비에 저장된 SP{n} 값 — 연결 직후·선택할 때·쓰고 확인한 뒤·공정 밖 주기(MFC_SP_REFRESH_SEC)에 읽는다. "
+              "못 읽었거나 형식이 다르면 값 없음(5-19)") for n in (1, 2, 3, 4, 5)),
 ), desc="GPC3000")
 
 DC_BLOCK = DeviceBlock("dc", "DC Power", (

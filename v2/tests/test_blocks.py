@@ -24,7 +24,7 @@ from v2.tests.test_safety_engine import CFG, H
 C0 = defaults(P.PARAMS)
 
 
-# ───────────── 5-3 스텝 빌더 사본(기준 — 5-4 ④ 의 SP4_SET 만 다르다) ─────────────
+# ───────────── 5-3 스텝 빌더 사본(기준 — 5-19 ③ 부터 SP4 도 같다: 기본 SP4_SOURCE = 장비 값) ─────────────
 def REF(p, cfg, *, ig_enabled, rfpulse_present=True):
     channels, buttons = channels_of(p)
     default_flow = float(p.get("mfc_flow", 0.0) or 0.0)
@@ -119,10 +119,7 @@ def test_template_expands_to_same_steps_as_5_3_builder(ig, rfpe):
         p = row_to_params(ok, cfg)
         key = lambda ss: [(s.unit(), s.message, s.state, s.polling) for s in ss]
         new = build_process_steps(p, cfg, ig_enabled=ig, rfpulse_present=rfpe)
-        i = [k for k, s in enumerate(new) if s.params and s.params[0] == "SP4_ON"][0]
-        sp4 = new.pop(i - 1)                                               # 의도된 차이 SP4_FROM_CONFIG(5-4 ④)
-        assert (sp4.params, sp4.state, sp4.message) == (("SP4_SET", {"value": cfg["SP4_MTORR"]}), "GAS_STABILIZE",
-                                                        "SP4_SET=30.00 설정")
+        assert not any(s.params and s.params[0] == "SP4_SET" for s in new)   # 5-19 ③: SP4 기본 = 장비 값(v1 과 같게 D4 만)
         assert key(new) == key(REF(p, cfg, ig_enabled=ig, rfpulse_present=rfpe)), row
         n += 1
     assert n > 1000

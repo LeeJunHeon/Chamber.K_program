@@ -106,7 +106,7 @@ def test_bundle_has_what_block_check_needs():
             if isinstance(p["default"], str) and p["default"].startswith("cfg:"):
                 assert p["default"][4:] in params
     for r in b["valueRules"]:
-        assert r["kind"] in ("need", "warn") or r["key"] in params
+        assert r["kind"] in ("need", "empty", "warn") or r["key"] in params
     assert set(G.CFG_KEYS) <= params
 
 

@@ -3273,6 +3273,414 @@
    ]
   },
   {
+   "name": "pressure_device_value",
+   "covers": [],
+   "blocks": [
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "set": false
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "set": false,
+      "wait": false
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    }
+   ],
+   "cfg": {
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "DC_MAX_POWER": 500.0,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 6.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_SOAK_TIME_SEC": 60,
+    "HEATER_SOAK_TOLERANCE": 2.0,
+    "IG_ENABLED": true,
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "PRESSURE_STAGE_TIMEOUT_SEC": 180.0,
+    "PRESSURE_WAIT_STABLE_SEC": 6.0,
+    "PRESSURE_WAIT_TOL_RATIO": 0.1,
+    "PRE_POWER_OFF_SETTLE_SEC": 1.0,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_ENABLED": false,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RF_MAX_POWER": 600.0,
+    "SP1_TIMEOUT_SEC": 300.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "SP4_MTORR": 30.0,
+    "SP5_MTORR": 50.0,
+    "HEATER_SHUTTER_SETTLE_TOL_C": 2.0,
+    "HEATER_SHUTTER_SETTLE_SEC": 60.0,
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0,
+    "HEATER_SHUTTER_SETTLE_FAIL_ACTION": "proceed"
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "clean": [
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 3,
+      "value": null,
+      "set": false,
+      "select": true,
+      "wait": true,
+      "tol_ratio": "cfg:PRESSURE_WAIT_TOL_RATIO",
+      "stable_sec": "cfg:PRESSURE_WAIT_STABLE_SEC",
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3"
+    },
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": false,
+      "select": true,
+      "wait": false,
+      "tol_ratio": "cfg:PRESSURE_WAIT_TOL_RATIO",
+      "stable_sec": "cfg:PRESSURE_WAIT_STABLE_SEC",
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "SP4",
+     "stage": "GAS_STABILIZE"
+    }
+   ],
+   "errors": [],
+   "warnings": [],
+   "uses": {
+    "dc": false,
+    "rf": false,
+    "rfp": false,
+    "heater": false,
+    "ig": false,
+    "ar": false,
+    "o2": false
+   },
+   "expanded": [
+    {
+     "no": "1",
+     "type": "pressure",
+     "label": "Stage1(SP3)",
+     "stage": "PRESSURE_SP3",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "sp": 3,
+      "value": null,
+      "set": false,
+      "select": true,
+      "wait": true,
+      "tol_ratio": 0.1,
+      "stable_sec": 6.0,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "steps": [
+      {
+       "action": "MFC_CMD",
+       "message": "Stage1(SP3): SP3_ON",
+       "params": [
+        "SP3_ON",
+        {}
+       ]
+      },
+      {
+       "action": "MFC_CMD",
+       "message": "Stage1(SP3): 압력 도달 대기 (target=장비 값 SP3, ±10%, timeout=180s)",
+       "params": [
+        "WAIT_PRESSURE",
+        {
+         "target": null,
+         "tolerance_ratio": 0.1,
+         "stable_sec": 6.0,
+         "timeout_sec": 180.0,
+         "fail_on_timeout": false,
+         "device_sp": 3
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "no": "2",
+     "type": "pressure",
+     "label": "SP4",
+     "stage": "GAS_STABILIZE",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "sp": 4,
+      "value": null,
+      "set": false,
+      "select": true,
+      "wait": false,
+      "tol_ratio": 0.1,
+      "stable_sec": 6.0,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "steps": [
+      {
+       "action": "MFC_CMD",
+       "message": "SP4 ON",
+       "params": [
+        "SP4_ON",
+        {}
+       ]
+      }
+     ]
+    },
+    {
+     "no": "3",
+     "type": "end_stop",
+     "label": "자동 끝 정지",
+     "stage": "STOPPING",
+     "iter": null,
+     "auto": true,
+     "params": {
+      "skip": null
+     },
+     "steps": [
+      {
+       "action": "END_STOP",
+       "message": "정상 끝 정지 순서",
+       "internal": true,
+       "spec": {
+        "skip": []
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "err_pressure_device_with_value",
+   "covers": [],
+   "blocks": [
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 2,
+      "set": false,
+      "value": 5.0
+     }
+    }
+   ],
+   "cfg": {
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "DC_MAX_POWER": 500.0,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 6.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_SOAK_TIME_SEC": 60,
+    "HEATER_SOAK_TOLERANCE": 2.0,
+    "IG_ENABLED": true,
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "PRESSURE_STAGE_TIMEOUT_SEC": 180.0,
+    "PRESSURE_WAIT_STABLE_SEC": 6.0,
+    "PRESSURE_WAIT_TOL_RATIO": 0.1,
+    "PRE_POWER_OFF_SETTLE_SEC": 1.0,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_ENABLED": false,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RF_MAX_POWER": 600.0,
+    "SP1_TIMEOUT_SEC": 300.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "SP4_MTORR": 30.0,
+    "SP5_MTORR": 50.0,
+    "HEATER_SHUTTER_SETTLE_TOL_C": 2.0,
+    "HEATER_SHUTTER_SETTLE_SEC": 60.0,
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0,
+    "HEATER_SHUTTER_SETTLE_FAIL_ACTION": "proceed"
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "clean": null,
+   "errors": [
+    "블록 1(pressure): value: 프로그램 값을 장비에 쓰지 않으면(set=false) 비워야 함 — 장비에 저장된 SP2 값을 읽어 목표로 삼음"
+   ],
+   "warnings": [],
+   "uses": null,
+   "expanded": null
+  },
+  {
+   "name": "pressure_sp1_device",
+   "covers": [],
+   "blocks": [
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "set": false
+     }
+    }
+   ],
+   "cfg": {
+    "BASE_PRESSURE_MAX_TORR": 0.001,
+    "BASE_PRESSURE_MIN_TORR": 1e-09,
+    "DC_MAX_POWER": 500.0,
+    "HEATER_ENABLED": true,
+    "HEATER_MAX_TEMP": 700.0,
+    "HEATER_RAMP_RATE_C_PER_MIN": 6.0,
+    "HEATER_RECIPE_RAMP_MAX_C_PER_MIN": 60.0,
+    "HEATER_SOAK_TIME_SEC": 60,
+    "HEATER_SOAK_TOLERANCE": 2.0,
+    "IG_ENABLED": true,
+    "MFC_AR_FS_SCCM": 100.0,
+    "MFC_O2_FS_SCCM": 100.0,
+    "PRESSURE_STAGE_TIMEOUT_SEC": 180.0,
+    "PRESSURE_WAIT_STABLE_SEC": 6.0,
+    "PRESSURE_WAIT_TOL_RATIO": 0.1,
+    "PRE_POWER_OFF_SETTLE_SEC": 1.0,
+    "RFPULSE_DUTY_MAX": 99,
+    "RFPULSE_DUTY_MIN": 1,
+    "RFPULSE_ENABLED": false,
+    "RFPULSE_MAX_POWER": 600.0,
+    "RFPULSE_PULSE_FREQ_MAX_HZ": 30000,
+    "RFPULSE_PULSE_FREQ_MIN_HZ": 1,
+    "RFPULSE_PULSE_MIN_EDGE_US": 16.0,
+    "RF_MAX_POWER": 600.0,
+    "SP1_TIMEOUT_SEC": 300.0,
+    "SP2_MTORR": 5.0,
+    "SP3_MTORR": 15.0,
+    "SP4_MTORR": 30.0,
+    "SP5_MTORR": 50.0,
+    "HEATER_SHUTTER_SETTLE_TOL_C": 2.0,
+    "HEATER_SHUTTER_SETTLE_SEC": 60.0,
+    "HEATER_SHUTTER_SETTLE_MAX_SEC": 900.0,
+    "HEATER_SHUTTER_SETTLE_FAIL_ACTION": "proceed"
+   },
+   "igEnabled": true,
+   "rfpulsePresent": false,
+   "clean": [
+    {
+     "type": "pressure",
+     "params": {
+      "sp": 1,
+      "value": null,
+      "set": false,
+      "select": true,
+      "wait": true,
+      "tol_ratio": "cfg:PRESSURE_WAIT_TOL_RATIO",
+      "stable_sec": "cfg:PRESSURE_WAIT_STABLE_SEC",
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "label": "",
+     "stage": ""
+    }
+   ],
+   "errors": [],
+   "warnings": [],
+   "uses": {
+    "dc": false,
+    "rf": false,
+    "rfp": false,
+    "heater": false,
+    "ig": false,
+    "ar": false,
+    "o2": false
+   },
+   "expanded": [
+    {
+     "no": "1",
+     "type": "pressure",
+     "label": "",
+     "stage": "PRESSURE_SP1",
+     "iter": null,
+     "auto": false,
+     "params": {
+      "sp": 1,
+      "value": null,
+      "set": false,
+      "select": true,
+      "wait": true,
+      "tol_ratio": 0.1,
+      "stable_sec": 6.0,
+      "timeout_sec": null,
+      "on_timeout": null
+     },
+     "steps": [
+      {
+       "action": "MFC_CMD",
+       "message": "SP1: SP1_ON",
+       "params": [
+        "SP1_ON",
+        {}
+       ]
+      },
+      {
+       "action": "MFC_CMD",
+       "message": "SP1: 압력 도달 대기 (target=장비 값 SP1, ±10%, timeout=300s, FAIL ON TIMEOUT)",
+       "params": [
+        "WAIT_PRESSURE",
+        {
+         "target": null,
+         "tolerance_ratio": 0.1,
+         "stable_sec": 6.0,
+         "timeout_sec": 300.0,
+         "fail_on_timeout": true,
+         "device_sp": 1
+        }
+       ],
+       "ref": "mfc.wp"
+      }
+     ]
+    },
+    {
+     "no": "2",
+     "type": "end_stop",
+     "label": "자동 끝 정지",
+     "stage": "STOPPING",
+     "iter": null,
+     "auto": true,
+     "params": {
+      "skip": null
+     },
+     "steps": [
+      {
+       "action": "END_STOP",
+       "message": "정상 끝 정지 순서",
+       "internal": true,
+       "spec": {
+        "skip": []
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
    "name": "heater_settle_defaults",
    "covers": [
     "defaults"

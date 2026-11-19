@@ -103,6 +103,11 @@ CASES: List[tuple] = [
     ("pressure_sp5_stage", [B("pressure", sp=5, label="Stage0(SP5)", stage="PRESSURE_SP5", wait=False),
                             B("wait", sec=60, label="Stage0(SP5): 압력 안정화 대기(60초)", stage="PRESSURE_SP5"),
                             B("pressure", sp=5, value=45.0)], {"SP5_MTORR": 40.0}, ["defaults"]),
+    # 장비 값(5-19 ③) — set=false 면 쓰지 않고 선택만, 도달 대기 목표 = 장비에서 읽은 값(device_sp), 값을 넣으면 오류
+    ("pressure_device_value", [B("pressure", sp=3, set=False, label="Stage1(SP3)", stage="PRESSURE_SP3"),
+                               B("pressure", sp=4, set=False, wait=False, label="SP4", stage="GAS_STABILIZE")], {}, []),
+    ("err_pressure_device_with_value", [B("pressure", sp=2, set=False, value=5.0)], {}, []),
+    ("pressure_sp1_device", [B("pressure", sp=1, set=False)], {}, []),
     # 셔터 전 히터 정착(5-15) — 비우면 설정값, 상한 0 이면 할 일 없음(NOP)
     ("heater_settle_defaults", [B("heater_ramp", target_c=300.0), B("heater_settle"), B("main", sec=10.0)], {}, ["defaults"]),
     ("heater_settle_custom", [B("heater_ramp", target_c=300.0),

@@ -134,11 +134,12 @@ def heater_used(p: Dict[str, Any]) -> bool:
     return bool(p.get("use_heater")) and float(p.get("heater_temp") or 0.0) > 0.0
 
 
-def build_process_steps(p: Dict[str, Any], cfg: Dict[str, Any], *, ig_enabled: bool, rfpulse_present: bool = True
-                        ) -> List[ProcessStep]:
-    """v1 _build_steps(486-682) — 같은 순서·조건. 기본 템플릿 블록(blocks.template_blocks)을 펼친 것에서 블록 제어 스텝을 뺀 것."""
+def build_process_steps(p: Dict[str, Any], cfg: Dict[str, Any], *, ig_enabled: bool, rfpulse_present: bool = True,
+                        dev_sp: Optional[Dict[int, float]] = None) -> List[ProcessStep]:
+    """v1 _build_steps(486-682) — 같은 순서·조건. 기본 템플릿 블록(blocks.template_blocks)을 펼친 것에서 블록 제어 스텝을 뺀 것.
+    dev_sp = 장비에 저장된 설정점 값(장비 값 출처 단계의 비교, 5-19 ③)."""
     from v2.chk import blocks as BK
-    bl = BK.template_blocks(p, cfg, ig_enabled=ig_enabled, rfpulse_present=rfpulse_present)
+    bl = BK.template_blocks(p, cfg, ig_enabled=ig_enabled, rfpulse_present=rfpulse_present, dev_sp=dev_sp)
     steps, _ = BK.expand(bl, cfg, ig_enabled=ig_enabled, rfpulse_present=rfpulse_present)
     return [s for s in steps if not s.internal]
 
@@ -223,6 +224,7 @@ class StepRunner:
         self.finished = False
         self.failed: Optional[str] = None
         self.cancelled = False
+        self.sp_expect: Dict[int, float] = {}          # 기본 템플릿의 장비 값 단계 → 만들 때 쓴 장비 값(5-19 ③, 공정 엔진이 넣는다)
         # 기록 번호는 블록 제어 스텝(internal)을 빼고 센다 — v1 과 같은 "[k/N]"
         self._number()
 
@@ -395,10 +397,25 @@ class StepRunner:
                 return ("fail", "MFC_CMD_FAILED")
             if cmd == "FLOW_ON":
                 return self._flow_stable(int(a["channel"]), cur, view, now)
+            if cmd.endswith("_ON") and cmd.startswith("SP") and int(cmd[2]) in self.sp_expect:
+                self._check_sp_expect(int(cmd[2]))
             return "next"
         if now - cur.t0 > MFC_CMD_GUARD_S:
             return ("fail", "MFC_CMD_FAILED")
         return "wait"
+
+    def _check_sp_expect(self, n: int) -> None:
+        """장비 값 단계에 들어와 다시 읽은 SPn 이 기본 템플릿을 만들 때 쓴 값과 MFC_SP_VERIFY_TOL 보다 다르면 경고 —
+        목표는 새로 읽은 값(WAIT_PRESSURE 가 그때 장비 값을 본다, 5-19 ③)."""
+        old, new = self.sp_expect[n], (getattr(self.mfc, "sp_device", None) or {}).get(n)
+        if new is None:
+            self._emit(StepEvent("warn", f"SP{n}: 단계에 들어와 장비 값을 다시 읽지 못함(시작 때 {old:.2f} mTorr)",
+                                 "SP_DEVICE_VALUE_UNKNOWN", self.idx))
+            return
+        tol = self.mfc.pct_to_mtorr(float(self.cfg["MFC_SP_VERIFY_TOL"])) if self.cfg is not None else 0.0
+        if abs(float(new) - float(old)) > tol + 1e-9:
+            self._emit(StepEvent("warn", f"SP{n}: 장비 값이 시작 때 {old:.2f} → 지금 {float(new):.2f} mTorr — 지금 값을 목표로",
+                                 "SP_DEVICE_CHANGED", self.idx))
 
     def _flow_stable(self, ch: int, cur: _Cur, view, now: float):
         """FLOW ON 유량 안정화(v1 _check_flow_stabilization) — 한 번이라도 허용 범위 안이면 통과, 한도를 넘으면 실패."""
@@ -418,7 +435,15 @@ class StepRunner:
         return "wait"
 
     def _wait_pressure(self, s: ProcessStep, a: Dict[str, Any], cur: _Cur, view, now: float):
-        target = float(self.resolve(s, a["target"]))
+        if a.get("device_sp"):                              # 장비에 저장된 값이 목표(5-19 ③) — 단계에 들어와 읽은 값
+            n = int(a["device_sp"])
+            v = (getattr(self.mfc, "sp_device", None) or {}).get(n)
+            if v is None:
+                self._emit(StepEvent("warn", f"SP{n}: 장비에 저장된 값을 읽지 못함", "SP_DEVICE_VALUE_UNKNOWN", self.idx))
+                return ("fail", "SP_DEVICE_VALUE_UNKNOWN")
+            target = float(v)
+        else:
+            target = float(self.resolve(s, a["target"]))
         if target <= 0:
             return "next"
         if cur.persist is None or cur.extra.get("target") != target:

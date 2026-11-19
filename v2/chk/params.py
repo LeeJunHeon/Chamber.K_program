@@ -33,7 +33,8 @@ _COM = r"COM[1-9][0-9]{0,2}"
 
 def _p(key, group, label, unit, type_, default, lo=None, hi=None, *, safety=M, apply=IDLE,
        scope=Scope.PROCESS, role=None, desc="", enum=None, pattern=None, v1_key=None,
-       v1_default=None, src=_JSON, pending=False, note="", v1_period=None, locked=False, choices=None) -> ParamDef:
+       v1_default=None, src=_JSON, pending=False, note="", v1_period=None, locked=False, choices=None,
+       enum_labels=None) -> ParamDef:
     if choices is not None:                     # 허용 숫자 목록 — 범위(min·max)는 목록의 양 끝(목록을 모르는 화면도 범위는 맞게)
         lo, hi = min(choices), max(choices)
     if role is None:
@@ -42,7 +43,8 @@ def _p(key, group, label, unit, type_, default, lo=None, hi=None, *, safety=M, a
                     default=default, min=lo, max=hi, enum=enum, pattern=pattern, safety=safety,
                     apply=apply, scope=scope, role=role, v1_key=v1_key, v1_default=v1_default,
                     v1_source=src, pending_confirm=pending, note=note, v1_period_s=v1_period, web_locked=locked,
-                    choices=tuple(choices) if choices is not None else None)
+                    choices=tuple(choices) if choices is not None else None,
+                    enum_labels=tuple(enum_labels) if enum_labels is not None else None)
 
 
 def _inst(key, label, type_, default, *, desc="", pattern=None, lo=None, hi=None, enum=None,
@@ -159,6 +161,9 @@ PARAMS: tuple = (
           src="device/MFC.py max_attempts=5 (FLOW_SET·SPn_SET·SPn_ON·밸브)",
           desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 이 횟수 안에 되읽기가 맞지 않으면 그 명령 실패(VERIFY_MISMATCH). "
                "횟수 × 대기가 공정 스텝 한도(60 s)를 넘지 않게 상한 10"),
+    _inst("MFC_SP_REFRESH_SEC", "MFC 장비 설정점 값 다시 읽기 주기", I, 60, lo=0, hi=3600, unit="s", src="v2 (5-19 ③ — v1 없음)",
+          desc="공정이 돌지 않는 동안 장비에 저장된 설정점 값(R1~R4·R10)을 이 주기로 다시 읽는다(한 초에 하나 — 설정 명령·읽기 "
+               "마감에 양보). 0 이면 하지 않는다(연결 직후·설정점을 고를 때만 읽음). PC 쪽 설정이다(장비 쪽에 맞출 값 없음)"),
     _inst("MFC_LINK_RETRY_MS", "MFC 재연결 대기 중 다시 내는 간격", I, 1000, lo=200, hi=5000, unit="ms",
           src="v2 (4-2 drivers/mfc.py LINK_RETRY_S, v1 은 큐에서 기다림)",
           desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 포트가 끊긴 동안 설정 명령을 이 간격으로 다시 낸다(공정 스텝 한도 안에서)"),
@@ -597,18 +602,32 @@ PARAMS: tuple = (
     _p("GAS_STABILIZE_SEC", "process", "SP4 ON 뒤 압력 안정화", "s", F, 60.0, 0.0, 600.0,
        src="controller/process_controller.py:577"),
     _p("SP3_MTORR", "process", "압력 1단계(SP3)", "mTorr", F, 15.0, 1.0, 100.0,
-       src="controller/process_controller.py:619", desc="WP < 이 값일 때만 거친다"),
+       src="controller/process_controller.py:619",
+       desc="WP < 이 값일 때만 거친다. 값 출처(SP3_SOURCE)가 프로그램 값일 때 장비에 쓰는 값(장비 값이면 장비에서 읽은 값으로 비교)"),
     _p("SP2_MTORR", "process", "압력 2단계(SP2)", "mTorr", F, 5.0, 0.5, 100.0,
-       src="controller/process_controller.py:623"),
+       src="controller/process_controller.py:623",
+       desc="WP < 이 값일 때만 거친다. 값 출처(SP2_SOURCE)가 프로그램 값일 때 장비에 쓰는 값"),
     _p("SP5_MTORR", "process", "압력 0단계(SP5)", "mTorr", F, 50.0, 1.0, 1000.0,
        src="controller/process_controller.py (a78b5ce — 고정값 50.0)",
-       desc="WP > 이 값일 때만 거친다: SP4 → 파워 → SP5(이 값) 설정·선택 → SP5_STABILIZE_SEC 고정 대기 → SP1(WP)"),
+       desc="WP > 이 값일 때만 거친다: SP4 → 파워 → SP5(이 값) 설정·선택 → SP5_STABILIZE_SEC 고정 대기 → SP1(WP). "
+            "값 출처(SP5_SOURCE)가 프로그램 값일 때 장비에 쓰는 값(장비 값이면 장비에서 읽은 값으로 비교)"),
     _p("SP5_STABILIZE_SEC", "process", "SP5 ON 뒤 고정 대기", "s", F, 60.0, 0.0, 600.0,
        src="controller/process_controller.py (f5780ca — 고정값 60 s)",
        desc="SP5 단계는 압력 도달 판정 없이 이 시간만 기다린다"),
+    # 압력 설정점 값 출처(5-19 ③) — 단계마다 프로그램 값(SPn_MTORR 를 장비에 쓰고 되읽음)을 쓸지, 장비에 저장된 값을 그대로 쓸지.
+    # 기본값은 v1 과 같게: SP4 = 장비 값(v1 은 D4 만), SP2·SP3·SP5 = 프로그램 값(v1 이 값을 써서 확인). 장비 값이면 기본 템플릿이
+    # 그 단계를 set=false·값 비움으로 만들고, 단계를 넣을지 비교(WP < SP3·WP < SP2·WP > SP5)도 장비에서 읽은 값으로 한다.
+    *(_p(f"SP{n}_SOURCE", "process", f"SP{n} 값 출처", "", E, "device" if n == 4 else "program",
+         enum=("program", "device"), enum_labels=(("program", "프로그램 값"), ("device", "장비 값")),
+         src="controller/process_controller.py (v1 — SP4 는 D4 만, SP2·SP3·SP5 는 값을 써서 확인)" if n != 4 else
+             "controller/process_controller.py (v1 — 가스 안정화 SP4 ON 은 D4 만)",
+         desc=f"프로그램 값 = 설정 SP{n}_MTORR 를 장비에 쓰고 되읽어 확인한 뒤 고름 / 장비 값 = 쓰지 않고 장비에 저장된 SP{n} 을 "
+              "고르고 읽은 값을 목표·비교에 씀(못 읽으면 시작 거부). 기본은 v1 과 같게"
+              + (" — v1 은 SP4 를 쓰지 않음" if n == 4 else "")) for n in (2, 3, 4, 5)),
     _p("SP4_MTORR", "process", "가스 안정화 설정점(SP4)", "mTorr", F, 30.0, 0.5, 1000.0,
        src="v2 (10/20 bench 장비 저장값 S4 3.00 %FS = 30 mTorr — v1 은 S4 를 쓰지 않음)",
-       desc="기본 템플릿의 가스 안정화 단계가 S4 로 쓰고 R4 로 되읽은 뒤 D4(사용자 결정 2026-10-20)"),
+       desc="값 출처(SP4_SOURCE)가 프로그램 값일 때 기본 템플릿의 가스 안정화 단계가 S4 로 쓰고 R4 로 되읽은 뒤 D4"
+            "(장비 값이 기본 — v1 과 같게 D4 만)"),
     _p("PRESSURE_WAIT_TOL_RATIO", "process", "압력 도달 허용 비율", "비율", F, 0.10, 0.01, 0.5,
        src="controller/process_controller.py:105"),
     _p("PRESSURE_WAIT_STABLE_SEC", "process", "압력 도달 지속 시간", "s", F, 6.0, 1.0, 120.0,
@@ -669,7 +688,7 @@ COMM_GROUPS: tuple = (
                   "PLC_TXN_TIMEOUT_MS", "PLC_WRITE_DEADLINE_MS", "PLC_RETRY_COUNT", "PLC_RETRY_DELAY_MS",
                   "PLC_READ_DEADLINE_MS")),
     ("comm_mfc", ("MFC_PORT", "MFC_BAUD", "MFC_FAIL_STREAK", "MFC_CMD_GAP_MS", "MFC_QUERY_TIMEOUT_MS",
-                  "MFC_QUERY_RETRIES", "MFC_VERIFY_RETRY_MS", "MFC_VERIFY_TRIES", "MFC_LINK_RETRY_MS",
+                  "MFC_QUERY_RETRIES", "MFC_VERIFY_RETRY_MS", "MFC_VERIFY_TRIES", "MFC_LINK_RETRY_MS", "MFC_SP_REFRESH_SEC",
                   "MFC_READ_PLAN", "MFC_READ_DEADLINE_MS")),
     ("comm_dc", ("DC_PORT", "DC_BAUD", "DC_DELIMITER", "DC_FAIL_STREAK", "DC_WRITE_QUERY_GAP_MS", "DC_START_GAP_MS",
                  "DC_STEP_TIMEOUT_MS", "DC_CURR_WRITE_DELAY_MS", "DC_READ_DEADLINE_MS")),
