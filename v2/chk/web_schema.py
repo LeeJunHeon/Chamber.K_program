@@ -51,6 +51,7 @@
                 스냅샷 mfc.sp_sel_mtorr "압력 설정"(지금 선택된 설정점 sp_active 1~5 에 마지막으로 쓴 값 — SP1·SP2·SP3·SP5 는 되읽기
                 확인값, SP4 는 쓴 SP4_MTORR, 선택이 없으면 값 없음 — 화면의 압력 목표). mfc.sp_mtorr 는 뜻 그대로(SP1 확인값)·
                 이름 "작업 압력 설정(SP1)"·detail
+                버전 17(5-19): 설정 MFC_FLOW_STABLE_TIMEOUT_SEC 기본 30 → 100 s·범위 5~600(v1 563f772 MFC_STABILIZATION_TIMEOUT_S)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -88,7 +89,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 16
+EXPORT_VERSION = 17
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (

@@ -54,10 +54,13 @@ def test_flow_on_waits_until_flow_is_within_tolerance():
 
 
 def test_flow_on_fails_after_stabilize_timeout():
+    """v1 563f772: 시도 횟수(30회) 대신 시간 — MFC_STABILIZATION_TIMEOUT_S 100 s(v2 MFC_FLOW_STABLE_TIMEOUT_SEC)."""
     r = _flow_runner()
-    for t in range(0, 31):
+    for t in range(0, 100):
         r.tick(_v(t, 0.0), float(t))
-    assert r.failed == "FLOW_STABILIZE_TIMEOUT"              # v1 "유량 안정화 시간 초과" → 공정 중단
+        assert not r.failed, t                               # 30 s(예전 v1)에는 아직 실패가 아니다
+    r.tick(_v(100, 0.0), 100.0)
+    assert r.failed == "FLOW_STABILIZE_TIMEOUT"              # v1 "유량 안정화 시간 초과(100초)" → 공정 중단
 
 
 # ───────── 행 끝 정지 순서 중의 STOP·중단·ALL STOP ─────────

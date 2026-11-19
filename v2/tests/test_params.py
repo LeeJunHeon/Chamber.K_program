@@ -42,8 +42,9 @@ def _v1_json() -> dict:
     return {k: v for k, v in data.items() if not k.startswith("//")}
 
 
-def test_v1_json_has_118_entries():
-    assert len(_v1_json()) == 118          # 5-17: main(12ecc2d) 병합 뒤 — 히터 제어 구조 15개 + MFC 상태 기록 4개
+def test_v1_json_has_119_entries():
+    assert len(_v1_json()) == 119          # 5-17: main(12ecc2d) 병합 뒤 118(히터 제어 구조 15개 + MFC 상태 기록 4개),
+    #                                        5-19: main(563f772) + MFC_STABILIZATION_TIMEOUT_S
 
 
 def test_every_v1_json_key_is_param_or_dropped():
@@ -190,7 +191,7 @@ def test_count_params_converted_to_seconds():
                 "PRESSURE_WAIT_STABLE_COUNT"):
         assert old not in keys
     conv = {p.key: (p.v1_default, p.v1_period_s, p.default) for p in P.PARAMS if p.v1_period_s}
-    assert len(conv) == 13                       # + MFC_FLOW_STABLE_TIMEOUT_SEC(v1 30회 × 1 s)
+    assert len(conv) == 12                       # MFC_FLOW_STABLE_TIMEOUT_SEC 는 v1 도 시간(563f772 MFC_STABILIZATION_TIMEOUT_S)
     for k, (n, period, sec) in conv.items():
         assert k.endswith("_SEC") and sec == pytest.approx(n * period), k
     assert conv["RFPULSE_REFP_SEC"][2] == 15.0 and conv["FLOW_ERROR_SEC"][2] == 10.0

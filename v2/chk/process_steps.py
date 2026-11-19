@@ -12,7 +12,7 @@ ProcessStep 이 된다(build_process_steps = 기본 템플릿 펼치기). 스텝
 실행기(StepRunner): 매 tick 스냅샷 하나로 지금 스텝을 진행한다(중첩 이벤트 루프 없음, 대기는 실제 시각).
 - MFC_CMD: 드라이버 명령을 한 번 내고, 완료 콜백(되읽기 확인)이 오면 다음 tick 에 다음 스텝. 실패면 MFC_CMD_FAILED.
   FLOW_ON 은 R69 확인 뒤 유량 안정화까지(v1 device/MFC.py:1128-1139·1236-1270): 매 tick 스냅샷 유량이
-  |실제 − 설정| ≤ 설정 × FLOW_ERROR_TOLERANCE 면 통과, MFC_FLOW_STABLE_TIMEOUT_SEC(30 s)를 넘으면 FLOW_STABILIZE_TIMEOUT.
+  |실제 − 설정| ≤ 설정 × FLOW_ERROR_TOLERANCE 면 통과, MFC_FLOW_STABLE_TIMEOUT_SEC(100 s, v1 MFC_STABILIZATION_TIMEOUT_S)를 넘으면 FLOW_STABILIZE_TIMEOUT.
   설정은 드라이버가 FLOW_SET 되읽기로 확인한 값(v1 last_setpoints) — 0 이면 안정화 없이 통과(v1).
   WAIT_PRESSURE 는 명령이 아니라 스냅샷 판정: |P − 목표| ≤ 목표×tol 이 stable_sec 이어지면 통과(judge.Persist, ok·late 값만),
   timeout_sec 를 넘으면 fail_on_timeout 이면 실패(SP1_TIMEOUT), 아니면 경고하고 진행.
