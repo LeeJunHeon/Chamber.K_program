@@ -191,6 +191,21 @@ def mfc_interpret(inv: Inventory, cfg: Dict[str, Any]) -> None:
         c.append("[확인] MFC Remote(R37 X=1) — 원격 제어 가능 [p.84, p.54]")
     else:
         c.append(f"[참고] MFC R37 {st!r} X=0(매뉴얼상 Local [p.84, p.54]) — 10/20 bench 에서도 M006 인데 v1 은 원격 제어가 됨. 정보로만")
+    # 설정점 되읽기(5-19 ④) — 드라이버와 같은 해석(drivers.mfc.parse_sp_reply: "Sn" 접두어 + 값 %FS). bench 는 쓰기 검증을 해 볼 수
+    # 없으므로, 읽은 원문만으로 v2 가 그 응답을 해석할 수 있는지(쓰기 확인·장비 값 출처가 쓰는 경로) 미리 본다
+    from v2.chk.drivers.mfc import SP_READ_CMD, parse_sp_reply
+    fs_t = sc[2] if sc is not None else float(cfg["MFC_PRESSURE_FS_TORR"])
+    for n, q in SP_READ_CMD.items():
+        raw = inv.raw("mfc", q)
+        v = parse_sp_reply(raw, n)
+        if raw is None:
+            c.append(f"[미확인] MFC SP{n} 되읽기({q}) — 무응답")
+        elif v is None:
+            c.append(f"!!! MFC SP{n} 되읽기({q}) 형식 다름 — {raw!r}: v2 가 'S{n}' 접두어 값으로 풀지 못함(쓰기 확인·장비 값 출처 실패)")
+        else:
+            mt = v / 100.0 * fs_t * 1000.0
+            inv.values[f"mfc_sp{n}_mtorr"] = round(mt, 3)
+            c.append(f"[확인] MFC SP{n} 되읽기({q}) 형식 맞음 — {raw!r} = {v:g} %FS = {mt:.2f} mTorr")
 
 
 # ───────────── IG(934) ─────────────
