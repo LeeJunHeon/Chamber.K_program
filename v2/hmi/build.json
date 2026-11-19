@@ -1,11 +1,11 @@
 {
  "what": "챔버K v2 노트북 로컬 화면(vanam-process hmi/ — W-7)",
  "vanamProcess": {
-  "commit": "0b685227abf9826d98d5036c3cc2f05c8b940102",
+  "commit": "caf91c661f1e751aa12d4867c4b614b021694fde",
   "branch": "chk2-web",
   "clean": true
  },
- "builtAt": "2026-11-18T03:10:27.805Z",
+ "builtAt": "2026-11-19T09:48:43.851Z",
  "esbuild": "0.28.2",
  "tailwindcss": "4.3.3",
  "files": [
@@ -15,14 +15,14 @@
    "sha256": "3b30b2089ad0e4b9231cac0f2a86fadc1a9623289d34d9ccf92a4a6bc14470c5"
   },
   {
-   "path": "assets/app-7KYLXA6Q.js",
-   "bytes": 513902,
-   "sha256": "351979b6c6a0ce2385ea2b7f720978c101c7e11fe19646e187a06b47194506be"
+   "path": "assets/app-FGVAPXUM.js",
+   "bytes": 515110,
+   "sha256": "5aabf097b1e930845013e78104568d4ffb2c582439890af25441a43d62546632"
   },
   {
    "path": "index.html",
    "bytes": 350,
-   "sha256": "a6c2c94671c3faba4b8cf9032b17b06019faf444d1da3e32077efa25d2f12974"
+   "sha256": "33fc4c35cc50866392f311035c356ee0af0097e5264e16fe3ec1c6a2ef341cdf"
   }
  ]
 }
