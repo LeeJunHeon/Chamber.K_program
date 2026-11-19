@@ -139,6 +139,8 @@
     "MFC_PRESSURE_WARN_RATIO": 0.10,
     "// 압력 이탈 연속 횟수 - 이 횟수 초과 시 구글챗 알림 (공정 유지)": "",
     "MFC_PRESSURE_WARN_COUNT": 5,
+    "// MFC FLOW_ON 후 목표 유량(±FLOW_ERROR_TOLERANCE) 도달 대기 한도(초). 허용 10~600, 바꾸면 프로그램 재시작": "",
+    "MFC_STABILIZATION_TIMEOUT_S": 100,
     "// MFC 압력·밸브 위치 1초 CSV(Logs/CHK/mfc/MFC_YYYYMMDD.csv). 저우선 읽기라 공정 명령이 있으면 양보한다. 끄려면 false 후 프로그램 재시작": "",
     "MFC_STATE_LOG_ENABLED": true,
     "// 기록 주기(초). 허용 0.5~60": "",

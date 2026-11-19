@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Deque, Callable, Optional
 import datetime
 import re
+import time
 import traceback
 
 from PyQt6.QtCore import QObject, QTimer, QIODeviceBase, pyqtSignal as Signal, pyqtSlot as Slot
@@ -37,7 +38,7 @@ from lib.comm_policy import ReconnectPolicy
 from lib.config import (
     MFC_PORT, MFC_BAUD, MFC_COMMANDS,
     FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT,
-    MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS,
+    MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS, MFC_STABILIZATION_TIMEOUT_S,
     MFC_WATCHDOG_INTERVAL_MS, MFC_TIMEOUT,
     COMM_RECONNECT_START_MS, COMM_RECONNECT_MAX_MS, COMM_LONG_OUTAGE_SEC, COMM_PROBE_MS, COMM_OUTAGE_LOG_SEC,
     MFC_GAP_MS, MFC_DELAY_MS, MFC_DELAY_MS_VALVE,
@@ -122,7 +123,8 @@ class MFCController(QObject):
 
         self._stabilizing_channel: Optional[int] = None
         self._stabilizing_target: float = 0.0
-        self.stabilization_attempts = 0
+        self.stabilization_attempts = 0   # 로그 표시용 — 시간 초과 판정은 _stabilizing_started(monotonic) 기준
+        self._stabilizing_started: Optional[float] = None
 
         # (호환성) self-loop로 들어와도 처리되게 자기 자신에 연결
         self.command_requested.connect(self.handle_command)
@@ -1188,6 +1190,7 @@ class MFCController(QObject):
                     self.stabilization_timer.stop()
                 self._stabilizing_channel = None
                 self._stabilizing_target = 0.0
+                self._stabilizing_started = None
                 self.last_setpoints[ch] = 0.0
                 self.flow_error_counters[ch] = 0
                 self.status_message.emit("MFC", f"FLOW_OFF 요청: ch{ch} 안정화 취소")
@@ -1228,6 +1231,7 @@ class MFCController(QObject):
                             self._stabilizing_target  = float(self.last_setpoints.get(ch, 0.0))
                             if (self._stabilizing_target > 0) and self.stabilization_timer:
                                 self.stabilization_attempts = 0
+                                self._stabilizing_started = time.monotonic()
                                 self.stabilization_timer.start()
                                 started_stab = True
                     if (not started_stab) and confirm_cmd:
@@ -1336,6 +1340,7 @@ class MFCController(QObject):
                 self.stabilization_timer.stop()
             self._stabilizing_channel = None
             self._stabilizing_target = 0.0
+            self._stabilizing_started = None
             self.command_failed.emit("FLOW_ON", "안정화 대상 없음")
             return
 
@@ -1351,14 +1356,19 @@ class MFCController(QObject):
                 self.command_confirmed.emit("FLOW_ON")
                 self._stabilizing_channel = None
                 self._stabilizing_target = 0.0
+                self._stabilizing_started = None
                 return
 
-            if self.stabilization_attempts >= 30:
+            started = self._stabilizing_started
+            if started is None:   # 시작 시각이 없으면(예외 경로) 지금부터 센다
+                started = self._stabilizing_started = time.monotonic()
+            if time.monotonic() - started >= MFC_STABILIZATION_TIMEOUT_S:
                 if self.stabilization_timer:
                     self.stabilization_timer.stop()
-                self.command_failed.emit("FLOW_ON", "유량 안정화 시간 초과")
+                self.command_failed.emit("FLOW_ON", f"유량 안정화 시간 초과({MFC_STABILIZATION_TIMEOUT_S}초)")
                 self._stabilizing_channel = None
                 self._stabilizing_target = 0.0
+                self._stabilizing_started = None
 
         def _after_all(vals):
             if vals and (ch - 1) < len(vals):
