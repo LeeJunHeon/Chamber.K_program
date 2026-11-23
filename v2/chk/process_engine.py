@@ -698,7 +698,7 @@ class ProcessEngine:
         if 3 in sk:
             tgt = self.heater.handover() if self.heater.owner == "process" else None
             if tgt is not None:
-                self._emit(ProcEvent("heater_handover", f"히터를 켠 채 넘김 — 목표 {tgt} °C(웹 히터 카드로 조작)",
+                self._emit(ProcEvent("heater_handover", f"히터를 켠 채 넘김(목표 {tgt} °C, 웹 히터 카드로 조작)",
                                      "HEATER_HANDOVER", {"target": tgt, "level": "info"}))
             if self.heater.left_on():
                 left["heater"] = {"target": tgt if tgt is not None else self.heater.st.get("sv")}
@@ -779,7 +779,7 @@ class ProcessEngine:
         with self._lock:
             if kind == "cleanup":
                 res = self.safety.engine.seq_results.get("cleanup", []) if self.safety is not None else []
-                self._emit(ProcEvent("cleanup", "남긴 출력 정리 끝 — " + ", ".join(f"{n}:{st}" for n, _, st in res),
+                self._emit(ProcEvent("cleanup", "남긴 출력 정리 끝: " + ", ".join(f"{n}:{st}" for n, _, st in res),
                                      "OUTPUTS_CLEANUP", {"steps": [{"no": n, "act": a, "status": st} for n, a, st in res],
                                                          "items": list(self.left), "level": "info"}))
                 self.left, self.cleaning = {}, False
@@ -804,7 +804,7 @@ class ProcessEngine:
                     and self.safety is not None):
                 # 정상 끝 정지 중 STOP·이상 중단 — 남김 취소: 뺀 단계를 표 순서로 이어서 실행한 뒤 run_end(5-6 ①)
                 self.end_skip = ()
-                self._emit(ProcEvent("stop_rest", f"정지 순서 중 {self.end_code} — 뺀 단계 {drop} 이어서 실행",
+                self._emit(ProcEvent("stop_rest", f"정지 순서 중 {self.end_code}: 뺀 단계 {drop} 를 이어서 실행",
                                      self.end_code, {"steps": drop, "level": "info"}))
                 self.safety.stop_rest(drop)
                 return
@@ -1275,7 +1275,7 @@ class ProcessEngine:
         el = now - p["t0"]
         if not p["warned"] and el >= mx - 300.0:
             p["warned"] = True
-            self._emit(ProcEvent("pause_long", f"일시정지 {el:.0f} s — {max(0.0, mx - el):.0f} s 뒤 정지 순서", "PAUSE_LONG",
+            self._emit(ProcEvent("pause_long", f"일시정지 {el:.0f} s 째, {max(0.0, mx - el):.0f} s 뒤 정지 순서를 실행함", "PAUSE_LONG",
                                  {"no": p["no"], "pausedSec": round(el, 1), "maxSec": mx, "level": "warn"}))
         if el >= mx:
             self._end_pause(now, resumed=False)
@@ -1490,7 +1490,7 @@ class ProcessEngine:
 
     def _h_heater_wait(self, r, s, cur, view, now):
         if not self.heater.proc.get("target"):
-            self._emit(ProcEvent("warn", "히터 목표가 없음(승온 블록 없음) — 도달 대기를 건너뜀", "HEATER_NO_TARGET"))
+            self._emit(ProcEvent("warn", "히터 목표가 없어(승온 블록 없음) 도달 대기를 건너뜀", "HEATER_NO_TARGET"))
             return "next"
         res = self.heater.process_wait_tick(now)
         if res == "reached":
@@ -1535,7 +1535,7 @@ class ProcessEngine:
             c = self.heater.casc.snapshot()
             if not self.heater.cascade or not c.get("active"):
                 self.settle_track = None
-                self._emit(ProcEvent("warn", f"셔터 전 히터 정착 확인 생략 — 캐스케이드가 활성이 아님"
+                self._emit(ProcEvent("warn", f"셔터 전 히터 정착 확인 생략: 캐스케이드가 활성이 아님"
                                              f" (상태 {c.get('state') or '-'}, 공정이 히터를 소유하지 않음)",
                                      "HEATER_SETTLE_SKIPPED", {"level": "warn"}))
                 return "next"
@@ -1577,10 +1577,10 @@ class ProcessEngine:
                 "need": need, "elapsed": int(round(el)), "sv2": c.get("sv2"), "bias": c.get("bias"),
                 "bias_ff": c.get("bias_ff"), "bias_int": c.get("bias_int"), "level": "warn"}
         if action == "abort":
-            self._emit(ProcEvent("warn", f"{reason} — 공정 중단(HEATER_SHUTTER_SETTLE_FAIL_ACTION=abort)",
+            self._emit(ProcEvent("warn", f"{reason}, 공정 중단(HEATER_SHUTTER_SETTLE_FAIL_ACTION=abort)",
                                  "HEATER_SETTLE_FAILED", data))
             return ("fail", "HEATER_SETTLE_FAILED")
-        self._emit(ProcEvent("warn", f"{reason} — 경고 후 셔터를 열고 진행(HEATER_SHUTTER_SETTLE_FAIL_ACTION=proceed)",
+        self._emit(ProcEvent("warn", f"{reason}, 경고 후 셔터를 열고 진행(HEATER_SHUTTER_SETTLE_FAIL_ACTION=proceed)",
                              "HEATER_SETTLE_TIMEOUT", data))
         return "next"
 
@@ -1910,7 +1910,7 @@ class ProcessEngine:
                 self.settle.pop("dc")
             elif now - self.settle["dc"] >= lim:
                 self.settle.pop("dc")
-                self._emit(ProcEvent("warn", f"DC 새 목표 {self.dcc.target:.1f} W 에 {lim:.0f} s 안에 못 감 — 이탈 판정 다시 켬",
+                self._emit(ProcEvent("warn", f"DC 새 목표 {self.dcc.target:.1f} W 에 {lim:.0f} s 안에 도달하지 않아 이탈 판정을 다시 켰음",
                                      "ADJUST_SETTLE_TIMEOUT"))
         if "rfp" in self.settle:
             fwd, tgt = view.get("rfp.fwd_w"), self.rfp_target
@@ -1919,7 +1919,7 @@ class ProcessEngine:
                 self.settle.pop("rfp")
             elif now - self.settle["rfp"] >= lim:
                 self.settle.pop("rfp")
-                self._emit(ProcEvent("warn", f"RF Pulse 새 목표 {tgt:.0f} W 에 {lim:.0f} s 안에 못 감 — 이탈 판정 다시 켬",
+                self._emit(ProcEvent("warn", f"RF Pulse 새 목표 {tgt:.0f} W 에 {lim:.0f} s 안에 도달하지 않아 이탈 판정을 다시 켰음",
                                      "ADJUST_SETTLE_TIMEOUT"))
 
     # 파워 대기(v1 _power_wait)
@@ -1989,6 +1989,6 @@ class ProcessEngine:
         if not pend:
             return "next"
         if now - cur.t0 > pw["timeout"]:
-            self._emit(ProcEvent("warn", f"파워 목표 도달 대기 timeout({pw['timeout']:.0f}s) — 미도달: {', '.join(pend)}"))
+            self._emit(ProcEvent("warn", f"파워 목표 도달 대기 시간 초과({pw['timeout']:.0f}s), 도달하지 않음: {', '.join(pend)}"))
             return ("fail", "POWER_WAIT_TIMEOUT")        # S36
         return "wait"

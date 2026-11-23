@@ -324,11 +324,11 @@ class SeqStep:
 # 건 셔터 → 차단밸브. v2 는 RF 램프다운 뒤 enable 도 OFF(v2 방식 유지), 끝에서 DC OFF 결과를 받아 기록한다.
 STOP_SEQUENCE: tuple = (
     SeqStep(1, Act("IG_FILAMENT_OFF"), "", False, "이번 공정에서 필라멘트를 켰으면",
-            "베이스 대기 정리 — 1회 요청, 결과를 기다리지 않음(v1 _ig_cancel)", nowait=True),
+            "베이스 대기를 정리한다. 한 번 요청하고 결과를 기다리지 않는다(v1 _ig_cancel)", nowait=True),
     SeqStep(2, Act("SHUTTERS_CLOSE", {"which": "ms"}), "", True, "", "Main 셔터 닫기"),
     SeqStep(3, Act("HEATER_FORCE_OFF"), "", True, "공정이 히터를 쓰는 행이면", "히터 RUN=0, 램프 원복"),
-    SeqStep(4, Act("DC_SAFE_OFF"), "", True, "이번 행에서 DC 를 켰으면", "DC OFF(확인형) — 보내고 다음으로", nowait=True),
-    SeqStep(5, Act("RFP_SAFE_OFF"), "", True, "이번 행에서 RF Pulse 를 켰으면", "RF Pulse OFF — 보내고 다음으로(램프다운 없음)",
+    SeqStep(4, Act("DC_SAFE_OFF"), "", True, "이번 행에서 DC 를 켰으면", "DC 끄기(확인형)를 보내고 다음 단계로 간다", nowait=True),
+    SeqStep(5, Act("RFP_SAFE_OFF"), "", True, "이번 행에서 RF Pulse 를 켰으면", "RF Pulse 끄기를 보내고 다음 단계로 간다(램프다운 없음)",
             nowait=True),
     SeqStep(6, Act("RF_RAMP_DOWN"), "STOP_RF_RAMPDOWN_TIMEOUT_SEC", True, "RF 사용 중",
             "RF_RAMP_DOWN_STEP_COUNTS 씩 0.5 s 간격, 한도 넘으면 즉시 0"),
@@ -352,14 +352,15 @@ END_STOP_MUST_KEEP: tuple = (4, 5, 6, 7, 8, 13)
 ALL_STOP_SEQUENCE: tuple = (
     SeqStep(1, Act("HEATER_RECIPE_ABORT", {"reason": "ALL_STOP"}), "", True, "히터 레시피 실행 중", "히터 레시피 중단"),
     SeqStep(2, Act("PROCESS_ABORT", {"reason": "ALL_STOP"}), "", True, "공정 진행 중",
-            "중단 표시를 PLC OFF 보다 먼저(S4 — MV 닫힘 이중 중단 방지). 공정은 STOPPING 으로"),
+            "PLC 출력을 끄기 전에 공정을 중단 상태(STOPPING)로 표시한다. 메인 밸브가 닫혀 중단이 두 번 나지 않게 한다(S4)"),
     SeqStep(3, Act("PLC_OUTPUTS_OFF"), "", True, "",
             "PLC 비상 정지: 버튼 코일 15개 전부 OFF(펌프·밸브 포함) → 히터 RUN=0 → D00040=0 → M00200=0(D00040=0 만 v2 추가)"),
-    SeqStep(4, Act("DC_SAFE_OFF"), "", True, "", "DC OFF 직결 확인형 — 보내고 다음 단계로(v1 dc_emergency_off)", nowait=True),
+    SeqStep(4, Act("DC_SAFE_OFF"), "", True, "", "DC 를 바로 끄는 확인형 명령을 보내고 다음 단계로 간다(v1 "
+                                                 "dc_emergency_off)", nowait=True),
     SeqStep(5, Act("GAS_FLOW_OFF"), "STOP_FLOW_OFF_TIMEOUT_SEC", True, "", "MFC 유량 OFF"),
     SeqStep(6, Act("GAS_EXHAUST"), "STOP_EXHAUST_WAIT_SEC", True, "공정 진행 중이었으면", "MFC 밸브 열기(v1 공정 정지 순서)"),
     SeqStep(7, Act("IG_FILAMENT_OFF"), "", False, "필라멘트 켜져 있으면", "이온 게이지 필라멘트 OFF"),
-    SeqStep(8, Act("RFP_SAFE_OFF"), "", True, "", "RF Pulse OFF 직결 — 공정 여부와 무관(v1 맨 끝 rfpulse_stop)"),
+    SeqStep(8, Act("RFP_SAFE_OFF"), "", True, "", "공정 여부와 상관없이 RF Pulse 를 바로 끈다(v1 맨 끝 rfpulse_stop)"),
     SeqStep(9, Act("AWAIT", {"no": 4}), "", True, "", "DC OFF 결과"),
 )
 

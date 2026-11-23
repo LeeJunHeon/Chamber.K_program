@@ -227,7 +227,7 @@ class MfcDriver:
             self.onoff_at_connect = None
         odd = [f"ch{ch}={v:g}" for ch, v in self.fs.items() if abs(v - 100.0) > 1e-9]
         if odd:
-            self._emit("fs_not_100", "MFC 풀스케일이 100 이 아님(" + ", ".join(odd) + ") — v1 레시피 유량이 %FS 였을 수 있다. "
+            self._emit("fs_not_100", "MFC 풀스케일이 100 이 아님(" + ", ".join(odd) + "). v1 레시피 유량이 %FS 였을 수 있으니 "
                        "실제 공정 전에 사용자 확인 필요", "MFC_FS_NOT_100")
 
     def _check_scale(self, session) -> None:
@@ -260,12 +260,12 @@ class MfcDriver:
                 if abs(v - 100.0) > 1e-9:
                     bad.append(f"ch{ch} 유량 FS {v:g} ≠ 100(v1 레시피 유량 = %FS)")
         st = (raw[37] or "").strip()
-        self._emit("remote_state", f"R37 {st!r}" + (" — X=0(매뉴얼상 Local)이지만 v1 은 원격 제어가 됨(10/20 bench) — 정보만"
-                                                    if len(st) == 4 and st[:2] == "M0" else " — 정보만"))
+        self._emit("remote_state", f"R37 {st!r}" + (": X=0(매뉴얼상 Local)이지만 v1 은 원격 제어가 됨(10/20 bench). 정보로만 씀"
+                                                    if len(st) == 4 and st[:2] == "M0" else ": 정보로만 씀"))
         self.scale_raw = raw
         self.scale_mismatch = "; ".join(bad) or None
         if bad:
-            self._emit("scale", "MFC 설정이 v2 설정과 다름 — 공정 시작 거부: " + "; ".join(bad), "MFC_SCALE_MISMATCH")
+            self._emit("scale", "MFC 설정이 v2 설정과 달라 공정 시작을 거부함: " + "; ".join(bad), "MFC_SCALE_MISMATCH")
         if unknown:
             self._emit("scale", "MFC 설정을 못 읽음(설정값 사용): " + "; ".join(unknown), "MFC_SCALE_UNREAD")
         if not bad and not unknown:
@@ -342,7 +342,7 @@ class MfcDriver:
         v = parse_sp_reply(ans, n)
         if v is None:
             self.sp_device.pop(n, None)
-            self._emit("sp_device", f"SP{n} 장비 값을 읽지 못함({when}): {SP_READ_CMD[n]} 응답={ans!r} — 모름으로 둠")
+            self._emit("sp_device", f"SP{n} 장비 값을 읽지 못함({when}): {SP_READ_CMD[n]} 응답={ans!r}, 모름으로 둠")
             return None
         self.sp_device[n] = round(self.pct_to_mtorr(v), 3)
         return self.sp_device[n]
@@ -372,7 +372,7 @@ class MfcDriver:
             if v is not None and abs(self.pct_to_mtorr(v) - self.sp_written[n]) > self.pct_to_mtorr(
                     float(self.cfg["MFC_SP_VERIFY_TOL"])) + 1e-9:
                 old = self.sp_written.pop(n)              # 장비 쪽에서 바뀜(앞면 조작 등) — 장비 값을 따른다
-                self._emit("sp_device", f"SP{n} 장비 값이 바뀜(쓴 값 {old:.2f} → 장비 {self.pct_to_mtorr(v):.2f} mTorr) — 장비 값을 따름")
+                self._emit("sp_device", f"SP{n} 장비 값이 바뀜(쓴 값 {old:.2f} → 장비 {self.pct_to_mtorr(v):.2f} mTorr), 장비 값을 따름")
         self._store_device_sp(n, ans, "주기 갱신")
         if not self._sp_refresh_todo:
             self._sp_refresh_t = now

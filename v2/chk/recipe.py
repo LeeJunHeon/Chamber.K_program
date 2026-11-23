@@ -104,7 +104,7 @@ _PROCESS_UI = {
     "process_time": ("압력·시간", "공정 시간", ""),
     "shutter_delay": ("압력·시간", "셔터 딜레이", ""),
     "use_dc": ("파워", "DC", ""), "dc_power": ("파워", "DC 파워", ""),
-    "use_dc_delay": ("파워", "DC 안정화 대기", "DC 를 쓸 때만 — 작업 압력에 도달한 뒤 설정의 DC 안정화 시간만큼 기다림"),
+    "use_dc_delay": ("파워", "DC 안정화 대기", "DC 를 쓸 때만 작업 압력에 도달한 뒤 설정의 DC 안정화 시간만큼 기다림"),
     "use_rf": ("파워", "RF", ""), "rf_power": ("파워", "RF 파워", ""),
     "use_rf_pulse": ("파워", "RF Pulse", ""), "rf_pulse_power": ("파워", "RF Pulse 파워", ""),
     "rf_pulse_freq": ("파워", "RF Pulse 주파수", "비우면 장비에 설정된 주파수를 그대로 씀"),

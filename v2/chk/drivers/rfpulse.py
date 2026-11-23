@@ -156,7 +156,7 @@ class RfPulseDriver:
             # 명령 33 은 Host 모드에서만 받는다(CSR 1). 출력이 켜져 있을 때 제어 모드를 바꾸면 장비가 RF 를 끄므로
             # (매뉴얼 명령 14) 앞면에서 쓰는 중일 수 있는 RF 를 끄지 않도록, 출력이 꺼져 있을 때만 Host 로 바꾼다.
             if parse_status(self._x(session, Q_STATUS))["out_on"]:
-                self._emit("auto_off", "RF 출력 중이라 Host 로 바꾸지 않음 — 명령 33 은 다음 연결 때", "STATE_NOT_ALLOWED")
+                self._emit("auto_off", "RF 출력 중이라 Host 로 바꾸지 않음(명령 33 은 다음 연결 때)", "STATE_NOT_ALLOWED")
                 return
             self._exec(session, SET_CONTROL, b"\x02")
         csr = self._exec(session, SET_AUTO_OFF, bytes([sec]))
@@ -288,7 +288,7 @@ class RfPulseDriver:
                 raise RfpCsr(cmd, csr)
             tries += 1
             backoff = max(self.gap_s * 1.5, 1.2) if csr == 5 else max(0.15, self.gap_s)
-            self._emit("retry", f"{name}: 명령 {cmd} {'CSR ' + str(csr) if csr is not None else r[1]} — {tries}/{self.cmd_retries} 다시")
+            self._emit("retry", f"{name}: 명령 {cmd} {'CSR ' + str(csr) if csr is not None else r[1]}, {tries}/{self.cmd_retries} 번째 다시 보냄")
             yield ("sleep", backoff)
 
     def start(self, target_w: float, freq_hz: Optional[int] = None, duty: Optional[int] = None,
@@ -340,7 +340,7 @@ class RfPulseDriver:
                 if self.cfg["RFPULSE_VERIFY_PULSE_CONFIG"]:
                     yield ("x", RF_OFF, b"", self.onoff_timeout_s)
                     self.set_w = 0.0
-                    self._emit("config_readback", "펄스 설정 되읽기 불일치 — RF OFF: " + ", ".join(bad), "RFP_CONFIG_MISMATCH")
+                    self._emit("config_readback", "펄스 설정 되읽기가 달라 RF OFF: " + ", ".join(bad), "RFP_CONFIG_MISMATCH")
                     raise RfpConfigMismatch(", ".join(bad))
                 self._emit("config_readback", "펄스 설정 되읽기 불일치(경고만): " + ", ".join(bad), "RFP_CONFIG_MISMATCH")
             else:
@@ -424,7 +424,7 @@ class RfPulseDriver:
                     raise
                 except (ReadTimeout, aebus.AeBusError):
                     pass
-            self._emit("off_unconfirmed", "RF OFF 확인 못 함 — 장비 전면 확인", "RFP_OFF_UNCONFIRMED")
+            self._emit("off_unconfirmed", "RF OFF 를 확인할 수 없음. 장비 전면을 확인할 것", "RFP_OFF_UNCONFIRMED")
             raise RfpError("RF OFF 확인 실패")
         self.worker.submit(Request("safety", fn, deadline=self.clock.monotonic() + 3.0, on_done=on_done,
                                    name="rfp:RF OFF", purge=True,

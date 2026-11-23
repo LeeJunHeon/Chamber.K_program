@@ -193,7 +193,7 @@ def test_reason_and_command_labels_not_in_messages():
             if p.name not in ("commands.py",)]
     for lab in labels:
         assert not any(lab in p.read_text(encoding="utf-8") for p in srcs), lab
-    assert CC.COMMON_REASONS and texts["COMMAND_EXPIRED"] == "유효 시간이 지난 웹 명령 — 실행하지 않음(장비 시계 기준)"
+    assert CC.COMMON_REASONS and texts["COMMAND_EXPIRED"] == "유효 시간이 지난 웹 명령이라 실행하지 않음(장비 시계 기준)"
 
 
 def test_export_version_11_hash_changed():
@@ -259,3 +259,43 @@ def test_mfc_read_plan_desc_matches_driver():
     assert plan.reads == ("R5", "R60", "R6") and plan.deadline_param == "MFC_READ_DEADLINE_MS"
     for w in ("짝수 초", "홀수 초", "양보", "마감을 넘길"):
         assert w in plan.plan, w
+
+
+# 5-20 ④ — 화면 문구 규칙: '—' 로 이은 조각 문장, '안 함·안 씀·못 함·안 됨·미룸', 상태·동작의 '켬·끔' 을 쓰지 않는다.
+# 예외: 블록 값 검사 문구(valueRules msg — 골든 web_block_cases 에 묶여 있음)
+def _bundle_screen_texts():
+    from v2.chk import web_schema as W
+    from v2.common.paramdef import defaults
+    b = W.bundle(defaults(P.PARAMS))
+    out = []
+    for p in b["params"]:
+        out += [("param", p["key"], p["label"]), ("param", p["key"], p["desc"])] + [
+            ("param", p["key"], v) for v in (p.get("enumLabels") or {}).values()]
+    for blk in b["snapshot"]["blocks"]:
+        for f in blk["fields"]:
+            out += [("field", f["column"], f["label"]), ("field", f["column"], f["desc"] or "")] + [
+                ("field", f["column"], v) for v in (f.get("enumLabels") or {}).values()]
+    for f in b["snapshot"]["process"] + b["snapshot"]["tick"]:
+        out += [("field", f["column"], f["label"]), ("field", f["column"], f["desc"] or "")]
+    for c in b["commands"]:
+        out += [("command", c["kind"], c["label"]), ("command", c["kind"], c["desc"] or "")] + [
+            ("command", c["kind"], a.get("desc") or "") for a in c["args"]]
+    out += [("reason", r["code"], r["label"]) for r in b["reasons"]]
+    out += [("precondition", x["id"], x["desc"]) for x in b["preconditions"]]
+    out += [("state", s["name"], s["label"]) for s in b["states"]]
+    out += [("eventKind", e["kind"], e["label"]) for e in b["eventKinds"]]
+    for d in b["blocks"]["defs"]:
+        out += [("block", d["type"], d.get(k) or "") for k in ("label", "desc", "help")]
+        out += [("block", d["type"], (d.get(k) or {}).get("text") or "") for k in ("skip", "pause")]
+        for pp in d["params"]:
+            out += [("blockParam", f"{d['type']}.{pp['name']}", pp.get(k) or "") for k in ("label", "desc", "help")]
+    out += [("stopStep", str(s["no"]), s.get("desc") or "") for s in b["stopSequence"]["steps"] + b["allStopSequence"]["steps"]]
+    return out
+
+
+def test_screen_texts_follow_wording_rules():
+    import re
+    bad = re.compile(r"—|안 ?(함|씀|됨)(?![가-힣])|못 ?함(?![가-힣])|미룸|(?<![가-힣])(켬|끔)(?![가-힣])|[가-힣](켬|끔)(?![가-힣])")
+    hits = [(k, key, t) for k, key, t in _bundle_screen_texts() if bad.search(t)]
+    hits += [("screen", w, t) for w, t in _screen_texts() if t and bad.search(t)]      # 레시피 열·공정 중 수정 항목 등
+    assert hits == [], hits[:10]

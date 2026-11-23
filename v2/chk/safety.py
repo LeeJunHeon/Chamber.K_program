@@ -503,7 +503,7 @@ class ChkSafety:
             return
         p = self.process
         busy = bool(p.active or getattr(p, "heater_recipe_running", False) or self.engine.stopping)
-        tail = " — 공정·히터 레시피 진행 중이라 끄지 않음" if busy else ""
+        tail = ". 공정·히터 레시피 진행 중이라 끄지 않음" if busy else ""
         if "plc" not in self.first_done and v.q("plc") in FRESH:
             self.first_done.add("plc")
             dac, en, fwd = v.get("rf.dac") or 0, bool(v.get("rf.dac_enable")), v.get("rf.fwd_w")
@@ -515,7 +515,7 @@ class ChkSafety:
                         Step(1, Act("RF_RAMP_DOWN"), float(self.cfg["STOP_RF_RAMPDOWN_TIMEOUT_SEC"]), True, desc="RF 램프다운"),
                         Step(2, Act("RF_SAFE_OFF"), float(self.cfg["STOP_STEP_WAIT_DEFAULT_SEC"]), True, desc="D40 0 → enable OFF")])
             elif en:
-                self._s51("info", "RF_ENABLE_RESIDUAL", f"M00200 켜짐 · D40 0 · 순방향 {fwd} W — v1 정상 종료 흔적{tail}",
+                self._s51("info", "RF_ENABLE_RESIDUAL", f"M00200 켜짐 · D40 0 · 순방향 {fwd} W(v1 정상 종료 흔적){tail}",
                           None if busy else "RF_SAFE_OFF", "plc")
         if "dc" not in self.first_done and v.q("dc") in FRESH:
             self.first_done.add("dc")
@@ -526,16 +526,16 @@ class ChkSafety:
             if getattr(self.rfp, "out_at_connect", None):
                 host = getattr(self.rfp, "control_at_connect", None) == 2
                 if host and not busy:
-                    self._s51("warn", "RFP_RESIDUAL_OUTPUT", "연결 때 RF Pulse 출력 켜짐(Host) — 끔", "RFP_SAFE_OFF", "rfp")
+                    self._s51("warn", "RFP_RESIDUAL_OUTPUT", "연결 때 RF Pulse 출력 켜짐(Host), 끄기", "RFP_SAFE_OFF", "rfp")
                 else:
                     self._s51("warn", "RFP_RESIDUAL_OUTPUT",
-                              "연결 때 RF Pulse 출력 켜짐" + (tail or " — 앞면(Host 아님) 모드라 끄지 않음"))
+                              "연결 때 RF Pulse 출력 켜짐" + (tail or ". 앞면(Host 아님) 모드라 끄지 않음"))
         if "mfc" not in self.first_done and v.q("mfc") in FRESH:
             self.first_done.add("mfc")
             bits = getattr(self.mfc, "onoff_at_connect", None) or ""
             flow = max(v.get("mfc.ar_sccm") or 0.0, v.get("mfc.o2_sccm") or 0.0)
             if "1" in bits[:2] or flow > 0.1:
-                self._s51("warn", "GAS_RESIDUAL_FLOW", f"R69 {bits or '?'} · 유량 {flow:g} sccm — 끄지 않음(확인)")
+                self._s51("warn", "GAS_RESIDUAL_FLOW", f"R69 {bits or '?'} · 유량 {flow:g} sccm, 끄지 않음(확인 필요)")
 
     # ── 사용자 명령 ──
     def stop(self) -> bool:

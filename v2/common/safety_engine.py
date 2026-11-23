@@ -81,7 +81,7 @@ class Step:
     nowait: bool = False                              # 보내기만 하고 다음 단계로 — 결과는 AWAIT 단계가 받는다
 
 
-BENCH_SKIP = "bench — 보내지 않음"                    # 정지 순서 단계가 bench 에서 BENCH_READ_ONLY 로 거절됨(info)
+BENCH_SKIP = "bench 라서 보내지 않음"                    # 정지 순서 단계가 bench 에서 BENCH_READ_ONLY 로 거절됨(info)
 
 
 class StepRunner:

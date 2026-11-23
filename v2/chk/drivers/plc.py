@@ -235,7 +235,7 @@ class PlcDriver:
         if self._pending_heater_off:
             c.write_coil(_ADDR["heater_run"].addr, False)
             self._pending_heater_off = False
-            self._emit("heater_off_applied", "링크 복구 — 보류된 히터 OFF 적용")
+            self._emit("heater_off_applied", "링크가 복구되어 미룬 히터 OFF 를 적용함")
         self.push_heater_limits(c)
         mark = self.cfg["PLC_SESSION_MARK_REG"]
         if mark:
@@ -348,7 +348,7 @@ class PlcDriver:
         (v1 set_heater_run, device/PLC.py:1275-1295). ON 은 보관하지 않는다."""
         if not on and not self.link_up:
             self._pending_heater_off = True
-            self._emit("heater_off_pending", "링크 없음 — 히터 OFF 보류(복구 때 적용)")
+            self._emit("heater_off_pending", "링크가 없어 히터 OFF 를 미룸(복구 때 적용)")
         kind = "write" if on else "safety"
 
         def done(res: Result) -> None:
@@ -359,7 +359,7 @@ class PlcDriver:
                     self._pending_heater_off = False
                 elif not self._pending_heater_off:
                     self._pending_heater_off = True
-                    self._emit("heater_off_pending", f"히터 OFF 쓰기 실패({res.reason or res.status}) — 보류(통신 성공 때 다시)")
+                    self._emit("heater_off_pending", f"히터 OFF 쓰기 실패({res.reason or res.status})로 미룸(통신이 되면 다시)")
             if on_done:
                 on_done(res)
         self.submit_write(f"RUN={int(on)}", lambda s: self._client(s).write_coil(_ADDR["heater_run"].addr, on),

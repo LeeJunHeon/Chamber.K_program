@@ -151,13 +151,13 @@ class DcDriver:
         # 읽기만 한다(어떤 모드에서도 쓰지 않음 — 사용자 결정 2026-10-16). 응답은 DISABLE·SAFETY·FULLY [DC p.94, p.78].
         # FULLY 만 전원 차단 전 출력까지 되살린다 → 경고(바꾸는 것은 사람이 앞면 FACTORY 메뉴에서)
         if cur.strip().upper() == "FULLY":
-            self._emit("last_state", f"FACT:LAST-STA? = {cur} — 전원이 다시 들어오면 출력까지 되살아남(앞면에서 바꿀 것)",
+            self._emit("last_state", f"FACT:LAST-STA? = {cur} 이라 전원이 다시 들어오면 출력까지 되살아남(앞면에서 바꿀 것)",
                        "DC_LAST_STATE_FULLY")
         else:
             self._emit("last_state", f"FACT:LAST-STA? = {cur}")
         for q, name in (("VOLT:OVP:TRIP?", "OVP"), ("CURR:OCP:TRIP?", "OCP")):
             if self._query(session, q) == "1":                         # 트립 중에는 출력이 나오지 않는다 [DC p.89-91]
-                self._emit("trip", f"{name} 트립 중 — 출력이 나오지 않음(해제는 사람이 앞면에서)", "DC_PROTECTION_TRIPPED")
+                self._emit("trip", f"{name} 트립 중이라 출력이 나오지 않음(해제는 사람이 앞면에서)", "DC_PROTECTION_TRIPPED")
         if not self.writes_allowed:
             return
         if self.cfg["DC_SET_PROTECTION"]:
@@ -214,7 +214,7 @@ class DcDriver:
                 except Exception as e:
                     a = f"무응답({type(e).__name__})"
                 if a == "1" or k >= tries:
-                    self._emit("out_check", f"OUTP ON 뒤 OUTP? = {a} ({k}회째) — 기록만")
+                    self._emit("out_check", f"OUTP ON 뒤 OUTP? = {a} ({k}회째), 기록만")
                     return SEQ_DONE
             return fn
         self.running = True
@@ -281,14 +281,14 @@ class DcDriver:
         def done(name, reason, results):
             if reason and reason != "BENCH_READ_ONLY":
                 if not self.maybe_on:                       # 켠 적 없음 — 에피소드가 아니라 정보 한 줄(v1 356-359)
-                    self._emit("off_unverified", "DC OFF 생략/미확인(" + "/".join(answers) + ") — 이번 실행에서 출력을 켠 적 없음")
+                    self._emit("off_unverified", "DC OFF 생략/미확인(" + "/".join(answers) + "): 이번 실행에서 출력을 켠 적 없음")
                     reason = None
                 else:
                     first = self._off_unconfirmed_since is None
                     if first:
                         self._off_unconfirmed_since = self.clock.monotonic()
                         self._emit("off_unconfirmed", f"DC 출력 OFF 확인 못 함({where}): " + "/".join(answers)
-                                   + " — 장비 전면 확인, 통신되면 자동 재시도", "DC_OFF_UNCONFIRMED")
+                                   + ". 장비 전면을 확인하고, 통신되면 자동으로 다시 시도함", "DC_OFF_UNCONFIRMED")
                     reason = "DC_OFF_UNCONFIRMED"
                     self._schedule_off_retry()
             if on_done:
