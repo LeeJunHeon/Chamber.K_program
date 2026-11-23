@@ -63,7 +63,7 @@ def test_commands_defined_operator_bench_off_and_paths():
         c = by[k]
         assert c.role == "operator" and c.bench_ok is False and "STOPPING" not in c.states
         assert C.Source.WEB in c.sources
-        assert (C.Source.HMI in c.sources) == (k != "PROCESS_EDIT")
+        assert c.hmi == ("operate" if k == "PROCESS_EDIT" else "always")    # 순서 고치기는 노트북 조작을 열었을 때만(5-20 ②)
     codes = C.reason_codes()
     assert {"SKIP_STALE", "PAUSE_STALE", "EDIT_STALE", "SKIP_NOT_ALLOWED", "PAUSE_NOT_ALLOWED", "EDIT_TOUCHES_STARTED",
             "PAUSE_TIMEOUT", "PROCESS_SKIP", "PROCESS_PAUSE", "PROCESS_RESUME", "PROCESS_EDIT"} <= codes

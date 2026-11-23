@@ -2,7 +2,13 @@
 
 경로
 - web      : vanam-process — 공정·레시피·히터·PLC 조작·설정
-- hmi      : 노트북 로컬 화면 — STOP·ALL STOP·Buzz Stop·히터 정지 + 공정 중 값 수정(PROCESS_ADJUST source local, 5-4)(로그인 없음)
+- hmi      : 노트북 로컬 화면(로그인 없음, 127.0.0.1). 받는 명령은 CommandDef.hmi 로 나뉜다(5-20 ②).
+             always  — 늘 받음: STOP·ALL STOP·부저 정지·히터 정지, 공정 중 값 바꾸기(PROCESS_ADJUST source local, 5-4)·
+                       건너뛰기·일시정지·재개(5-15)
+             operate — 설정 LOCAL_HMI_CONTROL 이 '보기와 정지만'(view_stop)이 아니면 받음(HMI_OPERATE: 공정 시작·적재 레시피
+                       시작·해제·순서 고치기·PLC 버튼·필라멘트·히터 명령·수동 조작). view_stop 이면 HMI_CONTROL_OFF 로 거부.
+                       잠금(LOCAL_HMI_RELOCK_MIN)은 노트북 화면이 한다 — 장비는 hello 로 설정·잠금 시간·지금 받는 명령을 알린다
+             그 밖(설정 적용·되돌리기·레시피 적재·내부 조치)은 노트북에서 받지 않는다(SOURCE_NOT_ALLOWED)
 - internal : 안전 엔진·공정 엔진 — 안전 조치(safety_rules 의 action)
 
 v1 근거: integrations/erp_commands.py(명령·거부 규칙), main.py:_erp_exec_heater_command, core/process_service.py.
@@ -48,6 +54,7 @@ CHK_REASONS: tuple = (
     Reason("IG_ATM_FILAMENT_ON", "대기압(PLC ATM 센서) — 이온 게이지 필라멘트 켜기 금지", "reject"),
     Reason("IG_FILAMENT_FAILED_CMD", "필라멘트 명령 결과 확인 실패", "fail"),
     Reason("COMMAND_NOT_ALLOWED", "장비에 보내지 않는 명령(예: 이온 게이지 디개스 C·D)", "reject"),
+    Reason("HMI_CONTROL_OFF", "노트북 조작이 꺼져 있음(설정 '노트북 조작' = 보기와 정지만) — 웹에서 하거나 설정을 바꿀 것", "reject"),
     Reason("DOOR_CONFLICT", "도어 올림·내림 동시 요청", "reject"),
     Reason("CONFIG_H_IN_PROCESS", "공정 중 H 등급 설정 변경 금지", "reject"),
     Reason("CLEANUP_RUNNING", "공정 밖 STOP 정리 중 — 끝난 뒤에 시작", "reject"),
@@ -243,6 +250,7 @@ class CommandDef:
     desc: str = ""
     v1: str = ""
     bench_ok: bool = False        # bench(장비 쓰기 금지)에서도 받는 명령 — 장비에 쓰지 않는다(5-14, core 가 이 값을 본다)
+    hmi: str = ""                 # 노트북 경로: always(늘) / operate(LOCAL_HMI_CONTROL ≠ view_stop 일 때) / ""(받지 않음) — 5-20 ②
 
 
 def _a(name, type_, required=True, **kw) -> ArgDef:
@@ -380,19 +388,44 @@ _BENCH_OK = frozenset({"RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_RO
 assert _BENCH_OK <= {c.kind for c in COMMANDS}
 COMMANDS = tuple(replace(c, bench_ok=c.kind in _BENCH_OK) for c in COMMANDS)
 
+# 노트북 조작(5-20 ②) — 설정 LOCAL_HMI_CONTROL 이 view_stop 이 아니면 노트북에서도 받는 명령(관리자 설정·내부 조치는 넣지 않는다).
+# 위 표에서 hmi 경로가 있는 명령(정지·공정 중 값 바꾸기·건너뛰기·일시정지·재개)은 always — 설정과 상관없이 늘 받는다.
+HMI_CONTROL_VALUES = ("view_stop", "unlock", "always")
+HMI_OPERATE = ("PROCESS_START", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT", "PLC_BUTTON", "IG_FILAMENT",
+               "HEATER_SV", "HEATER_ON", "HEATER_OFF", "HEATER_RESET", "HEATER_GAS_RELEASE", "HEATER_RECIPE_RUN",
+               "HEATER_RECIPE_STOP", "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP")
+assert set(HMI_OPERATE) <= {c.kind for c in COMMANDS}
+COMMANDS = tuple(replace(c, hmi="always") if HMI in c.sources else
+                 replace(c, hmi="operate", sources=c.sources + (HMI,)) if c.kind in HMI_OPERATE else c for c in COMMANDS)
+assert all(c.role == "operator" for c in COMMANDS if c.hmi == "operate")      # 관리자 설정·내부 조치는 노트북에서 받지 않는다
+
 
 def by_kind() -> dict:
     return {c.kind: c for c in COMMANDS}
 
 
-def check_command(kind: str, source: Source, state: str, args: Optional[dict] = None) -> Optional[str]:
+def hmi_allows(c: CommandDef, hmi_control: Optional[str]) -> bool:
+    """노트북 경로에서 이 명령을 지금 받는가 — hmi_control = 설정 LOCAL_HMI_CONTROL 값(모르면 view_stop 처럼)."""
+    return c.hmi == "always" or (c.hmi == "operate" and hmi_control in ("unlock", "always"))
+
+
+def hmi_kinds(hmi_control: Optional[str]) -> list:
+    """노트북 경로에서 지금 받는 명령 종류(hello.commandKinds) — 표 순서."""
+    return [c.kind for c in COMMANDS if hmi_allows(c, hmi_control)]
+
+
+def check_command(kind: str, source: Source, state: str, args: Optional[dict] = None,
+                  hmi_control: Optional[str] = None) -> Optional[str]:
     """표만으로 판정할 수 있는 거부 사유(경로·상태). 통과면 None. 인자는 check_args(설정값 필요),
-    PRECONDITIONS(장비 값 필요)는 core 가 따로 평가한다."""
+    PRECONDITIONS(장비 값 필요)는 core 가 따로 평가한다. 노트북(hmi) 경로의 operate 명령은 hmi_control(설정
+    LOCAL_HMI_CONTROL)이 view_stop 이거나 없으면 HMI_CONTROL_OFF."""
     c = by_kind().get(kind)
     if c is None:
         return "UNKNOWN_COMMAND"
     if source not in c.sources:
         return "SOURCE_NOT_ALLOWED"
+    if source == HMI and not hmi_allows(c, hmi_control):
+        return "HMI_CONTROL_OFF"
     if ANY_STATE not in c.states and state not in c.states:
         return "STATE_NOT_ALLOWED"
     return None
@@ -461,9 +494,10 @@ def check_args(c: CommandDef, args: Mapping[str, Any], cfg: Mapping[str, Any],
     return None
 
 
-def check_ig_filament(source, state: str, on: bool, plc_atm: Optional[bool], plc_fresh: bool) -> Optional[str]:
-    """웹 IG_FILAMENT 판정: 경로·상태(유휴만) → 켜기면 ATM 센서(값이 신선해야). 통과면 None."""
-    r = check_command("IG_FILAMENT", source, state, {"on": on})
+def check_ig_filament(source, state: str, on: bool, plc_atm: Optional[bool], plc_fresh: bool,
+                      hmi_control: Optional[str] = None) -> Optional[str]:
+    """IG_FILAMENT 판정: 경로·상태(유휴만) → 켜기면 ATM 센서(값이 신선해야). 통과면 None."""
+    r = check_command("IG_FILAMENT", source, state, {"on": on}, hmi_control)
     if r:
         return r
     if on and (not plc_fresh or plc_atm is None):

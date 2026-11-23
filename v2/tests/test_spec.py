@@ -73,10 +73,11 @@ def test_command_table_refs():
 
 
 def test_hmi_only_stop_commands():
-    hmi = {c.kind for c in C.COMMANDS if Source.HMI in c.sources}
-    # 정지 명령 + 공정 중 값 수정(사용자 지시 5-4 ③ — source web·local)
+    hmi = {c.kind for c in C.COMMANDS if c.hmi == "always"}
+    # 정지 명령 + 공정 중 값 수정(사용자 지시 5-4 ③ — source web·local) — 노트북에서 늘 받는 명령(5-20 ② hmi = always)
     assert hmi == {"PROCESS_STOP", "ALL_STOP", "BUZZ_STOP", "HEATER_STOP", "PROCESS_ADJUST",
                    "PROCESS_SKIP", "PROCESS_PAUSE", "PROCESS_RESUME"}            # 5-15: 건너뛰기·멈춤·재개는 노트북 화면에서도
+    assert C.hmi_kinds("view_stop") == [c.kind for c in C.COMMANDS if c.kind in hmi]     # 보기와 정지만 = 5-19 까지와 같다
 
 
 def test_plc_buttons_map_to_addrs():
@@ -93,13 +94,14 @@ def test_plc_buttons_map_to_addrs():
     ("PLC_BUTTON", Source.WEB, "IDLE", {"target": "mv", "on": True}, None),
     ("PLC_BUTTON", Source.WEB, "MAIN", {"target": "s1", "on": False}, None),
     ("PLC_BUTTON", Source.WEB, "IDLE", {"target": "nope", "on": True}, None),       # 인자는 check_args(test_command_args)
-    ("PLC_BUTTON", Source.HMI, "IDLE", {"target": "mv", "on": True}, "SOURCE_NOT_ALLOWED"),
+    ("PLC_BUTTON", Source.HMI, "IDLE", {"target": "mv", "on": True}, "HMI_CONTROL_OFF"),   # 설정 없음 = 보기와 정지만(5-20 ②)
     ("ALL_STOP", Source.HMI, "MAIN", {}, None),
     ("ALL_STOP", Source.HMI, "IDLE", {}, None),
     ("PROCESS_STOP", Source.HMI, "BASE_WAIT", {}, None),
     ("PROCESS_STOP", Source.WEB, "IDLE", {}, None),                 # 공정 없으면 성공(아무것도 안 함, v1)
     ("PROCESS_START", Source.WEB, "MAIN", {}, "STATE_NOT_ALLOWED"),
-    ("PROCESS_START", Source.HMI, "IDLE", {}, "SOURCE_NOT_ALLOWED"),
+    ("PROCESS_START", Source.HMI, "IDLE", {}, "HMI_CONTROL_OFF"),
+    ("CONFIG_APPLY", Source.HMI, "IDLE", {}, "SOURCE_NOT_ALLOWED"),
     ("RECIPE_START", Source.WEB, "MAIN", {}, "STATE_NOT_ALLOWED"),  # IDLE 은 엔진이 RECIPE_NOT_LOADED
     ("DC_SAFE_OFF", Source.WEB, "IDLE", {}, "SOURCE_NOT_ALLOWED"),
     ("NOPE", Source.WEB, "IDLE", {}, "UNKNOWN_COMMAND"),
@@ -268,7 +270,7 @@ def test_common_reasons_not_shadowed():
     (Source.WEB, "IDLE", True, True, True, "IG_ATM_FILAMENT_ON"),
     (Source.WEB, "IDLE", True, None, False, "IG_ATM_FILAMENT_ON"),    # ATM 을 모르면 켜지 않음
     (Source.WEB, "BASE_WAIT", True, False, True, "STATE_NOT_ALLOWED"),  # 공정 중은 공정 엔진만
-    (Source.HMI, "IDLE", True, False, True, "SOURCE_NOT_ALLOWED"),
+    (Source.HMI, "IDLE", True, False, True, "HMI_CONTROL_OFF"),     # 설정 없음 = 보기와 정지만(5-20 ②)
 ])
 def test_ig_filament_web_rule(src, state, on, atm, fresh, expect):
     assert C.check_ig_filament(src, state, on, atm, fresh) == expect

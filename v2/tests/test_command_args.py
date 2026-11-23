@@ -132,7 +132,8 @@ def test_core_heater_sv_rejects_with_detail_and_uses_plc_limit(tmp_path):
         out["650"] = core.command("HEATER_SV", {"value": 650}, cid="h")
         out["on650"] = core.command("HEATER_ON", {"value": 650}, cid="i")
         out["ar"] = core.command("HEATER_ON", {"value": 100, "use_ar": True, "ar_flow": 1000.0, "wp_mtorr": 5.0}, cid="j")
-        out["hmi"] = core.command("PLC_BUTTON", {"target": "mv", "on": "x"}, source=Source.HMI, cid="k")
+        out["hmi"] = core.command("RECIPE_LOAD", {"name": 5}, source=Source.HMI, cid="k")        # 노트북에서 받지 않는 명령
+        out["hmi_plc"] = core.command("PLC_BUTTON", {"target": "mv", "on": "x"}, source=Source.HMI, cid="l")  # 5-20 ② 받음
     r.on(5, go)
     r.run(8)
     for k in ("5000", "neg", "abc", "null", "true", "650", "on650", "ar"):
@@ -142,6 +143,7 @@ def test_core_heater_sv_rejects_with_detail_and_uses_plc_limit(tmp_path):
     assert out["ar"].detail.startswith("ar_flow 1000 — 범위 0 ~ ")
     assert out["0"].reason != "BAD_ARGS" and out["700"].reason != "BAD_ARGS"
     assert out["hmi"].reason == "SOURCE_NOT_ALLOWED" and out["hmi"].detail == ""   # 경로·상태가 먼저
+    assert out["hmi_plc"].reason == "BAD_ARGS" and out["hmi_plc"].detail            # 노트북 조작(기본 잠금을 푼 뒤 조작) — 인자 검사
     res = {e["data"]["cmdId"]: e["data"] for e in r.rig.hub.recent if e["type"] == "cmd_result"}
     assert res["a"]["detail"] == out["5000"].detail and res["a"]["reasonCode"] == "BAD_ARGS"
     assert res["f"]["detail"] == "" or res["f"]["status"] == "rejected"

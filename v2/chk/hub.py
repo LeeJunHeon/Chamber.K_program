@@ -22,7 +22,6 @@ import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
-from v2.common.commands import Source
 
 RECENT_KEEP = 500                  # 최근 메시지(state 제외) 링 버퍼
 SUB_QUEUE = 1000                   # 소비자 큐 길이 — 넘치면 그 소비자를 끊는다
@@ -168,7 +167,9 @@ class MessageHub:
                 "configVersion": s.config_version, "webSchemaHash": self.web_schema_hash,
                 "overriddenKeys": s.store.overridden() if s.store is not None else [],
                 "snapshotColumns": list(s.bus.columns),
-                "commandKinds": [c.kind for c in C.COMMANDS if Source.HMI in c.sources],
+                # 노트북 경로에서 지금 받는 명령(5-20 ② — 설정 LOCAL_HMI_CONTROL 에 따라)과 그 설정·다시 잠그기까지(분)
+                "commandKinds": C.hmi_kinds(s.cfg.get("LOCAL_HMI_CONTROL")),
+                "hmiControl": s.cfg.get("LOCAL_HMI_CONTROL"), "hmiRelockMin": s.cfg.get("LOCAL_HMI_RELOCK_MIN"),
                 "writesAllowed": bool(s.policy.device_writes), "deviceUtc": utc_iso(self._wall())}
 
     def hello(self) -> dict:

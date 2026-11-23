@@ -236,7 +236,10 @@ def test_bench_running_all_commands_and_outputs_turning_on_send_only_allowed_que
             for src in c.sources:
                 res.append((c.kind, s.core.command(c.kind, dict(args.get(c.kind, {})), source=src)))
         assert all(r.ok or r.reason for _, r in res)
-        assert [k for k, r in res if r.ok] == ["RECIPE_LOAD", "RECIPE_CLEAR"]          # 장비에 쓰지 않는 명령만 받음
+        # 장비에 쓰지 않는 명령만 받음(RECIPE_CLEAR 는 웹·노트북 — 5-20 ② 기본 '잠금을 푼 뒤 조작')
+        assert [k for k, r in res if r.ok] == ["RECIPE_LOAD", "RECIPE_CLEAR", "RECIPE_CLEAR"]
+        assert all(r.reason == "BENCH_READ_ONLY" for k, r in res if not r.ok and C.by_kind()[k].hmi == "operate"
+                   and r.reason not in ("SOURCE_NOT_ALLOWED", "BAD_ARGS", "STATE_NOT_ALLOWED"))
         time.sleep(2.0)
         p.sims["COM9"].coils[A["heater_run"]] = True                              # 시작 뒤 출력이 켜진 상태로 바뀜
         p.sims["COM9"].regs[A["rf_dac"]] = 300

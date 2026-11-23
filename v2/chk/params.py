@@ -48,10 +48,11 @@ def _p(key, group, label, unit, type_, default, lo=None, hi=None, *, safety=M, a
 
 
 def _inst(key, label, type_, default, *, desc="", pattern=None, lo=None, hi=None, enum=None,
-          safety=M, v1_key=None, src=_JSON, unit="", v1_default=None, locked=False, choices=None) -> ParamDef:
+          safety=M, v1_key=None, src=_JSON, unit="", v1_default=None, locked=False, choices=None,
+          enum_labels=None) -> ParamDef:
     return _p(key, "install", label, unit, type_, default, lo, hi, safety=safety, apply=RESTART,
               scope=Scope.INSTALL, desc=desc, pattern=pattern, enum=enum, v1_key=v1_key, src=src,
-              v1_default=v1_default, locked=locked, choices=choices)
+              v1_default=v1_default, locked=locked, choices=choices, enum_labels=enum_labels)
 
 
 # 읽기 계획 판정 기준(5-20 ① — drivers/readplan.py). auto 일 때만 쓰고, 모두 PC 쪽 설정이다(장비 쪽에 맞출 값 없음).
@@ -246,6 +247,17 @@ PARAMS: tuple = (
           desc="연결 직후 장비 초기화(설정 쓰기·되읽기 등) 한도"),
     _inst("LOCAL_HMI_PORT", "로컬 화면 포트", I, 8710, lo=1024, hi=65535, safety=L, src=_V2,
           desc="127.0.0.1 에서만 연다"),
+    _inst("LOCAL_HMI_CONTROL", "노트북 조작", E, "unlock", enum=("view_stop", "unlock", "always"),
+          enum_labels=(("view_stop", "보기와 정지만"), ("unlock", "잠금을 푼 뒤 조작"), ("always", "항상 조작")),
+          src="v2 (5-20 ② — 11/23 bench 뒤 사용자 결정)",
+          desc="노트북(로컬 화면)에서 받는 명령. 보기와 정지만 = 정지(STOP·ALL STOP·부저 정지·히터 정지)와 공정 중 값 바꾸기·"
+               "건너뛰기·일시정지·재개만(5-19 까지와 같다). 잠금을 푼 뒤 조작·항상 조작 = 그 밖에 공정 시작·적재 레시피 시작·해제·"
+               "순서 고치기·PLC 버튼·필라멘트·히터·수동 조작도 받는다(설정 적용·되돌리기는 웹에서만). 둘의 차이는 노트북 화면이 "
+               "잠그는지뿐이다 — 잠금은 노트북 화면이 하고 장비는 이 값과 잠금 시간을 hello 로 알린다"),
+    _inst("LOCAL_HMI_RELOCK_MIN", "노트북 조작 다시 잠그기까지", I, 10, lo=1, hi=120, unit="분", safety=L,
+          src="v2 (5-20 ② — 사용자 결정)",
+          desc="노트북 조작이 '잠금을 푼 뒤 조작'일 때, 잠금을 푼 뒤 이 시간 동안 아무 조작이 없으면 노트북 화면이 다시 잠근다. "
+               "정지 버튼은 잠겨 있어도 늘 누를 수 있다"),
     _inst("LOCAL_DATA_DIR", "로컬 기록 폴더", S, r"C:\ChamberK_v2\data", pattern=r".+", safety=L,
           src=_V2, desc="1초 스냅샷 SQLite·일별 CSV·이벤트·블랙박스"),
     _inst("LOCAL_HMI_STATIC_DIR", "로컬 화면 파일 폴더", S, "", pattern=r".*", safety=L, src=_V2,

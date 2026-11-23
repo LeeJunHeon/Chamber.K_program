@@ -91,7 +91,7 @@ class ChkCore:
     def _run(self, kind: str, a: dict, source: Source, by: str = "") -> Optional[str]:
         p, h = self.process, self.heater
         state = p.state
-        why = C.check_command(kind, source, state, a)
+        why = C.check_command(kind, source, state, a, self.cfg.get("LOCAL_HMI_CONTROL"))
         if why:
             return why
         bad = C.check_args(C.by_kind()[kind], a, self.cfg, self._sv_limit() if kind in C.SV_LIMIT_KINDS else None)
@@ -160,7 +160,8 @@ class ChkCore:
         if kind == "IG_FILAMENT":
             last = self.plc.last
             atm = None if last is None else last.values.get("plc.atm")
-            why = C.check_ig_filament(source, state, bool(a.get("on")), atm, self._plc_up() and last is not None)
+            why = C.check_ig_filament(source, state, bool(a.get("on")), atm, self._plc_up() and last is not None,
+                                      self.cfg.get("LOCAL_HMI_CONTROL"))
             if why:
                 return why
             (self.ig.filament_on if a.get("on") else self.ig.filament_off)()

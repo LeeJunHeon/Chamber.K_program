@@ -65,6 +65,10 @@
                 RETURN_SEC·HOLD_SEC, comm_mfc·comm_rfpulse, 규칙 X28·X29), 스냅샷 mfc.read_plan·rfp.read_plan(full "매초 읽기"·
                 alternate "번갈아 읽기(2초마다)" — 이 행을 읽은 계획), mfc.valve_read(read·alternate·yielded "명령을 처리하느라 이번
                 읽기를 건너뜀"·no_reply). read_plan 이벤트는 두 방향(번갈아로·매초로)
+                노트북 조작(②): 설정 LOCAL_HMI_CONTROL(view_stop "보기와 정지만"·unlock "잠금을 푼 뒤 조작"(기본)·always "항상 조작")·
+                LOCAL_HMI_RELOCK_MIN(10 분), commands[].hmi = "always"(노트북에서 늘)·"operate"(LOCAL_HMI_CONTROL ≠ view_stop 일 때)·
+                null(받지 않음) — operate 명령은 sources 에 "hmi" 가 붙는다. 사유 HMI_CONTROL_OFF. hello 에 hmiControl·hmiRelockMin,
+                hello.commandKinds = 노트북 경로에서 지금 받는 명령(설정에 따라)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -282,7 +286,7 @@ def definitions() -> Dict[str, Any]:
                     for d in P.DROPPED],
         "commands": [{"kind": c.kind, "label": c.label, "sources": [s.value for s in c.sources], "role": c.role,
                       "states": list(c.states), "requires": list(c.requires), "args": [_arg(a) for a in c.args],
-                      "desc": c.desc, "v1": c.v1, "benchOk": c.bench_ok} for c in C.COMMANDS],
+                      "desc": c.desc, "v1": c.v1, "benchOk": c.bench_ok, "hmi": c.hmi or None} for c in C.COMMANDS],
         "preconditions": [{"id": p.id, "desc": p.desc, "reason": p.reason, "v1": p.v1} for p in C.PRECONDITIONS],
         "reasons": [{"code": r.code, "label": r.label, "category": r.category} for r in C.ALL_REASONS],
         "plcButtons": [{"target": b.target, "addr": b.addr, "label": b.label} for b in C.PLC_BUTTONS],
