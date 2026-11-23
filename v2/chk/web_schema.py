@@ -74,6 +74,9 @@
                 MANUAL_NOT_ACTIVE(거부)·MANUAL_BLOCK·MANUAL_END(info), 이벤트 manual, run_start·run_end data manual(·by·source),
                 스냅샷 proc.manual, state.run.manual {label "수동 조작 중", waiting, by, source, executed, outputs[{key, label,
                 value?, unit?}]}
+                화면 문구(④): 설정·스냅샷·블록·명령·사유·상태·이벤트 이름과 설명을 한 문장으로('—' 조각·'안 함·못 함·안 됨'·'켬·끔'
+                없음, 코드 이름은 끝에), 빈 설명 채움(설정 121·스냅샷 71·블록 값 23·명령 9). 키·값·숫자·단위는 그대로. 블록 값 검사
+                문구(valueRules msg)는 골든에 묶여 그대로
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
