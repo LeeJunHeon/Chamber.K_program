@@ -364,6 +364,9 @@ RF_BLOCK = DeviceBlock("rf", "RF Power", (
         desc="RF DAC 출력 허용 비트다. DAC 를 0 보다 크게 쓰기 전에 켜고, RF 를 끌 때 끈다(M00200)."),
     _f("set_w", F, "W", "목표", ".1f", "core",
         desc="RF 제어의 지금 목표 파워다. RF 를 시작하거나 목표를 바꾸면 그 값이 되고, RF 를 끄면 0 이다."),
+    _f("out_on", B, "", "RF 출력", source="core(D40·순방향)", summary="any",
+       desc="RF 출력이 켜져 있으면 참이다. DAC 설정값이 0 보다 크거나 순방향이 5 W 이상일 때 켜짐으로 본다. DAC 출력 허용(M00200)은 "
+            "v1 정상 종료 뒤에도 켜진 채 남으므로 쓰지 않는다(표시용, 5-21 ②)"),
 ), desc="PLC 아날로그 입출력")
 
 MFC_BLOCK = DeviceBlock("mfc", "MFC", (

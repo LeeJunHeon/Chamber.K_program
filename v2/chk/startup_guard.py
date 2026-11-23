@@ -18,11 +18,12 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from v2.common.transport import Transport, TransportError
 from v2.common.worker import Request, Status
+from v2.chk import devices as D
 
 PORT_HINT = "v1 프로그램이 켜져 있거나 포트 번호가 다를 수 있습니다"
 APP_OPEN_ORDER = ("plc", "mfc", "ig", "rfpulse", "dc")      # 실행 프로그램 — DC 는 v1 이 필요할 때만 열어 맨 뒤
 DEVICE_NAMES = {"plc": "PLC", "mfc": "MFC", "ig": "이온 게이지", "rfpulse": "RF Pulse", "dc": "DC Power"}
-RF_FWD_ACTIVE_W = 5.0                                        # 순방향 이 값 이상이면 RF 출력 있음
+RF_FWD_ACTIVE_W = D.RF_FWD_ACTIVE_W                           # 순방향 이 값 이상이면 RF 출력 있음(devices 한 곳)
 GAS_ACTIVE_SCCM = 0.1                                        # 유량 이 값 초과면 가스 흐름 있음
 READ_DEADLINE_S = 2.0
 READ_WAIT_S = 4.0
@@ -81,7 +82,7 @@ def first_read_check(read: Callable[[str, Callable], Tuple[Any, Any]], plc, dc, 
     if v["heater.run"]:
         return ("PLC 히터 RUN 이 켜져 있음 — bench 는 하트비트를 쓰지 않아 10 s 뒤 PLC 가 히터를 끕니다. "
                 "히터를 끈 뒤 다시 실행하세요")
-    if (dac or 0) > 0 or (fwd or 0.0) >= RF_FWD_ACTIVE_W:
+    if D.rf_output_on(dac, fwd):
         return f"RF 출력이 있음(D40 {dac} · 순방향 {fwd} W) — 공정 진행 중으로 보입니다"
     if en:
         note(f"[참고] M00200 켜짐 · D40 {dac} · 순방향 {fwd} W — v1 정상 종료 흔적(출력 없음)")

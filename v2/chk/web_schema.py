@@ -77,6 +77,8 @@
                 화면 문구(④): 설정·스냅샷·블록·명령·사유·상태·이벤트 이름과 설명을 한 문장으로('—' 조각·'안 함·못 함·안 됨'·'켬·끔'
                 없음, 코드 이름은 끝에), 빈 설명 채움(설정 121·스냅샷 71·블록 값 23·명령 9). 키·값·숫자·단위는 그대로. 블록 값 검사
                 문구(valueRules msg)는 골든에 묶여 그대로
+                버전 19(5-21): 스냅샷 rf.out_on "RF 출력"(D40 > 0 또는 순방향 ≥ 5 W — devices.rf_output_on, 시작 보호와 같은 기준.
+                M00200 만 켜진 v1 종료 흔적은 꺼짐, 표시용)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -114,7 +116,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 18
+EXPORT_VERSION = 19
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (

@@ -180,6 +180,7 @@ class PlcDriver:
         out["heater.current_est"] = round(heater_est_current(out["heater.mv"], cfg), 1)
         out["plc.marker_ok"] = None if self._marker is None else (regs[cfg["PLC_SESSION_MARK_REG"]] == self._marker)
         out["rf.set_w"] = self._rf_set_w
+        out["rf.out_on"] = D.rf_output_on(out.get("rf.dac"), out.get("rf.fwd_w"))   # 표시용(5-21 ②)
         return out
 
     def _after_poll(self, poll: PlcPoll) -> None:

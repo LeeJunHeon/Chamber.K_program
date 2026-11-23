@@ -490,6 +490,14 @@ HEATER_DAC_PHYS_MIN = 320         # 0.8 V
 HEATER_OT2_LADDER_MAX_C = 1150.0  # 래더 상한 11500
 RF_DAC_FULL_SCALE = 4000
 RF_ADC_FULL_SCALE = 4000
+# RF 출력 켜짐 판정(5-21 ②) — D40(DAC) > 0 이거나 순방향 ≥ RF_FWD_ACTIVE_W. 시작 보호(startup_guard)와 스냅샷 rf.out_on 이
+# 같이 쓴다. M00200(DAC 출력 허용)은 v1 정상 종료 뒤에도 켜진 채 남아 출력 판단에 쓰지 않는다(11-23 bench). 표시·시작 보호용 —
+# 안전 규칙·공정 판정은 쓰지 않는다
+RF_FWD_ACTIVE_W = 5.0
+
+
+def rf_output_on(dac, fwd_w) -> bool:
+    return (dac or 0) > 0 or (fwd_w or 0.0) >= RF_FWD_ACTIVE_W
 
 
 # ═════════════ 1초 예산 ═════════════

@@ -258,3 +258,13 @@ def test_bench_running_all_commands_and_outputs_turning_on_send_only_allowed_que
     log = (tmp_path / "data" / "logs" / "chk_v2.log").read_text(encoding="utf-8")
     bad = [ln for ln in log.splitlines() if " ERROR " in ln and ("BENCH_READ_ONLY" in ln or "조치 실패" in ln or "→ error" in ln)]
     assert bad == []
+
+
+# 5-21 ② — RF 출력 켜짐 판정은 devices 한 곳(시작 보호와 스냅샷 rf.out_on 이 같이). M00200 만 켜진 v1 종료 흔적은 꺼짐
+def test_rf_output_criterion_shared_with_snapshot():
+    from v2.chk import devices as D
+    from v2.chk import snapshot_fields as SF
+    assert SG.RF_FWD_ACTIVE_W == D.RF_FWD_ACTIVE_W == 5.0
+    assert not D.rf_output_on(0, 0.5) and not D.rf_output_on(None, None)            # 11-23 bench: M00200 켜짐·D40 0·0.5 W
+    assert D.rf_output_on(1, 0.0) and D.rf_output_on(0, 5.0)
+    assert "rf.out_on" in SF.columns()

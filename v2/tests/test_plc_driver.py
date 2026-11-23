@@ -304,3 +304,18 @@ def test_rf_enable_state_follows_first_poll():
     r.read()
     assert r.d._rf_enabled is False
     r.done()
+
+
+def test_rf_out_on_from_dac_or_forward_not_enable_bit():
+    """5-21 ②: rf.out_on = D40 > 0 또는 순방향 ≥ 5 W. DAC 출력 허용(M00200)만 켜진 것은 꺼짐."""
+    from v2.chk.drivers.plc import PlcDriver
+    from v2.chk.sim.plc_sim import A
+    d = PlcDriver.__new__(PlcDriver)
+    d.cfg = dict(CFG)
+    d._marker, d._rf_set_w = None, None
+    coils = {i: False for i in range(4096)}
+    regs = [0] * 400
+    coils[A["rf_dac_enable"]] = True
+    assert d._decode(coils, regs)["rf.out_on"] is False
+    regs[A["rf_dac"]] = 10
+    assert d._decode(coils, regs)["rf.out_on"] is True
