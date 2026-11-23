@@ -133,3 +133,21 @@ def test_unlock_and_always_accept_the_same_and_web_is_unchanged(tmp_path):
     web = {v: [(k, x.ok, x.reason) for k, x in _send_all(tmp_path / f"w{v}", v, Source.WEB)[0]] for v in VALUES}
     assert web["view_stop"] == web["unlock"] == web["always"]
     assert not any(r == "HMI_CONTROL_OFF" for _, _, r in web["view_stop"])
+
+
+# 5-21 ⑤ — 노트북 설정 보기(읽기 전용): 로컬 schema 의 params 로 충분(현재·대기·저장·덮어쓰기·기본값·설명), 비밀 값은 비움,
+# 노트북 경로로 설정을 바꾸는 명령은 받지 않음
+def test_notebook_settings_view_has_what_it_needs(tmp_path):
+    from v2.common.config_store import ConfigStore
+    from v2.chk.system import new_store
+    store = new_store(tmp_path / "config")
+    b = W.bundle_for(defaults(P.PARAMS), store, 0)
+    for p in b["params"]:
+        assert {"current", "pending", "stored", "overridden", "default", "desc", "group", "label", "unit"} <= set(p)
+        if p["scope"] == "secret":
+            assert p["current"] is None and p["default"] is None and p["stored"] is None and p["pending"] is None
+    assert {g["key"] for g in b["paramGroups"]} >= {p["group"] for p in b["params"]}
+    for k in ("CONFIG_APPLY", "CONFIG_ROLLBACK"):
+        for v in VALUES:
+            assert C.check_command(k, Source.HMI, "IDLE", {}, v) == "SOURCE_NOT_ALLOWED"
+    assert isinstance(store, ConfigStore)

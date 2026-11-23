@@ -83,6 +83,8 @@
                 "수동 조작 중단"), 수동 조작은 proc.remain_s 를 내지 않음
                 사건 종류(④): eventKinds[].desc(그 기록의 뜻·운전자가 할 일), 이름을 운전자 말로(EVENT_LABEL — 예 "블록" → "공정 단계",
                 "눈금" → "압력·유량 범위 확인", "읽기 계획" → "MFC 읽는 방식 바뀜")
+                노트북 설정 보기(⑤): 로컬 /api/v1/schema 의 params(current·pending·stored·overridden·default·desc, 비밀 값은 비움)와
+                state.configPending 으로 충분 — 더한 값 없음. 노트북 경로의 CONFIG_APPLY·CONFIG_ROLLBACK 은 지금처럼 받지 않음
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
