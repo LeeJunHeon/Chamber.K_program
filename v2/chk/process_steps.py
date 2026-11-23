@@ -251,6 +251,19 @@ class StepRunner:
         self.idx = i - 1
         self._advance(now)
 
+    def append(self, tail: List[ProcessStep], now: float) -> None:
+        """수동 조작(5-20 ③) — 블록 하나의 스텝을 뒤에 붙인다. 끝난 실행기면 붙인 첫 스텝부터 이어서 진행(다음 tick 부터 실행).
+        취소·실패한 실행기에는 붙이지 않는다(정지 순서가 이미 시작됨)."""
+        if self.cancelled or self.failed:
+            raise ValueError("취소·실패한 실행기")
+        n = len(self.steps)
+        self.steps = self.steps + list(tail)
+        self._number()
+        if self.finished:
+            self.finished = False
+            self.idx = n - 1
+            self._advance(now)
+
     def replace_tail(self, cut: int, tail: List[ProcessStep]) -> None:
         """공정 중 순서 고치기(5-15) — cut 번째부터 새 스텝으로(지금 스텝은 cut 앞이어야 함). 기록 번호를 다시 센다."""
         if self.idx >= cut:

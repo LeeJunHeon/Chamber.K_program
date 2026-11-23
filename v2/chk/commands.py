@@ -70,6 +70,10 @@ CHK_REASONS: tuple = (
     Reason("EDIT_TOUCHES_STARTED", "순서 고치기: 시작했거나 끝난 블록과 그 앞 순서는 바꿀 수 없음", "reject"),
     Reason("PROCESS_PAUSED", "이미 일시정지 중", "reject"),
     Reason("PROCESS_NOT_PAUSED", "일시정지 중이 아님", "reject"),
+    Reason("MANUAL_ACTIVE", "수동 조작 중 — 수동 조작을 먼저 끝낼 것", "reject"),
+    Reason("MANUAL_BUSY", "수동 조작: 블록이 실행 중 — 끝난 뒤에 다음 블록", "reject"),
+    Reason("MANUAL_BLOCK_NOT_ALLOWED", "수동 조작에서 쓰지 않는 블록(가스·압력·밸브·셔터·파워 블록만)", "reject"),
+    Reason("MANUAL_NOT_ACTIVE", "수동 조작 중이 아님", "reject"),
     # 공정 중단(abort)
     Reason("MV_CLOSED", "공정 중 메인 밸브 닫힘", "abort"),
     Reason("MV_INTERLOCK_LOST", "공정 중 MV 인터록 해제 지속", "abort"),
@@ -158,6 +162,9 @@ CHK_REASONS: tuple = (
     Reason("PROCESS_RESUME", "일시정지 재개 기록(누가·멈춘 시간)", "info"),
     Reason("PROCESS_EDIT", "공정 중 순서 고치기 기록(판 번호·누가·바뀐 것·전체 블록)", "info"),
     Reason("PAUSE_LONG", "일시정지가 길어짐 — 곧 정지 순서", "info"),
+    # 수동 조작(5-20 ③)
+    Reason("MANUAL_BLOCK", "수동 조작 블록 기록(누가·웹/노트북·블록·결과)", "info"),
+    Reason("MANUAL_END", "수동 조작 끝내기(정지 순서로 모두 끔)", "info"),
 )
 
 ALL_REASONS: tuple = COMMON_REASONS + CHK_REASONS
@@ -347,6 +354,17 @@ COMMANDS: tuple = (
       desc="아직 시작하지 않은 블록만 추가·삭제·순서·값 — 시작한 블록과 그 앞은 그대로(EDIT_TOUCHES_STARTED — 둘 다 check_blocks "
            "정리 모양으로 비교해 키 순서·기본값 생략·0/0.0 차이는 같다고 봄). 적재 때와 같은 검사 뒤 "
            "판 +1, 지금 블록은 끊지 않고 남은 부분을 새 목록으로. 기록 ProcEvent edit(PROCESS_EDIT)", v1="v2"),
+    # 수동 조작(5-20 ③) — 블록을 하나씩 실행하는 공정(공정 엔진·블록 실행기·감시·안전 규칙·정지 순서를 그대로 쓴다)
+    C("MANUAL_BLOCK", "수동 조작: 블록 하나 실행", (WEB,), "operator", (ANY_STATE,),
+      ("PLC_FRESH", "MV_OPEN", "MV_ITL_ON", "NO_HEATER_GAS"),
+      (_a("block", "obj", desc="블록 하나 {type, params, label?} — type 은 blocks.MANUAL_BLOCK_TYPES 만(값 검사는 check_blocks)"),),
+      desc="공정이 없으면(대기·적재 없음) 수동 조작을 시작한다 — 시작 조건·검사는 수동 공정 시작(블록)과 같고 끝 정지는 붙이지 "
+           "않는다. 블록이 끝나면 수동 대기(MANUAL_WAIT — 감시·안전 규칙은 공정과 같다). 블록 실행 중이면 MANUAL_BUSY, "
+           "공정 중이면 PROCESS_RUNNING, 쓰지 않는 블록이면 MANUAL_BLOCK_NOT_ALLOWED. 기록 ProcEvent manual(MANUAL_BLOCK)",
+      v1="v2"),
+    C("MANUAL_END", "수동 조작 끝내기(모두 끄기)", (WEB,), "operator", (ANY_STATE,), (),
+      desc="STOP 과 같은 정지 순서(표 전체)로 모두 끄고 run_end done(MANUAL_END). 수동 조작 중이 아니면 MANUAL_NOT_ACTIVE. "
+           "정지 순서 중이면 아무것도 하지 않고 성공", v1="v2"),
     # 설정
     C("CONFIG_APPLY", "설정 적용", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),
       (_a("version", "int", min=1), _a("values", "obj"), _a("schemaHash", "str")),
@@ -393,8 +411,11 @@ COMMANDS = tuple(replace(c, bench_ok=c.kind in _BENCH_OK) for c in COMMANDS)
 HMI_CONTROL_VALUES = ("view_stop", "unlock", "always")
 HMI_OPERATE = ("PROCESS_START", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT", "PLC_BUTTON", "IG_FILAMENT",
                "HEATER_SV", "HEATER_ON", "HEATER_OFF", "HEATER_RESET", "HEATER_GAS_RELEASE", "HEATER_RECIPE_RUN",
-               "HEATER_RECIPE_STOP", "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP")
+               "HEATER_RECIPE_STOP", "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP", "MANUAL_BLOCK", "MANUAL_END")
 assert set(HMI_OPERATE) <= {c.kind for c in COMMANDS}
+# 수동 조작 중(5-20 ③): 공정을 새로 시작하는 명령은 MANUAL_ACTIVE, 필라멘트는 공정이 없을 때처럼(허용 상태를 대기로 본다)
+MANUAL_EXCLUSIVE = ("PROCESS_START", "RECIPE_LOAD", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT")
+IDLE_IN_MANUAL = ("IG_FILAMENT",)
 COMMANDS = tuple(replace(c, hmi="always") if HMI in c.sources else
                  replace(c, hmi="operate", sources=c.sources + (HMI,)) if c.kind in HMI_OPERATE else c for c in COMMANDS)
 assert all(c.role == "operator" for c in COMMANDS if c.hmi == "operate")      # 관리자 설정·내부 조치는 노트북에서 받지 않는다

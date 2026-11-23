@@ -15,6 +15,8 @@
   엔진이 문구와 함께 거부하면(행 검사 RECIPE_INVALID·IG_DISABLED·DEVICE_DISABLED 의 첫 오류, 히터 가스 준비 거부, 공정 중 수정 형식·범위,
   히터 레시피 검사) 그 첫 문구도 detail 로(300자) — 엔진의 reject_detail.
 - bench(장비 쓰기 금지)에서는 장비에 쓰는 명령을 BENCH_READ_ONLY 로 거부한다 — worker 도 막지만 결과가 accepted 로 보이지 않게.
+- 수동 조작(5-20 ③): MANUAL_BLOCK·MANUAL_END → 공정 엔진(manual_block·manual_end). 수동 조작 중 공정 시작·적재·시작·해제·
+  순서 고치기는 MANUAL_ACTIVE, 필라멘트는 공정이 없을 때처럼(허용 상태를 대기로 본다).
 """
 from __future__ import annotations
 
@@ -91,7 +93,12 @@ class ChkCore:
     def _run(self, kind: str, a: dict, source: Source, by: str = "") -> Optional[str]:
         p, h = self.process, self.heater
         state = p.state
+        manual = bool(getattr(p, "manual", False))
+        if manual and kind in C.IDLE_IN_MANUAL:
+            state = "IDLE"                                # 수동 조작 중 필라멘트는 공정이 없을 때처럼(5-20 ③)
         why = C.check_command(kind, source, state, a, self.cfg.get("LOCAL_HMI_CONTROL"))
+        if why in (None, "STATE_NOT_ALLOWED") and manual and kind in C.MANUAL_EXCLUSIVE:
+            raise Rejected("MANUAL_ACTIVE", "수동 조작 중입니다. 수동 조작을 먼저 끝내세요")
         if why:
             return why
         bad = C.check_args(C.by_kind()[kind], a, self.cfg, self._sv_limit() if kind in C.SV_LIMIT_KINDS else None)
@@ -147,6 +154,15 @@ class ChkCore:
             return self._why(p, lambda: p.edit(int(a["revision"]), a["blocks"], by=by, source=src))
         if kind == "RECIPE_START":
             return p.start_recipe()
+        if kind in ("MANUAL_BLOCK", "MANUAL_END"):
+            if not hasattr(p, "manual_block"):
+                return "UNKNOWN_COMMAND"
+            src = "local" if source == Source.HMI else "web"
+            if kind == "MANUAL_BLOCK":
+                if not manual:
+                    p.started_by = by                     # run_start 에 남는다(hub)
+                return self._why(p, lambda: p.manual_block(a.get("block"), by=by, source=src))
+            return self._why(p, lambda: p.manual_end(by=by, source=src))
         if kind == "PLC_BUTTON":
             if not self._plc_up():
                 return "LINK_DOWN"

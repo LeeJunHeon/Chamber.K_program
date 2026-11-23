@@ -222,12 +222,14 @@ class MessageHub:
                                        "by": getattr(p, "started_by", None),
                                        "name": d.get("name"), "stepNo": (p.csv_index + 1) if getattr(p, "list_active", False) else 1,
                                        "params": d.get("params"), "blocks": d.get("blocks"),
-                                       "configVersion": self.sys.config_version})
+                                       "configVersion": self.sys.config_version,
+                                       **({"manual": True, "source": d.get("source")} if d.get("manual") else {})})
             return
         if e.kind == "run_end":
             self.publish("run_end", {"runId": getattr(p, "run_id", None) or None, "result": d.get("status"),
                                      "reasonCode": d.get("reason"),
-                                     "summary": dict({"name": d.get("name")}, **(d.get("summary") or {}))})
+                                     "summary": dict({"name": d.get("name")}, **(d.get("summary") or {})),
+                                     **({"manual": True} if d.get("manual") else {})})
             return
         level = d.get("level") or ("warn" if e.code else "info")
         self._event(level, e.code or e.kind.upper(), None, e.detail, {"source": "process", "kind": e.kind, "data": d or None})

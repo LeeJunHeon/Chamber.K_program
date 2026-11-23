@@ -93,6 +93,9 @@ STATES: tuple = (
     S("GAS_OFF", "가스 끄기", A, v1="v2 블록"),
     S("HEATER_OFF", "히터 끄기", A, v1="v2 블록"),
     S("WAIT", "대기", A, v1="v2 블록"),
+    S("MANUAL_WAIT", "수동 대기", A, v1="v2 (5-20 ③)",
+      desc="수동 조작 중 블록 하나가 끝나고 다음 블록을 기다린다. 켜 둔 출력은 그대로이고, 감시(블록 기본값)와 진행 중 안전 "
+           "규칙은 공정과 같게 동작한다"),
     S("COND_WAIT", "조건 대기", A, v1="v2 블록", desc="한도는 블록 값 timeout_sec(on_timeout abort → COND_WAIT_TIMEOUT)"),
     S("CSV_DELAY", "레시피 딜레이 행", A, v1="core/process_service.py 딜레이", desc="delay N 행 — 장비 조작 없이 시간만"),
     S("CSV_BETWEEN", "레시피 스텝 사이", A, v1="core/state.py Phase.CSV_BETWEEN"),

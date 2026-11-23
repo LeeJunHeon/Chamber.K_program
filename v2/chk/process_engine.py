@@ -51,6 +51,20 @@ adjust 와 같은 기준(공정 중 = 진행 상태·공정 행, 지금 쓰는 �
   공정 중 수정 값은 남은 스텝이 쓰는 항목이면 지우고(새 목록 값), 지금 쓰는 값은 그대로.
 - 기록: 블록마다 실행 결과(exec — 번호·종류·이름표·시작·끝·done/skipped/aborted·멈춘 초·실행 판), run_end summary 에 실행 순서·
   마지막 판·건너뛴/멈춘 횟수. 사건 skip·pause·resume·edit(PROCESS_SKIP·PROCESS_PAUSE·PROCESS_RESUME·PROCESS_EDIT).
+
+수동 조작(5-20 ③ — MANUAL_BLOCK·MANUAL_END): 블록을 하나씩 실행하는 공정이다(따로 드라이버를 부르는 길 없음).
+- 공정이 없을 때 첫 블록이 수동 조작을 시작한다 — 시작 조건·검사는 수동 공정 시작(블록)과 같다(적재 레시피 없음·꺼진 장비·연결·
+  메인 밸브·히터 가스). 실행 이름 "수동 조작", run_start·run_end 에 manual = true. 끝 정지 블록은 붙이지 않는다(auto_end=False).
+- 블록은 blocks.MANUAL_BLOCK_TYPES 만, 값 검사는 check_blocks 그대로. 블록이 실행 중이면 MANUAL_BUSY, 끝나면 수동 대기
+  (MANUAL_WAIT — 진행 중 상태라 감시는 블록 기본값(WATCH_DEFAULT)·진행 중 안전 규칙이 공정과 같다). 다음 블록은 같은 스텝
+  실행기 뒤에 붙여 이어서 실행한다(StepRunner.append — 공정 중 수정·기록이 공정과 같은 길). 새 블록이 쓰는 항목의 공정 중 수정
+  값은 지운다(그 블록 값이 이긴다).
+- 실패·안전 규칙 중단은 공정과 같다(중단 → 정지 순서 → 알림). 끝내기(MANUAL_END)·STOP·ALL STOP 도 같은 정지 순서(표 전체 고정)
+  — 끝내기는 run_end done(MANUAL_END), STOP 은 aborted(USER_STOP). 끝나면 켜 둔 출력이 남지 않는다(남긴 출력 없음).
+- 수동 조작 중 공정 시작·레시피 적재·시작·해제·순서 고치기는 MANUAL_ACTIVE("수동 조작을 먼저 끝내세요"). 공정 중 수정은 공정과
+  같이 받는다. 히터 명령·필라멘트는 공정이 없을 때처럼(수동 조작은 히터·필라멘트를 쓰지 않는다 — 정지 순서도 끄지 않음).
+- 기록: 블록마다 ProcEvent manual(MANUAL_BLOCK — 누가·web/local·블록·결과), 실행 상태(run_state)에 manual·지금 블록·
+  실행한 블록·켜져 있는 출력(manual_outputs).
 """
 from __future__ import annotations
 
@@ -173,6 +187,12 @@ class ProcessEngine:
         self.block_rev = 0
         self.blocks_version = 0                 # 블록 목록·상태가 바뀔 때마다 +1(state.run.blocks 를 다시 싣는 기준)
         self._delay_rec: Optional[Dict[str, Any]] = None
+        # 수동 조작(5-20 ③)
+        self.manual = False                     # 수동 조작 중(첫 블록부터 run_end 까지)
+        self.manual_by: Optional[str] = None    # 시작한 사람·경로
+        self.manual_source: Optional[str] = None
+        self.manual_who: Dict[int, tuple] = {}  # 블록 순번 → (누가, web/local)
+        self._manual_end = False                # MANUAL_END 로 끝내는 중(run_end done MANUAL_END)
 
     # ── 안전 엔진이 보는 것 ──
     @property
@@ -307,7 +327,8 @@ class ProcessEngine:
                 "proc.block_label": (b.label or b.no) if b is not None else None,
                 "proc.remain_s": self.remain_s(),
                 "proc.paused": self.paused is not None if self.state in ACT else None,
-                "proc.revision": self.revision if (self.row_is_process and self.state in ACT) else None}
+                "proc.revision": self.revision if (self.row_is_process and self.state in ACT) else None,
+                "proc.manual": True if self.manual else None}
 
     def remain_s(self) -> Optional[int]:
         """지금 대기 스텝(DELAY·조건 대기·압력 대기)의 남은 초 — 화면용. 딜레이 행이면 그 남은 시간."""
@@ -335,9 +356,18 @@ class ProcessEngine:
                 "csv_delay_active": self.state == "CSV_DELAY"}
 
     # ── 명령(core 가 부른다) — 돌려주는 값은 거부 사유 코드 또는 None ──
+    def _manual_reject(self) -> Optional[str]:
+        """수동 조작 중이면 MANUAL_ACTIVE(5-20 ③) — 공정 시작·레시피 적재·시작·해제·순서 고치기."""
+        if self.manual:
+            self.reject_detail = "수동 조작 중입니다. 수동 조작을 먼저 끝내세요"
+            return "MANUAL_ACTIVE"
+        return None
+
     def load(self, name: str, rows: List[Dict[str, Any]]) -> Optional[str]:
         with self._lock:
             self.reject_detail = ""
+            if self._manual_reject():
+                return "MANUAL_ACTIVE"
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
             checked, err = self._check_rows(rows)
@@ -399,6 +429,8 @@ class ProcessEngine:
 
     def clear(self) -> Optional[str]:
         with self._lock:
+            if self._manual_reject():
+                return "MANUAL_ACTIVE"
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
             self._clear_recipe()                        # 적재 없음이면 아무것도 안 하고 성공(v1 B5)
@@ -412,6 +444,8 @@ class ProcessEngine:
     def start_manual(self, row: Dict[str, Any], name: str = "") -> Optional[str]:
         """수동 시작. run 이름 = name → 행의 process_name → "Single CHK"(v1 기본)."""
         with self._lock:
+            if self._manual_reject():
+                return "MANUAL_ACTIVE"
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
             if self.cleaning:
@@ -442,6 +476,8 @@ class ProcessEngine:
 
     def start_recipe(self) -> Optional[str]:
         with self._lock:
+            if self._manual_reject():
+                return "MANUAL_ACTIVE"
             if self.state in ACT or self.state == "STOPPING":
                 return "PROCESS_RUNNING"
             if self.cleaning:
@@ -462,6 +498,122 @@ class ProcessEngine:
             self.list_active, self.csv_index = True, -1
             self._next_row()
             return None
+
+    # ── 수동 조작(5-20 ③) ──
+    def manual_block(self, block: Any, by: Optional[str] = None, source: str = "web") -> Optional[str]:
+        """MANUAL_BLOCK — 블록 하나 실행. 공정이 없으면 수동 조작을 시작한다. 돌려주는 값은 거부 사유 코드 또는 None."""
+        with self._lock:
+            self.reject_detail = ""
+            if self.cleaning:
+                return "CLEANUP_RUNNING"
+            if self.state == "STOPPING" or (self.safety is not None and self.safety.engine.stopping is not None):
+                self.reject_detail = "정지 순서 중"
+                return "STATE_NOT_ALLOWED"
+            if not self.manual and (self.state in ACT or self.state in ("CSV_DELAY", "CSV_BETWEEN")):
+                self.reject_detail = "공정 중에는 수동 조작 대신 '공정 중 값 바꾸기'를 사용하세요"
+                return "PROCESS_RUNNING"
+            if not self.manual and self.state not in ("IDLE", "LOADED"):
+                return "STATE_NOT_ALLOWED"                    # 끝난 직후(DONE·ABORTED) — 정리된 뒤에
+            if self.manual and self.state != "MANUAL_WAIT":
+                b = self.block
+                self.reject_detail = f"블록 {b.no} {b.type} 실행 중 — 끝난 뒤에" if b is not None else "블록 실행 중"
+                return "MANUAL_BUSY"
+            t = block.get("type") if isinstance(block, dict) else None
+            if t not in BK.MANUAL_BLOCK_TYPES:
+                self.reject_detail = (f"수동 조작에서 쓰지 않는 블록: {t!r} — 쓸 수 있는 블록: "
+                                      + ", ".join(BK.MANUAL_BLOCK_TYPES))[:300]
+                return "MANUAL_BLOCK_NOT_ALLOWED"
+            bl, errs, _ = BK.check_blocks([block], self.cfg)
+            if errs:
+                self._emit(ProcEvent("reject", "; ".join(errs[:5]), _row_error_code(errs), {"errors": errs}))
+                return self._reject(_row_error_code(errs), errs[0])[1]
+            b = bl[0]
+            u = BK.uses_of([b])
+            if not self.manual:
+                if self.rows:
+                    return "RECIPE_LOADED"
+                why = self._device_guard(u) or self._plc_guard()
+                if why:
+                    return why
+                self.list_active, self.csv_index = False, -1
+                self.manual, self.manual_by, self.manual_source, self.manual_who = True, by, source, {0: (by, source)}
+                self._manual_end = False
+                self._start_row({"process_name": "수동 조작", "blocks": [b]}, "수동 조작", manual=True)
+                return None
+            why = self._device_guard(u)
+            if why:
+                return why
+            self._manual_append(b, by, source)
+            return None
+
+    def _manual_append(self, b: dict, by: Optional[str], source: str) -> None:
+        """수동 대기 중 다음 블록 — 같은 스텝 실행기 뒤에 붙여 이어서 실행."""
+        steps, insts = BK.expand([b], self.cfg, ig_enabled=bool(self.cfg["IG_ENABLED"]),
+                                 rfpulse_present=bool(self.cfg["RFPULSE_ENABLED"]), auto_end=False)
+        off = len(self.insts)
+        for x in insts:
+            x.index += off
+            x.no = str(off + 1)
+        for st in steps:
+            st.block += off
+        for ai in BK.ADJUST_ITEMS:                         # 이 블록이 쓰는 항목은 블록 값이 이긴다(앞의 공정 중 수정 값을 지움)
+            if any(self._step_recipe(ai, st)[0] for st in steps):
+                self.overrides.pop(ai.key, None)
+        self.manual_who[off] = (by, source)
+        self.blocks.append(b)
+        self.insts += insts
+        self.uses = BK.uses_of(self.blocks)
+        self.blocks_version += 1
+        self._emit(ProcEvent("steps", self.run_name, data={"steps": [x.unit() for x in steps if not x.internal]}))
+        self.runner.append(steps, self.clock.monotonic())
+        self._set_state(steps[0].state if steps[0].state in ACT else "WAIT")
+
+    def _manual_block_done(self) -> None:
+        """수동 조작 블록 하나가 끝남 — 수동 대기(지금 블록 없음 → 감시는 블록 기본값)."""
+        self._block_end("ok")
+        self.block_idx = -1
+        self.blocks_version += 1
+        self._set_state("MANUAL_WAIT")
+
+    def manual_end(self, by: Optional[str] = None, source: str = "web") -> Optional[str]:
+        """MANUAL_END — 수동 조작 끝내기: STOP 과 같은 정지 순서로 모두 끄고 run_end done(MANUAL_END)."""
+        with self._lock:
+            self.reject_detail = ""
+            if not self.manual:
+                return "MANUAL_NOT_ACTIVE"
+            if self.state == "STOPPING" or (self.safety is not None and self.safety.engine.stopping is not None):
+                return None                                   # 이미 정지 순서 중 — 끝나면 run_end
+            self._manual_end = True
+            self._emit(ProcEvent("manual", f"수동 조작 끝내기 ({by or source})", "MANUAL_END",
+                                 {"by": by, "source": source, "run_id": self.run_id or None, "t": self.clock.wall(),
+                                  "level": "info"}))
+            if self.safety is None or not self.safety.stop():
+                self._manual_end = False
+                return "STATE_NOT_ALLOWED"
+            return None
+
+    def manual_outputs(self) -> List[Dict[str, Any]]:
+        """지금 켜져 있는 출력(수동 조작 화면·실행 상태) — 이번 실행이 켠 것과 PLC 가 보고한 셔터·차단밸브."""
+        out: List[Dict[str, Any]] = []
+        for ch, g, name in ((1, "ar", "Ar 유량"), (2, "o2", "O₂ 유량")):
+            if self.flow_on[ch]:
+                out.append({"key": f"{g}_flow", "label": name, "value": self.cur_vals.get(f"mfc.{g}_flow"), "unit": "sccm"})
+        sp = getattr(self.mfc, "sp_active", None)
+        if sp:
+            out.append({"key": "pressure", "label": f"압력 설정점 SP{sp}",
+                        "value": getattr(self.mfc, "sp_sel_mtorr", lambda: None)(), "unit": "mTorr"})
+        last = self.plc.last.values if self.plc.last is not None else {}
+        for k, name in (("ar_valve", "Ar 차단밸브"), ("o2_valve", "O₂ 차단밸브"), ("s1", "Gun 1 셔터"), ("s2", "Gun 2 셔터"),
+                        ("ms", "Main 셔터")):
+            if last.get(f"plc.{k}"):
+                out.append({"key": k, "label": name})
+        if self.dc_on and self.dcc.state != DcControl.IDLE:
+            out.append({"key": "dc", "label": "DC Power", "value": self.dcc.target, "unit": "W"})
+        if self.rf_on and self.rfc.state != RfControl.IDLE:
+            out.append({"key": "rf", "label": "RF Power", "value": self.rfc.target, "unit": "W"})
+        if self.rfp_on:
+            out.append({"key": "rfp", "label": "RF Pulse", "value": self.rfp_target, "unit": "W"})
+        return out
 
     def _plc_guard(self) -> Optional[str]:
         if self.safety is None:
@@ -585,6 +737,9 @@ class ProcessEngine:
     def on_stop(self) -> None:
         with self._lock:
             self.end_kind, self.end_code = "aborted", "USER_STOP"
+            if self.manual and self._manual_end:          # 수동 조작 끝내기 — 정상 끝(5-20 ③)
+                self.end_kind, self.end_code = "done", "MANUAL_END"
+                self._block_end("stopped", "MANUAL_END")
             self._halt()
             self._set_state("STOPPING")
 
@@ -662,8 +817,11 @@ class ProcessEngine:
                 self.left = {}                                     # 정지 순서 전체 — 남긴 것도 함께 꺼졌다
             self.end_skip = ()
             self._block_end("ok" if kind_ == "done" else kind_, code)
-            self._emit(ProcEvent("run_end", kind_, code, {"name": self.run_name, "status": kind_, "reason": code,
-                                                          "summary": self.run_summary()}))
+            end = {"name": self.run_name, "status": kind_, "reason": code, "summary": self.run_summary()}
+            if self.manual:
+                end["manual"] = True
+            self._emit(ProcEvent("run_end", kind_, code, end))
+            self._manual_off()
             self.row_is_process = False
             self.filament_by_process = False
             self.params = {}
@@ -691,15 +849,22 @@ class ProcessEngine:
             self.dcc.stop()
             self.rfc.stop()
             self._block_end("error", "PROGRAM_EXIT")
-            self._emit(ProcEvent("run_end", "error", "PROGRAM_EXIT",
-                                 {"name": self.run_name, "status": "error", "reason": "PROGRAM_EXIT",
-                                  "summary": self.run_summary()}))
+            end = {"name": self.run_name, "status": "error", "reason": "PROGRAM_EXIT", "summary": self.run_summary()}
+            if self.manual:
+                end["manual"] = True
+            self._emit(ProcEvent("run_end", "error", "PROGRAM_EXIT", end))
+            self._manual_off()
             self.row_is_process = False
             if self.list_active:
                 self._emit(ProcEvent("list_cancel", self.recipe_name, "PROGRAM_EXIT"))
                 self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
             self._set_state("ABORTED")
             return True
+
+    def _manual_off(self) -> None:
+        self.manual, self._manual_end = False, False
+        self.manual_by = self.manual_source = None
+        self.manual_who = {}
 
     def _cancel_list(self, code: str) -> None:
         self._emit(ProcEvent("list_cancel", self.recipe_name, code))
@@ -750,8 +915,9 @@ class ProcessEngine:
     def _dev_sp(self) -> Dict[int, float]:
         return dict(getattr(self.mfc, "sp_device", None) or {})
 
-    def _start_row(self, row: Dict[str, Any], name: str) -> None:
-        """행 시작 — 블록 행은 그 블록, v1 행은 기본 템플릿 블록(blocks.template_blocks)."""
+    def _start_row(self, row: Dict[str, Any], name: str, manual: bool = False) -> None:
+        """행 시작 — 블록 행은 그 블록, v1 행은 기본 템플릿 블록(blocks.template_blocks). manual = 수동 조작 첫 블록
+        (끝 정지를 붙이지 않는다 — 5-20 ③)."""
         ig_en, rfp_en = bool(self.cfg["IG_ENABLED"]), bool(self.cfg["RFPULSE_ENABLED"])
         sp_expect: Dict[int, float] = {}
         if "blocks" in row:
@@ -768,7 +934,7 @@ class ProcessEngine:
             clean, _, _ = BK.check_blocks(blocks, self.cfg)    # 템플릿은 늘 통과(test_template_blocks_pass_block_check_as_is)
             if clean is not None:
                 blocks = clean
-        steps, insts = BK.expand(blocks, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en)
+        steps, insts = BK.expand(blocks, self.cfg, ig_enabled=ig_en, rfpulse_present=rfp_en, auto_end=not manual)
         self.params, self.run_name, self.run_id = params, name, uuid.uuid4().hex[:12]
         self.blocks, self.insts, self.uses = blocks, insts, BK.uses_of(blocks)
         self.block_idx, self.overrides, self.cur_vals, self.adjusted = -1, {}, {}, {}
@@ -793,8 +959,10 @@ class ProcessEngine:
         self.runner.sp_expect = sp_expect
         if self.safety is not None:
             self.safety.engine.new_run()
-        self._emit(ProcEvent("run_start", name, data={"name": name, "params": dict(params), "run_id": self.run_id,
-                                                       "blocks": [b.record() for b in insts]}))
+        start = {"name": name, "params": dict(params), "run_id": self.run_id, "blocks": [b.record() for b in insts]}
+        if manual:
+            start.update(manual=True, by=self.manual_by, source=self.manual_source)
+        self._emit(ProcEvent("run_start", name, data=start))
         self._emit(ProcEvent("steps", name, data={"steps": [s.unit() for s in steps if not s.internal]}))
         if insts and insts[-1].auto:
             self._emit(ProcEvent("auto_end_stop", f"목록 끝이 정상 끝 정지가 아니어서 '{insts[-1].label}'(블록 {insts[-1].no}) 덧붙임",
@@ -826,6 +994,13 @@ class ProcessEngine:
         self._emit(ProcEvent("block", f"{b.no} {b.type} → {result}", code, data=dict(
             b.record(), phase="end", result=result, reason=code, index=b.index + 1, total=len(self.insts),
             elapsed_s=round(self.clock.monotonic() - self.block_t0, 1), t=self.clock.wall(), run_id=self.run_id)))
+        if self.manual:                                   # 수동 조작 기록 — 누가·web/local·블록·결과(5-20 ③)
+            by, src = self.manual_who.get(b.index, (None, None))
+            res = self.exec_log[-1]["result"]
+            self._emit(ProcEvent("manual", f"수동 조작 블록 {b.no} {b.type} → {res} ({by or src})", "MANUAL_BLOCK",
+                                 {"by": by, "source": src, "no": b.no, "type": b.type, "label": b.label,
+                                  "params": dict(b.params), "result": res, "reason": code, "run_id": self.run_id or None,
+                                  "t": self.clock.wall(), "level": "info"}))
 
     def _step_event(self, e: StepEvent) -> None:
         if e.kind in ("step", "istep") and self.runner is not None and 0 <= e.index < len(self.runner.steps):
@@ -887,6 +1062,8 @@ class ProcessEngine:
             self.rfc.tick(view.get("rf.fwd_w"), view.get("rf.ref_w"))
             self._settle_feed(view)
             self._settle_tick(view, now)
+            if self.state == "MANUAL_WAIT":
+                return                                   # 수동 대기 — 실행할 블록 없음(파워 제어·안전 규칙은 그대로 돈다)
             if self.paused is not None:
                 self._pause_tick(now)                   # 멈춘 동안은 스텝 실행기를 돌리지 않는다(판정·시간 한도 멈춤)
                 return
@@ -894,6 +1071,9 @@ class ProcessEngine:
             if self.runner.failed and self.state in ACT:
                 if self.safety is not None:
                     self.safety.engine.abort(self.runner.failed, rule="process")
+                return
+            if self.runner.finished and self.state in ACT and self.manual:
+                self._manual_block_done()                # 수동 조작 — 블록 하나 끝 → 수동 대기(끝 정지 없음)
                 return
             if self.runner.finished and self.state in ACT:
                 # 목록 끝은 늘 정상 끝 정지(자동 끝 정지 포함)라 여기는 정지 순서를 못 낸 경우뿐(안전 엔진 없음)
@@ -1108,6 +1288,8 @@ class ProcessEngine:
         """PROCESS_EDIT — 지금 행의 새 블록 전체 목록. 시작한 블록과 그 앞은 그대로, 나머지를 바꾼다."""
         with self._lock:
             self.reject_detail = ""
+            if self._manual_reject():
+                return "MANUAL_ACTIVE"                       # 수동 조작은 블록을 하나씩 — 순서 고치기 없음
             if self.state not in ACT or self.state in ("CSV_BETWEEN", "CSV_DELAY") or not self.row_is_process \
                     or self.runner is None:
                 return "PROCESS_NOT_RUNNING"
@@ -1182,6 +1364,10 @@ class ProcessEngine:
         b = self.block
         out = {"revision": self.revision, "current": b.no if b is not None else None, "paused": self._pause_public(),
                "blocksVersion": self.blocks_version}
+        if self.manual:                                   # 수동 조작(5-20 ③) — 화면 이름 "수동 조작 중"
+            out["manual"] = {"label": "수동 조작 중", "waiting": self.state == "MANUAL_WAIT", "by": self.manual_by,
+                             "source": self.manual_source, "executed": [dict(e) for e in self.exec_log],
+                             "outputs": self.manual_outputs()}
         if base and self.state != "STOPPING":
             out["editBase"] = {"revision": self.revision, "blocks": copy.deepcopy(self.blocks)}
         if full:

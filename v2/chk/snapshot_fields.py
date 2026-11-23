@@ -183,6 +183,8 @@ PROCESS_FIELDS: tuple = (
     FieldDef("proc.paused", FType.BOOL, "", "일시정지", summary="any",
              desc="PROCESS_PAUSE 로 멈춤(공정 상태 이름은 그대로 — 안전 규칙 구간이 바뀌지 않게, 5-15)"),
     FieldDef("proc.revision", FType.INT, "", "순서 판", detail=True, desc="지금 행의 판 번호(PROCESS_EDIT 마다 +1)"),
+    FieldDef("proc.manual", FType.BOOL, "", "수동 조작", summary="any",
+             desc="수동 조작 중(블록을 하나씩 실행하는 공정 — 5-20 ③). 공정이면 값 없음"),
 )
 
 # 블록 → 품질을 공유하는 worker

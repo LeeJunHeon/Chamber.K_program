@@ -65,6 +65,9 @@ SHUTTERS: tuple = (("g1", "S1_button", "Gun Shutter 1"), ("g2", "S2_button", "Gu
 SP_DEFAULT_KEY = {2: "SP2_MTORR", 3: "SP3_MTORR", 4: "SP4_MTORR", 5: "SP5_MTORR"}
 
 AUTO_END_STOP_LABEL = "자동 끝 정지"
+# 수동 조작(5-20 ③)에서 한 번에 하나씩 실행하는 블록 — 장비 하나를 켜고 끄는 블록만(대기·메인·히터·베이스 대기·반복·끝 정지 없음)
+MANUAL_BLOCK_TYPES: tuple = ("pre_clean", "gas_prep", "gas_intro", "gas_off", "pressure", "valve", "shutter", "power_on",
+                             "power_off")
 HEATER_RAMP_MIN = 6.0                  # °C/min — 래더 분해능(0 < 값 < 6 은 6 으로, 경고)
 BLOCK_KEYS: tuple = ("type", "params", "label", "stage", "blocks")
 REPEAT_MAX = 100
@@ -832,13 +835,14 @@ class _Ctx:
 
 
 def expand(blocks: List[dict], cfg: Mapping[str, Any], *, ig_enabled: Optional[bool] = None,
-           rfpulse_present: Optional[bool] = None) -> tuple:
+           rfpulse_present: Optional[bool] = None, auto_end: bool = True) -> tuple:
     """블록 → (스텝 목록, 블록 목록). 블록마다 스텝이 하나 이상(값이 없어 할 일이 없으면 NOP — 블록 시작·끝 기록용).
-    펼친 마지막 스텝이 정상 끝 정지가 아니면 기본 끝 정지를 덧붙인다(auto — 공정이 끝날 때 파워는 항상 끈다)."""
+    펼친 마지막 스텝이 정상 끝 정지가 아니면 기본 끝 정지를 덧붙인다(auto — 공정이 끝날 때 파워는 항상 끈다).
+    auto_end=False 는 수동 조작(5-20 ③)만 — 블록 하나씩 실행하고, 끝낼 때는 STOP 과 같은 정지 순서를 낸다."""
     ctx = _Ctx(cfg, bool(cfg["IG_ENABLED"]) if ig_enabled is None else ig_enabled,
                bool(cfg.get("RFPULSE_ENABLED", True)) if rfpulse_present is None else rfpulse_present)
     _expand_list(ctx, blocks, "")
-    if not ctx.steps or ctx.steps[-1].action != "END_STOP":
+    if auto_end and (not ctx.steps or ctx.steps[-1].action != "END_STOP"):
         _expand_block(ctx, {"type": "end_stop", "params": {}, "label": AUTO_END_STOP_LABEL}, str(len(blocks) + 1))
         ctx.insts[-1].auto = True
     return ctx.steps, ctx.insts

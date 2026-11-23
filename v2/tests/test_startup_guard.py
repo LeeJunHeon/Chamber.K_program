@@ -229,6 +229,7 @@ def test_bench_running_all_commands_and_outputs_turning_on_send_only_allowed_que
     args = {"PROCESS_START": {"row": row}, "RECIPE_LOAD": {"name": "r", "rows": [row]}, "HEATER_SV": {"value": 50.0},
             "HEATER_ON": {"value": 50.0}, "HEATER_RECIPE_HOLD": {"on": True}, "PLC_BUTTON": {"target": "mv", "on": True},
             "IG_FILAMENT": {"on": True}, "PROCESS_ADJUST": {"device": "dc", "item": "power", "value": 60.0},
+            "MANUAL_BLOCK": {"block": {"type": "gas_intro", "params": {"ar": True, "ar_flow": 20.0}}},   # 5-20 ③
             "HEATER_CLAMP_MV": {"value": 500}, "PROCESS_ABORT": {"reason": "TEST"}, "NOTIFY": {"level": "info", "code": "T"}}
     try:
         res = []
@@ -238,6 +239,7 @@ def test_bench_running_all_commands_and_outputs_turning_on_send_only_allowed_que
         assert all(r.ok or r.reason for _, r in res)
         # 장비에 쓰지 않는 명령만 받음(RECIPE_CLEAR 는 웹·노트북 — 5-20 ② 기본 '잠금을 푼 뒤 조작')
         assert [k for k, r in res if r.ok] == ["RECIPE_LOAD", "RECIPE_CLEAR", "RECIPE_CLEAR"]
+        assert [r.reason for k, r in res if k in ("MANUAL_BLOCK", "MANUAL_END")] == ["BENCH_READ_ONLY"] * 4   # 웹·노트북 둘씩
         assert all(r.reason == "BENCH_READ_ONLY" for k, r in res if not r.ok and C.by_kind()[k].hmi == "operate"
                    and r.reason not in ("SOURCE_NOT_ALLOWED", "BAD_ARGS", "STATE_NOT_ALLOWED"))
         time.sleep(2.0)

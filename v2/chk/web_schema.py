@@ -69,6 +69,11 @@
                 LOCAL_HMI_RELOCK_MIN(10 분), commands[].hmi = "always"(노트북에서 늘)·"operate"(LOCAL_HMI_CONTROL ≠ view_stop 일 때)·
                 null(받지 않음) — operate 명령은 sources 에 "hmi" 가 붙는다. 사유 HMI_CONTROL_OFF. hello 에 hmiControl·hmiRelockMin,
                 hello.commandKinds = 노트북 경로에서 지금 받는 명령(설정에 따라)
+                수동 조작(③): 명령 MANUAL_BLOCK {block}·MANUAL_END(웹·노트북 operate), 상태 MANUAL_WAIT "수동 대기"(진행 중),
+                manual {commands, blockTypes, waitState, label, desc}, 사유 MANUAL_ACTIVE·MANUAL_BUSY·MANUAL_BLOCK_NOT_ALLOWED·
+                MANUAL_NOT_ACTIVE(거부)·MANUAL_BLOCK·MANUAL_END(info), 이벤트 manual, run_start·run_end data manual(·by·source),
+                스냅샷 proc.manual, state.run.manual {label "수동 조작 중", waiting, by, source, executed, outputs[{key, label,
+                value?, unit?}]}
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -110,7 +115,8 @@ EXPORT_VERSION = 18
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
-    ("run_start", "행 시작", ("name", "params", "run_id", "blocks")),
+    ("run_start", "행 시작(수동 조작이면 manual·by·source — 5-20 ③)", ("name", "params", "run_id", "blocks", "manual", "by",
+                                                                   "source")),
     ("steps", "펼친 스텝 목록(골든 비교 단위)", ("steps",)),
     ("block", "블록 시작·끝(phase start/end, result ok/failed/aborted/error, reason)",
      ("no", "type", "label", "stage", "params", "phase", "result", "reason", "index", "total", "elapsed_s", "t", "run_id")),
@@ -130,7 +136,10 @@ EVENTS: tuple = (
     ("edit", "순서 고치기(PROCESS_EDIT) — 판마다 전체 목록", ("by", "source", "summary", "from", "count", "blocks", "warnings",
                                                          "insts", "run_id", "revision", "t", "level")),
     ("pause_long", "일시정지 오래(PAUSE_LONG — 한도 5분 전)", ("no", "pausedSec", "maxSec", "level")),
-    ("run_end", "행 끝 — summary: 실행된 순서(executed)·마지막 판·건너뛴/멈춘 횟수", ("name", "status", "reason", "summary")),
+    ("manual", "수동 조작 블록(MANUAL_BLOCK — 누가·web/local·블록·결과)·끝내기(MANUAL_END)",
+     ("by", "source", "no", "type", "label", "params", "result", "reason", "run_id", "t", "level")),
+    ("run_end", "행 끝 — summary: 실행된 순서(executed)·마지막 판·건너뛴/멈춘 횟수(수동 조작이면 manual)",
+     ("name", "status", "reason", "summary", "manual")),
     ("list_done", "레시피 리스트 끝", ()),
     ("list_cancel", "레시피 리스트 취소", ()),
 )
@@ -168,6 +177,7 @@ EVENT_KINDS: tuple = (
     ("process", "warn", "공정 경고", _M), ("process", "adjust", "공정 중 수정", _M),
     ("process", "skip", "블록 건너뜀", _M), ("process", "pause", "일시정지", _M), ("process", "resume", "재개", _M),
     ("process", "edit", "순서 고침", _M), ("process", "pause_long", "일시정지 오래 — 곧 정지", _M),
+    ("process", "manual", "수동 조작", _M),
     ("process", "plc_manual", "공정 중 PLC 버튼", _M), ("process", "list_done", "레시피 끝", _M),
     ("process", "list_cancel", "레시피 취소", _M), ("process", "stop_rest", "남은 정지 단계 실행", _M),
     ("process", "auto_end_stop", "자동 끝 정지 덧붙임", _M), ("process", "reject", "시작 거부", _M),
@@ -316,6 +326,11 @@ def definitions() -> Dict[str, Any]:
                                  "rule": "ON = duty/100/Hz×1e6 µs, OFF = (100−duty)/100/Hz×1e6 µs — 둘 다 ≥ 최소 − 1e-6. "
                                          "최소 ≤ 0 이거나 Hz ≤ 0 이면 검사 안 함"},
                    "autoEndStopLabel": BK.AUTO_END_STOP_LABEL},
+        "manual": {"commands": ["MANUAL_BLOCK", "MANUAL_END"], "blockTypes": list(BK.MANUAL_BLOCK_TYPES),
+                   "waitState": "MANUAL_WAIT", "label": "수동 조작 중",
+                   "desc": "블록을 하나씩 실행하는 공정(5-20 ③). 첫 블록이 시작하고(수동 공정 시작과 같은 조건), 블록이 끝나면 "
+                           "수동 대기. 감시·안전 규칙·정지 순서는 공정과 같다. 끝내기(MANUAL_END)·STOP·ALL STOP 은 같은 정지 "
+                           "순서로 모두 끈다. state.run.manual = {label, waiting, by, source, executed, outputs}"},
         "adjust": {"command": "PROCESS_ADJUST", "items": [a.public() for a in BK.ADJUST_ITEMS],
                    "settleParam": "ADJUST_SETTLE_MAX_SEC"},
         "stopSequence": {"stopFixed": True, "steps": [_seq(s) for s in SR.STOP_SEQUENCE],
