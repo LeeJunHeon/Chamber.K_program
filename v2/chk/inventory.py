@@ -100,7 +100,8 @@ def dc_interpret(inv: Inventory) -> None:
 # ───────────── MFC(GPC3000) ─────────────
 MFC_FORMAT = {0: ("S0", "아날로그 셋포인트 %FS"), 5: ("P", "압력 %FS"), 6: ("V", "밸브 열림 %"), 7: ("M", "상태 MXYZ"),
               10: ("S5", "셋포인트 5 %FS"), 23: ("J", "밸브 종류"), 32: ("N", "제어 방향"), 33: ("E", "압력 센서 레인지 코드"),
-              34: ("F", "압력 단위"), 37: ("M", "시스템 상태 MXYZ(X 1=Remote)"), 38: ("H3", "소프트웨어 버전"),
+              34: ("F", "압력 단위"), 37: ("M", "시스템 상태 MXYZ(X 1=Remote)"),
+              38: ("H", "소프트웨어 버전(매뉴얼 예 'H3…', bench 10/20·11/23 'H1.00')"),
               51: ("V", "자동 압력 제어 종류"), 60: ("Q0", "전 채널 유량 %FS"), 65: ("Q5", "ch1 설정 %FS"),
               66: ("Q6", "ch2 설정 %FS"), 69: ("L0", "ON/OFF"), 70: ("W1", "ch1 FS"), 71: ("W2", "ch2 FS"),
               74: ("W5", "ch1 단위(1 SCCM, 2 SLM)"), 75: ("W6", "ch2 단위")}
@@ -132,7 +133,8 @@ def mfc_format_ok(n: int, raw: str) -> bool:
     if n == 69:
         return re.fullmatch(r"L0\s*[01]{4}", s) is not None
     if n == 38:
-        return s.startswith("H3")
+        # 매뉴얼 예는 'H3…' 인데 10/20·11/23 bench 두 번 모두 'H1.00' — 'H' + 버전 숫자를 맞는 형식으로 본다(5-20 ⑤)
+        return s.startswith("H3") or re.fullmatch(r"H\d+(\.\d+)*", s) is not None
     if n in (61, 62):
         return re.fullmatch(rf"Q[0-2]\s*{NUM}", s) is not None      # 표는 Q1·Q2, 예는 Q0+100.0 [p.86]
     if n in (23, 32, 33, 34, 51, 74, 75) or 25 <= n <= 30:
@@ -191,6 +193,16 @@ def mfc_interpret(inv: Inventory, cfg: Dict[str, Any]) -> None:
         c.append("[확인] MFC Remote(R37 X=1) — 원격 제어 가능 [p.84, p.54]")
     else:
         c.append(f"[참고] MFC R37 {st!r} X=0(매뉴얼상 Local [p.84, p.54]) — 10/20 bench 에서도 M006 인데 v1 은 원격 제어가 됨. 정보로만")
+    if st is not None and re.fullmatch(r"M\d{3}", st.strip()):
+        c.append("[참고] MFC R37 은 bench 날마다 다르게 읽혔다(10/20 'M006' X=0, 11/23 'M100' X=1) — 두 날 모두 원격 제어가 됨. "
+                 "정보로만, 시작을 거부하지 않음")
+    sw = r(38)
+    if sw is None:
+        c.append("[미확인] MFC 소프트웨어 버전 — R38 무응답")
+    elif mfc_format_ok(38, sw):
+        c.append(f"[확인] MFC 소프트웨어 버전 R38 {sw!r} — 매뉴얼 예('H3…')와 다르지만 10/20·11/23 bench 두 번 같은 형식 'H1.00'")
+    else:
+        c.append(f"!!! MFC 소프트웨어 버전 R38 {sw!r} — 형식 다름('H' + 버전 숫자가 아님)")
     # 설정점 되읽기(5-19 ④) — 드라이버와 같은 해석(drivers.mfc.parse_sp_reply: "Sn" 접두어 + 값 %FS). bench 는 쓰기 검증을 해 볼 수
     # 없으므로, 읽은 원문만으로 v2 가 그 응답을 해석할 수 있는지(쓰기 확인·장비 값 출처가 쓰는 경로) 미리 본다
     from v2.chk.drivers.mfc import SP_READ_CMD, parse_sp_reply

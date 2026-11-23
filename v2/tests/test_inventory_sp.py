@@ -20,3 +20,22 @@ def test_inventory_shows_setpoint_readback_format_and_value():
                   "[확인] MFC SP4 되읽기(R4) 형식 맞음 — 'S4+003.00' = 3 %FS = 30.00 mTorr",
                   "[미확인] MFC SP5 되읽기(R10) — 무응답"]
     assert inv.values["mfc_sp4_mtorr"] == 30.0 and "mfc_sp3_mtorr" not in inv.values
+
+
+# 5-20 ⑤ — 11/23 bench 응답: R38 'H1.00'(10/20 과 같음)은 맞는 형식, R37 'M100'(X=1)·'M006'(X=0)은 정보로만, 설정점 되읽기 확인
+def test_inventory_11_23_bench_replies():
+    from v2.chk import devices as D
+    from v2.chk import inventory as INV
+    assert INV.mfc_format_ok(38, "H1.00") and INV.mfc_format_ok(38, "H3.10") and not INV.mfc_format_ok(38, "1.00")
+    inv = INV.Inventory()
+    for q, raw in (("R33", "E11"), ("R34", "F01"), ("R1", "S1+004.60"), ("R2", "S2+000.50"), ("R3", "S3+001.50"),
+                   ("R4", "S4+003.00"), ("R10", "S5+005.00"), ("R37", "M100"), ("R38", "H1.00")):
+        inv.items.append(INV.Item("mfc", q, raw, True, ""))
+    INV.mfc_interpret(inv, CFG)
+    assert [inv.values[f"mfc_sp{n}_mtorr"] for n in (1, 2, 3, 4, 5)] == [46.0, 5.0, 15.0, 30.0, 50.0]
+    assert "[확인] MFC Remote(R37 X=1) — 원격 제어 가능 [p.84, p.54]" in inv.checks
+    assert any(x.startswith("[참고] MFC R37 은 bench 날마다") and "거부하지 않음" in x for x in inv.checks)
+    assert any(x.startswith("[확인] MFC 소프트웨어 버전 R38 'H1.00'") for x in inv.checks)
+    a = {x.item: x.assumed for x in D.ASSUMPTIONS}
+    assert "11/23 bench 'M100'" in a["MFC Remote 표시(R37)"] and "확인(11/23 bench)" in a["MFC 설정점 되읽기 형식(R1~R4·R10)"]
+    assert "'H1.00'" in a["MFC 소프트웨어 버전(R38)"]
