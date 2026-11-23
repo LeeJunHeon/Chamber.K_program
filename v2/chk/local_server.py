@@ -17,10 +17,12 @@ bench 에서는 쓰기 명령이 BENCH_READ_ONLY — hello 의 runMode·writesAl
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import socket
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
@@ -48,9 +50,37 @@ def _dumps(obj: Any) -> bytes:
     return dumps_json(obj)
 
 
+# 상대(브라우저)가 끊은 연결 — 새로 고침·탭 닫기 중 응답을 쓰다 생긴다. 동작에는 영향이 없다(5-21 ①)
+DISCONNECTS = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, socket.timeout, TimeoutError)
+ERROR_EVERY_S = 60.0               # 같은 종류의 그 밖 예외를 로그 파일에 남기는 최소 간격
+log = logging.getLogger("chk.local_server")
+log.addHandler(logging.NullHandler())        # 앱이 로그를 붙이기 전(시험 등)에도 stderr 로 새지 않게
+
+
 class _Server(ThreadingHTTPServer):
+    """요청 처리 중 예외를 콘솔에 Traceback 으로 쏟지 않는다(5-21 ①): 끊긴 연결은 로그 파일에 한 줄, 그 밖은 로그 파일에
+    Traceback 과 함께(같은 종류는 ERROR_EVERY_S 에 한 번). 서버는 계속 돈다."""
     daemon_threads = True
     allow_reuse_address = sys.platform != "win32"   # Windows SO_REUSEADDR 는 같은 포트 두 번 바인드를 허용한다 — 끔
+
+    def __init__(self, *a, **kw) -> None:
+        super().__init__(*a, **kw)
+        self._err_at: dict = {}
+        self.disconnects = 0
+        self.errors = 0
+
+    def handle_error(self, request, client_address) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, DISCONNECTS):
+            self.disconnects += 1
+            log.info("로컬 화면 연결을 상대가 끊음(%s) — 무시", type(exc).__name__, extra={"file_only": True})
+            return
+        self.errors += 1
+        key = type(exc).__name__
+        now = time.monotonic()
+        if now - self._err_at.get(key, -1e18) >= ERROR_EVERY_S:
+            self._err_at[key] = now
+            log.error("로컬 화면 요청 처리 중 예외(%s)", key, exc_info=True, extra={"file_only": True})
 
     def server_bind(self) -> None:
         if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):

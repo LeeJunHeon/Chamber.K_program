@@ -201,6 +201,8 @@ class App:
 
         class _Console(logging.Handler):                  # 콘솔은 경고·오류만(시작 줄은 따로)
             def emit(self, rec):
+                if getattr(rec, "file_only", False):          # 로그 파일에만(로컬 화면 서버 예외 등, 5-21 ①)
+                    return
                 try:
                     say(f"[{rec.levelname}] {rec.getMessage()}")
                 except Exception:
