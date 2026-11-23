@@ -1,7 +1,10 @@
 """챔버K MFC 드라이버 — ATOVAC GPC3000(ASCII + CR, 값은 %FS). v1 device/MFC.py 를 읽고 다시 쓴 것(import 안 함).
 
 읽기(스냅샷 묶기 소스): R5(압력) 매초 + R60(유량) + R6(밸브 위치) — MFC_READ_PLAN: full=셋 다 매초, alternate=R5 매초·
-  R60 짝수 tick·R6 홀수 tick(tick 마다 질의 둘), auto=한 번 읽기가 마감의 60 %를 넘으면 다음부터 번갈아.
+  R60 짝수 tick·R6 홀수 tick(tick 마다 질의 둘), auto=느린 읽기가 이어지면 번갈아, 다시 빨라지면 매초(5-20 ① — 판정은
+  drivers/readplan.py, 기준은 설정 MFC_READ_PLAN_*). 번갈아 읽는 동안의 판정 시간 = 셋 다 읽었다면 걸렸을 시간
+  (이번 읽기 마지막 질의를 보낸 때 + 명령 간격 + 이번 읽기에서 가장 긴 응답 시간). 지금 계획은 스냅샷 mfc.read_plan,
+  밸브 위치를 이번 초에 읽었는지·왜 안 읽었는지는 mfc.valve_read(read·alternate·yielded·no_reply).
   유량·밸브 위치 필드는 자기 품질(own_quality)이라 안 읽은 tick 은 stale·나이 1.
   밸브 위치(mfc.valve_pct, 5-17 — v1 12ecc2d 의 1초 CSV "V" 열)는 기록용 읽기다: 응답이 "V" 로 시작하지 않거나 무응답이면
   그 tick 의 밸브 값만 비우고(stale) 압력·유량은 그대로 쓴다. 설정 명령(공정 명령)이 진행·대기 중인 tick, 또는 설정 명령에
@@ -35,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional
 from v2.common.transport import Cancelled
 from v2.common.worker import Request, Result, Status, Worker
 from v2.chk.process_steps import MFC_CMD_GUARD_S
+from v2.chk.drivers.readplan import ReadPlan
 
 CH_AR, CH_O2 = 1, 2
 L0_TRIES = 2               # v1 _set_onoff_mask_and_verify max_attempts=2
@@ -57,7 +61,7 @@ class MfcVerifyError(MfcError):
 
 @dataclass(frozen=True)
 class MfcEvent:
-    kind: str     # fs / fs_not_100 / verify_ok / verify_mismatch / read_plan / sp_device(장비 설정점 값, 5-19)
+    kind: str     # fs / fs_not_100 / verify_ok / verify_mismatch / read_plan(두 방향, 5-20) / sp_device(장비 설정점 값, 5-19)
     detail: str
     reason: Optional[str] = None
 
@@ -123,7 +127,8 @@ class MfcDriver:
         self.scale_mismatch: Optional[str] = None      # 연결 때 R33·R34·R74·R75·R37 대조 — 다르면 공정 시작 거부
         self.scale_raw: Dict[int, Optional[str]] = {}
         self.onoff_at_connect: Optional[str] = None     # 연결 때 R69 'bbbb'
-        self.alternate = cfg["MFC_READ_PLAN"] == "alternate"
+        self.read_plan = ReadPlan(cfg, "MFC")             # 읽기 계획(5-20 ① — auto 면 느려지면 번갈아, 빨라지면 매초)
+        self._q_lat = 0.0                               # 마지막 질의의 응답 시간(보낸 뒤 응답까지, s)
         self.ar_set: Optional[float] = None
         self.o2_set: Optional[float] = None
         self.sp_active: Optional[int] = None
@@ -147,6 +152,10 @@ class MfcDriver:
     def _emit(self, kind: str, detail: str, reason: Optional[str] = None) -> None:
         if self.on_event:
             self.on_event(MfcEvent(kind, detail, reason))
+
+    @property
+    def alternate(self) -> bool:
+        return self.read_plan.alternate
 
     # ───────── 단위 ─────────
     def pct_to_sccm(self, ch: int, pct: float) -> float:
@@ -180,7 +189,9 @@ class MfcDriver:
             raise ValueError("질의는 R…")
         self._send(session, cmd)
         dl = min(session.deadline, self.clock.monotonic() + self.q_timeout_s)
-        return session.read_until(b"\r", deadline=dl).decode("ascii", errors="replace").strip()
+        ans = session.read_until(b"\r", deadline=dl).decode("ascii", errors="replace").strip()
+        self._q_lat = self.clock.monotonic() - self._last_cmd
+        return ans
 
     # ───────── 연결 ─────────
     def _on_connect(self, session) -> None:
@@ -264,33 +275,59 @@ class MfcDriver:
     def source_read(self, session, seq: int) -> Dict[str, Any]:
         t0 = self.clock.monotonic()
         out: Dict[str, Any] = {}
-        p = parse_pressure(self._query(session, "R5"))
+        sent: List[float] = []                              # 이번 읽기 질의를 보낸 시각
+        lat: List[float] = []                               # 이번 읽기 질의의 응답 시간
+
+        def q(cmd: str) -> str:
+            ans = self._query(session, cmd)
+            sent.append(self._last_cmd)
+            lat.append(self._q_lat)
+            return ans
+        p = parse_pressure(q("R5"))
         if p is None:
             raise MfcError("R5 형식 다름")
         out["mfc.pressure_mtorr"] = round(self.pct_to_mtorr(p), 3)
+        plan = self.read_plan.plan                         # 이번 읽기의 계획(행의 품질과 맞게 — 바꾸면 다음 읽기부터)
         full = not self.alternate
         if full or seq % 2 == 0:
-            vals = parse_r60(self._query(session, "R60"))
+            vals = parse_r60(q("R60"))
             if not vals or len(vals) < 2:
                 raise MfcError("R60 형식 다름")
             out["mfc.ar_sccm"] = round(self.pct_to_sccm(CH_AR, vals[0]), 3)
             out["mfc.o2_sccm"] = round(self.pct_to_sccm(CH_O2, vals[1]), 3)
-        slow_ok = True
+        valve = "alternate"
         if full or seq % 2 == 1:
-            v = self._read_valve(session)
+            v, valve = self._read_valve(session, q)
             if v is not None:
                 out["mfc.valve_pct"] = v
-            slow_ok = v is not None or self._ops > 0      # R6 무응답(응답 제한까지 기다림)으로 길어진 읽기는 계획을 바꾸지 않는다
         took = self.clock.monotonic() - t0
-        if (full and slow_ok and self.cfg["MFC_READ_PLAN"] == "auto"
-                and took > 0.6 * self.cfg["MFC_READ_DEADLINE_MS"] / 1000.0):
-            self.alternate = True
-            self._emit("read_plan", f"한 번 읽기 {took * 1000:.0f} ms — R60(유량)·R6(밸브 위치)를 번갈아")
+        # 판정(5-20 ①): R6 무응답(응답 제한까지 기다림)으로 길어진 읽기는 세지 않는다. 셋 다 읽었으면 잰 시간, 질의 둘이면
+        # 셋 다 읽었을 때 예상(마지막 질의를 보낸 때 + 명령 간격 + 가장 긴 응답), 하나면 세지 않는다.
+        ms: Optional[float] = None
+        if valve != "no_reply":
+            if len(sent) >= 3:
+                ms = took * 1000.0
+            elif len(sent) == 2:
+                ms = ((sent[-1] - t0) + self.gap_s + max(lat)) * 1000.0
+        changed = self.read_plan.note(t0, ms, float(self.cfg["MFC_READ_DEADLINE_MS"]))
+        if changed:
+            self._emit_plan(changed, ms)
         self._refresh_sp(session, self.clock.monotonic())  # ㉣ 계획 판단(took) 뒤 — 갱신 읽기는 번갈아 읽기 판단에 넣지 않는다
         out.update({"mfc.ar_set": self.ar_set, "mfc.o2_set": self.o2_set, "mfc.sp_active": self.sp_active,
-                    "mfc.sp_mtorr": self.sp_mtorr, "mfc.sp_sel_mtorr": self.sp_sel_mtorr()})
+                    "mfc.sp_mtorr": self.sp_mtorr, "mfc.sp_sel_mtorr": self.sp_sel_mtorr(),
+                    "mfc.read_plan": plan, "mfc.valve_read": valve})
         out.update({f"mfc.sp{n}_dev_mtorr": self.sp_device.get(n) for n in SP_READ_CMD})
         return out
+
+    def _emit_plan(self, plan: str, ms: Optional[float]) -> None:
+        rp, dl = self.read_plan, float(self.cfg["MFC_READ_DEADLINE_MS"])
+        last = f", 마지막 {ms:.0f} ms" if ms is not None else ""
+        if plan == "alternate":
+            self._emit("read_plan", f"느린 읽기가 이어져 유량(R60)과 밸브 위치(R6)를 번갈아 읽음(2초마다). "
+                                    f"최근 {rp.switch_of}번 중 {rp.switch_slow}번이 {rp.slow_ms(dl):.0f} ms 를 넘음{last}")
+        else:
+            self._emit("read_plan", f"읽기가 다시 빨라져 압력·유량·밸브 위치를 매초 모두 읽음. "
+                                    f"{rp._c('RETURN_SEC'):.0f}초 동안 셋 다 읽는 시간이 {rp.fast_ms(dl):.0f} ms 안{last}")
 
     def sp_sel_mtorr(self) -> Optional[float]:
         """지금 선택된 설정점(sp_active 1~5)의 값 — 이번 연결에서 쓰고 확인한 값이 있으면 그 값, 없으면 장비에서 읽은 값
@@ -340,22 +377,23 @@ class MfcDriver:
         if not self._sp_refresh_todo:
             self._sp_refresh_t = now
 
-    def _read_valve(self, session) -> Optional[float]:
-        """R6(밸브 위치 %) — 기록용. 설정 명령이 진행·대기 중이면 보내지 않고(양보), 무응답·"V" 아닌 응답이면 None
-        (그 tick 의 밸브 값만 stale — 압력·유량 읽기는 실패로 만들지 않는다). 설정 명령에 밀려 읽기가 늦게 시작해
-        응답 제한까지 기다리면 읽기 마감을 넘길 때도 보내지 않는다 — 압력·유량이 그 행에 제때 들어가게."""
+    def _read_valve(self, session, q=None):
+        """R6(밸브 위치 %) — 기록용. (값, 까닭) — 까닭 read·yielded·no_reply(스냅샷 mfc.valve_read).
+        설정 명령이 진행·대기 중이면 보내지 않고(양보 — yielded), 무응답·"V" 아닌 응답이면 값 없음(no_reply — 그 tick 의
+        밸브 값만 stale, 압력·유량 읽기는 실패로 만들지 않는다). 설정 명령에 밀려 읽기가 늦게 시작해 응답 제한까지 기다리면
+        읽기 마감을 넘길 때도 보내지 않는다(yielded) — 압력·유량이 그 행에 제때 들어가게."""
         now = self.clock.monotonic()
         late = max(now, self._last_cmd + self.gap_s) + self.q_timeout_s > session.deadline
         if late or (self._ops > 0 and now < self._ops_until):
             self.valve_yielded += 1
-            return None
+            return None, "yielded"
         try:
-            v = parse_valve(self._query(session, "R6"))
+            v = parse_valve((q or (lambda c: self._query(session, c)))("R6"))
         except Cancelled:
             raise
         except Exception:
-            return None
-        return None if v is None else round(v, 1)
+            return None, "no_reply"
+        return (None, "no_reply") if v is None else (round(v, 1), "read")
 
     # ───────── 쓰기(v1 재시도 — 한 I/O 씩 worker 요청) ─────────
     def _op(self, name: str, gen, on_done=None) -> None:

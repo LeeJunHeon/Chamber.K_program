@@ -30,6 +30,10 @@ CASC_STATE_LABELS = tuple(STATE_TEXT.items())
 CASC_STATE_LABELS_BY = ("ctrl_mode", (("tc2", tuple(STATE_TEXT_TC2.items())),))
 
 # 유지 모드(heater_engine.HeaterEngine.hold_label: off / arming / holding_<kind>, kind = dac·tc2) 화면용 이름
+# 읽기 계획(5-20 ①) — drivers/readplan.py PLAN_LABELS 와 같다
+READ_PLAN_LABELS = (("full", "매초 읽기"), ("alternate", "번갈아 읽기(2초마다)"))
+VALVE_READ_LABELS = (("read", "읽음"), ("alternate", "번갈아 읽는 중(이번 초는 유량 차례)"),
+                     ("yielded", "명령을 처리하느라 이번 읽기를 건너뜀"), ("no_reply", "응답이 없거나 형식이 다름"))
 HOLD_LABELS = (("off", "꺼짐"), ("arming", "진입 대기"), ("holding_dac", "DAC 고정 유지"), ("holding_tc2", "TC2 추종 유지"))
 
 
@@ -117,6 +121,11 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
     *(_f(f"sp{n}_dev_mtorr", F, "mTorr", f"SP{n} 장비 값", ".2f", f"R{10 if n == 5 else n}(parse_sp_reply)", detail=True,
          desc=f"장비에 저장된 SP{n} 값 — 연결 직후·선택할 때·쓰고 확인한 뒤·공정 밖 주기(MFC_SP_REFRESH_SEC)에 읽는다. "
               "못 읽었거나 형식이 다르면 값 없음(5-19)") for n in (1, 2, 3, 4, 5)),
+    _f("read_plan", S, "", "읽기 계획", source="core(MFC_READ_PLAN)", detail=True, enum_labels=READ_PLAN_LABELS,
+       desc="이 행을 읽은 계획 — 매초 읽기(압력·유량·밸브 위치 모두 매초) 또는 번갈아 읽기(압력 매초, 유량·밸브 위치는 "
+            "2초마다 번갈아). auto 면 느린 읽기가 이어질 때 번갈아로, 다시 빨라지면 매초로 바뀐다(5-20 ①)"),
+    _f("valve_read", S, "", "밸브 위치 읽기", source="core(R6)", detail=True, enum_labels=VALVE_READ_LABELS,
+       desc="이번 초에 밸브 위치(R6)를 읽었는지, 읽지 않았다면 그 까닭(5-20 ①)"),
 ), desc="GPC3000")
 
 DC_BLOCK = DeviceBlock("dc", "DC Power", (
@@ -137,6 +146,9 @@ RFPULSE_BLOCK = DeviceBlock("rfp", "RF Pulse", (
     _f("set_w", F, "W", "목표", ".0f", "core"),
     _f("freq_hz", I, "Hz", "펄스 주파수", "d", "core(시작 때 193 되읽기)"),
     _f("duty_pct", I, "%", "듀티", "d", "core(시작 때 196 되읽기)"),
+    _f("read_plan", S, "", "읽기 계획", source="core(RFPULSE_READ_PLAN)", detail=True, enum_labels=READ_PLAN_LABELS,
+       desc="이 행을 읽은 계획 — 매초 읽기(상태·순방향·반사 모두 매초) 또는 번갈아 읽기(반사 매초, 순방향·상태는 2초마다 "
+            "번갈아). auto 면 느린 읽기가 이어질 때 번갈아로, 다시 빨라지면 매초로 바뀐다(5-20 ①)"),
 ), desc="CESAR 1310")
 
 IG_BLOCK = DeviceBlock("ig", "이온 게이지", (

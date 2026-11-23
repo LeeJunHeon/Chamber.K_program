@@ -54,6 +54,30 @@ def _inst(key, label, type_, default, *, desc="", pattern=None, lo=None, hi=None
               v1_default=v1_default, locked=locked, choices=choices)
 
 
+# 읽기 계획 판정 기준(5-20 ① — drivers/readplan.py). auto 일 때만 쓰고, 모두 PC 쪽 설정이다(장비 쪽에 맞출 값 없음).
+def _read_plan_params(dev_key: str, name: str, what: str, slow_n: int) -> tuple:
+    k = f"{dev_key}_READ_PLAN"
+    src = "v2 (5-20 ① — 11/23 bench: 한 번 느렸던 읽기로 끝까지 번갈아 읽음)"
+    return (
+        _inst(f"{k}_SLOW_N", f"{name} 번갈아로 바꾸는 느린 읽기 수", I, slow_n, lo=2, hi=60, unit="회", src=src,
+              desc=f"매초 읽기 중 최근 {k}_SLOW_M 번 읽기 가운데 느린 읽기가 이 횟수 이상이면 번갈아 읽기로 바꾼다. "
+                   "하한 2 — 한 번 느렸다고 바꾸지 않는다"),
+        _inst(f"{k}_SLOW_M", f"{name} 느린 읽기를 세는 최근 읽기 수", I, 10, lo=2, hi=120, unit="회", src=src,
+              desc=f"느린 읽기를 셀 때 보는 최근 읽기 수(1초에 한 번 읽으므로 대략 초). {k}_SLOW_N 이상이어야 한다"),
+        _inst(f"{k}_SLOW_PCT", f"{name} 느린 읽기 기준", I, 60, lo=20, hi=100, unit="%", src=src,
+              desc=f"{what}이 읽기 마감({dev_key}_READ_DEADLINE_MS)의 이 비율을 넘으면 느린 읽기다. "
+                   "v2 처음 기준(마감의 60 %)과 같다"),
+        _inst(f"{k}_FAST_PCT", f"{name} 매초 읽기로 돌아오는 기준", I, 45, lo=10, hi=95, unit="%", src=src,
+              desc=f"번갈아 읽는 동안 셋 다 읽었다면 걸렸을 시간(이번 읽기 + 명령 간격 + 가장 긴 응답)이 읽기 마감의 이 비율 "
+                   f"안이면 빠른 읽기다. {k}_SLOW_PCT 보다 작아야 한다 — 기준 근처에서 계획이 오가지 않게"),
+        _inst(f"{k}_RETURN_SEC", f"{name} 매초 읽기로 돌아오기까지", I, 60, lo=10, hi=3600, unit="s", src=src,
+              desc="번갈아 읽는 동안 이 시간 내내 빠른 읽기만 이어지면 매초 읽기로 돌아온다(느린 읽기가 하나라도 있으면 처음부터 "
+                   "다시 센다)"),
+        _inst(f"{k}_HOLD_SEC", f"{name} 읽기 계획을 다시 바꾸기까지", I, 60, lo=60, hi=3600, unit="s", src=src,
+              desc="읽기 계획을 바꾼 뒤 이 시간 안에는 다시 바꾸지 않는다. 하한 60 s — 1분에 한 번보다 자주 바뀌지 않는다"),
+    )
+
+
 # 통신 설정 설명에 붙는 말(5-17) — 이 값은 PC 쪽 설정일 뿐이고 장비 쪽은 사람이 따로 맞춘다
 def _pc(where: str) -> str:
     return f" PC 쪽 설정이다. 장비 쪽도 같은 값이어야 한다(장비에서 바꾸는 곳: {where})."
@@ -176,9 +200,11 @@ PARAMS: tuple = (
           desc="압력 %FS ↔ mTorr 환산. bench 에서 레인지 코드(E)로 확인"),
     _inst("MFC_READ_PLAN", "MFC 읽기 계획", E, "auto", enum=("auto", "full", "alternate"), src="v2 (사용자 결정 2026-10-15)",
           desc="full=매초 R5(압력)·R60(유량)·R6(밸브 위치), alternate=R5 매초·R60 짝수 초·R6 홀수 초, "
-               "auto=셋 다 읽은 한 번이 MFC_READ_DEADLINE_MS 의 60 %를 넘으면 그다음부터 alternate(R6 무응답으로 길어진 것은 "
-               "세지 않음 — 읽기 실패로는 바꾸지 않는다). R6 는 기록용이라 설정 명령이 진행 중이거나 R6 를 기다리면 마감을 넘길 "
-               "초에는 보내지 않는다(양보 — 밸브 값만 stale)"),
+               "auto=느린 읽기가 이어질 때만 alternate 로 바꾸고 다시 빨라지면 full 로 돌아온다(5-20 ① — 기준은 "
+               "MFC_READ_PLAN_SLOW_N·SLOW_M·SLOW_PCT·FAST_PCT·RETURN_SEC·HOLD_SEC, R6 무응답으로 길어진 읽기는 세지 않고 "
+               "읽기 실패로도 바꾸지 않는다). R6 는 기록용이라 설정 명령이 진행 중이거나 R6 를 기다리면 마감을 넘길 "
+               "초에는 보내지 않는다(양보 — 밸브 값만 stale). 지금 계획은 스냅샷 mfc.read_plan"),
+    *_read_plan_params("MFC", "MFC", "셋 다 읽은 한 번(R5·R60·R6)", 5),
     _inst("RFPULSE_CMD_GAP_MS", "RF Pulse 명령 간격", I, 50, lo=0, hi=2000, unit="ms",
           src="[CESAR p.174 / 6-4] (v1 1500 ms)", desc="응답을 받은 뒤 다음 명령까지 — 매뉴얼: 핸드셰이크 또는 50 ms"),
     _inst("RFPULSE_QUERY_TIMEOUT_MS", "RF Pulse 질의 응답 제한", I, 250, lo=50, hi=3000, unit="ms",
@@ -197,7 +223,11 @@ PARAMS: tuple = (
           desc="시작 순서의 설정 명령 하나가 무응답·NAK·CSR ≠ 0 일 때 다시 보내는 횟수"),
     _inst("RFPULSE_READ_PLAN", "RF Pulse 읽기 계획", E, "auto", enum=("auto", "full", "alternate"),
           src="v2 (사용자 결정 2026-10-15)",
-          desc="full=매초 162·165·166, alternate=166 매초·165/162 번갈아, auto=질의 하나가 250 ms 를 넘으면 번갈아"),
+          desc="full=매초 162(상태)·165(순방향)·166(반사), alternate=166 매초·165/162 번갈아, auto=느린 읽기가 이어질 때만 "
+               "alternate 로 바꾸고 다시 빨라지면 full 로 돌아온다(5-20 ① — 느린 읽기 = 질의 하나가 "
+               "RFPULSE_QUERY_TIMEOUT_MS 를 다 썼거나 한 번 읽기가 마감의 RFPULSE_READ_PLAN_SLOW_PCT % 를 넘음). "
+               "지금 계획은 스냅샷 rfp.read_plan"),
+    *_read_plan_params("RFPULSE", "RF Pulse", "셋 다 읽은 한 번(162·165·166)", 3),
     _inst("IG_CHAR_GAP_MS", "이온 게이지 글자 사이 간격", I, 50, lo=dev.IG_CHAR_GAP_MIN_MS, hi=1000, unit="ms",
           src="v2 (5-17 — [IG p.52-53] 글자 사이 50 ms 이상, 초당 약 2글자보다 빠르게 보내지 않는다)",
           desc="명령 글자(E·F·A·B)를 보낸 뒤 다음 글자를 보내기까지 최소 간격. 평소에는 E 를 1초에 한 번만 보내 걸리지 않는다"),
@@ -683,19 +713,23 @@ PARAMS: tuple = (
 # ───────────── 장비별 통신 묶음(5-17) ─────────────
 # 포트·속도·패리티·종결 문자·응답 시간·재시도가 같은 장비끼리 한 묶음에 보이게 한다(화면 묶음 params[].group 만 바뀐다 —
 # scope·적용 시점·역할은 그대로). 표에 있는데 PARAMS 에 없는 키는 그냥 지나간다.
+def _RP(dev_key: str) -> tuple:
+    return tuple(f"{dev_key}_READ_PLAN_{n}" for n in ("SLOW_N", "SLOW_M", "SLOW_PCT", "FAST_PCT", "RETURN_SEC", "HOLD_SEC"))
+
+
 COMM_GROUPS: tuple = (
     ("comm_plc", ("PLC_PORT", "PLC_BAUD", "PLC_PARITY", "PLC_STOPBITS", "PLC_SLAVE_ID", "PLC_FAIL_STREAK",
                   "PLC_TXN_TIMEOUT_MS", "PLC_WRITE_DEADLINE_MS", "PLC_RETRY_COUNT", "PLC_RETRY_DELAY_MS",
                   "PLC_READ_DEADLINE_MS")),
     ("comm_mfc", ("MFC_PORT", "MFC_BAUD", "MFC_FAIL_STREAK", "MFC_CMD_GAP_MS", "MFC_QUERY_TIMEOUT_MS",
                   "MFC_QUERY_RETRIES", "MFC_VERIFY_RETRY_MS", "MFC_VERIFY_TRIES", "MFC_LINK_RETRY_MS", "MFC_SP_REFRESH_SEC",
-                  "MFC_READ_PLAN", "MFC_READ_DEADLINE_MS")),
+                  "MFC_READ_PLAN", *_RP("MFC"), "MFC_READ_DEADLINE_MS")),
     ("comm_dc", ("DC_PORT", "DC_BAUD", "DC_DELIMITER", "DC_FAIL_STREAK", "DC_WRITE_QUERY_GAP_MS", "DC_START_GAP_MS",
                  "DC_STEP_TIMEOUT_MS", "DC_CURR_WRITE_DELAY_MS", "DC_READ_DEADLINE_MS")),
     ("comm_rfpulse", ("RFPULSE_ENABLED", "RFPULSE_PORT", "RFPULSE_BAUD", "RFPULSE_PARITY", "RFPULSE_ADDR",
                       "RFPULSE_FAIL_STREAK", "RFPULSE_CMD_GAP_MS", "RFPULSE_QUERY_TIMEOUT_MS", "RFPULSE_ACK_TIMEOUT_MS",
                       "RFPULSE_ONOFF_TIMEOUT_MS", "RFPULSE_ON_SETTLE_MS", "RFPULSE_CMD_RETRIES", "RFPULSE_READ_PLAN",
-                      "RFPULSE_READ_DEADLINE_MS", "RFPULSE_COMM_REOPEN_SEC")),
+                      *_RP("RFPULSE"), "RFPULSE_READ_DEADLINE_MS", "RFPULSE_COMM_REOPEN_SEC")),
     ("comm_ig", ("IG_ENABLED", "IG_PORT", "IG_BAUD", "IG_FAIL_STREAK", "IG_CHAR_GAP_MS", "IG_FILAMENT_E_BLOCK_MS",
                  "IG_RESPONSE_LIMIT_MS")),
     ("comm", ("PORT_OPEN_TIMEOUT_SEC", "PORT_WRITE_TIMEOUT_SEC", "CONNECT_INIT_TIMEOUT_SEC", "CONNECT_RETRY_PAUSE_MS")),
@@ -798,6 +832,13 @@ CROSS_RULES: tuple = (
     _r("X24", ("RFPULSE_REFP_AUTO_OFF_SEC", "RFPULSE_REFP_SEC"), "장비 반사 자동 차단(명령 33) > 소프트웨어 반사파 판정",
        lambda v: _need(v["RFPULSE_REFP_AUTO_OFF_SEC"] > v["RFPULSE_REFP_SEC"],
                        "명령 33 시간이 소프트웨어 판정보다 짧다 — 평소에도 장비가 먼저 끈다")),
+    *(_r(xid, (f"{d}_READ_PLAN_SLOW_N", f"{d}_READ_PLAN_SLOW_M", f"{d}_READ_PLAN_SLOW_PCT", f"{d}_READ_PLAN_FAST_PCT"),
+         f"{name} 읽기 계획 기준: 느린 읽기 수 ≤ 세는 읽기 수, 돌아오는 기준 < 느린 읽기 기준(5-20 ①)",
+         lambda v, d=d: _need(v[f"{d}_READ_PLAN_SLOW_N"] <= v[f"{d}_READ_PLAN_SLOW_M"]
+                              and v[f"{d}_READ_PLAN_FAST_PCT"] < v[f"{d}_READ_PLAN_SLOW_PCT"],
+                              f"{d}_READ_PLAN_SLOW_N {v[f'{d}_READ_PLAN_SLOW_N']} > SLOW_M {v[f'{d}_READ_PLAN_SLOW_M']} 이거나 "
+                              f"FAST_PCT {v[f'{d}_READ_PLAN_FAST_PCT']} ≥ SLOW_PCT {v[f'{d}_READ_PLAN_SLOW_PCT']}"))
+      for xid, d, name in (("X28", "MFC", "MFC"), ("X29", "RFPULSE", "RF Pulse"))),
     _r("X23", ("RUN_MODE", "UPLINK_URL"), "sim 모드는 웹 주소를 쓰지 않는다(UPLINK_IN_SIM 이 아니면 무시) — prod 는 주소 필요",
        lambda v: _need(v["RUN_MODE"] != "prod" or bool(v["UPLINK_URL"]),
                        "prod 인데 UPLINK_URL 이 비었다")),

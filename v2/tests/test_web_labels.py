@@ -251,8 +251,9 @@ def test_casc_state_label_matches_engine_text():
 def test_mfc_read_plan_desc_matches_driver():
     from v2.chk import devices as D
     d = P.by_key()["MFC_READ_PLAN"].desc
-    for w in ("R5", "R60", "R6", "짝수 초", "홀수 초", "60 %", "양보"):
+    for w in ("R5", "R60", "R6", "짝수 초", "홀수 초", "양보", "돌아온다", "MFC_READ_PLAN_SLOW_N"):
         assert w in d, w
+    assert P.by_key()["MFC_READ_PLAN_SLOW_PCT"].default == 60            # 처음 기준(마감의 60 %)은 설정으로(5-20 ①)
     assert "R5+R60" not in d and "실패하면" not in d
     plan = [t for t in D.TICK_PLAN if t.device == "mfc"][0]
     assert plan.reads == ("R5", "R60", "R6") and plan.deadline_param == "MFC_READ_DEADLINE_MS"

@@ -507,17 +507,21 @@ TICK_PLAN: tuple = (
              "250 ms 내부 폴링 4회 중 정각 회차를 스냅샷에. 실패 시 재시도 1회 후 그 회차 fail",
              "PLC_READ_DEADLINE_MS"),
     TickPlan("mfc", ("R5", "R60", "R6"), 60.0,
-             "응답 p50 34·p99 62 ms(10/20 bench) + 명령 간격 MFC_CMD_GAP_MS 150 × 2 → 약 400~490 ms(마감 900 의 60 % = 540 안)",
+             "응답 p50 34·p99 62 ms(10/20 bench) + 명령 간격 MFC_CMD_GAP_MS 150 × 2 → 약 400~490 ms(마감 900 의 60 % = 540 안). "
+             "11/23 bench: 응답 p50 34·p99 60·최대 69 ms, 셋 다 읽는 한 번은 보통 약 350 ms(한 번 664 ms)",
              "bench",
-             "1초에 셋 다 안 되면(한 번 읽기 > 마감의 60 %): R5(압력)는 매초, R60(유량)은 짝수 초·R6(밸브 위치)은 홀수 초 — "
-             "유량·밸브 위치 필드 own_quality(MFC_READ_PLAN auto — R6 무응답으로 길어진 읽기는 세지 않음). "
+             "느린 읽기(한 번 읽기 > 마감의 MFC_READ_PLAN_SLOW_PCT 60 %)가 최근 10번 중 5번이면: R5(압력)는 매초, "
+             "R60(유량)은 짝수 초·R6(밸브 위치)은 홀수 초 — 유량·밸브 위치 필드 own_quality. 60초 동안 셋 다 읽는 시간이 "
+             "마감의 45 % 안이면 매초 읽기로 돌아옴, 바꾸는 사이 60초 이상(MFC_READ_PLAN auto, 5-20 ① — "
+             "R6 무응답으로 길어진 읽기는 세지 않음). "
              "R6 는 기록용 — 설정 명령이 진행 중인 tick, 또는 R6 응답 제한까지 기다리면 마감을 넘길 tick 에는 보내지 않음(양보)",
              "MFC_READ_DEADLINE_MS"),
     TickPlan("dc", ("MEAS:ALL?",), 28.0, "장비 처리 미상 + 쓰기 뒤 500 ms 규칙", "bench",
              "읽기 t0, 제어 쓰기(CURR) t0+약 100 ms → 다음 읽기까지 약 900 ms. 쓰기 직후 읽기 금지",
              "DC_READ_DEADLINE_MS"),
     TickPlan("rfpulse", ("162", "165", "166"), 41.0, "장비 처리 L 미상, L=150 ms 여도 약 0.5 s", "bench",
-             "L > 250 ms 이면: 166(반사)은 매초, 165 와 162 를 번갈아 — fwd·status own_quality",
+             "느린 읽기(질의 > 250 ms 이거나 한 번 읽기 > 마감의 60 %)가 최근 10번 중 3번이면: 166(반사)은 매초, 165 와 162 를 "
+             "번갈아 — fwd·status own_quality. 60초 동안 빠르면 매초 읽기로 돌아옴(RFPULSE_READ_PLAN auto, 5-20 ①)",
              "RFPULSE_READ_DEADLINE_MS"),
     TickPlan("ig", ("E",), 160.0, "실측 250~300 ms, 레인지 찾기 860 ms", "yes",
              "응답을 IG_RESPONSE_LIMIT_MS(1200)까지 기다려 늦으면 다음 행에 late, 그동안 E 를 보내지 않음(stale). "

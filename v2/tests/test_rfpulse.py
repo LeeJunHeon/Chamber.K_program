@@ -93,9 +93,9 @@ def test_alternate_plan_quality():
 
 def test_auto_switches_when_query_slow():
     r = Rig()
-    r.sim.add_fault("delay", 3.0, 5.0, extra_s=0.3)                         # 질의 > 250 ms
-    rows = r.run(6)
-    assert r.ev("read_plan") and r.d.alternate
+    r.sim.add_fault("delay", 3.0, 100.0, extra_s=0.15)                      # 질의마다 +150 ms — 한 번 읽기 > 마감 60 %
+    rows = r.run(8)                                                          # 5-20 ①: 이어질 때(최근 10번 중 3번)만
+    assert r.ev("read_plan") and r.d.alternate and rows[-1]["rfp.read_plan"] == "alternate"
     assert rows[-1]["rfp.q"] == "ok"
     r.done()
 

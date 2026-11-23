@@ -189,8 +189,9 @@ def test_auto_switches_to_alternate_when_slow():
     sim = MfcSim()
     sim.add_fault("delay", 3.0, 100.0, extra_s=0.24)                   # 질의마다 +240 ms(제한 300 안) → 한 번 읽기 > 마감 60 %
     r = Rig(sim=sim)
-    rows = r.run(5)
+    rows = r.run(10)                                                    # 5-20 ①: 느린 읽기가 이어질 때(최근 10번 중 5번)만
     assert "read_plan" in r.kinds() and r.d.alternate
+    assert rows[-1]["mfc.read_plan"] == "alternate" and rows[0]["mfc.read_plan"] == "full"
     assert all(x["mfc.q"] == "ok" for x in rows)
     r.done()
 

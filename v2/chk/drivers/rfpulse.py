@@ -1,7 +1,10 @@
 """챔버K RF Pulse 드라이버 — AE CESAR 1310(AE Bus, 주소 RFPULSE_ADDR). v1 device/RFpulse.py 를 읽고 다시 쓴 것(import 안 함).
 
 읽기(스냅샷 묶기 소스): 162(상태)·165(순방향)·166(반사), 질의 하나 RFPULSE_QUERY_TIMEOUT_MS(250), 사이 RFPULSE_CMD_GAP_MS.
-  RFPULSE_READ_PLAN: full=매초 셋, alternate=166 매초 + 165(짝수 tick)/162(홀수 tick), auto=질의가 제한을 넘으면 번갈아로.
+  RFPULSE_READ_PLAN: full=매초 셋, alternate=166 매초 + 165(짝수 tick)/162(홀수 tick), auto=느린 읽기가 이어지면 번갈아,
+  다시 빨라지면 매초(5-20 ① — 판정은 drivers/readplan.py, 기준은 설정 RFPULSE_READ_PLAN_*). 느린 읽기 = 질의 하나가 응답
+  제한을 다 썼거나(요청 마감이 먼저 끝난 것은 세지 않음) 한 번 읽기가 마감의 SLOW_PCT % 를 넘음. 번갈아 읽는 동안의 판정
+  시간 = 이번 읽기 + 명령 간격 + 이번 읽기에서 가장 긴 응답 시간(셋 다 읽었다면 걸렸을 시간). 지금 계획은 스냅샷 rfp.read_plan.
   순방향·상태 필드는 자기 품질(own_quality)이라 번갈아면 stale·나이 1.
 START(v1 순서·대기, RFpulse.py:925-960): 14 Host → 1 RF OFF(사전) → 200 ms → 3 조절 모드 6(FWD) → 8 셋포인트 → [93 주파수]
   → [96 듀티] → 27 펄싱 1 → 2 RF ON → 800 ms → 193·196 되읽기. I/O 하나가 worker 요청 하나(그 사이 tick 읽기가 끼어든다).
@@ -23,6 +26,7 @@ from typing import Any, Callable, Dict, List, Optional
 from v2.common import aebus
 from v2.common.transport import Cancelled, ReadTimeout
 from v2.common.worker import Request, Result, Worker
+from v2.chk.drivers.readplan import ReadPlan
 
 RF_OFF, RF_ON, SET_MODE, SET_SETPOINT, SET_CONTROL, SET_PULSING, SET_AUTO_OFF, SET_FREQ, SET_DUTY = 1, 2, 3, 8, 14, 27, 33, 93, 96
 Q_MODEL, Q_CAPACITY, Q_AUTO_OFF, Q_CONTROL, Q_STATUS, Q_FWD, Q_REF, Q_FREQ, Q_DUTY, Q_SW = 128, 130, 152, 155, 162, 165, 166, 193, 196, 198
@@ -58,7 +62,7 @@ class RfpConfigMismatch(RfpError):
 
 @dataclass(frozen=True)
 class RfpEvent:
-    kind: str     # identity / auto_off / csr_recovery / config_readback / read_plan / off_confirmed / off_unconfirmed
+    kind: str     # identity / auto_off / csr_recovery / config_readback / read_plan(두 방향, 5-20) / off_confirmed / off_unconfirmed
     detail: str
     reason: Optional[str] = None
 
@@ -83,7 +87,8 @@ class RfPulseDriver:
         self.onoff_timeout_s = cfg["RFPULSE_ONOFF_TIMEOUT_MS"] / 1000.0
         self.on_settle_s = cfg["RFPULSE_ON_SETTLE_MS"] / 1000.0
         self.cmd_retries = int(cfg["RFPULSE_CMD_RETRIES"])
-        self.alternate = cfg["RFPULSE_READ_PLAN"] == "alternate"
+        self.read_plan = ReadPlan(cfg, "RFPULSE")         # 읽기 계획(5-20 ① — auto 면 느려지면 번갈아, 빨라지면 매초)
+        self._q_lat = 0.0                                 # 마지막 주고받기 시간(간격 대기 뺌, s)
         self.model: Optional[str] = None
         self.set_w: Optional[float] = None
         self.out_at_connect: Optional[bool] = None        # 연결 때 RF 출력(162)
@@ -97,6 +102,10 @@ class RfPulseDriver:
         if self.on_event:
             self.on_event(RfpEvent(kind, detail, reason))
 
+    @property
+    def alternate(self) -> bool:
+        return self.read_plan.alternate
+
     # ───────── 한 번 주고받기 ─────────
     def _x(self, session, cmd: int, data: bytes = b"", timeout_s: Optional[float] = None) -> bytes:
         if cmd < 128 and not self.writes_allowed:
@@ -106,10 +115,12 @@ class RfPulseDriver:
         ready = self._last + self.gap_s
         if ready > self.clock.monotonic():
             self.clock.sleep_until(ready)
+        t_send = self.clock.monotonic()
         try:
             return aebus.transact(session, self.addr, cmd, data, self.q_timeout_s if timeout_s is None else timeout_s)
         finally:
             self._last = self.clock.monotonic()
+            self._q_lat = self._last - t_send
 
     def _exec(self, session, cmd: int, data: bytes = b"", timeout_s: Optional[float] = None) -> int:
         out = self._x(session, cmd, data, timeout_s)
@@ -157,19 +168,23 @@ class RfPulseDriver:
 
     # ───────── 읽기 ─────────
     def source_read(self, session, seq: int) -> Dict[str, Any]:
+        t0 = self.clock.monotonic()
         out: Dict[str, Any] = {}
+        used = self.read_plan.plan                          # 이번 읽기의 계획(행의 품질과 맞게 — 바꾸면 다음 읽기부터)
+        dl = float(self.cfg["RFPULSE_READ_DEADLINE_MS"])
         plan = [Q_STATUS, Q_FWD, Q_REF] if not self.alternate else ([Q_REF, Q_FWD] if seq % 2 == 0 else [Q_REF, Q_STATUS])
+        lat: List[float] = []
         for q in plan:
-            t0 = self.clock.monotonic()
             try:
                 data = self._x(session, q)
             except ReadTimeout:
-                # 질의 자체가 제한을 다 쓴 경우만(요청 마감이 먼저 끝난 경우 — 앞 작업에 밀림 — 는 장비가 느린 게 아니다)
-                slow = self.clock.monotonic() - t0 >= self.q_timeout_s - 1e-6
-                if self.cfg["RFPULSE_READ_PLAN"] == "auto" and not self.alternate and slow:
-                    self.alternate = True
-                    self._emit("read_plan", f"질의 {q} 가 {self.q_timeout_s * 1000:.0f} ms 를 넘음 — 166 매초, 165·162 번갈아로")
+                # 질의 자체가 제한을 다 쓴 경우만 느린 읽기(요청 마감이 먼저 끝난 경우 — 앞 작업에 밀림 — 는 장비가 느린 게 아니다)
+                if self._q_lat >= self.q_timeout_s - 1e-6:
+                    changed = self.read_plan.note(t0, None, dl, slow=True)
+                    if changed:
+                        self._emit_plan(changed, None)
                 raise
+            lat.append(self._q_lat)
             if q == Q_STATUS:
                 st = parse_status(data)
                 out.update({"rfp.out_on": st["out_on"], "rfp.itl_open": st["itl_open"], "rfp.status_raw": data.hex()})
@@ -177,8 +192,25 @@ class RfPulseDriver:
                 out["rfp.fwd_w"] = float(aebus.u16(data))
             else:
                 out["rfp.ref_w"] = float(aebus.u16(data))
-        out.update({"rfp.set_w": self.set_w, "rfp.freq_hz": self.freq_hz, "rfp.duty_pct": self.duty_pct})
+        took = self.clock.monotonic() - t0
+        ms = took * 1000.0 if len(plan) >= 3 else (took + self.gap_s + max(lat)) * 1000.0
+        changed = self.read_plan.note(t0, ms, dl)
+        if changed:
+            self._emit_plan(changed, ms)
+        out.update({"rfp.set_w": self.set_w, "rfp.freq_hz": self.freq_hz, "rfp.duty_pct": self.duty_pct,
+                    "rfp.read_plan": used})
         return out
+
+    def _emit_plan(self, plan: str, ms: Optional[float]) -> None:
+        rp, dl = self.read_plan, float(self.cfg["RFPULSE_READ_DEADLINE_MS"])
+        last = f", 마지막 {ms:.0f} ms" if ms is not None else ", 마지막 읽기는 질의 응답 제한을 다 씀"
+        if plan == "alternate":
+            self._emit("read_plan", f"느린 읽기가 이어져 순방향(165)과 상태(162)를 번갈아 읽음(2초마다, 반사 166 은 매초). "
+                                    f"최근 {rp.switch_of}번 중 {rp.switch_slow}번이 느림(질의 하나가 "
+                                    f"{self.q_timeout_s * 1000:.0f} ms 를 다 쓰거나 한 번 읽기가 {rp.slow_ms(dl):.0f} ms 를 넘음){last}")
+        else:
+            self._emit("read_plan", f"읽기가 다시 빨라져 상태·순방향·반사를 매초 모두 읽음. "
+                                    f"{rp._c('RETURN_SEC'):.0f}초 동안 셋 다 읽는 시간이 {rp.fast_ms(dl):.0f} ms 안{last}")
 
     # ───────── START(v1 device/RFpulse.py:925-1080 — 단계마다 재시도, I/O 하나가 worker 요청 하나) ─────────
     def _op(self, name: str, gen, on_done=None) -> None:

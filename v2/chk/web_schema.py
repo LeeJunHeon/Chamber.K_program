@@ -61,6 +61,10 @@
                 장비 값(펼친 WAIT_PRESSURE args device_sp·target null, 문구 "target=장비 값 SP{n}"), valueRules 에 kind "empty"
                 (조건이면 그 값을 비워야)·조건 "<값>=false" — device_sp_no_value. 스냅샷 mfc.sp1_dev_mtorr~sp5_dev_mtorr(detail),
                 mfc.sp_sel_mtorr = 쓴 값 → 없으면 장비 값. 사유 SP_DEVICE_VALUE_UNKNOWN·SP_DEVICE_CHANGED, eventKinds mfc sp_device
+                버전 18(5-20): 읽기 계획 되돌아오기(①) — 설정 MFC_READ_PLAN_*·RFPULSE_READ_PLAN_*(SLOW_N·SLOW_M·SLOW_PCT·FAST_PCT·
+                RETURN_SEC·HOLD_SEC, comm_mfc·comm_rfpulse, 규칙 X28·X29), 스냅샷 mfc.read_plan·rfp.read_plan(full "매초 읽기"·
+                alternate "번갈아 읽기(2초마다)" — 이 행을 읽은 계획), mfc.valve_read(read·alternate·yielded "명령을 처리하느라 이번
+                읽기를 건너뜀"·no_reply). read_plan 이벤트는 두 방향(번갈아로·매초로)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -98,7 +102,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 17
+EXPORT_VERSION = 18
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
