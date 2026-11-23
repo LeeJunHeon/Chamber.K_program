@@ -284,6 +284,7 @@ def _bundle_screen_texts():
     out += [("precondition", x["id"], x["desc"]) for x in b["preconditions"]]
     out += [("state", s["name"], s["label"]) for s in b["states"]]
     out += [("eventKind", e["kind"], e["label"]) for e in b["eventKinds"]]
+    out += [("eventKindDesc", e["kind"], e.get("desc") or "") for e in b["eventKinds"]]
     for d in b["blocks"]["defs"]:
         out += [("block", d["type"], d.get(k) or "") for k in ("label", "desc", "help")]
         out += [("block", d["type"], (d.get(k) or {}).get("text") or "") for k in ("skip", "pause")]
@@ -303,3 +304,15 @@ def test_screen_texts_follow_wording_rules():
     hits += [("screen", w, t) for w, t in _screen_texts() if t and bad.search(t)      # 레시피 열·공정 중 수정 항목 등
              and not (w.startswith("snapshot ig.") and t == "음수 — 영점·오염 확인")]
     assert hits == [], hits[:10]
+
+
+# 5-21 ④ — 사건 종류마다 설명(desc)이 있고, 이름에 프로그램 말이 남지 않는다
+def test_event_kinds_have_desc_and_operator_names():
+    from v2.chk import web_schema as W
+    from v2.common.paramdef import defaults
+    ek = W.bundle(defaults(P.PARAMS))["eventKinds"]
+    assert all(e["desc"] for e in ek)
+    for word in ("눈금", "펼친 스텝", "읽기 계획", "블록"):
+        assert not any(word == e["label"] or e["label"].startswith(word) for e in ek), word
+    by = {(e["source"], e["kind"]): e for e in ek}
+    assert by[("mfc", "scale")]["label"] == "압력·유량 범위 확인" and by[("dc", "disconnected")]["desc"].startswith("장비 연결이 끊겼다")
