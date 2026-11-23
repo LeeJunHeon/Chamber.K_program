@@ -260,7 +260,7 @@ BLOCK_DEFS: tuple = (
         "", container=True, steps="안의 블록을 count 번(중첩 가능)", v1="v2"),
     BlockDef("end_stop", "정상 끝 정지", (
         P("skip", "steps", "", None, desc="건너뛸 정지 순서 단계 번호이며 1·2·3·9·10·11·12(필라멘트·셔터·히터·가스)만 뺄 수 있다. 파워 끄기 "
-                                          "4·5·6·7·8·13 은 뺄 수 없다(사용자 결정 2026-10-21, safety_rules.STOP_SEQUENCE)"),),
+                                          "4·5·6·7·8·13 은 뺄 수 없음(사용자 결정 2026-10-21, safety_rules.STOP_SEQUENCE)"),),
         "STOPPING", steps="SafetyEngine.end_row — 지금 행 끝 정지 순서(표 순서 고정, skip 만 뺀다)", v1="pc:1785-2019",
         desc="기본 템플릿의 마지막. 중간에 두면 정지 순서 뒤 다음 블록으로. 목록 끝이 이 블록이 아니면 자동으로 덧붙는다"),
 )

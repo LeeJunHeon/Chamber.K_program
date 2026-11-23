@@ -39,7 +39,7 @@ def torr_text(v: float) -> str:
 # 압력 상태 → 화면 문구(v1 device/IonGauge.py STATE_TEXT 와 같은 말 — 숫자 대신 이 말을 보여 준다).
 # below 는 측정 하한 GAUGE_MIN_TORR 에서 만든다(v1 화면 "< 1.0E-3 Torr")
 ION_STATES = (("ok", "정상"), ("off", "꺼짐"), ("preparing", "측정 준비 중"), ("invalid", "값 오류"))
-GAUGE_STATES = (("ok", "정상"), ("below", f"< {torr_text(GAUGE_MIN_TORR)} Torr"), ("negative", "음수(영점·오염 확인)"),
+GAUGE_STATES = (("ok", "정상"), ("below", f"< {torr_text(GAUGE_MIN_TORR)} Torr"), ("negative", "음수 — 영점·오염 확인"),
                 ("disconnected", "미연결"), ("unzeroed", "영점 미조정"), ("invalid", "값 오류"))
 STATE_TEXT = dict(ION_STATES + GAUGE_STATES)
 
