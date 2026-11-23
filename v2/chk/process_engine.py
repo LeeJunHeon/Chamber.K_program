@@ -332,6 +332,8 @@ class ProcessEngine:
 
     def remain_s(self) -> Optional[int]:
         """지금 대기 스텝(DELAY·조건 대기·압력 대기)의 남은 초 — 화면용. 딜레이 행이면 그 남은 시간."""
+        if self.manual:
+            return None                                 # 수동 조작은 정해진 길이가 없다 — 남은 시간·예상 끝을 내지 않음(5-21 ③)
         now = self.paused["t0"] if self.paused is not None else self.clock.monotonic()   # 멈춘 동안은 멈춘 값
         if self.state == "CSV_DELAY":
             return max(0, int(round(self.delay_s - (now - self.delay_t0))))
@@ -818,8 +820,9 @@ class ProcessEngine:
             self.end_skip = ()
             self._block_end("ok" if kind_ == "done" else kind_, code)
             end = {"name": self.run_name, "status": kind_, "reason": code, "summary": self.run_summary()}
-            if self.manual:
+            if self.manual:                               # 수동 조작의 말(5-21 ③) — 사유 코드는 그대로
                 end["manual"] = True
+                end["summary"].update(manual=True, endText="수동 조작 끝" if kind_ == "done" else "수동 조작 중단")
             self._emit(ProcEvent("run_end", kind_, code, end))
             self._manual_off()
             self.row_is_process = False
@@ -852,6 +855,7 @@ class ProcessEngine:
             end = {"name": self.run_name, "status": "error", "reason": "PROGRAM_EXIT", "summary": self.run_summary()}
             if self.manual:
                 end["manual"] = True
+                end["summary"].update(manual=True, endText="수동 조작 중단")
             self._emit(ProcEvent("run_end", "error", "PROGRAM_EXIT", end))
             self._manual_off()
             self.row_is_process = False

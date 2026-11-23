@@ -299,7 +299,8 @@ class SafetyEngine:
             if late is not None:                       # 정지 순서 중의 중단 — 리스트를 끝내도록 공정 쪽에 알린다
                 late("error", reason)
             return False
-        self._emit(SafetyEvent("abort", rule, reason, "공정 중단", "error", t))
+        what = "수동 조작 중단" if getattr(self.process, "manual", False) else "공정 중단"     # 수동 조작의 말(5-21 ③)
+        self._emit(SafetyEvent("abort", rule, reason, what, "error", t))
         if not getattr(self.process, "needs_stop_sequence", True):
             # 켜진 장비가 없는 상태(딜레이 행 등) — 정지 순서 없이 공정 쪽이 바로 정리한다
             with self._lock:

@@ -360,3 +360,21 @@ def test_commands_table_and_bundle():
     assert insts[-1].auto and steps[-1].action == "END_STOP"
     steps, insts = BK.expand([GAS], defaults(P.PARAMS), auto_end=False)
     assert not any(i.auto for i in insts) and steps[-1].action != "END_STOP"
+
+
+# 5-21 ③ — 수동 조작의 말: 안전 규칙으로 멈추면 "수동 조작 중단", run_end 요약 endText, 남은 시간 없음
+def test_manual_abort_words_and_no_remaining_time(tmp_path):
+    m = _run_fault(tmp_path, "mv_itl", True)
+    ab = [e for e in m.rig.events if type(e).__name__ == "SafetyEvent" and e.kind == "abort"]
+    assert ab and all(e.detail == "수동 조작 중단" for e in ab)
+    (e,) = m.ev("run_end")
+    assert e.data["summary"]["endText"] == "수동 조작 중단" and e.data["reason"] == "MV_INTERLOCK_LOST"
+    p = _run_fault(tmp_path / "p", "mv_itl", False)
+    assert all(x.detail == "공정 중단" for x in p.rig.events if type(x).__name__ == "SafetyEvent" and x.kind == "abort")
+    w = M(tmp_path / "w")
+    w.blocks([GAS, {"type": "pressure", "params": {"sp": 1, "value": 5.0, "timeout_sec": 600}}], end=False)
+    seen = []
+    w.rig.loop.tick_hooks.append(lambda t: seen.append(w.rig.process.snapshot_fields()["proc.remain_s"])
+                                 if w.rig.process.manual else None)
+    w.run(40)
+    assert seen and all(x is None for x in seen)                          # 압력 도달 대기 중에도 남은 시간 없음
