@@ -1,28 +1,28 @@
 {
  "what": "챔버K v2 노트북 로컬 화면(vanam-process hmi/ — W-7)",
  "vanamProcess": {
-  "commit": "caf91c661f1e751aa12d4867c4b614b021694fde",
+  "commit": "91d27075cca3e243e7521e396f1dad3d4b06bbe0",
   "branch": "chk2-web",
   "clean": true
  },
- "builtAt": "2026-11-19T09:48:43.851Z",
+ "builtAt": "2026-11-23T03:58:14.289Z",
  "esbuild": "0.28.2",
  "tailwindcss": "4.3.3",
  "files": [
   {
-   "path": "assets/app-3B30B208.css",
-   "bytes": 32880,
-   "sha256": "3b30b2089ad0e4b9231cac0f2a86fadc1a9623289d34d9ccf92a4a6bc14470c5"
+   "path": "assets/app-0BDC3B8A.css",
+   "bytes": 33669,
+   "sha256": "0bdc3b8abf14843c1c3c29dc042fafe6fee781f60e17cded594420a4af1acadd"
   },
   {
-   "path": "assets/app-FGVAPXUM.js",
-   "bytes": 515110,
-   "sha256": "5aabf097b1e930845013e78104568d4ffb2c582439890af25441a43d62546632"
+   "path": "assets/app-4ZCPT5HU.js",
+   "bytes": 545117,
+   "sha256": "36a05ab48332021be36e79a2f041c1392916648dd316c2cbcc17bd3f5912b8cb"
   },
   {
    "path": "index.html",
    "bytes": 350,
-   "sha256": "33fc4c35cc50866392f311035c356ee0af0097e5264e16fe3ec1c6a2ef341cdf"
+   "sha256": "a9fe1f501271550f45ffa55278e6fd4beac37b2f2648ab01aba3a8e8b39d2430"
   }
  ]
 }
