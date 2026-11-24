@@ -85,6 +85,9 @@
                 "눈금" → "압력·유량 범위 확인", "읽기 계획" → "MFC 읽는 방식 바뀜")
                 노트북 설정 보기(⑤): 로컬 /api/v1/schema 의 params(current·pending·stored·overridden·default·desc, 비밀 값은 비움)와
                 state.configPending 으로 충분 — 더한 값 없음. 노트북 경로의 CONFIG_APPLY·CONFIG_ROLLBACK 은 지금처럼 받지 않음
+                버전 20(5-22): 웹 연결 사건 이름표(①) — eventSources "uplink"(웹 연결), eventKinds uplink_up·uplink_down·
+                uplink_auth_failed·uplink_conflict·uplink_gap·uplink_spool_loaded·uplink_spool_error·uplink_spool_full·uplink_too_large·
+                uplink_bad_command(이름·설명·수준). 기록에 남는 code(UPLINK_*)는 그대로
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -122,7 +125,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 19
+EXPORT_VERSION = 20
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -274,6 +277,18 @@ EVENT_DESC: Dict[tuple, str] = {
     ("*", "long_outage"): "장비 연결이 오래 끊겨 있다. 케이블과 장비 전원을 확인한다.",
     ("*", "timeout"): "장비가 정해진 시간 안에 응답하지 않았다. 이어지면 연결이 끊긴 것으로 본다.",
     ("*", "COMMAND_BLOCKED"): "허용되지 않은 명령이라 장비 포트에 보내지 않았다(장비 설정을 바꾸는 명령 등).",
+    ("uplink", "uplink_up"): "끊겼던 웹 연결이 다시 이어졌다. 그동안 쌓인 기록을 이어서 보낸다.",
+    ("uplink", "uplink_down"): "웹 서버와 연결이 끊긴 채 정해진 시간이 지났다. 공정·안전은 그대로이고 기록은 장비에 쌓였다가 연결되면 보낸다. "
+                               "네트워크와 웹 서버 상태를 확인한다.",
+    ("uplink", "uplink_auth_failed"): "웹이 장비 토큰을 거부했다. 장비 관리(v2)에서 장비 사용 여부와 토큰을 확인하고, 장비의 토큰 설정을 맞춘다. "
+                                      "1분마다 다시 시도한다.",
+    ("uplink", "uplink_conflict"): "웹이 이 실행을 받지 않았다(같은 장비 이름으로 다른 실행이 붙어 있는 경우 등). 장비 이름과 다른 실행이 있는지 확인한다.",
+    ("uplink", "uplink_gap"): "웹으로 보낼 기록이 너무 많이 밀려 일부를 놓쳤다. 놓친 기록은 장비의 기록 파일에 남아 있다.",
+    ("uplink", "uplink_spool_loaded"): "지난 실행이 웹으로 보내지 못한 기록을 찾아 이어서 보낸다.",
+    ("uplink", "uplink_spool_error"): "웹으로 보낼 기록을 장비 디스크에 저장하지 못했다. 디스크 공간과 데이터 폴더 권한을 확인한다.",
+    ("uplink", "uplink_spool_full"): "웹 연결이 오래 끊겨 미전송 보관함이 가득 찼다. 중요도가 낮은 기록부터 버렸다. 웹 연결을 확인한다.",
+    ("uplink", "uplink_too_large"): "웹이 받지 않는 큰 기록이라 보내지 않았다. 장비의 기록 파일에는 남아 있다.",
+    ("uplink", "uplink_bad_command"): "읽을 수 없거나 번호가 없는 웹 명령이라 실행하지 않고 버렸다.",
 }
 
 
@@ -299,7 +314,7 @@ _M, _D = "main", "detail"
 # event 메시지 context.source → 화면 출처 이름(5-15 — 장비 이름은 DC Power·RF Power·RF Pulse)
 EVENT_SOURCES: tuple = (
     ("process", "공정"), ("safety", "안전 규칙"), ("heater", "히터"), ("plc", "PLC"), ("mfc", "MFC"), ("dc", "DC Power"),
-    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "이온 게이지"),
+    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "이온 게이지"), ("uplink", "웹 연결"),
 )
 _WORKERS = ("plc", "mfc", "dc", "rfpulse", "ig")
 EVENT_KINDS: tuple = (
@@ -352,7 +367,14 @@ EVENT_KINDS: tuple = (
     (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "connect_retry", "연결 다시 시도", _D),
     (w, "disconnected", "장비 연결 끊김", _M), (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),
     (w, "COMMAND_BLOCKED", "명령 막힘", _M),
-))
+)) + (
+    # 웹 연결(5-22 ① — uplink._note: source "uplink", kind = 코드 소문자. 기록에 남는 code 는 UPLINK_* 그대로)
+    ("uplink", "uplink_up", "웹 연결 복구", _M), ("uplink", "uplink_down", "웹 연결 끊김", _M),
+    ("uplink", "uplink_auth_failed", "웹이 장비 토큰을 거부함", _M), ("uplink", "uplink_conflict", "웹이 이 실행을 받지 않음", _M),
+    ("uplink", "uplink_gap", "웹으로 보낼 기록 일부를 놓침", _M), ("uplink", "uplink_spool_loaded", "지난 실행의 미전송 기록 이어서 보냄", _D),
+    ("uplink", "uplink_spool_error", "미전송 보관함 쓰기 실패", _M), ("uplink", "uplink_spool_full", "미전송 보관함이 가득 참", _M),
+    ("uplink", "uplink_too_large", "너무 큰 기록을 보내지 않음", _D), ("uplink", "uplink_bad_command", "읽을 수 없는 웹 명령을 버림", _D),
+)
 
 
 def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any],

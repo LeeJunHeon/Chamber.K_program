@@ -161,6 +161,10 @@ def _code_event_kinds() -> set:
         found |= {(w, k) for w in workers}
     for k in re.findall(r'GuardEvent\(\s*"([A-Z_]+)"', _src("chk/cmd_guard.py")):
         found |= {(w, k) for w in workers}
+    # 웹 연결(5-22 ①) — uplink._note·_warn_once: source "uplink", kind = 코드 소문자
+    up = _src("chk/uplink.py")
+    for k in re.findall(r'_note\(\s*"\w+",\s*"(UPLINK_[A-Z_]+)"', up) + re.findall(r'_warn_once\(\s*"[^"]+",\s*"(UPLINK_[A-Z_]+)"', up):
+        found.add(("uplink", k.lower()))
     return found
 
 
