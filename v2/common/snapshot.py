@@ -55,6 +55,7 @@ class FieldDef:
     # 그 필드 값이 표에 있고 이 값이 그 줄에 있으면 그 이름, 아니면 enum_labels(예: heater.casc_state 는 ctrl_mode = tc2 이면
     # running·frozen 이 '(단독)' 이름 — v1 heater_cascade.STATE_TEXT_TC2). 없는 값만 enum_labels 로 — 바뀌는 것만 적는다
     enum_labels_by: Optional[tuple] = None
+    help: str = ""            # 운전자용 설명(5-23 ②) — 평소 보기 마우스 설명. 비면 묶음이 snapshot_fields.FIELD_HELP 로 채운다
 
 
 @dataclass(frozen=True)
