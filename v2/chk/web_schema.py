@@ -458,7 +458,8 @@ def definitions() -> Dict[str, Any]:
                       "states": list(c.states), "requires": list(c.requires), "args": [_arg(a) for a in c.args],
                       "desc": c.desc, "v1": c.v1, "benchOk": c.bench_ok, "hmi": c.hmi or None} for c in C.COMMANDS],
         "preconditions": [{"id": p.id, "desc": p.desc, "reason": p.reason, "v1": p.v1} for p in C.PRECONDITIONS],
-        "reasons": [{"code": r.code, "label": r.label, "category": r.category} for r in C.ALL_REASONS],
+        "reasons": [{"code": r.code, "label": r.label, "category": r.category, "help": r.help or C.REASON_HELP.get(r.code, "")}
+                    for r in C.ALL_REASONS],
         "plcButtons": [{"target": b.target, "addr": b.addr, "label": b.label} for b in C.PLC_BUTTONS],
         "recipe": {"processColumns": [_col(c) for c in RC.PROCESS_COLUMNS],
                    "heaterStepColumns": [_col(c) for c in RC.HEATER_STEP_COLUMNS],

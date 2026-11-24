@@ -197,7 +197,7 @@ def test_reason_and_command_labels_not_in_messages():
             if p.name not in ("commands.py",)]
     for lab in labels:
         assert not any(lab in p.read_text(encoding="utf-8") for p in srcs), lab
-    assert CC.COMMON_REASONS and texts["COMMAND_EXPIRED"] == "유효 시간이 지난 웹 명령이라 실행하지 않음(장비 시계 기준)"
+    assert CC.COMMON_REASONS and texts["COMMAND_EXPIRED"] == "유효 시간 지난 웹 명령"
 
 
 def test_export_version_11_hash_changed():

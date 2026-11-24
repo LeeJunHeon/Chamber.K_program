@@ -11,7 +11,7 @@ from v2.chk import params as P
 from v2.chk import safety_rules as SR
 from v2.chk import web_schema as W
 
-PINNED = (21, "f70b13ff59b129bd500020bfd7027c850f9c12aee095b9c02c7906bf50a1e34f")
+PINNED = (21, "8e63f868bbcee14abec8234d5fa814640658c2f68d8c965cc3a1a4bef0b7067f")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "overriddenKeys", "params", "crossRules", "dropped", "commands", "preconditions",
        "reasons", "plcButtons", "recipe", "blocks", "manual", "adjust", "stopSequence", "allStopSequence", "states", "events",
        "eventKinds", "eventSources", "paramGroups", "snapshot"]
@@ -50,7 +50,7 @@ def test_bundle_shape_and_values():
     assert "STOP_SEQUENCE_ORDER" not in by
     codes = {r["code"]: r for r in b["reasons"]}
     assert {"AUTO_END_STOP", "HEATER_HANDOVER", "OUTPUTS_CLEANUP", "CLEANUP_RUNNING"} <= set(codes)
-    assert "뺀 단계" in codes["OUTPUTS_LEFT_ON"]["label"]
+    assert codes["OUTPUTS_LEFT_ON"]["label"] == "일부러 남긴 출력" and "뺀 단계" in codes["OUTPUTS_LEFT_ON"]["help"]   # 5-23 ③ 이름은 짧게, 까닭은 help
     gi = [d for d in b["blocks"]["defs"] if d["type"] == "gas_intro"][0]["params"]
     assert {p["name"]: p["paramMax"] for p in gi if p["name"].endswith("_flow")} == {"ar_flow": "MFC_AR_FS_SCCM",
                                                                                      "o2_flow": "MFC_O2_FS_SCCM"}
