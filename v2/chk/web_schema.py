@@ -374,7 +374,7 @@ EVENT_KINDS: tuple = (
     # 웹 연결(5-22 ① — uplink._note: source "uplink", kind = 코드 소문자. 기록에 남는 code 는 UPLINK_* 그대로)
     ("uplink", "uplink_up", "웹 연결 복구", _M), ("uplink", "uplink_down", "웹 연결 끊김", _M),
     ("uplink", "uplink_auth_failed", "웹이 장비 토큰을 거부함", _M), ("uplink", "uplink_conflict", "웹이 이 실행을 받지 않음", _M),
-    ("uplink", "uplink_gap", "웹으로 보낼 기록 일부를 놓침", _M), ("uplink", "uplink_spool_loaded", "지난 실행의 미전송 기록 이어서 보냄", _D),
+    ("uplink", "uplink_gap", "웹으로 보낼 기록 일부를 놓침", _M), ("uplink", "uplink_spool_loaded", "미전송 기록 이어서 보냄", _D),
     ("uplink", "uplink_spool_error", "미전송 보관함 쓰기 실패", _M), ("uplink", "uplink_spool_full", "미전송 보관함이 가득 참", _M),
     ("uplink", "uplink_too_large", "너무 큰 기록을 보내지 않음", _D), ("uplink", "uplink_bad_command", "읽을 수 없는 웹 명령을 버림", _D),
 )

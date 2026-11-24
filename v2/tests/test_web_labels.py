@@ -320,3 +320,113 @@ def test_event_kinds_have_desc_and_operator_names():
         assert not any(word == e["label"] or e["label"].startswith(word) for e in ek), word
     by = {(e["source"], e["kind"]): e for e in ek}
     assert by[("mfc", "scale")]["label"] == "압력·유량 범위 확인" and by[("dc", "disconnected")]["desc"].startswith("장비 연결이 끊겼습니다")
+
+
+# ───────────── 5-23 ⑤ 용어표·같은 이름·길이 ─────────────
+# 용어표의 옛 말 — 화면 이름(label)·운전자용 설명(help)·값 이름(enum)·사건 설명·사유 이름/설명에 쓰지 않는다.
+OLD_TERMS = ("인터록", "이온 게이지", "이오나이저", "필라멘트", "디개스", "방출", "냉각수", "도어", "차단밸브", "메인 밸브", "Main 밸브",
+             "건 셔터", "Gun 1", "Gun 2", "순방향", "반사", "설정점", "끄기 순서", "끄기 단계", "감시 신호", "스텝", "램프")
+# 그대로 두는 글(이유와 함께) — [어디, 글의 일부]
+OLD_TERM_EXCEPT = (
+    # 개발용 desc 는 이 시험이 보지 않는다(상세 보기 전용). v1 대조·골든 글은 label·help 가 아니라 여기에 걸리지 않는다
+)
+
+
+def _named_texts():
+    """(어디, 글) — 화면 이름·설명(평소 보기)."""
+    b = W.bundle()
+    out = []
+    for bl in b["snapshot"]["blocks"]:
+        out.append((f"block {bl['name']}", bl["label"]))
+        for f in bl["fields"]:
+            out += [(f"field {f['column']}", f["label"]), (f"field help {f['column']}", f.get("help") or "")]
+            out += [(f"field enum {f['column']}", v) for v in (f.get("enumLabels") or {}).values()]
+    out += [(f"button {x['target']}", x["label"]) for x in b["plcButtons"]]
+    out += [(f"command {c['kind']}", c["label"]) for c in b["commands"]]
+    out += [(f"state {s['name']}", s["label"]) for s in b["states"]]
+    out += [(f"event {e['source']}.{e['kind']}", e["label"]) for e in b["eventKinds"]]
+    out += [(f"event desc {e['source']}.{e['kind']}", e.get("desc") or "") for e in b["eventKinds"]]
+    out += [(f"source {e['source']}", e["label"]) for e in b["eventSources"]]
+    out += [(f"reason {r['code']}", r["label"]) for r in b["reasons"]]
+    out += [(f"reason help {r['code']}", r.get("help") or "") for r in b["reasons"]]
+    out += [(f"param {p['key']}", p["label"]) for p in b["params"]]
+    out += [(f"param enum {p['key']}", v) for p in b["params"] for v in (p.get("enumLabels") or {}).values()]
+    out += [(f"group {g['key']}", g["label"]) for g in b["paramGroups"]]
+    for d in b["blocks"]["defs"]:
+        out += [(f"blockdef {d['type']}", d["label"]), (f"blockdef help {d['type']}", d.get("help") or "")]
+        for p in d["params"]:
+            out += [(f"blockparam {d['type']}.{p['name']}", p.get("label") or ""), (f"blockparam help {d['type']}.{p['name']}", p.get("help") or "")]
+            out += [(f"blockparam enum {d['type']}.{p['name']}", v) for v in (p.get("enumLabels") or {}).values()]
+    out += [(f"recipe {c['name']}", c.get("label") or "") for c in b["recipe"]["processColumns"]]
+    out += [(f"recipe help {c['name']}", c.get("help") or "") for c in b["recipe"]["processColumns"]]
+    out += [(f"recipe group {c['name']}", c.get("group") or "") for c in b["recipe"]["processColumns"]]
+    out += [(f"adjust {a['item']}", a.get("label") or "") for a in b["adjust"]["items"]]
+    out += [(f"adjust help {a['item']}", a.get("help") or "") for a in b["adjust"]["items"]]
+    out += [(f"stop {s['no']}", s.get("label") or "") for s in b["stopSequence"]["steps"] + b["allStopSequence"]["steps"]]
+    return out
+
+
+def test_old_terms_not_in_screen_names():
+    bad = []
+    for where, t in _named_texts():
+        for w in OLD_TERMS:
+            if w in (t or "") and not any(where.startswith(a) and part in t for a, part in OLD_TERM_EXCEPT):
+                bad.append((where, w, t))
+    assert bad == [], bad[:10]
+
+
+def test_same_thing_same_name():
+    b = W.bundle()
+    fields = {f["column"]: f["label"] for bl in b["snapshot"]["blocks"] for f in bl["fields"]}
+    # PLC 버튼 이름 = 그 주소의 스냅샷 필드 이름
+    assert [(x["target"], x["label"]) for x in b["plcButtons"] if x["label"] != fields[f"plc.{x['addr']}"]] == []
+    # 수동 조작 출력 이름(process_engine.manual_outputs)은 스냅샷 필드 이름과 같다(유량·파워·압력 SPn 은 그 이름)
+    src = _src("chk/process_engine.py")
+    body = src[src.index("def manual_outputs"):src.index("def _plc_guard")]
+    names = re.findall(r'\("(\w+)", "([^"]+)"\)', body)
+    plc_names = [(k, n) for k, n in names if f"plc.{k}" in fields]
+    assert plc_names and all(fields[f"plc.{k}"] == n for k, n in plc_names), plc_names
+    assert 'f"압력 SP{sp}"' in body
+    # 상태 이름 = 그 상태를 만드는 블록 이름
+    st = {s["name"]: s["label"] for s in b["states"]}
+    bl = {d["type"]: d["label"] for d in b["blocks"]["defs"]}
+    for s_, t in (("PRE_CLEAN", "pre_clean"), ("GAS_PRE", "gas_prep"), ("GAS_INTRO", "gas_intro"), ("HEATER_RAMP", "heater_ramp"),
+                  ("BASE_WAIT", "base_wait"), ("HEATER_SETTLE", "heater_settle"), ("VALVE", "valve"), ("SHUTTER", "shutter"),
+                  ("POWER_OFF", "power_off"), ("GAS_OFF", "gas_off"), ("HEATER_OFF", "heater_off"), ("COND_WAIT", "cond_wait"),
+                  ("WAIT", "wait"), ("MAIN", "main")):
+        assert st[s_] == bl[t], (s_, st[s_], bl[t])
+    assert st["GUN_SHUTTER"] == "Gun 셔터 열기" and st["PRESSURE_SP1"] == "작업 압력(SP1)" and st["HEATER_HOLD_WAIT"] == "히터 유지 대기"
+    # 기본 템플릿의 셔터 블록 이름(골든에도 이 이름 — 스텝 문구는 그대로)
+    assert 'B("shutter", "Gun 셔터 열기", "GUN_SHUTTER"' in _src("chk/blocks.py") and "건 셔터 열기" not in _src("chk/blocks.py")
+
+
+def test_name_lengths_and_shapes():
+    b = W.bundle()
+    bad = []
+    for bl in b["snapshot"]["blocks"]:
+        bad += [("field", f["label"]) for f in bl["fields"] if len(f["label"]) > 16]
+    bad += [("state", s["label"]) for s in b["states"] if len(s["label"]) > 14]
+    bad += [("event", e["label"]) for e in b["eventKinds"] if len(e["label"]) > 18]
+    bad += [("command", c["label"]) for c in b["commands"] if len(c["label"]) > 20 or "(" in c["label"]]
+    bad += [("reason", r["label"]) for r in b["reasons"] if len(r["label"]) > 26 or "(" in r["label"]]
+    helps = [("field help", f.get("help") or "") for bl in b["snapshot"]["blocks"] for f in bl["fields"]]
+    helps += [("field help", f.get("help") or "") for f in b["snapshot"]["process"]]
+    helps += [("reason help", r.get("help") or "") for r in b["reasons"]]
+    bad += [h for h in helps if len(h[1]) > 70]
+    named = [("field", f["label"]) for bl in b["snapshot"]["blocks"] for f in bl["fields"]] + helps
+    named += [("command", c["label"]) for c in b["commands"]] + [("reason", r["label"]) for r in b["reasons"]]
+    for where, t in named:
+        for pat in DEV_MARKS + (r"\bv1\b", r"[MDP]0\d{3,4}"):
+            if re.search(pat, t or ""):
+                bad.append((where, t, pat))
+    assert bad == [], bad[:10]
+
+
+def test_everyday_fields_have_help():
+    b = W.bundle()
+    fields = [f for bl in b["snapshot"]["blocks"] for f in bl["fields"]] + list(b["snapshot"]["process"])
+    miss = [(f.get("column") or f.get("name")) for f in fields
+            if not f.get("detail") and not f.get("help") and (f.get("column") or f.get("name")) not in SF.FIELD_NAME_ONLY]
+    assert miss == []
+    # 거부·중단·실패·경고(정보 중 경고만인 것 포함) 사유는 help 가 있다 — 지금은 162개 모두
+    assert all(r.get("help") for r in b["reasons"])
