@@ -602,10 +602,10 @@ class ProcessEngine:
                 out.append({"key": f"{g}_flow", "label": name, "value": self.cur_vals.get(f"mfc.{g}_flow"), "unit": "sccm"})
         sp = getattr(self.mfc, "sp_active", None)
         if sp:
-            out.append({"key": "pressure", "label": f"압력 설정점 SP{sp}",
+            out.append({"key": "pressure", "label": f"압력 SP{sp}",
                         "value": getattr(self.mfc, "sp_sel_mtorr", lambda: None)(), "unit": "mTorr"})
         last = self.plc.last.values if self.plc.last is not None else {}
-        for k, name in (("ar_valve", "Ar 차단밸브"), ("o2_valve", "O₂ 차단밸브"), ("s1", "Gun 1 셔터"), ("s2", "Gun 2 셔터"),
+        for k, name in (("ar_valve", "Ar 밸브"), ("o2_valve", "O₂ 밸브"), ("s1", "Gun1 셔터"), ("s2", "Gun2 셔터"),
                         ("ms", "Main 셔터")):
             if last.get(f"plc.{k}"):
                 out.append({"key": k, "label": name})

@@ -111,8 +111,8 @@ _PROCESS_UI = {
     "rf_pulse_duty": ("파워", "RF Pulse 듀티", "비우면 장비에 설정된 듀티를 그대로 씀"),
     "use_heater": ("히터", "히터", ""), "heater_temp": ("히터", "히터 온도", ""),
     "heater_ramp": ("히터", "승온 속도", _HEATER_RAMP_HELP),
-    "gun1": ("건·타겟", "Gun1", ""), "gun2": ("건·타겟", "Gun2", ""),
-    "g1_target": ("건·타겟", "G1 타겟", ""), "g2_target": ("건·타겟", "G2 타겟", ""),
+    "gun1": ("Gun·타겟", "Gun1", ""), "gun2": ("Gun·타겟", "Gun2", ""),
+    "g1_target": ("Gun·타겟", "G1 타겟", ""), "g2_target": ("Gun·타겟", "G2 타겟", ""),
 }
 _HEATER_STEP_UI = {
     "target_c": ("", "목표 온도", ""),

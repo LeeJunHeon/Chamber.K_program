@@ -91,6 +91,8 @@
                 명령 이름(②): MANUAL_BLOCK "수동 조작"(전 "수동 조작: 블록 하나 실행"), 진행 중 건너뛰기·일시정지 "지금 단계 …",
                 내부 정지 명령 이름을 운전자 말로(예 "DC 출력 끄기(꺼짐 확인)"), 수동 조작·건너뛰기·일시정지 사유 이름의 '블록' → 조작·단계.
                 명령 종류(kind)·사유 코드는 그대로. 블록 레시피 편집 명령(PROCESS_EDIT)의 '블록'은 레시피 용어라 그대로
+                버전 21(5-23): 화면 이름을 용어표 하나로(①) — 장비·부품·신호는 영문(MV·Door·Water·Ionizer·Ion Gauge·Filament·
+                Forward·Reflected), Ar 밸브·Gun1 셔터·인터락·SP·정지 순서, 블록과 같은 상태 이름, 괄호 없는 명령 이름. 식별자는 그대로
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -128,7 +130,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 20
+EXPORT_VERSION = 21
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -166,19 +168,19 @@ EVENTS: tuple = (
 EVENT_LABEL: Dict[tuple, str] = {
     ("safety", "abort"): "안전 규칙으로 멈춤", ("process", "block"): "공정 단계", ("process", "steps"): "공정 순서 전체", ("process", "step"): "세부 동작",
     ("process", "skip"): "단계 건너뜀", ("process", "edit"): "공정 순서 고침", ("process", "auto_end_stop"): "끝 정리 단계 덧붙임",
-    ("process", "stop_rest"): "남은 끄기 단계 실행", ("process", "message"): "장비 동작 알림",
+    ("process", "stop_rest"): "남은 정지 단계 실행", ("process", "message"): "장비 동작 알림",
     ("safety", "blip"): "안전 조건 잠깐 벗어남", ("safety", "also"): "정지 중 다른 안전 규칙 발동",
-    ("safety", "step"): "끄기 단계 진행", ("safety", "error"): "끄기 단계 실패", ("safety", "seq_start"): "끄기 순서 시작",
-    ("safety", "seq_done"): "끄기 순서 끝", ("safety", "bench_skip"): "읽기 전용이라 보내지 않음",
-    ("plc", "marker_written"): "PLC 재기동 표시 씀", ("plc", "heater_wd_delay"): "히터 감시 신호 늦음",
-    ("plc", "heater_wd_recovered"): "히터 감시 신호 복구", ("plc", "blackbox"): "PLC 값 기록 저장",
+    ("safety", "step"): "정지 단계 진행", ("safety", "error"): "정지 단계 실패", ("safety", "seq_start"): "정지 순서 시작",
+    ("safety", "seq_done"): "정지 순서 끝", ("safety", "bench_skip"): "읽기 전용이라 보내지 않음",
+    ("plc", "marker_written"): "PLC 재기동 표시 씀", ("plc", "heater_wd_delay"): "히터 워치독 늦음",
+    ("plc", "heater_wd_recovered"): "히터 워치독 복구", ("plc", "blackbox"): "PLC 값 기록 저장",
     ("plc", "heater_residual_run"): "히터 운전 상태가 남아 있음",
     ("mfc", "fs"): "유량 범위 확인", ("mfc", "fs_not_100"): "유량 범위가 100 이 아님", ("mfc", "scale"): "압력·유량 범위 확인",
-    ("mfc", "verify_ok"): "설정 확인됨", ("mfc", "verify_mismatch"): "설정이 다르게 읽힘", ("mfc", "sp_readback"): "압력 설정점 확인",
-    ("mfc", "remote_state"): "원격 조작 상태", ("mfc", "sp_device"): "장비에 저장된 압력 설정점", ("mfc", "read_plan"): "MFC 읽는 방식 바뀜",
+    ("mfc", "verify_ok"): "설정 확인됨", ("mfc", "verify_mismatch"): "설정이 다르게 읽힘", ("mfc", "sp_readback"): "압력 SP 확인",
+    ("mfc", "remote_state"): "원격 조작 상태", ("mfc", "sp_device"): "장비에 저장된 압력 SP", ("mfc", "read_plan"): "MFC 읽는 방식 바뀜",
     ("dc", "identity"): "장비 확인", ("dc", "syst_err"): "장비 자체 오류 기록", ("dc", "last_state"): "전원 복귀 때 출력 설정",
     ("dc", "protection"): "과전압·과전류 보호 설정", ("dc", "out_check"): "출력 켜짐 확인",
-    ("rfp", "identity"): "장비 확인", ("rfp", "auto_off"): "반사파 자동 차단 설정", ("rfp", "auto_off_read"): "반사파 자동 차단 설정 읽음",
+    ("rfp", "identity"): "장비 확인", ("rfp", "auto_off"): "Reflected 자동 차단 설정", ("rfp", "auto_off_read"): "Reflected 자동 차단 읽음",
     ("rfp", "csr_recovery"): "명령 거부 뒤 다시 시도", ("rfp", "config_readback"): "펄스 설정 확인", ("rfp", "read_plan"): "RF Pulse 읽는 방식 바뀜",
     ("ig", "identity_ok"): "장비 확인", ("ig", "parse_error"): "응답을 읽을 수 없음",
 }
@@ -300,10 +302,10 @@ PARAM_GROUPS: tuple = (
     ("install", "설치·장비"), ("secret", "비밀값"),
     # 장비별 통신(5-17): 포트·속도·패리티·종결 문자·응답 시간·재시도 — params.COMM_GROUPS
     ("comm_plc", "PLC 통신"), ("comm_mfc", "MFC 통신"), ("comm_dc", "DC Power 통신"), ("comm_rfpulse", "RF Pulse 통신"),
-    ("comm_ig", "이온 게이지 통신"), ("comm", "통신 공통(포트 열기·재연결·두절)"),
+    ("comm_ig", "Ion Gauge 통신"), ("comm", "통신 공통"),
     ("tick", "1초 읽기"), ("plc", "PLC"),
     ("mfc", "MFC"), ("dc", "DC Power"), ("rf", "RF Power"), ("stop", "정지 순서"), ("rfpulse", "RF Pulse"),
-    ("ig", "이온 게이지"), ("heater", "히터"), ("heater_plc", "히터 PLC 설정"), ("heater_ramp", "히터 승온"),
+    ("ig", "Ion Gauge"), ("heater", "히터"), ("heater_plc", "히터 PLC 설정"), ("heater_ramp", "히터 승온"),
     ("heater_hold", "히터 유지 모드"), ("heater_recipe", "히터 레시피"), ("heater_gas", "히터 가스"),
     ("process", "공정"), ("uplink", "웹 연결"), ("record", "기록"),
 )
@@ -316,8 +318,8 @@ PARAM_GROUPS: tuple = (
 _M, _D = "main", "detail"
 # event 메시지 context.source → 화면 출처 이름(5-15 — 장비 이름은 DC Power·RF Power·RF Pulse)
 EVENT_SOURCES: tuple = (
-    ("process", "공정"), ("safety", "안전 규칙"), ("heater", "히터"), ("plc", "PLC"), ("mfc", "MFC"), ("dc", "DC Power"),
-    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "이온 게이지"), ("uplink", "웹 연결"),
+    ("process", "공정"), ("safety", "안전"), ("heater", "히터"), ("plc", "PLC"), ("mfc", "MFC"), ("dc", "DC Power"),
+    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "Ion Gauge"), ("uplink", "웹 연결"),
 )
 _WORKERS = ("plc", "mfc", "dc", "rfpulse", "ig")
 EVENT_KINDS: tuple = (
@@ -342,7 +344,7 @@ EVENT_KINDS: tuple = (
     ("heater", "reached", "히터 목표 도달", _M), ("heater", "engaged", "유지 모드 진입", _M),
     ("heater", "give_up", "유지 모드 포기", _M), ("heater", "alert", "히터 경고", _M),
     ("heater", "saturated", "히터 출력 포화", _M), ("heater", "gas", "히터 가스", _M),
-    ("heater", "recipe_step", "히터 레시피 스텝", _M), ("heater", "recipe_finished", "히터 레시피 끝", _M),
+    ("heater", "recipe_step", "히터 레시피 단계", _M), ("heater", "recipe_finished", "히터 레시피 끝", _M),
     ("heater", "message", "히터 알림", _D),
     ("plc", "link_up", "장비 연결 복구", _M), ("plc", "link_down", "장비 연결 끊김", _M),
     ("plc", "plc_restarted", "PLC 재기동 감지", _M), ("plc", "marker_written", "재기동 마커 씀", _D),
@@ -364,8 +366,8 @@ EVENT_KINDS: tuple = (
     ("rfp", "csr_recovery", "명령 응답 복구", _D), ("rfp", "config_readback", "설정 되읽기", _D),
     ("rfp", "read_plan", "읽기 계획", _D), ("rfp", "retry", "다시 시도", _D), ("rfp", "adjusted", "공정 중 수정 적용", _D),
     ("rfp", "off_confirmed", "꺼짐 확인", _D), ("rfp", "off_unconfirmed", "꺼짐 미확인", _M),
-    ("ig", "identity_ok", "장비 식별", _D), ("ig", "filament_sent", "필라멘트 명령", _D),
-    ("ig", "filament_result", "필라멘트 결과", _M), ("ig", "parse_error", "응답 해석 실패", _D),
+    ("ig", "identity_ok", "장비 식별", _D), ("ig", "filament_sent", "Filament 명령", _D),
+    ("ig", "filament_result", "Filament 결과", _M), ("ig", "parse_error", "응답 해석 실패", _D),
 ) + tuple(x for w in _WORKERS for x in (
     (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "connect_retry", "연결 다시 시도", _D),
     (w, "disconnected", "장비 연결 끊김", _M), (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),

@@ -54,10 +54,10 @@ WATCH_MAIN: Dict[str, bool] = {"dc": True, "rf": True, "rfp": True, "flow": True
 # 조건 대기 블록이 볼 수 있는 스냅샷 값(snapshot_fields.columns() 의 열 — 시험이 확인)
 COND_FIELDS: tuple = (
     ("mfc.pressure_mtorr", "챔버 압력", "mTorr"), ("mfc.ar_sccm", "Ar 유량", "sccm"), ("mfc.o2_sccm", "O2 유량", "sccm"),
-    ("heater.pv", "히터 온도(TC1)", "°C"), ("heater.pv2", "히터 온도(TC2)", "°C"), ("ig.ion_torr", "이온 게이지 압력", "Torr"),
+    ("heater.pv", "히터 온도(TC1)", "°C"), ("heater.pv2", "히터 온도(TC2)", "°C"), ("ig.ion_torr", "Ion Gauge 압력", "Torr"),
     ("dc.p", "DC 파워", "W"), ("dc.v", "DC 전압", "V"), ("dc.i", "DC 전류", "A"),
-    ("rf.fwd_w", "RF 순방향", "W"), ("rf.ref_w", "RF 반사", "W"), ("rfp.fwd_w", "RF Pulse 순방향", "W"),
-    ("rfp.ref_w", "RF Pulse 반사", "W"),
+    ("rf.fwd_w", "RF Forward", "W"), ("rf.ref_w", "RF Reflected", "W"), ("rfp.fwd_w", "RF Pulse Forward", "W"),
+    ("rfp.ref_w", "RF Pulse Reflected", "W"),
 )
 COND_OPS: tuple = (("le", "≤ 값"), ("ge", "≥ 값"), ("near", "값 ± 허용"))
 
@@ -182,7 +182,7 @@ BLOCK_DEFS: tuple = (
         desc="2단 제어에서 지금 히터 목표(마지막 승온 블록)에 정착할 때까지 기다린다. 2단 제어가 돌고 있지 않으면 경고 뒤 다음으로 가며, tc2 모드는 메인 셔터 열기 직전 "
              "TC1·TC2 를 한 줄 기록만 한다. DC ±이탈 감시를 켠다(HEATER_CTRL_MODE=cascade·HEATER_SETTLE_SKIPPED·S31C, v1 "
              "_arm_dc_power_monitor)"),
-    BlockDef("base_wait", "베이스 압력 대기(IG)", (
+    BlockDef("base_wait", "베이스 압력 대기", (
         P("target_torr", "float", "Torr", required=True, param_min="BASE_PRESSURE_MIN_TORR", param_max="BASE_PRESSURE_MAX_TORR"),),
         "BASE_WAIT", steps="IG_FILAMENT_ON · IG_BASE_WAIT · IG_FILAMENT_OFF", v1="pc:1036-1273",
         desc="IG_ENABLED 가 꺼져 있으면 시작 거부(DEVICE_DISABLED)"),
@@ -297,48 +297,48 @@ _UI: Dict[str, tuple] = {
         "sec": ("연속 시간", "허용 폭 안에 이 시간 동안 이어지면 통과. 승온 대기를 통과한 뒤부터 셈. 비우면 설정값"),
         "max_sec": ("최대 대기", "넘으면 아래 '넘었을 때' 대로. 0 이면 이 블록을 하지 않음. 비우면 설정값", _ADV),
         "fail_action": ("넘었을 때", "비우면 설정값", _ADV, (("proceed", "경고 남기고 셔터 열고 진행"), ("abort", "공정 중단")))}),
-    "base_wait": ("prep", "이온 게이지를 켜고 압력이 목표 이하가 될 때까지 기다린 뒤 게이지를 끕니다. "
-                          "설정에서 이온 게이지가 꺼져 있으면 시작할 수 없습니다", ("target_torr",), {
-        "target_torr": ("목표 압력", "이온 게이지 압력이 이 값 이하가 될 때까지 기다림")}),
-    "gas_intro": ("gas", "영점을 맞추고 차단밸브를 연 뒤 정한 유량으로 가스를 넣습니다", ("ar_flow", "o2_flow"), {
-        "ar": ("Ar 사용", "켜면 Ar 차단밸브를 열고 정한 Ar 유량을 설정해 흘린다. 유량이 허용 범위에 들어올 때까지 기다리며, 'FLOW ON 유량 안정화 한도'를 넘으면 공정을 중단한다."), "ar_flow": ("Ar 유량", "Ar 을 쓰면 필요. 상한은 Ar MFC 풀스케일"),
-        "o2": ("O₂ 사용", "켜면 O₂ 차단밸브를 열고 정한 O₂ 유량을 설정해 흘린다. 유량이 허용 범위에 들어올 때까지 기다리며, 'FLOW ON 유량 안정화 한도'를 넘으면 공정을 중단한다."), "o2_flow": ("O₂ 유량", "O₂ 를 쓰면 필요. 상한은 O₂ MFC 풀스케일"),
+    "base_wait": ("prep", "Ion Gauge 를 켜고 압력이 목표 이하가 될 때까지 기다린 뒤 끕니다. "
+                          "설정에서 Ion Gauge 가 꺼져 있으면 시작할 수 없습니다", ("target_torr",), {
+        "target_torr": ("목표 압력", "Ion Gauge 압력이 이 값 이하가 될 때까지 기다림")}),
+    "gas_intro": ("gas", "영점을 맞추고 밸브를 연 뒤 정한 유량으로 가스를 넣습니다", ("ar_flow", "o2_flow"), {
+        "ar": ("Ar 사용", "켜면 Ar 밸브를 열고 정한 Ar 유량을 설정해 흘린다. 유량이 허용 범위에 들어올 때까지 기다리며, 'FLOW ON 유량 안정화 한도'를 넘으면 공정을 중단한다."), "ar_flow": ("Ar 유량", "Ar 을 쓰면 필요. 상한은 Ar MFC 풀스케일"),
+        "o2": ("O₂ 사용", "켜면 O₂ 밸브를 열고 정한 O₂ 유량을 설정해 흘린다. 유량이 허용 범위에 들어올 때까지 기다리며, 'FLOW ON 유량 안정화 한도'를 넘으면 공정을 중단한다."), "o2_flow": ("O₂ 유량", "O₂ 를 쓰면 필요. 상한은 O₂ MFC 풀스케일"),
         "zero": ("영점 맞추기", "가스를 넣기 전에 MFC 유량·압력 영점을 맞춤", _ADV)}),
-    "pressure": ("gas", "MFC 압력 설정점에 값을 쓰고 그 설정점으로 제어한 뒤, 압력이 들어올 때까지 기다립니다", ("sp", "value"), {
-        "sp": ("설정점 번호", "1 = 작업 압력(SP1), 2·3·4·5 = 중간 단계 압력"),
-        "value": ("압력", "비우면 SP2·SP3·SP4·SP5 는 설정의 단계 압력. SP1 은 설정점에 값을 쓸 때 값이 필요. "
+    "pressure": ("gas", "MFC 압력 SP 에 값을 쓰고 그 SP 로 제어한 뒤, 압력이 들어올 때까지 기다립니다", ("sp", "value"), {
+        "sp": ("SP 번호", "1 = 작업 압력(SP1), 2·3·4·5 = 중간 단계 압력"),
+        "value": ("압력", "비우면 SP2·SP3·SP4·SP5 는 설정의 단계 압력. SP1 은 장비에 값을 쓸 때 값이 필요. "
                            "프로그램 값을 장비에 쓰지 않으면 비워 둠"),
         "set": ("프로그램 값을 장비에 쓰기", "끄면 장비에 저장된 값을 그대로 쓰고, 그 값을 읽어 목표로 삼습니다"),
-        "select": ("이 설정점으로 제어", "끄면 값만 써 두고 제어 설정점은 그대로", _ADV),
+        "select": ("이 SP 로 제어", "끄면 값만 써 두고 제어 SP은 그대로", _ADV),
         "wait": ("도달 대기", "끄면 압력이 들어오기를 기다리지 않고 다음 블록으로"),
         "tol_ratio": ("허용 범위", "목표 대비 비율이다. 0.1 이면 ±10 %, 비우면 설정값을 쓴다", _ADV),
         "stable_sec": ("안정 시간", "허용 범위 안에 이 시간 동안 머물면 도달로 봄. 비우면 설정값", _ADV),
         "timeout_sec": ("최대 대기", "비우면 SP1 은 설정의 SP1 한도, 그 밖은 단계 한도", _ADV),
         "on_timeout": ("시간 초과 시", "비우면 SP1 은 공정 중단, 그 밖은 경고 남기고 다음으로", _ADV, _ON_TIMEOUT_LABELS)}),
     "valve": ("gas", "MFC 밸브를 열거나 닫거나, 지금 위치에서 멈춥니다", ("action",), {
-        "action": ("동작", "MFC 압력 조절 밸브를 설정점 제어 대신 직접 열거나 닫거나 지금 위치에서 멈춘다. 열기·닫기는 밸브 위치를 읽어 확인한 뒤 다음으로 가며, 닫기·멈춤은 공정 중 건너뛸 수 없다.", None, (("open", "열기"), ("close", "닫기"), ("hold", "지금 위치에서 멈춤")))}),
+        "action": ("동작", "MFC 압력 조절 밸브를 SP 제어 대신 직접 열거나 닫거나 지금 위치에서 멈춘다. 열기·닫기는 밸브 위치를 읽어 확인한 뒤 다음으로 가며, 닫기·멈춤은 공정 중 건너뛸 수 없다.", None, (("open", "열기"), ("close", "닫기"), ("hold", "지금 위치에서 멈춤")))}),
     "shutter": ("power", "고른 셔터를 열거나 닫습니다", ("action", "targets"), {
         "action": ("동작", "고른 셔터를 열지 닫을지 정한다. 셔터마다 PLC 에 쓰고 0.8 초 뒤 다음으로 가며, 닫기는 공정 중 건너뛸 수 없다.", None, (("open", "열기"), ("close", "닫기"))),
         "targets": ("셔터", "여러 개면 Gun1 → Gun2 → Main 순서로", None,
                     (("g1", "Gun1 셔터"), ("g2", "Gun2 셔터"), ("ms", "Main 셔터")))}),
     "power_on": ("power", "값을 넣은 파워(DC·RF·RF Pulse)를 함께 켭니다. 이미 켜져 있으면 목표만 바꿉니다",
                  ("dc_power", "rf_power", "rfp_power"), {
-        "dc_power": ("DC 파워", "DC 를 켤 목표 파워다. 비우면 DC 는 켜지 않고, 이미 켜져 있으면 다시 켜지 않고 목표만 바꾼다(상한은 설정 'DC 파워 상한')."), "rf_power": ("RF 파워", "RF 를 켤 목표 파워다. 1초마다 'RF 램프업 속도'만큼 올려 목표에 맞추며, 비우면 RF 는 켜지 않는다(상한은 설정 'RF 파워 상한')."), "rfp_power": ("RF Pulse 파워", "RF Pulse 를 켤 목표 파워다. 켤 때 설정점·펄스 설정을 쓰고 RF ON 한 뒤 주파수·듀티를 되읽어 확인하며, 설정에서 RF Pulse 를 쓰지 않으면 값을 넣을 수 없다."),
+        "dc_power": ("DC 파워", "DC 를 켤 목표 파워다. 비우면 DC 는 켜지 않고, 이미 켜져 있으면 다시 켜지 않고 목표만 바꾼다(상한은 설정 'DC 파워 상한')."), "rf_power": ("RF 파워", "RF 를 켤 목표 파워다. 1초마다 'RF 천천히 올리기 속도'만큼 올려 목표에 맞추며, 비우면 RF 는 켜지 않는다(상한은 설정 'RF 파워 상한')."), "rfp_power": ("RF Pulse 파워", "RF Pulse 를 켤 목표 파워다. 켤 때 SP·펄스 설정을 쓰고 RF ON 한 뒤 주파수·듀티를 되읽어 확인하며, 설정에서 RF Pulse 를 쓰지 않으면 값을 넣을 수 없다."),
         "rfp_freq_khz": ("RF Pulse 주파수", "비우면 장비에 설정된 주파수를 그대로 씀"),
         "rfp_duty": ("RF Pulse 듀티", "비우면 장비에 설정된 듀티를 그대로 씀"),
         "wait": ("목표 도달 대기", "끄면 켜기만 하고 바로 다음 블록으로"),
         "timeout_sec": ("최대 대기", "비우면 목표 파워에 맞춰 장비가 계산", _ADV)}),
     "power_off": ("power", "고른 파워를 끕니다. RF 는 천천히 내린 뒤 끕니다", ("dc", "rf", "rfpulse"), {
         "dc": ("DC 끄기", "켜면 DC 출력을 끈다. 꺼짐 확인은 따로 이어서 하고 블록은 바로 다음으로 간다."), "rf": ("RF 끄기", "천천히 내린 뒤 끄기"), "rfpulse": ("RF Pulse 끄기", "켜면 RF Pulse 출력을 끈다(꺼짐 확인은 따로 이어서 하고 블록은 바로 다음으로 간다). 설정에서 RF Pulse 를 쓰지 않으면 아무것도 하지 않는다.")}),
-    "gas_off": ("gas", "고른 가스의 유량을 끄고 차단밸브를 닫습니다", ("ar", "o2"), {
-        "ar": ("Ar 끄기", "켜면 Ar 채널 유량을 끈다. '차단밸브 닫기'가 켜져 있으면 Ar 차단밸브도 닫는다."), "o2": ("O₂ 끄기", "켜면 O₂ 채널 유량을 끈다. '차단밸브 닫기'가 켜져 있으면 O₂ 차단밸브도 닫는다."), "close_valves": ("차단밸브 닫기", "켜면 유량을 끈 뒤 이 블록에서 고른 가스의 차단밸브를 닫는다. 끄면 유량만 끄고 차단밸브는 열린 채 둔다.")}),
+    "gas_off": ("gas", "고른 가스의 유량을 끄고 밸브를 닫습니다", ("ar", "o2"), {
+        "ar": ("Ar 끄기", "켜면 Ar 채널 유량을 끈다. 'Ar·O₂ 밸브 닫기'가 켜져 있으면 Ar 밸브도 닫는다."), "o2": ("O₂ 끄기", "켜면 O₂ 채널 유량을 끈다. 'Ar·O₂ 밸브 닫기'가 켜져 있으면 O₂ 밸브도 닫는다."), "close_valves": ("Ar·O₂ 밸브 닫기", "켜면 유량을 끈 뒤 이 블록에서 고른 가스의 밸브를 닫는다. 끄면 유량만 끄고 밸브는 열린 채 둔다.")}),
     "heater_off": ("heater", "히터를 끕니다", (), {}),
     "wait": ("run", "정한 시간만큼 기다립니다. 공정 중에 '지금 대기 끝내기'로 바로 끝낼 수 있습니다", ("sec",), {
         "sec": ("시간", "기다릴 시간(초, 최대 7일)이다. 그동안 켜 둔 출력·가스는 그대로이며, 공정 중에 남은 시간을 멈추거나 바로 끝낼 수 있다."), "watch": _WATCH_TEXT}),
     "main": ("run", "Main 셔터를 열고 정한 시간 동안 증착합니다. 공정 중에 남은 시간을 바꿀 수 있습니다", ("sec",), {
         "sec": ("시간", "Main 셔터를 연 뒤 증착하는 시간(초)이다. 0 보다 커야 하며, 공정 중에 남은 시간을 바꿀 수 있다."), "close": ("끝에 Main 셔터 닫기", "끄면 다음 블록이나 정지 순서에서 닫힘"), "watch": _WATCH_TEXT}),
     "cond_wait": ("run", "고른 값이 조건을 만족할 때까지 기다립니다", ("field", "op", "value"), {
-        "field": ("볼 값", "조건을 볼 값(챔버 압력·유량·히터 온도·이온 게이지 압력·DC·RF·RF Pulse 값)이다. 값을 모르는 초는 판정을 바꾸지 않으며, 이온 게이지 값을 고르면 설정에서 이온 게이지를 써야 한다.", None, tuple((f, _O2(lab)) for f, lab, _ in COND_FIELDS)),
+        "field": ("볼 값", "조건을 볼 값(챔버 압력·유량·히터 온도·Ion Gauge 압력·DC·RF·RF Pulse 값)이다. 값을 모르는 초는 판정을 바꾸지 않으며, Ion Gauge 값을 고르면 설정에서 Ion Gauge를 써야 한다.", None, tuple((f, _O2(lab)) for f, lab, _ in COND_FIELDS)),
         "op": ("조건", "'≤ 값'은 기준 값 이하, '≥ 값'은 기준 값 이상, '값 ± 허용'은 기준 값과의 차이가 허용 범위 이하일 때 조건이 맞은 것으로 본다.", None, tuple(COND_OPS)),
         "value": ("기준 값", "조건에 쓰는 기준 값이다. 고른 값과 같은 단위로 넣는다."),
         "tol": ("허용 범위", "조건이 '값 ± 허용'일 때만(같은 단위)"),
@@ -346,10 +346,10 @@ _UI: Dict[str, tuple] = {
         "timeout_sec": ("최대 대기", "조건이 유지 시간 동안 이어지기를 기다리는 최대 시간(초)이다. 넘으면 '시간 초과 시' 설정대로 공정을 중단하거나 경고를 남기고 다음 블록으로 간다."),
         "on_timeout": ("시간 초과 시", "비우면 공정 중단", None, _ON_TIMEOUT_LABELS),
         "watch": _WATCH_TEXT}),
-    "repeat": ("flow", "안의 블록을 정한 횟수만큼 되풀이합니다", ("count",), {"count": ("반복 횟수", "안의 블록을 되풀이할 횟수(1~100)다. 반복은 4단까지 겹칠 수 있고, 펼친 스텝이 3000 개를 넘으면 레시피를 받지 않는다.")}),
+    "repeat": ("flow", "안의 블록을 정한 횟수만큼 되풀이합니다", ("count",), {"count": ("반복 횟수", "안의 블록을 되풀이할 횟수(1~100)다. 반복은 4단까지 겹칠 수 있고, 펼친 단계이 3000 개를 넘으면 레시피를 받지 않는다.")}),
     "end_stop": ("flow", "공정을 마치는 정지 순서를 실행합니다. 목록 끝에 없으면 자동으로 덧붙습니다. 파워 끄기는 뺄 수 없습니다",
                  ("skip",), {
-        "skip": ("뺄 정지 단계", "필라멘트·셔터·히터·가스 단계만 뺄 수 있음(파워 끄기는 늘 실행)")}),
+        "skip": ("뺄 정지 단계", "Filament·셔터·히터·가스 단계만 뺄 수 있음(파워 끄기는 늘 실행)")}),
 }
 
 
@@ -753,7 +753,7 @@ def template_blocks(p: Dict[str, Any], cfg: Mapping[str, Any], *, ig_enabled: bo
     out.append(B("wait", f"압력 안정화 대기({stab}초)", "GAS_STABILIZE", sec=stab, watch=None))
     guns = [g for g, k in (("g1", "use_g1"), ("g2", "use_g2")) if p.get(k)]
     if guns:
-        out.append(B("shutter", "건 셔터 열기", "GUN_SHUTTER", action="open", targets=guns))
+        out.append(B("shutter", "Gun 셔터 열기", "GUN_SHUTTER", action="open", targets=guns))
     dc_w, rf_w = float(p.get("dc_power", 0.0) or 0.0), float(p.get("rf_power", 0.0) or 0.0)
     rfp_w = float(p.get("rf_pulse_power") or 0) if p.get("use_rf_pulse") else 0.0
     fhz = p.get("rf_pulse_freq_hz")
@@ -1107,8 +1107,8 @@ _ADJUST_UI: Dict[str, tuple] = {
     "rfpulse.duty": ("RF Pulse 듀티", _RFP_LIVE),
     "heater.target": ("히터 목표 온도", "히터 목표를 낸 뒤면 바로 바뀝니다. 도달 대기 중이면 새 목표로 기다립니다"),
     "heater.ramp": ("히터 승온 속도", "히터 승온을 시작한 뒤면 바로 바뀝니다"),
-    "process.main_remaining": ("메인 남은 시간", "메인 블록 중이면 남은 시간이 이 값이 됩니다. 아직이면 다음 메인 블록 길이가 됩니다"),
-    "process.skip_wait": ("지금 대기 끝내기", "대기·조건 대기 블록 중에만 쓸 수 있습니다"),
+    "process.main_remaining": ("메인 남은 시간", "메인 단계 중이면 남은 시간이 이 값이 됩니다. 아직이면 다음 메인 단계 길이가 됩니다"),
+    "process.skip_wait": ("지금 대기 끝내기", "대기·조건 대기 단계 중에만 쓸 수 있습니다"),
 }
 
 
