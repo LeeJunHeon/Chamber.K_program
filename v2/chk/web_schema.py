@@ -88,6 +88,9 @@
                 버전 20(5-22): 웹 연결 사건 이름표(①) — eventSources "uplink"(웹 연결), eventKinds uplink_up·uplink_down·
                 uplink_auth_failed·uplink_conflict·uplink_gap·uplink_spool_loaded·uplink_spool_error·uplink_spool_full·uplink_too_large·
                 uplink_bad_command(이름·설명·수준). 기록에 남는 code(UPLINK_*)는 그대로
+                명령 이름(②): MANUAL_BLOCK "수동 조작"(전 "수동 조작: 블록 하나 실행"), 진행 중 건너뛰기·일시정지 "지금 단계 …",
+                내부 정지 명령 이름을 운전자 말로(예 "DC 출력 끄기(꺼짐 확인)"), 수동 조작·건너뛰기·일시정지 사유 이름의 '블록' → 조작·단계.
+                명령 종류(kind)·사유 코드는 그대로. 블록 레시피 편집 명령(PROCESS_EDIT)의 '블록'은 레시피 용어라 그대로
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다

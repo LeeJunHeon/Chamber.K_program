@@ -62,17 +62,17 @@ CHK_REASONS: tuple = (
     Reason("ADJUST_OUT_OF_RANGE", "공정 중 수정: 범위 밖(레시피와 같은 상한·펄스 ON/OFF 시간)", "reject"),
     Reason("ADJUST_NOT_APPLICABLE", "공정 중 수정: 지금 블록에 해당 없음(대기 끝내기는 대기·조건 대기 블록만)", "reject"),
     Reason("ADJUST_BUSY", "공정 중 수정: RF Pulse 가 시작하는 중이라 끝난 뒤에 할 수 있음", "reject"),
-    Reason("SKIP_STALE", "건너뛰기: 화면이 본 블록·판이 지금과 달라 받지 않음. 다시 보고 누를 것", "reject"),
-    Reason("PAUSE_STALE", "일시정지·재개: 화면이 본 블록·판이 지금과 달라 받지 않음. 다시 보고 누를 것", "reject"),
+    Reason("SKIP_STALE", "건너뛰기: 화면이 본 단계·판이 지금과 달라 받지 않음. 다시 보고 누를 것", "reject"),
+    Reason("PAUSE_STALE", "일시정지·재개: 화면이 본 단계·판이 지금과 달라 받지 않음. 다시 보고 누를 것", "reject"),
     Reason("EDIT_STALE", "순서 고치기: 화면이 본 판이 지금과 달라 받지 않음. 다시 받아 고칠 것", "reject"),
-    Reason("SKIP_NOT_ALLOWED", "이 블록은 건너뛸 수 없음(끄기·닫기·정상 끝 정지 등)", "reject"),
-    Reason("PAUSE_NOT_ALLOWED", "이 블록은 멈출 수 없음(바로 끝나는 명령 블록 등)", "reject"),
+    Reason("SKIP_NOT_ALLOWED", "이 단계는 건너뛸 수 없음(끄기·닫기·정상 끝 정지 등)", "reject"),
+    Reason("PAUSE_NOT_ALLOWED", "이 단계는 멈출 수 없음(바로 끝나는 명령 등)", "reject"),
     Reason("EDIT_TOUCHES_STARTED", "순서 고치기: 시작했거나 끝난 블록과 그 앞 순서는 바꿀 수 없음", "reject"),
     Reason("PROCESS_PAUSED", "이미 일시정지 중", "reject"),
     Reason("PROCESS_NOT_PAUSED", "일시정지 중이 아님", "reject"),
     Reason("MANUAL_ACTIVE", "수동 조작 중이라 받지 않음. 수동 조작을 먼저 끝낼 것", "reject"),
-    Reason("MANUAL_BUSY", "수동 조작: 블록이 실행 중이라 끝난 뒤에 다음 블록을 보낼 수 있음", "reject"),
-    Reason("MANUAL_BLOCK_NOT_ALLOWED", "수동 조작에서 쓰지 않는 블록(가스·압력·밸브·셔터·파워 블록만)", "reject"),
+    Reason("MANUAL_BUSY", "수동 조작: 앞 조작이 진행 중이라 끝난 뒤에 할 수 있음", "reject"),
+    Reason("MANUAL_BLOCK_NOT_ALLOWED", "수동 조작에서 받지 않는 조작(가스·압력·밸브·셔터·파워만)", "reject"),
     Reason("MANUAL_NOT_ACTIVE", "수동 조작 중이 아님", "reject"),
     # 공정 중단(abort)
     Reason("MV_CLOSED", "공정 중 메인 밸브 닫힘", "abort"),
@@ -157,13 +157,13 @@ CHK_REASONS: tuple = (
     Reason("HEATER_SETTLE_SKIPPED", "2단 제어가 돌고 있지 않아 셔터 전 히터 정착 확인을 생략함", "info"),
     Reason("HEATER_SETTLE_TIMEOUT", "셔터 전 히터가 정착하지 않아 경고를 남기고 셔터를 열어 진행함", "info"),
     Reason("HEATER_SETTLE_NOT_CHECKED", "셔터 전 히터 정착 확인 없이 진행(사용자 건너뛰기)", "info"),
-    Reason("PROCESS_SKIP", "공정 중 블록 건너뛰기 기록(누가·블록·정리한 것)", "info"),
-    Reason("PROCESS_PAUSE", "공정 중 일시정지 기록(누가·블록·남은 시간)", "info"),
+    Reason("PROCESS_SKIP", "공정 중 단계 건너뛰기 기록(누가·단계·정리한 것)", "info"),
+    Reason("PROCESS_PAUSE", "공정 중 일시정지 기록(누가·단계·남은 시간)", "info"),
     Reason("PROCESS_RESUME", "일시정지 재개 기록(누가·멈춘 시간)", "info"),
     Reason("PROCESS_EDIT", "공정 중 순서 고치기 기록(판 번호·누가·바뀐 것·전체 블록)", "info"),
     Reason("PAUSE_LONG", "일시정지가 길어져 곧 정지 순서를 실행함", "info"),
     # 수동 조작(5-20 ③)
-    Reason("MANUAL_BLOCK", "수동 조작 블록 기록(누가·웹/노트북·블록·결과)", "info"),
+    Reason("MANUAL_BLOCK", "수동 조작 기록(누가·웹/노트북·조작·결과)", "info"),
     Reason("MANUAL_END", "수동 조작 끝내기(정지 순서로 모두 끄기)", "info"),
 )
 
@@ -287,12 +287,12 @@ COMMANDS: tuple = (
       (_a("row", "obj", False, desc="레시피 한 행이다. 수동 공정은 히터를 쓰지 않아 히터 열은 무시한다(recipe.PROCESS_COLUMNS)"),
        _a("blocks", "rows", False, desc="row 대신 쓰는 블록 목록이다(blocks.BLOCK_DEFS)"),
        _a("name", "str", False, desc="실행 이름(공정 기록)이다. 비우면 행의 process_name, 그것도 없으면 Single CHK 이다")),
-      desc="row 또는 blocks 하나", v1="PROCESS_START"),
+      desc="한 행 공정 또는 블록 레시피 하나를 바로 시작한다(row·blocks)", v1="PROCESS_START"),
     C("RECIPE_LOAD", "공정 레시피 적재", (WEB,), "operator", IDLE_STATES, ("RECIPE_VALID", "IG_FOR_BASE"),
       (_a("name", "str"), _a("rows", "rows", False, desc="행 목록이다. v1 행·딜레이 행·블록 행 {process_name, blocks} 을 쓸 수 "
                                                          "있다(recipe.PROCESS_COLUMNS)"),
        _a("blocks", "rows", False, desc="rows 대신 쓰는 블록 목록 하나이다(블록 행 하나와 같다)")),
-      desc="rows 또는 blocks 하나. 블록 검사는 값 범위·꺼진 장비만(순서 규칙 없음)", v1="RECIPE_PROCESS_RUN"),
+      desc="공정 레시피(행 목록 또는 블록 레시피 하나)를 장비에 올린다. 블록 레시피 검사는 값 범위·꺼진 장비만 본다(순서 규칙 없음, rows·blocks)", v1="RECIPE_PROCESS_RUN"),
     C("RECIPE_CLEAR", "레시피 적재 해제", (WEB,), "operator", (ANY_STATE,),
       desc="적재가 없으면 아무것도 하지 않고 성공, 공정 중이면 PROCESS_RUNNING(v1 B5)", v1="RECIPE_CLEAR"),
     C("RECIPE_START", "적재 레시피 시작", (WEB,), "operator", IDLE_STATES,
@@ -350,19 +350,19 @@ COMMANDS: tuple = (
       desc="이번 공정의 그 값을 바꾼다. 지금 쓰는 블록이면 바로 바꾸고(드라이버 경로·되읽기), 아직 오지 않은 블록이면 그 블록이 새 값을 쓴다. 공정 밖이나 정지 중이면 "
            "받지 않는다(PROCESS_NOT_RUNNING, 기록 ProcEvent adjust·PROCESS_ADJUST)", v1="v2"),
     # 공정 중 건너뛰기·일시정지·순서 고치기(5-15) — 판단은 장비(process_engine), 규칙은 blocks.BlockDef skip·pause
-    C("PROCESS_SKIP", "지금 블록 건너뛰기", (WEB, HMI), "operator", ACTIVE_STATES, (),
-      (_a("no", "str", desc="지금 블록 번호이다. 반복 안이면 그 안쪽 번호, 딜레이 행은 delay 이다(state.run.current)"),
+    C("PROCESS_SKIP", "지금 단계 건너뛰기", (WEB, HMI), "operator", ACTIVE_STATES, (),
+      (_a("no", "str", desc="지금 단계 번호이다. 반복 안이면 그 안쪽 번호, 딜레이 행은 delay 이다(state.run.current)"),
        _a("revision", "int", min=0, desc="지금 판 번호(state.run.revision, 딜레이 행 0)")),
-      desc="지금 블록을 끝내고 다음으로 간다. 정리는 블록 정의를 따른다(기다림만 끝내기·Main 셔터 닫기·필라멘트 끄기·보낸 명령 그대로). 화면이 본 블록이 다르거나 건너뛸 수 없는 "
-           "블록이거나 정지 순서 중이면 받지 않는다(SKIP_STALE·SKIP_NOT_ALLOWED·STATE_NOT_ALLOWED, 기록 ProcEvent skip·PROCESS_SKIP)",
+      desc="지금 단계를 끝내고 다음으로 간다. 정리는 그 단계의 정의를 따른다(기다림만 끝내기·Main 셔터 닫기·필라멘트 끄기·보낸 명령 그대로). 화면이 본 단계가 다르거나 "
+           "건너뛸 수 없는 단계이거나 정지 순서 중이면 받지 않는다(SKIP_STALE·SKIP_NOT_ALLOWED·STATE_NOT_ALLOWED, 기록 ProcEvent skip·PROCESS_SKIP)",
       v1="v2"),
-    C("PROCESS_PAUSE", "지금 블록 일시정지", (WEB, HMI), "operator", ACTIVE_STATES, (),
-      (_a("no", "str", desc="지금 블록 번호"), _a("revision", "int", min=0, desc="지금 판 번호")),
-      desc="지금 블록을 멈춘다. 대기·딜레이는 남은 시간을, 메인은 Main 셔터를 닫고 남은 시간을, 도달 대기는 판정과 시간 한도를 멈춘다. 안전 규칙·STOP·ALL "
+    C("PROCESS_PAUSE", "지금 단계 일시정지", (WEB, HMI), "operator", ACTIVE_STATES, (),
+      (_a("no", "str", desc="지금 단계 번호"), _a("revision", "int", min=0, desc="지금 판 번호")),
+      desc="지금 단계를 멈춘다. 대기·딜레이는 남은 시간을, 메인은 Main 셔터를 닫고 남은 시간을, 도달 대기는 판정과 시간 한도를 멈춘다. 안전 규칙·STOP·ALL "
            "STOP·공정 중 수정은 그대로이며, 한도를 넘으면 정지 순서를 실행한다(PROCESS_PAUSE_MAX_SEC·PAUSE_TIMEOUT)", v1="v2"),
     C("PROCESS_RESUME", "일시정지 재개", (WEB, HMI), "operator", ACTIVE_STATES, (),
       (_a("revision", "int", min=0, desc="지금 판 번호"),),
-      desc="멈춘 블록 이어서(메인은 셔터를 다시 염, 도달 대기는 안정 유지 시간을 처음부터)", v1="v2"),
+      desc="멈춘 단계를 이어서 한다. 메인 단계는 셔터를 다시 열고, 도달 대기는 안정 유지 시간을 처음부터 잰다", v1="v2"),
     C("PROCESS_EDIT", "진행 중 순서 고치기", (WEB,), "operator", ACTIVE_STATES, (),
       (_a("revision", "int", min=1, desc="지금 판 번호"),
        _a("blocks", "rows", desc="지금 행의 새 블록 전체 목록이다. 장비가 실행하는 정리 목록을 고친 것이다(state.run.editBase.blocks, 5-16)")),
@@ -370,17 +370,17 @@ COMMANDS: tuple = (
            "검사 뒤 판을 1 올리고 지금 블록은 끊지 않고 남은 부분을 새 목록으로 실행한다(EDIT_TOUCHES_STARTED·check_blocks, 기록 ProcEvent "
            "edit·PROCESS_EDIT)", v1="v2"),
     # 수동 조작(5-20 ③) — 블록을 하나씩 실행하는 공정(공정 엔진·블록 실행기·감시·안전 규칙·정지 순서를 그대로 쓴다)
-    C("MANUAL_BLOCK", "수동 조작: 블록 하나 실행", (WEB,), "operator", (ANY_STATE,),
+    C("MANUAL_BLOCK", "수동 조작", (WEB,), "operator", (ANY_STATE,),
       ("PLC_FRESH", "MV_OPEN", "MV_ITL_ON", "NO_HEATER_GAS"),
-      (_a("block", "obj", desc="블록 하나 {type, params, label?} 이다. 종류는 수동 조작 블록만 쓸 수 있고 값 검사는 블록 공정과 "
-                               "같다(blocks.MANUAL_BLOCK_TYPES·check_blocks)"),),
-      desc="블록 하나를 실행한다. 공정이 없으면(대기·적재 없음) 수동 조작을 시작하며, 시작 조건·검사는 수동 공정 시작(블록)과 같고 끝 정지는 붙이지 않는다. 블록이 끝나면 수동 대기가 되고 "
-           "감시·안전 규칙은 공정과 같다. 블록이 실행 중이거나 공정 중이거나 쓰지 않는 블록이면 받지 "
+      (_a("block", "obj", desc="조작 하나이다. 가스·압력·밸브·셔터·파워 조작만 쓸 수 있고 값 검사는 블록 레시피와 "
+                               "같다({type, params, label?}, blocks.MANUAL_BLOCK_TYPES·check_blocks)"),),
+      desc="가스·압력·밸브·셔터·파워 조작 하나를 실행한다. 공정이 없으면(대기·적재 없음) 수동 조작을 시작하며, 시작 조건·검사는 공정 시작과 같고 끝 정지는 붙이지 않는다. "
+           "조작이 끝나면 다음 조작을 기다리고 감시·안전 규칙은 공정과 같다. 앞 조작이 진행 중이거나 공정 중이거나 수동 조작에서 받지 않는 조작이면 받지 "
            "않는다(MANUAL_WAIT·MANUAL_BUSY·PROCESS_RUNNING·MANUAL_BLOCK_NOT_ALLOWED, 기록 ProcEvent manual·MANUAL_BLOCK)",
       v1="v2"),
     C("MANUAL_END", "수동 조작 끝내기(모두 끄기)", (WEB,), "operator", (ANY_STATE,), (),
-      desc="STOP 과 같은 정지 순서(표 전체)로 모두 끄고 run_end done(MANUAL_END). 수동 조작 중이 아니면 MANUAL_NOT_ACTIVE. "
-           "정지 순서 중이면 아무것도 하지 않고 성공", v1="v2"),
+      desc="STOP 과 같은 정지 순서로 가스·파워·셔터를 모두 끄고 수동 조작을 끝낸다. 수동 조작 중이 아니면 받지 않고, 정지 순서 중이면 아무것도 하지 않고 "
+           "성공한다(run_end done·MANUAL_END·MANUAL_NOT_ACTIVE)", v1="v2"),
     # 설정
     C("CONFIG_APPLY", "설정 적용", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),
       (_a("version", "int", min=1), _a("values", "obj"), _a("schemaHash", "str")),
@@ -394,27 +394,27 @@ COMMANDS: tuple = (
     # 내부(안전·공정 엔진) 조치 — safety_rules 의 action 이 이것들을 쓴다
     C("PROCESS_ABORT", "공정 중단", (INT,), "system", STOPPABLE, (), (_a("reason", "str"),)),
     C("START_REJECT", "시작 거부", (INT,), "system", (ANY_STATE,), (), (_a("reason", "str"),)),
-    C("DC_SAFE_OFF", "DC 출력 OFF(확인형)", (INT,), "system", (ANY_STATE,)),
-    C("RF_SAFE_OFF", "RF DAC 0·enable OFF", (INT,), "system", (ANY_STATE,)),
-    C("RFP_SAFE_OFF", "RF Pulse RF OFF(확인형)", (INT,), "system", (ANY_STATE,)),
-    C("RF_RAMP_DOWN", "RF 램프다운", (INT,), "system", (ANY_STATE,)),
-    C("HEATER_FORCE_OFF", "히터 RUN=0(링크 없으면 보류 뒤 적용)", (INT,), "system", (ANY_STATE,)),
+    C("DC_SAFE_OFF", "DC 출력 끄기(꺼짐 확인)", (INT,), "system", (ANY_STATE,)),
+    C("RF_SAFE_OFF", "RF 출력 끄기(목표 0, 출력 허용 해제)", (INT,), "system", (ANY_STATE,)),
+    C("RFP_SAFE_OFF", "RF Pulse 출력 끄기(꺼짐 확인)", (INT,), "system", (ANY_STATE,)),
+    C("RF_RAMP_DOWN", "RF 천천히 내리기", (INT,), "system", (ANY_STATE,)),
+    C("HEATER_FORCE_OFF", "히터 운전 끄기(연결이 없으면 다시 연결된 뒤)", (INT,), "system", (ANY_STATE,)),
     C("HEATER_RECIPE_ABORT", "히터 레시피 중단", (INT,), "system", (ANY_STATE,), (), (_a("reason", "str"),)),
     C("HEATER_PUSH_CONFIG", "히터 한계값 쓰기·되읽기", (INT,), "system", (ANY_STATE,)),
-    C("HEATER_CLAMP_MV", "히터 MV 상한 클램프", (INT,), "system", (ANY_STATE,), (), (_a("value", "int"),)),
+    C("HEATER_CLAMP_MV", "히터 출력 상한 걸기", (INT,), "system", (ANY_STATE,), (), (_a("value", "int"),)),
     C("HEATER_GAS_HOLD", "냉각 보호 가스 유지", (INT,), "system", (ANY_STATE,)),
-    C("HEATER_RESIDUAL_CLEAR", "남은 RUN 정리(RUN=0, SV=PV)", (INT,), "system", (ANY_STATE,)),
-    C("GAS_FLOW_OFF", "MFC 전체 유량 OFF", (INT,), "system", (ANY_STATE,)),
+    C("HEATER_RESIDUAL_CLEAR", "남은 히터 운전 정리(목표를 지금 온도로)", (INT,), "system", (ANY_STATE,)),
+    C("GAS_FLOW_OFF", "MFC 유량 모두 끄기", (INT,), "system", (ANY_STATE,)),
     C("GAS_EXHAUST", "MFC 밸브 열기(배기)", (INT,), "system", (ANY_STATE,)),
-    C("GAS_VALVES_CLOSE", "Ar·O2 차단밸브 닫기", (INT,), "system", (ANY_STATE,)),
-    C("SHUTTERS_CLOSE", "셔터 닫기(MS·S1·S2)", (INT,), "system", (ANY_STATE,), (), (_a("which", "str", False),)),
+    C("GAS_VALVES_CLOSE", "Ar·O₂ 차단밸브 닫기", (INT,), "system", (ANY_STATE,)),
+    C("SHUTTERS_CLOSE", "셔터 닫기(Main·Gun1·Gun2)", (INT,), "system", (ANY_STATE,), (), (_a("which", "str", False),)),
     C("MV_CLOSE", "메인 밸브 닫기", (INT,), "system", (ANY_STATE,)),
-    C("PLC_OUTPUTS_OFF", "PLC 비상 정지(모든 출력 OFF)", (INT,), "system", (ANY_STATE,),
+    C("PLC_OUTPUTS_OFF", "PLC 비상 정지(모든 출력 끄기)", (INT,), "system", (ANY_STATE,),
       desc="버튼 코일 전부·히터 RUN·D00040·M00200 OFF"),
-    C("IG_FILAMENT_OFF", "이온 게이지 필라멘트 OFF", (INT,), "system", (ANY_STATE,)),
-    C("BLACKBOX_DUMP", "PLC 블랙박스 파일로", (INT,), "system", (ANY_STATE,)),
+    C("IG_FILAMENT_OFF", "이온 게이지 필라멘트 끄기", (INT,), "system", (ANY_STATE,)),
+    C("BLACKBOX_DUMP", "PLC 블랙박스를 파일로 저장", (INT,), "system", (ANY_STATE,)),
     C("LOCK_CONTROLS", "조작 잠금(값 오래됨·링크 끊김)", (INT,), "system", (ANY_STATE,)),
-    C("PLC_MARKER_WRITE", "PLC 재기동 마커 쓰기", (INT,), "system", (ANY_STATE,)),
+    C("PLC_MARKER_WRITE", "PLC 재기동 표시 쓰기", (INT,), "system", (ANY_STATE,)),
     C("NOTIFY", "이벤트·알람 보내기", (INT,), "system", (ANY_STATE,), (), (_a("level", "str"), _a("code", "str"))),
 )
 
