@@ -578,7 +578,7 @@ def test_cross_rule_x27_tc2_target_limit_must_fit_under_sv2_cap():
 
 def test_snapshot_enum_labels_cover_tc2():
     f = {x.name: x for x in SF.HEATER_BLOCK.fields}
-    assert dict(f["ctrl_mode"].enum_labels) == {"tc2": "TC2 단독 제어", "cascade": "2단 제어(TC2 + TC1 보정)",
+    assert dict(f["ctrl_mode"].enum_labels) == {"tc2": "TC2 단독 제어", "cascade": "2단 제어",
                                                "tc1": "TC1 직접 제어"}
     assert set(dict(f["ctrl_mode"].enum_labels)) == set(HC.CTRL_MODES)
     assert dict(f["casc_state"].enum_labels) == HC.STATE_TEXT and "TC2 제어(단독)" in f["casc_state"].desc

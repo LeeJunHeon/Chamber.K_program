@@ -303,7 +303,7 @@ def test_bundle_exports_new_keys_choices_and_groups():
     # 장비별 묶음: 포트·속도·패리티·시간이 같은 장비끼리
     groups = dict((g["key"], g["label"]) for g in b["paramGroups"])
     assert [groups[k] for k in ("comm_plc", "comm_mfc", "comm_dc", "comm_rfpulse", "comm_ig")] == \
-        ["PLC 통신", "MFC 통신", "DC Power 통신", "RF Pulse 통신", "이온 게이지 통신"]
+        ["PLC 통신", "MFC 통신", "DC Power 통신", "RF Pulse 통신", "Ion Gauge 통신"]
     for g, keys in P.COMM_GROUPS:
         for k in keys:
             if k in ps:
