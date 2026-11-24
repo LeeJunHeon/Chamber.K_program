@@ -399,3 +399,25 @@ def test_float_keys_in_config_ack_cfg_and_bundle(tmp_path):
     assert ca.rollback({}, "web") is None
     assert acks[-1]["kind"] == "rollback" and '"HEATER_MAX_TEMP": 650.0' in json.dumps(acks[-1]["values"])
     assert type(cfg["HEATER_MAX_TEMP"]) is float and cfg["HEATER_MAX_TEMP"] == 650.0
+
+
+# 5-23 ⑥ — 설정 이름(label)만 바뀌어 paramSchemaHash 가 달라져도, 예전 schemaHash 로 저장된 config_active.json 의 값은 그대로 쓴다
+def test_old_schema_hash_file_keeps_values_after_label_change(tmp_path):
+    import json as _json
+    from v2.chk import params as P_
+    from v2.common import config_store as CS_
+    from v2.common.paramdef import defaults as _defaults, schema_hash as _sh
+    now = _sh(P_.PARAMS, P_.CROSS_RULES)
+    old = "0" * 64                                                   # 묶음 20 때의 해시라고 본다(지금과 다름)
+    assert old != now
+    vals = {k: v for k, v in _defaults(P_.PARAMS).items() if k not in {p.key for p in P_.PARAMS if p.scope is CS_.Scope.SECRET}}
+    vals["IG_SETTLE_SEC"] = vals["IG_SETTLE_SEC"] + 1                 # 이름이 바뀐 설정('Emission 뒤 판정 제외 시간')
+    vals["MV_INTERLOCK_ABORT_MS"] = vals["MV_INTERLOCK_ABORT_MS"] + 100
+    body = {"version": 7, "schemaHash": old, "savedAt": "2026-11-24T00:00:00", "values": vals,
+            "contentHash": CS_._content_hash(7, old, vals)}
+    (tmp_path / CS_.ACTIVE).write_text(_json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    st = CS_.ConfigStore(tmp_path, P_.PARAMS, P_.CROSS_RULES, now)
+    st.load()
+    assert st.version == 7
+    assert st.values["IG_SETTLE_SEC"] == vals["IG_SETTLE_SEC"] and st.values["MV_INTERLOCK_ABORT_MS"] == vals["MV_INTERLOCK_ABORT_MS"]
+    assert any("파라미터 정의가 바뀜" in n for n in st.notes)

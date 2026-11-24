@@ -93,6 +93,7 @@
                 명령 종류(kind)·사유 코드는 그대로. 블록 레시피 편집 명령(PROCESS_EDIT)의 '블록'은 레시피 용어라 그대로
                 버전 21(5-23): 화면 이름을 용어표 하나로(①) — 장비·부품·신호는 영문(MV·Door·Water·Ionizer·Ion Gauge·Filament·
                 Forward·Reflected), Ar 밸브·Gun1 셔터·인터락·SP·정지 순서, 블록과 같은 상태 이름, 괄호 없는 명령 이름. 식별자는 그대로
+                snapshot 필드 help(②, 운전자용 설명 — desc 는 개발용 그대로), reasons[].label 짧게·help(③), eventKinds desc 다듬음(④)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
