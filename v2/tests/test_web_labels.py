@@ -319,4 +319,4 @@ def test_event_kinds_have_desc_and_operator_names():
     for word in ("눈금", "펼친 스텝", "읽기 계획", "블록"):
         assert not any(word == e["label"] or e["label"].startswith(word) for e in ek), word
     by = {(e["source"], e["kind"]): e for e in ek}
-    assert by[("mfc", "scale")]["label"] == "압력·유량 범위 확인" and by[("dc", "disconnected")]["desc"].startswith("장비 연결이 끊겼다")
+    assert by[("mfc", "scale")]["label"] == "압력·유량 범위 확인" and by[("dc", "disconnected")]["desc"].startswith("장비 연결이 끊겼습니다")
