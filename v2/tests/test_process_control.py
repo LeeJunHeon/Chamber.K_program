@@ -158,7 +158,7 @@ def test_stale_and_not_allowed_and_not_paused(tmp_path):
     assert [x.reason for x in _res(r)] == [None, "SKIP_STALE", "SKIP_STALE", "PAUSE_STALE", "PROCESS_NOT_PAUSED",
                                            "EDIT_STALE", None, "PROCESS_PAUSED", None, "SKIP_NOT_ALLOWED",
                                            "PAUSE_NOT_ALLOWED"]
-    assert "끄기·닫기 블록은 건너뛸 수 없음" in [x.detail for x in _res(r)]
+    assert "끄기·닫기 단계는 건너뛸 수 없음" in [x.detail for x in _res(r)]
     assert _ends(r) == [("done", None)]
 
 
@@ -313,7 +313,7 @@ def test_state_run_blocks_full_only_when_changed_or_every_10s(tmp_path):
     b = full[-1]["blocks"]
     assert [(x["no"], x["status"], x["skip"], x["pause"]) for x in b[:2]] == [("1", "running", True, True),
                                                                               ("2", "waiting", False, False)]
-    assert b[0]["durationS"] == 40 and b[1]["skipText"] == "끄기·닫기 블록은 건너뛸 수 없음"
+    assert b[0]["durationS"] == 40 and b[1]["skipText"] == "끄기·닫기 단계는 건너뛸 수 없음"
 
 
 def test_hub_run_end_summary_has_executed(tmp_path):
