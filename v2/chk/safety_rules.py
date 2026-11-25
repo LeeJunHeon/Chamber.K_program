@@ -72,7 +72,7 @@ ACT = ("*ACTIVE",)
 
 RULES: tuple = (
     # ── MV·인터록 ──
-    R("S1", "메인 밸브 시작 인터록", "reject", "command",
+    R("S1", "MV 시작 인터락", "reject", "command",
       "시작(PROCESS_START·RECIPE_START·HEATER_ON 가스) 때 plc.mv 와 plc.mv_interlock 이 모두 참이고 PLC 값이 신선",
       ("plc.mv", "plc.mv_interlock", "plc.q", "plc.age_s"), ("HEATER_STALE_SEC",),
       actions=(_rej("MV_NOT_OPEN"), _rej("MV_INTERLOCK_OFF"), _rej("MV_STATE_UNKNOWN")),

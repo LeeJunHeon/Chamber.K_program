@@ -188,7 +188,7 @@ PRECONDITIONS: tuple = (
     Pre("RUNNING", "공정 진행 중", "PROCESS_NOT_RUNNING"),
     Pre("RECIPE_LOADED", "레시피 적재됨", "RECIPE_NOT_LOADED", "erp_commands RECIPE_PROCESS_START"),
     Pre("NO_RECIPE_LOADED", "레시피가 적재되지 않음(수동 시작)", "RECIPE_LOADED", "process_service.start 원격 수동"),
-    Pre("MV_OPEN", "메인 밸브가 켜져 있고 값이 신선해야 함(M00003)", "MV_NOT_OPEN", "main.py:3675"),
+    Pre("MV_OPEN", "MV가 켜져 있고 값이 신선해야 함(M00003)", "MV_NOT_OPEN", "main.py:3675"),
     Pre("MV_ITL_ON", "MV_INTERLOCK(M00032) 켜짐", "MV_INTERLOCK_OFF", "main.py:3675"),
     Pre("PLC_FRESH", "PLC 값 품질 ok, 나이 ≤ HEATER_STALE_SEC", "MV_STATE_UNKNOWN", "main.py:3675(읽기 실패도 거부)"),
     Pre("PLC_LINK_UP", "PLC 통신 정상", "LINK_DOWN", "erp_commands:207"),
@@ -196,7 +196,7 @@ PRECONDITIONS: tuple = (
     Pre("HEATER_RECIPE_NO_CONFLICT", "히터 레시피 실행 중이면 공정 레시피에 히터 행 없음", "HEATER_RECIPE_CONFLICT",
         "process_service.start"),
     Pre("HEATER_ENABLED", "HEATER_ENABLED", "HEATER_DISABLED"),
-    Pre("HEATER_ITL", "히터 인터록(M00041) 정상", "HEATER_ITL_OFF", "main.py:1677"),
+    Pre("HEATER_ITL", "히터 인터락(M00041) 정상", "HEATER_ITL_OFF", "main.py:1677"),
     Pre("HEATER_NO_FAULT", "히터 이상(M00042) 아님", "HEATER_FAULT_ACTIVE"),
     Pre("HEATER_IS_FAULT", "히터 이상 상태", "HEATER_NOT_FAULT", "main.py:3260"),
     Pre("HEATER_RUN_OFF", "히터 RUN 꺼짐(리셋 전)", "HEATER_RUN_ON", "main.py:3260"),
@@ -207,7 +207,7 @@ PRECONDITIONS: tuple = (
     Pre("IG_FOR_BASE", "base_pressure 행이 있으면 IG_ENABLED", "IG_DISABLED"),
     Pre("RECIPE_VALID", "레시피 모든 행 검사 통과(recipe.check_process_row)", "RECIPE_INVALID", "process_service 적재 검사"),
     Pre("CONFIG_LIVE_ONLY_IN_PROCESS", "공정 중이면 apply=live 키만 즉시 적용, H 등급 변경은 거부", "CONFIG_H_IN_PROCESS"),
-    Pre("IG_ON_NOT_ATM", "필라멘트 켜기(on=true)일 때 PLC ATM 센서가 꺼져 있고 값이 신선", "IG_ATM_FILAMENT_ON",
+    Pre("IG_ON_NOT_ATM", "Filament 켜기(on=true)일 때 PLC ATM 센서가 꺼져 있고 값이 신선", "IG_ATM_FILAMENT_ON",
         "v2 (사용자 결정 2026-10-15)"),
 )
 
@@ -271,7 +271,7 @@ COMMANDS: tuple = (
     # 정지 — 로컬 화면에서도. bench 모드에서는 worker 가 BENCH_READ_ONLY 로 거부하므로 로컬 화면은
     # "읽기 전용 — 조작은 장비 앞면으로" 를 표시해야 한다(로컬 화면 단계 할 일)
     C("PROCESS_STOP", "공정 STOP", (WEB, HMI), "operator", (ANY_STATE,),
-      desc="공정을 멈춘다. 공정이 없으면 지난 공정이 남긴 출력만 정리하고, 남은 것이 없으면 아무것도 하지 않고 성공한다(v1 과 같게). 로컬 화면 STOP 도 "
+      desc="공정을 멈춘다. 공정이 없으면 지난 공정이 남긴 출력만 정리하고, 남은 것이 없으면 아무것도 하지 않고 성공한다(v1 과 같게). 노트북 화면 STOP 도 "
            "같다(OUTPUTS_CLEANUP)",
       v1="PROCESS_STOP"),
     C("ALL_STOP", "ALL STOP", (WEB, HMI, INT), "operator", (ANY_STATE,), desc="공정 여부와 상관없이 모든 출력을 "
@@ -298,7 +298,7 @@ COMMANDS: tuple = (
     C("RECIPE_START", "적재 레시피 시작", (WEB,), "operator", IDLE_STATES,
       ("RECIPE_LOADED", "PLC_FRESH", "MV_OPEN", "MV_ITL_ON", "NO_HEATER_GAS", "HEATER_RECIPE_NO_CONFLICT"),
       v1="RECIPE_PROCESS_START",
-        desc="적재한 공정 레시피를 첫 행부터 차례로 시작한다. Main 밸브가 열려 있고 MV 인터록이 켜져 있어야 하며, 히터 가스 유지 중이거나 히터 레시피가 도는데 레시피에 히터 행이 있으면 "
+        desc="적재한 공정 레시피를 첫 행부터 차례로 시작한다. MV가 열려 있고 MV 인터락이 켜져 있어야 하며, 히터 가스 유지 중이거나 히터 레시피가 도는데 레시피에 히터 행이 있으면 "
              "거부된다."),
     # 히터
     C("HEATER_SV", "히터 목표 온도", (WEB,), "operator", (ANY_STATE,),
@@ -321,12 +321,12 @@ COMMANDS: tuple = (
       v1="HEATER_RESET",
         desc="히터 이상(과온·TC 이상·워치독) 래치를 푸는 리셋 신호를 PLC 에 보낸다. 히터 이상 상태가 아니거나 히터 운전이 켜져 있으면 거부된다."),
     C("HEATER_GAS_RELEASE", "히터 가스 해제", (WEB,), "operator", IDLE_STATES, ("HEATER_GAS_ACTIVE",), v1="HEATER_GAS_RELEASE",
-        desc="히터용으로 넣은 가스·압력을 해제한다. 유량을 끄고 MFC 밸브를 연 뒤 차단밸브를 닫으며, 공정이 돌지 않을 때만 받는다."),
+        desc="히터용으로 넣은 가스·압력을 해제한다. 유량을 끄고 MFC 밸브를 연 뒤 밸브를 닫으며, 공정이 돌지 않을 때만 받는다."),
     C("HEATER_RECIPE_RUN", "히터 레시피 시작", (WEB,), "operator", (ANY_STATE,),
       ("HEATER_ENABLED", "PLC_LINK_UP", "HEATER_ITL", "HEATER_NO_FAULT", "HEATER_RECIPE_IDLE", "HEATER_NOT_PROCESS_OWNED"),
       (_a("name", "str"), _a("steps", "rows", desc="recipe.HEATER_STEP_COLUMNS"), _a("gas", "obj", False, desc="recipe.HEATER_GAS_COLUMNS")),
       v1="RECIPE_HEATER_RUN",
-        desc="히터 레시피를 검사한 뒤 첫 스텝부터 실행한다. 가스를 고르면 가스·압력을 먼저 준비한 뒤 시작하며, 히터 인터록이 정상이 아니거나 히터 이상이거나 공정이 히터를 쓰는 중이면 "
+        desc="히터 레시피를 검사한 뒤 첫 스텝부터 실행한다. 가스를 고르면 가스·압력을 먼저 준비한 뒤 시작하며, 히터 인터락이 정상이 아니거나 히터 이상이거나 공정이 히터를 쓰는 중이면 "
              "거부된다."),
     C("HEATER_RECIPE_STOP", "히터 레시피 정지", (WEB,), "operator", (ANY_STATE,), ("PLC_LINK_UP",),
       desc="레시피가 없어도 안전하게 끝낸다(RUN=0·램프 복구·SV=PV, v1 main.py:1953)", v1="RECIPE_HEATER_STOP"),
@@ -353,16 +353,16 @@ COMMANDS: tuple = (
     C("PROCESS_SKIP", "지금 단계 건너뛰기", (WEB, HMI), "operator", ACTIVE_STATES, (),
       (_a("no", "str", desc="지금 단계 번호이다. 반복 안이면 그 안쪽 번호, 딜레이 행은 delay 이다(state.run.current)"),
        _a("revision", "int", min=0, desc="지금 판 번호(state.run.revision, 딜레이 행 0)")),
-      desc="지금 단계를 끝내고 다음으로 간다. 정리는 그 단계의 정의를 따른다(기다림만 끝내기·Main 셔터 닫기·필라멘트 끄기·보낸 명령 그대로). 화면이 본 단계가 다르거나 "
+      desc="지금 단계를 끝내고 다음으로 간다. 정리는 그 단계의 정의를 따른다(기다림만 끝내기·Main 셔터 닫기·Filament 끄기·보낸 명령 그대로). 화면이 본 단계가 다르거나 "
            "건너뛸 수 없는 단계이거나 정지 순서 중이면 받지 않는다(SKIP_STALE·SKIP_NOT_ALLOWED·STATE_NOT_ALLOWED, 기록 ProcEvent skip·PROCESS_SKIP)",
       v1="v2"),
     C("PROCESS_PAUSE", "지금 단계 일시정지", (WEB, HMI), "operator", ACTIVE_STATES, (),
       (_a("no", "str", desc="지금 단계 번호"), _a("revision", "int", min=0, desc="지금 판 번호")),
-      desc="지금 단계를 멈춘다. 대기·딜레이는 남은 시간을, 메인은 Main 셔터를 닫고 남은 시간을, 도달 대기는 판정과 시간 한도를 멈춘다. 안전 규칙·STOP·ALL "
+      desc="지금 단계를 멈춘다. 대기·딜레이는 남은 시간을, 증착은 Main 셔터를 닫고 남은 시간을, 도달 대기는 판정과 시간 한도를 멈춘다. 안전 규칙·STOP·ALL "
            "STOP·공정 중 수정은 그대로이며, 한도를 넘으면 정지 순서를 실행한다(PROCESS_PAUSE_MAX_SEC·PAUSE_TIMEOUT)", v1="v2"),
     C("PROCESS_RESUME", "일시정지 재개", (WEB, HMI), "operator", ACTIVE_STATES, (),
       (_a("revision", "int", min=0, desc="지금 판 번호"),),
-      desc="멈춘 단계를 이어서 한다. 메인 단계는 셔터를 다시 열고, 도달 대기는 안정 유지 시간을 처음부터 잰다", v1="v2"),
+      desc="멈춘 단계를 이어서 한다. 증착 단계는 셔터를 다시 열고, 도달 대기는 안정 유지 시간을 처음부터 잰다", v1="v2"),
     C("PROCESS_EDIT", "진행 중 순서 고치기", (WEB,), "operator", ACTIVE_STATES, (),
       (_a("revision", "int", min=1, desc="지금 판 번호"),
        _a("blocks", "rows", desc="지금 행의 새 블록 전체 목록이다. 장비가 실행하는 정리 목록을 고친 것이다(state.run.editBase.blocks, 5-16)")),
@@ -613,7 +613,7 @@ REASON_HELP: dict = {
     "SKIP_STALE": "그사이 공정이 바뀌었습니다. 화면을 다시 보고 누르세요.",
     "PAUSE_STALE": "그사이 공정이 바뀌었습니다. 화면을 다시 보고 누르세요.",
     "EDIT_STALE": "다른 곳에서 순서가 바뀌었습니다. 다시 불러온 뒤 고치세요.",
-    "SKIP_NOT_ALLOWED": "끄기·닫기·정상 끝 정지 단계는 건너뛸 수 없습니다.",
+    "SKIP_NOT_ALLOWED": "끄기·닫기·공정 끝 단계는 건너뛸 수 없습니다.",
     "PAUSE_NOT_ALLOWED": "바로 끝나는 단계는 일시정지할 수 없습니다.",
     "EDIT_TOUCHES_STARTED": "이미 시작했거나 끝난 단계와 그 앞 순서는 바꿀 수 없습니다.",
     "PROCESS_PAUSED": "이미 일시정지 중입니다.",
@@ -687,8 +687,8 @@ REASON_HELP: dict = {
     "COMM_LONG_OUTAGE": "장비와 연결이 오래 끊겨 있습니다. 케이블과 장비 전원을 확인하세요.",
     "LINK_STALE": "장비 값을 새로 받지 못해 화면 조작을 잠갔습니다.",
     "PLC_MANUAL_IN_PROCESS": "공정 중에 PLC 버튼을 눌렀습니다.",
-    "OUTPUTS_LEFT_ON": "정상 끝 정지에서 뺀 단계의 출력을 켜 둔 채 끝냈습니다.",
-    "AUTO_END_STOP": "레시피 끝에 정상 끝 정지가 없어 덧붙였습니다.",
+    "OUTPUTS_LEFT_ON": "공정 끝에서 뺀 단계의 출력을 켜 둔 채 끝냈습니다.",
+    "AUTO_END_STOP": "레시피 끝에 공정 끝이 없어 덧붙였습니다.",
     "HEATER_HANDOVER": "공정이 끝난 뒤 히터를 켠 채 히터 카드 조작으로 넘겼습니다.",
     "OUTPUTS_CLEANUP": "STOP 으로 지난 공정이 남긴 출력을 정리했습니다.",
     "HEATER_NO_TARGET": "히터 목표가 없어 히터 대기 단계를 건너뛰었습니다.",

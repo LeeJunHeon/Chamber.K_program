@@ -44,7 +44,7 @@ S = ProcessStep
 WATCH_ITEMS: tuple = (
     ("dc", "S31C", "DC 파워 이탈"),
     ("rf", "S33B", "RF 파워 이탈"),
-    ("rfp", "S34A", "RF Pulse 순방향 이탈"),
+    ("rfp", "S34A", "RF Pulse Forward 이탈"),
     ("flow", "S38A", "가스 유량 이탈(경고)"),
     ("pressure", "S38B", "압력 이탈(경고)"),
 )
@@ -179,14 +179,14 @@ BLOCK_DEFS: tuple = (
           desc="상한 초과 시 proceed(경고 후 진행) / abort(HEATER_SETTLE_FAILED)")),
         "HEATER_SETTLE", watch={"dc": True, "rf": True, "rfp": True, "flow": False, "pressure": False},
         steps="HEATER_SETTLE — TC1 이 목표 ±tol_c 안에 sec 연속(승온 대기 통과 뒤부터 셈)", v1="pc HEATER_SETTLE(3328872)",
-        desc="2단 제어에서 지금 히터 목표(마지막 승온 블록)에 정착할 때까지 기다린다. 2단 제어가 돌고 있지 않으면 경고 뒤 다음으로 가며, tc2 모드는 메인 셔터 열기 직전 "
+        desc="2단 제어에서 지금 히터 목표(마지막 승온 블록)에 정착할 때까지 기다린다. 2단 제어가 돌고 있지 않으면 경고 뒤 다음으로 가며, tc2 모드는 Main 셔터 열기 직전 "
              "TC1·TC2 를 한 줄 기록만 한다. DC ±이탈 감시를 켠다(HEATER_CTRL_MODE=cascade·HEATER_SETTLE_SKIPPED·S31C, v1 "
              "_arm_dc_power_monitor)"),
     BlockDef("base_wait", "베이스 압력 대기", (
         P("target_torr", "float", "Torr", required=True, param_min="BASE_PRESSURE_MIN_TORR", param_max="BASE_PRESSURE_MAX_TORR"),),
         "BASE_WAIT", steps="IG_FILAMENT_ON · IG_BASE_WAIT · IG_FILAMENT_OFF", v1="pc:1036-1273",
         desc="IG_ENABLED 가 꺼져 있으면 시작 거부(DEVICE_DISABLED)"),
-    BlockDef("gas_intro", "가스 도입", (
+    BlockDef("gas_intro", "가스 주입", (
         P("ar", "bool", default=False), P("ar_flow", "float", "sccm", None, min=0.0, min_exclusive=True, param_max="MFC_AR_FS_SCCM",
                                           desc="ar 이면 필요. 상한 = Ar 풀스케일"),
         P("o2", "bool", default=False), P("o2_flow", "float", "sccm", None, min=0.0, min_exclusive=True, param_max="MFC_O2_FS_SCCM",
@@ -240,9 +240,9 @@ BLOCK_DEFS: tuple = (
     BlockDef("wait", "대기", (P("sec", "float", "s", required=True, min=0.0, max=7 * 86400.0), _WATCH(None)),
         "WAIT", ("GAS_STABILIZE", "PRESSURE_SP5", "DC_DELAY", "SHUTTER_DELAY"), watch=dict(WATCH_DEFAULT), steps="DELAY",
         v1="pc:565-579·632-657", desc="공정 중 수정 process.skip_wait 로 바로 끝낼 수 있다"),
-    BlockDef("main", "메인", (
+    BlockDef("main", "증착", (
         P("sec", "float", "s", required=True, min=0.0, max=7 * 86400.0, min_exclusive=True),
-        P("close", "bool", default=True, desc="끝에 메인 셔터 닫기(기본 템플릿은 정지 순서가 닫는다)"), _WATCH(None)),
+        P("close", "bool", default=True, desc="끝에 Main 셔터 닫기(기본 템플릿은 정지 순서가 닫는다)"), _WATCH(None)),
         "MAIN", watch=dict(WATCH_MAIN), steps="PLC_CMD MS 열기 · DELAY · [MS 닫기]", v1="pc:659-680",
         desc="공정 중 수정 process.main_remaining 으로 남은 시간을 바꾼다"),
     BlockDef("cond_wait", "조건 대기", (
@@ -258,7 +258,7 @@ BLOCK_DEFS: tuple = (
         desc="값을 모르는 tick(stale·fail)은 판정을 바꾸지 않는다(judge.Persist)"),
     BlockDef("repeat", "반복", (P("count", "int", "회", required=True, min=1, max=REPEAT_MAX),),
         "", container=True, steps="안의 블록을 count 번(중첩 가능)", v1="v2"),
-    BlockDef("end_stop", "정상 끝 정지", (
+    BlockDef("end_stop", "공정 끝", (
         P("skip", "steps", "", None, desc="건너뛸 정지 순서 단계 번호이며 1·2·3·9·10·11·12(필라멘트·셔터·히터·가스)만 뺄 수 있다. 파워 끄기 "
                                           "4·5·6·7·8·13 은 뺄 수 없음(사용자 결정 2026-10-21, safety_rules.STOP_SEQUENCE)"),),
         "STOPPING", steps="SafetyEngine.end_row — 지금 행 끝 정지 순서(표 순서 고정, skip 만 뺀다)", v1="pc:1785-2019",
@@ -309,7 +309,7 @@ _UI: Dict[str, tuple] = {
         "value": ("압력", "비우면 SP2·SP3·SP4·SP5 는 설정의 단계 압력. SP1 은 장비에 값을 쓸 때 값이 필요. "
                            "프로그램 값을 장비에 쓰지 않으면 비워 둠"),
         "set": ("프로그램 값을 장비에 쓰기", "끄면 장비에 저장된 값을 그대로 쓰고, 그 값을 읽어 목표로 삼습니다"),
-        "select": ("이 SP 로 제어", "끄면 값만 써 두고 제어 SP은 그대로", _ADV),
+        "select": ("이 SP 로 제어", "끄면 값만 써 두고 제어 SP는 그대로", _ADV),
         "wait": ("도달 대기", "끄면 압력이 들어오기를 기다리지 않고 다음 블록으로"),
         "tol_ratio": ("허용 범위", "목표 대비 비율이다. 0.1 이면 ±10 %, 비우면 설정값을 쓴다", _ADV),
         "stable_sec": ("안정 시간", "허용 범위 안에 이 시간 동안 머물면 도달로 봄. 비우면 설정값", _ADV),
@@ -369,35 +369,35 @@ BLOCK_DEFS = tuple(_with_text(d) for d in BLOCK_DEFS)
 
 # ───────────── 공정 중 건너뛰기·일시정지 규칙(5-15, 사용자 지시) — 블록 종류 → (건너뛰기, 멈춤) ─────────────
 # 각 (kind, when, 할 일 문구, 못 하는 이유). 지금 행의 지금 블록만, 정지 순서 중에는 못 함. 딜레이 행은 '대기'와 같다.
-_S_WAIT = "기다림만 끝내고 다음 블록으로 간다. 쓴 설정값과 켜진 출력은 그대로 둔다"
+_S_WAIT = "기다림만 끝내고 다음 단계로 간다. 쓴 설정값과 켜진 출력은 그대로 둔다"
 _S_CMD = "보낸 명령은 되돌리지 않고 확인 기다림만 끝냄(남은 명령은 보내지 않음)"
-_NO_OFF = "끄기·닫기 블록은 건너뛸 수 없음"
+_NO_OFF = "끄기·닫기 단계는 건너뛸 수 없음"
 _P_JUDGE = "도달 판정과 시간 한도를 멈추고 출력은 그대로 둔다. 재개하면 안정 유지 시간을 처음부터 센다"
 _P_TIMER = "남은 시간을 멈추고 출력은 그대로 둔다"
-_P_NO_CMD = "바로 끝나는 명령 블록은 멈출 수 없음"
+_P_NO_CMD = "바로 끝나는 명령 단계는 멈출 수 없음"
 _CTRL: Dict[str, tuple] = {
     "pre_clean": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
     "gas_prep": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
     "heater_ramp": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
     "heater_wait": (("wait", "", _S_WAIT, ""), ("judge", "", _P_JUDGE, "")),
-    "heater_settle": (("settle", "", "정착 확인 없이 다음 블록으로 간다(경고를 남긴다). 히터는 그대로 둔다", ""), ("judge", "", _P_JUDGE, "")),
-    "base_wait": (("base", "", "이 공정이 켠 이온 게이지 필라멘트를 끄고 다음 블록으로", ""), ("judge", "", _P_JUDGE, "")),
+    "heater_settle": (("settle", "", "정착 확인 없이 다음 단계로 간다(경고를 남긴다). 히터는 그대로 둔다", ""), ("judge", "", _P_JUDGE, "")),
+    "base_wait": (("base", "", "이 공정이 켠 Ion Gauge Filament를 끄고 다음 단계로", ""), ("judge", "", _P_JUDGE, "")),
     "gas_intro": (("cmd", "", _S_CMD, ""), ("", "", "", _P_NO_CMD)),
     "pressure": (("wait", "", "압력 도달 기다림만 끝낸다. 쓴 설정점과 제어 중인 설정점은 그대로 둔다", ""),
-                 ("judge", "wait=true", _P_JUDGE, "도달 대기가 없는 압력 블록은 멈출 수 없음")),
+                 ("judge", "wait=true", _P_JUDGE, "도달 대기가 없는 압력 단계는 멈출 수 없음")),
     "valve": (("cmd", "action^=open", _S_CMD, "밸브 닫기·멈춤은 건너뛸 수 없음"), ("", "", "", _P_NO_CMD)),
     "shutter": (("cmd", "action^=open", _S_CMD, "셔터 닫기는 건너뛸 수 없음"), ("", "", "", _P_NO_CMD)),
     "power_on": (("cmd", "", "보낸 명령은 되돌리지 않는다. 출력은 목표로 계속 가고 도달 확인만 끝낸다", ""),
-                 ("judge", "wait=true", _P_JUDGE, "도달 대기 없이 켜기만 하는 블록은 멈출 수 없음")),
+                 ("judge", "wait=true", _P_JUDGE, "도달 대기 없이 켜기만 하는 단계는 멈출 수 없음")),
     "power_off": (("", "", "", _NO_OFF), ("", "", "", _P_NO_CMD)),
     "gas_off": (("", "", "", _NO_OFF), ("", "", "", _P_NO_CMD)),
     "heater_off": (("", "", "", _NO_OFF), ("", "", "", _P_NO_CMD)),
     "wait": (("wait", "", _S_WAIT, ""), ("timer", "", _P_TIMER, "")),
-    "main": (("main", "", "이 블록이 연 Main 셔터를 닫고 남은 시간은 버림", ""),
+    "main": (("main", "", "이 단계가 연 Main 셔터를 닫고 남은 시간은 버림", ""),
              ("main", "", "Main 셔터를 닫고 남은 시간을 멈춤(파워·가스·압력은 그대로). 재개하면 셔터를 다시 열고 이어서", "")),
     "cond_wait": (("wait", "", _S_WAIT, ""), ("judge", "", _P_JUDGE, "")),
-    "repeat": (("", "", "", "반복은 안쪽 블록 단위로만"), ("", "", "", "반복은 안쪽 블록 단위로만")),
-    "end_stop": (("", "", "", "정상 끝 정지는 건너뛸 수 없음"), ("", "", "", "정상 끝 정지는 멈출 수 없음")),
+    "repeat": (("", "", "", "반복은 안쪽 단계 단위로만"), ("", "", "", "반복은 안쪽 단계 단위로만")),
+    "end_stop": (("", "", "", "공정 끝은 건너뛸 수 없음"), ("", "", "", "공정 끝은 멈출 수 없음")),
 }
 # 딜레이 행(CSV 'delay N') — 대기와 같은 규칙. 화면의 블록 번호는 DELAY_NO, 판 번호는 0
 DELAY_NO = "delay"
@@ -464,9 +464,9 @@ VALUE_RULES: tuple = (
     BRule("heater_disabled", ("heater_ramp", "heater_wait", "heater_off"), "device", "", "HEATER_ENABLED",
           "히터: HEATER_ENABLED=false"),
     BRule("ig_disabled_base", ("base_wait",), "device", "", "IG_ENABLED",
-          "base_pressure: 이온 게이지가 꺼져 있음(IG_ENABLED=false)"),
+          "base_pressure: Ion Gauge가 꺼져 있음(IG_ENABLED=false)"),
     BRule("ig_disabled_cond", ("cond_wait",), "device", "field^=ig.", "IG_ENABLED",
-          "조건 값 {field}: 이온 게이지가 꺼져 있음(IG_ENABLED=false)"),
+          "조건 값 {field}: Ion Gauge가 꺼져 있음(IG_ENABLED=false)"),
     BRule("rfpulse_disabled", ("power_on",), "device", "rfp_power:num", "RFPULSE_ENABLED", "RF Pulse: RFPULSE_ENABLED=false"),
     BRule("pulse_edge", ("power_on",), "pulse_edge", "rfp_freq_khz:num·rfp_duty:num", "RFPULSE_PULSE_MIN_EDGE_US",
           "RF Pulse: {edge}"),
@@ -1089,7 +1089,7 @@ ADJUST_ITEMS: tuple = (
                "D00020 + 감속 접근 속도(HeaterEngine.process_adjust)", "히터 램프를 냈으면"),
     AdjustItem("process", "main_remaining", "process.main_remaining", P("value", "float", "s", min=0.0, max=7 * 86400.0,
                                                                         required=True),
-               "지금 메인 블록 남은 시간 = 값(아직이면 다음 메인 블록 길이)", "메인 블록이 돌고 있으면"),
+               "지금 증착 블록 남은 시간 = 값(아직이면 다음 증착 블록 길이)", "증착 블록이 돌고 있으면"),
     AdjustItem("process", "skip_wait", "process.skip_wait", P("value", "bool", "", required=True),
                "지금 대기·조건 대기 블록을 바로 끝냄(value=true)", "대기·조건 대기 블록이 돌고 있을 때만"),
 )
@@ -1107,7 +1107,7 @@ _ADJUST_UI: Dict[str, tuple] = {
     "rfpulse.duty": ("RF Pulse 듀티", _RFP_LIVE),
     "heater.target": ("히터 목표 온도", "히터 목표를 낸 뒤면 바로 바뀝니다. 도달 대기 중이면 새 목표로 기다립니다"),
     "heater.ramp": ("히터 승온 속도", "히터 승온을 시작한 뒤면 바로 바뀝니다"),
-    "process.main_remaining": ("메인 남은 시간", "메인 단계 중이면 남은 시간이 이 값이 됩니다. 아직이면 다음 메인 단계 길이가 됩니다"),
+    "process.main_remaining": ("증착 남은 시간", "증착 단계 중이면 남은 시간이 이 값이 됩니다. 아직이면 다음 증착 단계 길이가 됩니다"),
     "process.skip_wait": ("지금 대기 끝내기", "대기·조건 대기 단계 중에만 쓸 수 있습니다"),
 }
 

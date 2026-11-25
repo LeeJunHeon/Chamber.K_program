@@ -102,7 +102,7 @@ _PROCESS_UI = {
     "base_pressure": ("압력·시간", "베이스 압력", "0 이나 빈 값이면 베이스 압력 대기를 하지 않음"),
     "working_pressure": ("압력·시간", "작업 압력", ""),
     "process_time": ("압력·시간", "공정 시간", ""),
-    "shutter_delay": ("압력·시간", "셔터 딜레이", ""),
+    "shutter_delay": ("압력·시간", "Shutter Delay", ""),
     "use_dc": ("파워", "DC", ""), "dc_power": ("파워", "DC 파워", ""),
     "use_dc_delay": ("파워", "DC 안정화 대기", "DC 를 쓸 때만 작업 압력에 도달한 뒤 설정의 DC 안정화 시간만큼 기다림"),
     "use_rf": ("파워", "RF", ""), "rf_power": ("파워", "RF 파워", ""),

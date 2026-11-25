@@ -94,6 +94,9 @@
                 버전 21(5-23): 화면 이름을 용어표 하나로(①) — 장비·부품·신호는 영문(MV·Door·Water·Ionizer·Ion Gauge·Filament·
                 Forward·Reflected), Ar 밸브·Gun1 셔터·인터락·SP·정지 순서, 블록과 같은 상태 이름, 괄호 없는 명령 이름. 식별자는 그대로
                 snapshot 필드 help(②, 운전자용 설명 — desc 는 개발용 그대로), reasons[].label 짧게·help(③), eventKinds desc 다듬음(④)
+                버전 22(웹 W-21): 블록·상태 이름 '가스 주입'·'증착'·'공정 끝'·'Shutter Delay', 설정·명령·필드 설명의 옛 말을 용어표 말로
+                (Ion Gauge·Filament·Forward·Reflected·인터락·SP·MV·천천히 올리기/내리기), 건너뛰기·일시정지 문구의 '블록' → 단계.
+                스텝·사건 message(v1 대조)·키·값·숫자는 그대로
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -131,7 +134,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 21
+EXPORT_VERSION = 22
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -146,7 +149,7 @@ EVENTS: tuple = (
     ("warn", "경고(OUTPUTS_LEFT_ON·COND_WAIT_TIMEOUT·ADJUST_SETTLE_TIMEOUT …)", ()),
     ("reject", "적재·시작 거부(블록 검사 오류 목록)", ("errors",)),
     ("plc_manual", "공정 중 PLC 버튼(PLC_MANUAL_IN_PROCESS)", ("target", "on", "source", "by", "t", "run_id", "state", "level")),
-    ("stop_rest", "정상 끝 정지 중 STOP·이상 중단 — 뺀 단계를 이어서 실행(남김 취소)", ("steps", "level")),
+    ("stop_rest", "공정 끝 중 STOP·이상 중단 — 뺀 단계를 이어서 실행(남김 취소)", ("steps", "level")),
     ("skip", "블록 건너뛰기(PROCESS_SKIP)", ("by", "source", "no", "type", "label", "kind", "cleaned", "pausedSec",
                                             "run_id", "revision", "t", "level")),
     ("pause", "일시정지(PROCESS_PAUSE)", ("by", "source", "no", "type", "label", "kind", "remainS", "cleaned",

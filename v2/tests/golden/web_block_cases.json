@@ -13125,8 +13125,8 @@
    "rfpulsePresent": false,
    "clean": null,
    "errors": [
-    "블록 1(base_wait): base_pressure: 이온 게이지가 꺼져 있음(IG_ENABLED=false)",
-    "블록 2(cond_wait): 조건 값 ig.ion_torr: 이온 게이지가 꺼져 있음(IG_ENABLED=false)"
+    "블록 1(base_wait): base_pressure: Ion Gauge가 꺼져 있음(IG_ENABLED=false)",
+    "블록 2(cond_wait): 조건 값 ig.ion_torr: Ion Gauge가 꺼져 있음(IG_ENABLED=false)"
    ],
    "warnings": [],
    "uses": null,

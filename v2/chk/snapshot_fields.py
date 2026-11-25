@@ -70,8 +70,8 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                                  "꺼진다(M00002 "
                                                                                                                                  "→ "
                                                                                                                                  "P00042)."), _bit("mv", "MV",
-                                                                                                                                                  desc="Main "
-                                                                                                                                                       "밸브 "
+                                                                                                                                                  desc="MV "
+                                                                                                                                                       ""
                                                                                                                                                        "출력 "
                                                                                                                                                        "코일의 "
                                                                                                                                                        "상태다. "
@@ -101,7 +101,7 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                            "꺼진다(M00005 "
                                                                                                            "→ "
                                                                                                            "P00045)."), _bit("door_up", "Door 올림",
-                                                                                                                            desc="도어 "
+                                                                                                                            desc="Door "
                                                                                                                                  "올림 "
                                                                                                                                  "출력 "
                                                                                                                                  "코일의 "
@@ -116,7 +116,7 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                                  "꺼진다(M00006 "
                                                                                                                                  "→ "
                                                                                                                                  "P00162)."), _bit("door_down", "Door 내림",
-                                                                                                                                                  desc="도어 "
+                                                                                                                                                  desc="Door "
                                                                                                                                                        "내림 "
                                                                                                                                                        "출력 "
                                                                                                                                                        "코일의 "
@@ -132,9 +132,9 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                                                        "→ "
                                                                                                                                                        "P00163)."),
     _bit("ar_valve", "Ar 밸브",
-        desc="Ar 차단밸브 출력 코일의 상태다. 가스 도입 때 열고 정지 순서의 마지막 단계에서 닫는다(M00007 → P00047)."), _bit("o2_valve", "O₂ 밸브",
-                                                                                          desc="O₂ 차단밸브 출력 코일의 상태다. "
-                                                                                               "가스 도입 때 열고 정지 순서의 "
+        desc="Ar 밸브 출력 코일의 상태다. 가스 주입 때 열고 정지 순서의 마지막 단계에서 닫는다(M00007 → P00047)."), _bit("o2_valve", "O₂ 밸브",
+                                                                                          desc="O₂ 밸브 출력 코일의 상태다. "
+                                                                                               "가스 주입 때 열고 정지 순서의 "
                                                                                                "마지막 단계에서 닫는다(M00008 "
                                                                                                "→ P00164)."), _bit("ms", "Main 셔터",
                                                                                                                   desc="Main "
@@ -142,7 +142,7 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                        "출력 "
                                                                                                                        "코일의 "
                                                                                                                        "상태다. "
-                                                                                                                       "메인 "
+                                                                                                                       "증착 "
                                                                                                                        "블록이 "
                                                                                                                        "열고 "
                                                                                                                        "정지 "
@@ -164,8 +164,8 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                        "→ "
                                                                                                                        "P00049)."),
     _bit("s1", "Gun1 셔터",
-        desc="Gun 1 셔터 출력 코일의 상태다. 셔터 블록(기본 템플릿의 건 셔터 열기)이 열고 정지 순서가 닫는다(M00010 → P0004A)."), _bit("s2", "Gun2 셔터",
-                                                                                                  desc="Gun 2 셔터 출력 "
+        desc="Gun1 셔터 출력 코일의 상태다. 셔터 블록(기본 템플릿의 Gun 셔터 열기)이 열고 정지 순서가 닫는다(M00010 → P0004A)."), _bit("s2", "Gun2 셔터",
+                                                                                                  desc="Gun2 셔터 출력 "
                                                                                                        "코일의 상태다. 셔터 "
                                                                                                        "블록(기본 템플릿의 건 "
                                                                                                        "셔터 열기)이 열고 "
@@ -189,7 +189,7 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                              "→ "
                                                                                                                              "P00165)."),
     _bit("mv_interlock", "MV 인터락",
-        desc="PLC 래더가 내는 MV 인터록 상태다. 공정 시작에는 켜짐이어야 하고, 공정 중 꺼짐이 'MV 인터록 해제 지속 중단' 시간 이상 이어지면 공정을 중단한다(M00032)."),
+        desc="PLC 래더가 내는 MV 인터락 상태다. 공정 시작에는 켜짐이어야 하고, 공정 중 꺼짐이 'MV 인터락 해제 지속 중단' 시간 이상 이어지면 공정을 중단한다(M00032)."),
     _bit("air", "Air",
         desc="Air 센서 입력의 상태다. 프로그램은 표시·기록에만 쓴다(P00000 → M00100)."), _bit("g1", "G1",
                                                                         desc="G1(Gauge1) 센서 입력의 상태다. 프로그램은 표시·기록에만 "
@@ -212,13 +212,13 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                                      "모르면 "
                                                                                                                                      "이온 "
                                                                                                                                      "게이지 "
-                                                                                                                                     "필라멘트 "
+                                                                                                                                     "Filament "
                                                                                                                                      "켜기 "
                                                                                                                                      "명령을 "
                                                                                                                                      "거부한다(P00003 "
                                                                                                                                      "→ "
                                                                                                                                      "M00103)."), _bit("water", "Water",
-                                                                                                                                                      desc="냉각수 "
+                                                                                                                                                      desc="Water "
                                                                                                                                                            "센서 "
                                                                                                                                                            "입력의 "
                                                                                                                                                            "상태다. "
@@ -228,14 +228,14 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                                                            "→ "
                                                                                                                                                            "M00104)."),
     _bit("ion_remote_on", "Ionizer",
-        desc="이오나이저 Remote On 출력 코일의 상태다. PLC 버튼 '이오나이저'로 켜고 끄며, ALL STOP 때 꺼진다(M00050 → P00160)."), _bit("ion_run", "Ionizer 구동",
-                                                                                                         desc="이오나이저 "
+        desc="Ionizer Remote On 출력 코일의 상태다. PLC 버튼 'Ionizer'로 켜고 끄며, ALL STOP 때 꺼진다(M00050 → P00160)."), _bit("ion_run", "Ionizer 구동",
+                                                                                                         desc="Ionizer "
                                                                                                               "구동 입력 "
                                                                                                               "신호의 "
                                                                                                               "상태다(P0000E "
                                                                                                               "→ "
                                                                                                               "M00114)."), _bit("ion_lamp", "Ionizer 점등",
-                                                                                                                               desc="이오나이저 "
+                                                                                                                               desc="Ionizer "
                                                                                                                                     "점등 "
                                                                                                                                     "입력 "
                                                                                                                                     "신호의 "
@@ -243,7 +243,7 @@ PLC_BLOCK = DeviceBlock("plc", "PLC", (
                                                                                                                                     "→ "
                                                                                                                                     "M00115)."),
     _bit("ion_ot", "Ionizer 수명 초과",
-        desc="이오나이저 램프 수명 초과 입력 신호의 상태다(P00010 → M00116)."),
+        desc="Ionizer 램프 수명 초과 입력 신호의 상태다(P00010 → M00116)."),
     _f("marker_ok", B, "", "재기동 표시 일치", source="core: D(PLC_SESSION_MARK_REG) 되읽기 비교", summary="any",
        detail=True,
         desc="연결 때 PLC 에 써 둔 재기동 마커 값이 그대로 읽히는지를 보인다(값이 없으면 마커를 쓰지 않은 상태). 두 번 연속 다르면 PLC 재기동으로 보고 히터 한계값과 마커를 다시 "
@@ -262,7 +262,7 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
        desc="래더가 운전(RUN=1) 중에만 갱신하는 현재 목표 온도이다. 정지 중에는 마지막 운전 때 값이 남고(실측 10/20 825.1·10/29 513.3, v1 main.py 는 정지 "
             "중 D00012 를 보임), TC2 추종·캐스케이드 중에는 TC2 목표이다(D00016 × 0.1 °C, v1 과 같은 레지스터·배율)"),
     _f("sv_ramp", F, "°C", "승온 중간 목표", ".1f", "plc:heater_sv_ramp", detail=True,
-        desc="PLC 래더 램프가 지금 가 있는 중간 목표다. TC1 직접 제어의 램프 완료 판정에 쓰며, 2단·TC2 단독 제어에서는 TC2 목표 쪽 값이라 판정에 쓰지 않는다(D00019)."),
+        desc="PLC 래더 승온이 지금 가 있는 중간 목표다. TC1 직접 제어의 램프 완료 판정에 쓰며, 2단·TC2 단독 제어에서는 TC2 목표 쪽 값이라 판정에 쓰지 않는다(D00019)."),
     _f("sv2", F, "°C", "TC2 목표", ".1f", "plc:heater_sv2", desc="2단 제어·TC2 추종 중 PID 가 따라가는 TC2 목표(SV2)이다(D00035)"),
     _f("sv_limit", F, "°C", "목표 상한", ".1f", "plc:heater_sv_limit", detail=True, desc="PLC D00013"),
     _f("ot2_limit", F, "°C", "TC2 과온 한계", ".1f", "plc:heater_ot2_limit", detail=True, desc="PLC D00034"),
@@ -279,7 +279,7 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
                                                                                                                "래더가 "
                                                                                                                "내는 "
                                                                                                                "히터 "
-                                                                                                               "인터록 "
+                                                                                                               "인터락 "
                                                                                                                "정상 "
                                                                                                                "비트다. "
                                                                                                                "꺼짐이면 "
@@ -355,17 +355,17 @@ HEATER_BLOCK = DeviceBlock("heater", "히터", (
 
 RF_BLOCK = DeviceBlock("rf", "RF Power", (
     _f("fwd_w", F, "W", "Forward", ".1f", "plc:rf_fwd_adc × RF_FWD_FULL_SCALE_W/4000", summary="mean",
-        desc="RF 순방향 파워다. PLC 가 읽은 ADC 값을 'RF 순방향 ADC 풀스케일' 기준 W 로 바꾼 값이며, RF 제어가 목표와 비교한다(D00000)."),
+        desc="RF Forward 파워다. PLC 가 읽은 ADC 값을 'RF Forward ADC 풀스케일' 기준 W 로 바꾼 값이며, RF 제어가 목표와 비교한다(D00000)."),
     _f("ref_w", F, "W", "Reflected", ".1f", "plc:rf_ref_adc × RF_REF_FULL_SCALE_W/4000", summary="max",
-        desc="RF 반사 파워다. 'RF 반사파 대기 기준' 이상이면 램프를 멈추고 기다리며, 그 상태가 'RF 반사파 대기 허용' 시간 이어지면 공정을 중단한다(D00001)."),
+        desc="RF Reflected 파워다. 'RF Reflected 대기 기준' 이상이면 올리기를 멈추고 기다리며, 그 상태가 'RF Reflected 대기 허용' 시간 이어지면 공정을 중단한다(D00001)."),
     _f("dac", I, "count", "DAC 값", "d", "plc:rf_dac", detail=True,
-        desc="PLC 가 RF 전원에 내는 DAC 설정값(0~4000)이다. 램프업 중 이 값이 'RF 무출력 판정 DAC' 이상인데 순방향이 거의 없으면 무출력으로 본다(D00040)."),
+        desc="PLC 가 RF 전원에 내는 DAC 설정값(0~4000)이다. 올리는 중 이 값이 'RF 무출력 판정 DAC' 이상인데 Forward가 거의 없으면 무출력으로 본다(D00040)."),
     _bit("dac_enable", "DAC 출력 허용", "rf_dac_enable", detail=True,
         desc="RF DAC 출력 허용 비트다. DAC 를 0 보다 크게 쓰기 전에 켜고, RF 를 끌 때 끈다(M00200)."),
     _f("set_w", F, "W", "목표", ".1f", "core",
         desc="RF 제어의 지금 목표 파워다. RF 를 시작하거나 목표를 바꾸면 그 값이 되고, RF 를 끄면 0 이다."),
     _f("out_on", B, "", "RF 출력", source="core(D40·순방향)", summary="any",
-       desc="RF 출력이 켜져 있으면 참이다. DAC 설정값이 0 보다 크거나 순방향이 5 W 이상일 때 켜짐으로 본다. DAC 출력 허용(M00200)은 "
+       desc="RF 출력이 켜져 있으면 참이다. DAC 설정값이 0 보다 크거나 Forward가 5 W 이상일 때 켜짐으로 본다. DAC 출력 허용(M00200)은 "
             "v1 정상 종료 뒤에도 켜진 채 남으므로 쓰지 않는다(표시용, 5-21 ②)"),
 ), desc="PLC 아날로그 입출력")
 
@@ -383,11 +383,11 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
     _f("o2_set", F, "sccm", "O₂ 목표", ".2f", "core",
         desc="O₂ 채널에 마지막으로 쓰고 되읽어 확인한 유량 설정값이다. 유량을 꺼도 설정값은 그대로 남고, FLOW ON 뒤 유량 안정화 판정은 이 값을 기준으로 한다."),
     _f("sp_active", I, "", "사용 중 SP", "d", "core(마지막 D 명령)",
-       desc="지금 쓰는 설정점 번호 0~5 이다. 0 은 밸브 직접 조작(열기·닫기·정지), 1 은 작업 압력, 2·3·5 는 단계 압력, 4 는 가스 안정화이다"),
+       desc="지금 쓰는 SP 번호 0~5 이다. 0 은 밸브 직접 조작(열기·닫기·정지), 1 은 작업 압력, 2·3·5 는 단계 압력, 4 는 가스 안정화이다"),
     _f("sp_mtorr", F, "mTorr", "작업 압력(SP1)", ".2f", "core", detail=True,
        desc="SP1 을 쓰고 되읽어 확인한 값이다(공정 중 수정·기록용). 단계 압력 SP2~SP5 를 쓸 때는 바뀌지 않으며, 지금 목표는 압력 설정 칸에 있다(mfc.sp_sel_mtorr)"),
     _f("sp_sel_mtorr", F, "mTorr", "압력 목표", ".2f", "core(선택된 설정점에 쓴 값)",
-       desc="지금 선택된 설정점(사용 중 설정점 1~5)에 마지막으로 쓴 값이다. SP1·SP2·SP3·SP5 는 되읽기 확인값, SP4 는 쓴 값이며, 이번 연결에서 쓴 값이 없으면 장비에서 "
+       desc="지금 선택된 SP(사용 중 SP 1~5)에 마지막으로 쓴 값이다. SP1·SP2·SP3·SP5 는 되읽기 확인값, SP4 는 쓴 값이며, 이번 연결에서 쓴 값이 없으면 장비에서 "
             "읽은 값이다. 선택이 없으면(밸브 직접 조작) 값이 없다(5-18·5-19, SP4_MTORR)"),
     *(_f(f"sp{n}_dev_mtorr", F, "mTorr", f"SP{n} 장비 값", ".2f", f"R{10 if n == 5 else n}(parse_sp_reply)", detail=True,
          desc=f"장비에 저장된 SP{n} 값이다. 연결 직후·선택할 때·쓰고 확인한 뒤·공정 밖 주기에 읽으며, 읽지 못했거나 형식이 "
@@ -406,7 +406,7 @@ DC_BLOCK = DeviceBlock("dc", "DC Power", (
         desc="DC 전원이 측정한 출력 전류다. 파워 유지 중 이 값이 'DC 저전류 기준' 이하로 'DC 저전류 지속 시간' 이어지면 공정을 중단한다(MEAS:ALL?)."),
     _f("p", F, "W", "파워", ".1f", "계산", summary="mean", desc="V×I 로 계산"),
     _f("i_set", F, "A", "전류 목표", ".4f", "core", detail=True,
-        desc="프로그램이 DC 전원에 마지막으로 보낸 전류 설정값이다(장비 응답이 아니라 명령 기준). 램프업 중 이 값이 'DC 무출력 판정 설정 전류' 이상인데 파워가 거의 없으면 무출력으로 "
+        desc="프로그램이 DC 전원에 마지막으로 보낸 전류 설정값이다(장비 응답이 아니라 명령 기준). 올리는 중 이 값이 'DC 무출력 판정 설정 전류' 이상인데 파워가 거의 없으면 무출력으로 "
              "본다."),
     _f("out", B, "", "출력", source="core", summary="any", desc="명령 기준(장비 응답 아님)"),
     _f("set_w", F, "W", "목표", ".1f", "core",
@@ -415,13 +415,13 @@ DC_BLOCK = DeviceBlock("dc", "DC Power", (
 
 RFPULSE_BLOCK = DeviceBlock("rfp", "RF Pulse", (
     _f("fwd_w", F, "W", "Forward", ".0f", "165", own=True, summary="mean",
-        desc="RF Pulse 가 보고한 순방향 파워다. 출력 중 목표와의 차이가 '순방향 허용 오차' 이상으로 이어지면 공정을 중단하며, 번갈아 읽기 중에는 2초마다 갱신된다(명령 165)."),
+        desc="RF Pulse 가 보고한 Forward 파워다. 출력 중 목표와의 차이가 'Forward 허용 오차' 이상으로 이어지면 공정을 중단하며, 번갈아 읽기 중에는 2초마다 갱신된다(명령 165)."),
     _f("ref_w", F, "W", "Reflected", ".0f", "166", summary="max",
-        desc="RF Pulse 가 보고한 반사 파워다. '반사파 상한' 이상이 '반사파 초과 지속 시간' 이어지면 RF Pulse 를 끄고 공정을 중단한다(명령 166)."),
+        desc="RF Pulse 가 보고한 Reflected 파워다. 'Reflected 상한' 이상이 'Reflected 초과 지속 시간' 이어지면 RF Pulse 를 끄고 공정을 중단한다(명령 166)."),
     _f("out_on", B, "", "출력", source="162 byte1 b5", own=True, summary="any",
         desc="RF Pulse 상태에서 읽은 RF 출력 켜짐 비트다. 번갈아 읽기 중에는 2초마다 갱신된다(명령 162)."),
     _f("itl_open", B, "", "RF Pulse 인터락", source="162 byte2 b7", own=True, summary="any",
-        desc="RF Pulse 상태에서 읽은 인터록 열림 비트다. RF Pulse 를 쓰는 공정 중 켜지면 바로 RF Pulse 를 끄고 공정을 중단한다(명령 162)."),
+        desc="RF Pulse 상태에서 읽은 인터락 열림 비트다. RF Pulse 를 쓰는 공정 중 켜지면 바로 RF Pulse 를 끄고 공정을 중단한다(명령 162)."),
     _f("status_raw", S, "", "상태 번호", source="162", own=True, detail=True, desc="상태 4바이트"),
     _f("set_w", F, "W", "목표", ".0f", "core",
         desc="RF Pulse 의 지금 목표 파워다. RF ON 이 받아들여지면 그 값이 되고, 꺼짐을 확인하면 0 이다."),
@@ -430,25 +430,25 @@ RFPULSE_BLOCK = DeviceBlock("rfp", "RF Pulse", (
     _f("duty_pct", I, "%", "듀티", "d", "core(시작 때 196 되읽기)",
         desc="RF Pulse 시작 때(공정 중 수정 때 포함) 장비에서 되읽은 펄스 듀티다. 요청한 값과 다르면 설정에 따라 공정을 중단하거나 경고만 남긴다(명령 196)."),
     _f("read_plan", S, "", "읽기 방식", source="core(RFPULSE_READ_PLAN)", detail=True, enum_labels=READ_PLAN_LABELS,
-       desc="이 행을 읽은 계획이다. 매초 읽기는 상태·순방향·반사를 모두 매초 읽고, 번갈아 읽기는 반사만 매초·순방향과 상태는 2초마다 번갈아 읽는다. auto 면 느린 읽기가 이어질 때 "
+       desc="이 행을 읽은 계획이다. 매초 읽기는 상태·Forward·Reflected를 모두 매초 읽고, 번갈아 읽기는 Reflected만 매초·Forward와 상태는 2초마다 번갈아 읽는다. auto 면 느린 읽기가 이어질 때 "
             "번갈아로, 다시 빨라지면 매초로 바뀐다(5-20 ①)"),
 ), desc="CESAR 1310")
 
 IG_BLOCK = DeviceBlock("ig", "Ion Gauge", (
     _f("ion_torr", F, "Torr", "Ion Gauge 압력", ".2E", "E #24", summary="min", state="ion_state",
-        desc="이온 게이지 압력이다. 필라멘트가 꺼져 있거나 측정 준비 중이면 값이 비고, 베이스 압력 대기는 이 값이 목표 이하로 이어지는지 본다(E #24)."),
+        desc="Ion Gauge 압력이다. Filament가 꺼져 있거나 측정 준비 중이면 값이 비고, 베이스 압력 대기는 이 값이 목표 이하로 이어지는지 본다(E #24)."),
     _f("a_torr", F, "Torr", "Gauge A", ".2E", "E #25", summary="mean", state="a_state",
-        desc="이온 게이지 컨트롤러에 물린 게이지 A 의 압력이다. 측정 하한(1.0E-3 Torr) 아래·미연결·영점 미조정이면 값이 비고, 그 까닭은 게이지 A 상태에 보인다(E #25)."),
+        desc="Ion Gauge 컨트롤러에 물린 게이지 A 의 압력이다. 측정 하한(1.0E-3 Torr) 아래·미연결·영점 미조정이면 값이 비고, 그 까닭은 게이지 A 상태에 보인다(E #25)."),
     _f("b_torr", F, "Torr", "Gauge B", ".2E", "E #26", summary="mean", state="b_state",
-        desc="이온 게이지 컨트롤러에 물린 게이지 B 의 압력이다. 측정 하한(1.0E-3 Torr) 아래·미연결·영점 미조정이면 값이 비고, 그 까닭은 게이지 B 상태에 보인다(E #26)."),
+        desc="Ion Gauge 컨트롤러에 물린 게이지 B 의 압력이다. 측정 하한(1.0E-3 Torr) 아래·미연결·영점 미조정이면 값이 비고, 그 까닭은 게이지 B 상태에 보인다(E #26)."),
     _f("filament", B, "", "Filament", source="E #2", summary="any",
-        desc="이온 게이지 필라멘트가 켜짐인지 보인다. 베이스 압력 대기 중 꺼지면 '대기 중 필라멘트 재점등 횟수'까지 다시 켠다(E #2)."),
+        desc="Ion Gauge Filament가 켜짐인지 보인다. 베이스 압력 대기 중 꺼지면 '대기 중 Filament 재점등 횟수'까지 다시 켠다(E #2)."),
     _f("emission", B, "", "Emission", source="E #3", summary="any",
-        desc="이온 게이지 방출이 정상인지 보인다. 필라멘트 켜기는 필라멘트와 방출이 모두 켜짐으로 보여야 성공으로 본다(E #3)."),
+        desc="Ion Gauge Emission이 정상인지 보인다. Filament 켜기는 Filament와 Emission이 모두 켜짐으로 보여야 성공으로 본다(E #3)."),
     _f("degas", B, "", "Degas", source="E #1", summary="any",
-        desc="이온 게이지 디개스 동작 여부다. 프로그램은 디개스 명령을 보내지 않고 상태만 기록한다(E #1)."),
+        desc="Ion Gauge Degas 동작 여부다. 프로그램은 Degas 명령을 보내지 않고 상태만 기록한다(E #1)."),
     _f("err_code", I, "", "Filament 오류 번호", "d", "E #5", detail=True,
-        desc="이온 게이지가 보고한 필라멘트 오류 코드다. 필라멘트 켜기·끄기가 기한 안에 확인되지 않으면 이 코드의 뜻을 함께 기록한다(E #5)."),
+        desc="Ion Gauge가 보고한 Filament 오류 코드다. Filament 켜기·끄기가 기한 안에 확인되지 않으면 이 코드의 뜻을 함께 기록한다(E #5)."),
     # 값이 빈 이유(5-14) — 값 열의 state 가 가리킨다. 열은 블록 끝에(앞 열 순서 그대로)
     _f("ion_state", S, "", "압력 상태", source="E #24", detail=True, enum_labels=ION_STATES,
        desc="이온 압력 값의 상태이다. ok 가 아니면 이온 압력 칸이 비어 있다(drivers.ig.pressure_from_pair)"),
@@ -502,7 +502,7 @@ FIELD_HELP: dict = {
     "plc.door_down": "Door 를 내리는 출력입니다.",
     "plc.ar_valve": "Ar 가스 밸브입니다. 가스를 넣을 때 열고 정지 순서 끝에 닫습니다.",
     "plc.o2_valve": "O₂ 가스 밸브입니다. 가스를 넣을 때 열고 정지 순서 끝에 닫습니다.",
-    "plc.ms": "기판 앞 셔터입니다. 메인 단계에서 열고 정지 순서에서 닫습니다.",
+    "plc.ms": "기판 앞 셔터입니다. 증착 단계에서 열고 정지 순서에서 닫습니다.",
     "plc.s1": "Gun1 앞 셔터입니다. Gun 셔터 열기 단계에서 열고 정지 순서에서 닫습니다.",
     "plc.s2": "Gun2 앞 셔터입니다. Gun 셔터 열기 단계에서 열고 정지 순서에서 닫습니다.",
     "plc.buzz_stop": "부저를 끄는 출력입니다.",

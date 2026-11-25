@@ -99,7 +99,7 @@ PARAMS: tuple = (
           desc="웹에서 장비를 구분하는 ID. 개발 중에는 v1(CHK)과 섞이지 않게 CHK2 를 쓴다. 웹에서 바꾸지 않고 노트북 설정 파일로만 바꾼다"),
     _inst("RUN_MODE", "실행 모드", E, "sim", enum=("sim", "bench", "prod"), safety=H, src=_V2, locked=True,
           desc="sim=가짜 장비·외부 연결 없음 / bench=실장비 읽기 전용 / prod=운전. "
-               "로컬 파일이 없으면 sim. prod 는 명시적으로만"),
+               "노트북 파일이 없으면 sim. prod 는 명시적으로만"),
     _inst("PLC_PORT", "PLC 포트", S, "COM9", pattern=_COM, safety=H,
           desc="PLC 가 물린 PC 의 COM 포트(장치 관리자에서 확인)"),
     _inst("PLC_BAUD", "PLC 통신 속도", I, 115200, choices=dev.PLC_BAUDS, unit="bps",
@@ -141,7 +141,7 @@ PARAMS: tuple = (
     _inst("IG_ENABLED", "Ion Gauge 사용", B, True, v1_default=False,
           desc="false 면 base_pressure 가 있는 공정은 시작을 거부한다(v1 은 경고만 하고 대기를 건너뜀)"),
     _inst("IG_PORT", "Ion Gauge 포트", S, "COM12", pattern=r"(" + _COM + r")?", v1_default="",
-          desc="이온 게이지가 물린 PC 의 COM 포트(MOXA UPort 경유)"),
+          desc="Ion Gauge가 물린 PC 의 COM 포트(MOXA UPort 경유)"),
     _inst("IG_BAUD", "Ion Gauge 통신 속도", I, 9600, choices=dev.IG_BAUDS, unit="bps", safety=L,
           src="lib/config.py:735 · [IG p.15, p.18] (DIP S1-1·S1-2, 출고 9600 — 사용자 확인 2026-11-13)",
           desc="Terranova 934 가 받는 속도만 고른다. 8N1 은 장비 고정." + _pc(_AT_IG)),
@@ -156,7 +156,7 @@ PARAMS: tuple = (
     _inst("RFPULSE_FAIL_STREAK", "RF Pulse 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="v2 (3단계 worker 기본값)",
         desc="RF Pulse 질의·명령에 연속으로 응답이 없는 횟수가 이 값에 이르면 포트를 닫고 백오프로 다시 연결한다. 작을수록 잠깐의 무응답에도 다시 연결하고, 클수록 끊김을 늦게 알아챈다."),
     _inst("IG_FAIL_STREAK", "Ion Gauge 연속 무응답 재연결 횟수", I, 3, lo=1, hi=20, unit="회", src="device/IonGauge.py (3회)",
-        desc="이온 게이지 질의에 연속으로 응답이 없는 횟수가 이 값에 이르면 포트를 닫고 백오프로 다시 연결한다. 필라멘트 켜기·끄기 직후 무응답 유예 동안의 무응답은 세지 않는다."),
+        desc="Ion Gauge 질의에 연속으로 응답이 없는 횟수가 이 값에 이르면 포트를 닫고 백오프로 다시 연결한다. Filament 켜기·끄기 직후 무응답 유예 동안의 무응답은 세지 않는다."),
     _inst("PLC_TXN_TIMEOUT_MS", "PLC 트랜잭션 응답 제한", I, 150, lo=30, hi=1000, unit="ms",
           src="v2 (4-1 drivers/plc.py TXN_TIMEOUT_S, v1 0.5 s)",
           desc="Modbus 트랜잭션 하나의 응답 제한이다. bench 실측(회선 + 스캔 + USB 지연)으로 맞춘다"),
@@ -186,15 +186,15 @@ PARAMS: tuple = (
           desc="설정 명령의 되읽기 질의 하나가 무응답이면 이 횟수만큼 다시 보내고, 다 쓰면 '응답 없음'으로 판정한다. PC 쪽 설정이다(장비 쪽에 맞출 값 없음)"),
     _inst("MFC_VERIFY_RETRY_MS", "MFC 되읽기 다시 하기 전 대기", I, 1000, lo=200, hi=5000, unit="ms",
           src="lib/config.py MFC_DELAY_MS(1000)",
-          desc="설정 명령(유량·설정점·설정점 선택·밸브·ON/OFF) 되읽기가 다르면 이만큼 뒤 다시 확인한다. 하한 200 ms 는 명령 간격(기본 150 ms)보다 길게 두기 위함이다. "
+          desc="설정 명령(유량·SP·SP 선택·밸브·ON/OFF) 되읽기가 다르면 이만큼 뒤 다시 확인한다. 하한 200 ms 는 명령 간격(기본 150 ms)보다 길게 두기 위함이다. "
                "PC 쪽 설정이다(장비 쪽에 맞출 값 없음, MFC_CMD_GAP_MS)"),
     _inst("MFC_VERIFY_TRIES", "MFC 되읽기 확인 횟수", I, 5, lo=1, hi=10, unit="회",
           src="device/MFC.py max_attempts=5 (FLOW_SET·SPn_SET·SPn_ON·밸브)",
           desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 이 횟수 안에 되읽기가 맞지 않으면 그 명령 실패(VERIFY_MISMATCH). "
                "횟수 × 대기가 공정 스텝 한도(60 s)를 넘지 않게 상한 10"),
     _inst("MFC_SP_REFRESH_SEC", "MFC 장비 SP 값 다시 읽기 주기", I, 60, lo=0, hi=3600, unit="s", src="v2 (5-19 ③ — v1 없음)",
-          desc="공정이 돌지 않는 동안 장비에 저장된 설정점 값(R1~R4·R10)을 이 주기로 다시 읽는다(한 초에 하나씩, 설정 명령·읽기 마감에 양보). 0 이면 다시 읽지 않고 연결 "
-               "직후·설정점을 고를 때만 읽는다. PC 쪽 설정이다(장비 쪽에 맞출 값 없음)"),
+          desc="공정이 돌지 않는 동안 장비에 저장된 SP 값(R1~R4·R10)을 이 주기로 다시 읽는다(한 초에 하나씩, 설정 명령·읽기 마감에 양보). 0 이면 다시 읽지 않고 연결 "
+               "직후·SP를 고를 때만 읽는다. PC 쪽 설정이다(장비 쪽에 맞출 값 없음)"),
     _inst("MFC_LINK_RETRY_MS", "MFC 재연결 대기 중 다시 내는 간격", I, 1000, lo=200, hi=5000, unit="ms",
           src="v2 (4-2 drivers/mfc.py LINK_RETRY_S, v1 은 큐에서 기다림)",
           desc="PC 쪽 설정이다(장비 쪽에 맞출 값 없음). 포트가 끊긴 동안 설정 명령을 이 간격으로 다시 낸다(공정 스텝 한도 안에서)"),
@@ -229,7 +229,7 @@ PARAMS: tuple = (
           desc="시작 순서의 설정 명령 하나가 무응답·NAK·CSR ≠ 0 일 때 다시 보내는 횟수"),
     _inst("RFPULSE_READ_PLAN", "RF Pulse 읽기 계획", E, "auto", enum=("auto", "full", "alternate"),
           src="v2 (사용자 결정 2026-10-15)",
-          desc="full 은 매초 162(상태)·165(순방향)·166(반사)를 모두 읽고, alternate 는 166 을 매초·165 와 162 를 번갈아 읽는다. auto 는 느린 읽기가 "
+          desc="full 은 매초 162(상태)·165(Forward)·166(Reflected)를 모두 읽고, alternate 는 166 을 매초·165 와 162 를 번갈아 읽는다. auto 는 느린 읽기가 "
                "이어질 때만 alternate 로 바꾸고 다시 빨라지면 full 로 돌아온다. 느린 읽기는 질의 하나가 응답 제한을 다 썼거나 한 번 읽기가 마감의 기준 비율을 넘은 읽기이다. "
                "지금 계획은 스냅샷 rfp.read_plan(RFPULSE_QUERY_TIMEOUT_MS·RFPULSE_READ_PLAN_SLOW_PCT)"),
     *_read_plan_params("RFPULSE", "RF Pulse", "셋 다 읽은 한 번(162·165·166)", 3),
@@ -254,8 +254,8 @@ PARAMS: tuple = (
     _inst("LOCAL_HMI_CONTROL", "노트북 조작", E, "unlock", enum=("view_stop", "unlock", "always"),
           enum_labels=(("view_stop", "보기와 정지만"), ("unlock", "잠금을 푼 뒤 조작"), ("always", "항상 조작")),
           src="v2 (5-20 ② — 11/23 bench 뒤 사용자 결정)",
-          desc="노트북(로컬 화면)에서 받는 명령을 정한다. 보기와 정지만은 정지(STOP·ALL STOP·부저 정지·히터 정지)와 공정 중 값 바꾸기·건너뛰기·일시정지·재개만 받는다(5-19 "
-               "까지와 같다). 잠금을 푼 뒤 조작과 항상 조작은 그 밖에 공정 시작·적재 레시피 시작·해제·순서 고치기·PLC 버튼·필라멘트·히터·수동 조작도 받는다(설정 적용·되돌리기는 "
+          desc="노트북(노트북 화면)에서 받는 명령을 정한다. 보기와 정지만은 정지(STOP·ALL STOP·부저 정지·히터 정지)와 공정 중 값 바꾸기·건너뛰기·일시정지·재개만 받는다(5-19 "
+               "까지와 같다). 잠금을 푼 뒤 조작과 항상 조작은 그 밖에 공정 시작·적재 레시피 시작·해제·순서 고치기·PLC 버튼·Filament·히터·수동 조작도 받는다(설정 적용·되돌리기는 "
                "웹에서만). 둘의 차이는 노트북 화면이 잠그는지뿐이며, 잠금은 노트북 화면이 하고 장비는 이 값과 잠금 시간을 hello 로 알린다"),
     _inst("LOCAL_HMI_RELOCK_MIN", "노트북 조작 다시 잠그기까지", I, 10, lo=1, hi=120, unit="분", safety=L,
           src="v2 (5-20 ② — 사용자 결정)",
@@ -264,7 +264,7 @@ PARAMS: tuple = (
     _inst("LOCAL_DATA_DIR", "노트북 기록 폴더", S, r"C:\ChamberK_v2\data", pattern=r".+", safety=L,
           src=_V2, desc="1초 스냅샷 SQLite·일별 CSV·이벤트·블랙박스"),
     _inst("LOCAL_HMI_STATIC_DIR", "노트북 화면 파일 폴더", S, "", pattern=r".*", safety=L, src=_V2,
-          desc="로컬 서버가 / 와 정적 파일로 내주는 폴더이다(폴더 밖 경로는 막음). 비면 프로그램 위치 기준으로 이 저장소의 v2\\hmi 를 쓴다(사용자 결정 2026-10-22). "
+          desc="노트북 서버가 / 와 정적 파일로 내주는 폴더이다(폴더 밖 경로는 막음). 비면 프로그램 위치 기준으로 이 저장소의 v2\\hmi 를 쓴다(사용자 결정 2026-10-22). "
                "화면 파일은 웹 W-7 에서 넣는다(127.0.0.1:LOCAL_HMI_PORT)"),
     _inst("NAS_COPY_DIR", "NAS 사본 폴더", S, r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK2",
           pattern=r".*", safety=L, src=_V2, desc="빈 값이면 NAS 에 복사하지 않는다. 복사는 제어 흐름과 분리된 스레드가 한다"),
@@ -279,14 +279,14 @@ PARAMS: tuple = (
             "호스트만 보인다"),
     _p("UPLINK_TOKEN", "secret", "웹 수집 토큰(장비별)", "", S, "", scope=Scope.SECRET, apply=RESTART,
        v1_key="ERP_INGEST_TOKEN", src="lib/config_local.py (이름만)",
-        desc="웹 수집 주소로 보내는 모든 요청(상태 보내기·명령 받기)에 Authorization: Bearer 헤더로 싣는 장비별 토큰이다. 장비 로컬 파일에만 두고 로그·화면·웹 메시지에는 "
+        desc="웹 수집 주소로 보내는 모든 요청(상태 보내기·명령 받기)에 Authorization: Bearer 헤더로 싣는 장비별 토큰이다. 장비 노트북 파일에만 두고 로그·화면·웹 메시지에는 "
              "쓰지 않으며, 바꾸면 재시작해야 적용된다."),
 
     # ───────────── 1초 수집(tick) ─────────────
     _p("TICK_DEADLINE_MS", "tick", "1초 수집 마감", "ms", I, 900, 500, 950, safety=M, apply=RESTART, src=_V2,
        desc="정각 초 t 에 읽기를 보내고 t+이 값에 행을 닫는다. 늦은 응답은 다음 행에 stale"),
     _p("PLC_FAST_POLL_MS", "tick", "PLC 내부 폴링 주기", "ms", I, 250, 100, 500, safety=H, apply=RESTART, src=_V2,
-       desc="안전 비트(MV·인터록·히터)를 보는 주기. 1초에 4번 중 정각 회차를 스냅샷에 쓴다",
+       desc="안전 비트(MV·인터락·히터)를 보는 주기. 1초에 4번 중 정각 회차를 스냅샷에 쓴다",
        v1_default=200, note="v1 200 ms(상대 타이머)"),
     _p("PLC_READ_DEADLINE_MS", "tick", "PLC 읽기 마감", "ms", I, 400, 100, 900, apply=RESTART, src=_V2,
         desc="PLC 한 번 읽기(재시도 포함)가 끝나야 하는 한도로, 넘기면 그 읽기는 무응답으로 끝난다. 1초 수집과 내부 폴링이 모두 이 한도를 쓰며, 1초 수집 마감 이하이고 내부 폴링 "
@@ -298,7 +298,7 @@ PARAMS: tuple = (
         desc="DC 1초 측정 질의가 끝나야 하는 한도로, 넘기면 그 읽기는 실패로 끝난다. 쓰기 뒤 질의 금지 시간 때문에 이 한도 안에 질의를 보내지 못해도 실패가 되며, 1초 수집 마감 "
              "이하여야 한다."),
     _p("RFPULSE_READ_DEADLINE_MS", "tick", "RF Pulse 읽기 마감", "ms", I, 900, 200, 950, apply=RESTART, src=_V2,
-        desc="RF Pulse 1초 읽기(상태·순방향·반사)가 끝나야 하는 한도로, 넘기면 그 읽기는 실패로 끝난다. 읽기 계획(auto)의 느린 읽기 판정도 이 한도의 비율로 하며, 1초 수집 "
+        desc="RF Pulse 1초 읽기(상태·Forward·Reflected)가 끝나야 하는 한도로, 넘기면 그 읽기는 실패로 끝난다. 읽기 계획(auto)의 느린 읽기 판정도 이 한도의 비율로 하며, 1초 수집 "
              "마감 이하여야 한다."),
     _p("IG_RESPONSE_LIMIT_MS", "tick", "Ion Gauge E 응답 제한", "ms", I, 1200, 900, 1900, apply=RESTART, src="lib/config.py:756 (v1 실측 근거)",
        desc="E 응답을 tick 마감 뒤에도 이만큼까지 받아 다음 행에 late 로 쓴다(그동안 다음 E 는 보내지 않아 stale). 넘기면 fail 이다. 평소 응답은 250~300 ms, "
@@ -324,7 +324,7 @@ PARAMS: tuple = (
         desc="v2 에서는 사용하지 않는다. 재연결은 연속 무응답 재연결 횟수와 재연결 간격 설정이 정한다(v1 은 무응답이 이만큼 이어지면 포트를 다시 열었음)"),
     _p("IG_COMM_LOSS_ABORT_SEC", "comm", "Ion Gauge 두절 베이스 대기 중단", "s", F, 60.0, 10.0, 600.0,
        src="controller/process_controller.py:35",
-        desc="베이스 압력 대기 블록 중 이온 게이지 값이 이 시간 넘게 들어오지 않으면 공정을 중단한다. 필라멘트 켜기·끄기 직후 무응답 유예 구간은 두절로 세지 않는다."),
+        desc="베이스 압력 대기 블록 중 Ion Gauge 값이 이 시간 넘게 들어오지 않으면 공정을 중단한다. Filament 켜기·끄기 직후 무응답 유예 구간은 두절로 세지 않는다."),
     _p("COMM_RECONNECT_START_MS", "comm", "재연결 첫 간격", "ms", I, 1000, 100, 60000, safety=L,
         desc="장비 포트가 끊기거나 열기에 실패한 뒤 다시 연결을 시도하기까지의 첫 간격이다. 실패할 때마다 두 배로 늘어 '재연결 최대 간격'까지 커지며, 다섯 장비에 함께 쓴다."),
     _p("COMM_RECONNECT_MAX_MS", "comm", "재연결 최대 간격", "ms", I, 60000, 1000, 600000, safety=L,
@@ -354,7 +354,7 @@ PARAMS: tuple = (
     _p("MFC_PRESSURE_WARN_RATIO", "mfc", "압력 이탈 허용 비율", "비율", F, 0.10, 0.01, 0.5, safety=L,
        apply=LIVE,
         desc="공정 중 챔버 압력과 작업 압력의 차이가 작업 압력 × 이 비율을 넘은 채 '압력 이탈 지속 시간' 이어지면 경고한다. 경고만 하고 공정은 계속하며, 압력 이탈 감시가 켜진 블록(기본 "
-             "템플릿은 메인)에서만 본다."),
+             "템플릿은 증착)에서만 본다."),
     _p("MFC_PRESSURE_WARN_SEC", "mfc", "압력 이탈 지속 시간", "s", F, 10.0, 1.0, 600.0, safety=L, apply=LIVE,
        v1_key="MFC_PRESSURE_WARN_COUNT", v1_period=2.0, v1_default=5, desc="v1: 5회 × MFC 폴링 2 s"),
     _p("MFC_FLOW_STABLE_TIMEOUT_SEC", "mfc", "FLOW ON 유량 안정화 한도", "s", F, 100.0, 5.0, 600.0,
@@ -374,7 +374,7 @@ PARAMS: tuple = (
     _p("DC_MAX_VOLTAGE", "dc", "DC 전압 상한", "V", F, 600.0, 0.0, 1000.0, safety=H,
        src="lib/config.py:512 (고정값)", desc="APPL 전압 상한. 장비 정격 이하"),
     _p("DC_MAX_CURRENT", "dc", "DC 전류 상한", "A", F, 1.0, 0.0, 2.0, safety=H, src="lib/config.py:513 (고정값)",
-        desc="DC 전류 설정의 상한으로, 정전류 제어는 전류를 이 값 위로 올리지 않는다. 램프업 중 이 상한에 걸린 채 목표에 미치지 않으면 'DC 상한 정체 시 유지로 넘김' 시간 뒤 유지 "
+        desc="DC 전류 설정의 상한으로, 정전류 제어는 전류를 이 값 위로 올리지 않는다. 올리는 중 이 상한에 걸린 채 목표에 미치지 않으면 'DC 상한 정체 시 유지로 넘김' 시간 뒤 유지 "
              "단계로 넘어가며, 연결 때 OVP·OCP 쓰기를 켜면 OCP 값으로도 쓴다."),
     _p("DC_MAX_POWER", "dc", "DC 파워 상한", "W", F, 500.0, 0.0, 1000.0, safety=H,
        src="lib/config.py:514 (고정값)", desc="레시피·수동 입력 상한(v1 은 드라이버에만 있었다)"),
@@ -384,7 +384,7 @@ PARAMS: tuple = (
     _p("DC_INITIAL_CURRENT", "dc", "DC 시작 전류", "A", F, 0.1, 0.0, 2.0, safety=H, src="lib/config.py:511 (고정값)",
         desc="DC 출력을 켤 때 처음 주는 전류 설정이다. 켠 뒤에는 정전류 제어가 이 값에서부터 전류를 조절해 목표 파워를 맞추며, 'DC 전류 상한'보다 크면 상한을 쓴다."),
     _p("DC_TOLERANCE_W", "dc", "DC 목표 도달 허용 오차", "W", F, 0.5, 0.1, 10.0, src="lib/config.py:515 (고정값)",
-        desc="DC 파워가 목표 ± 이 값 안이면 램프업 도달로 보고, 유지 중에는 전류를 고치지 않는다. 유지 이탈 판정 폭은 이 값과 목표 × 'DC 유지 이탈 비율' 중 큰 값이다."),
+        desc="DC 파워가 목표 ± 이 값 안이면 도달로 보고, 유지 중에는 전류를 고치지 않는다. 유지 이탈 판정 폭은 이 값과 목표 × 'DC 유지 이탈 비율' 중 큰 값이다."),
     _p("DC_POWER_ERROR_RATIO", "dc", "DC 유지 이탈 비율", "비율", F, 0.10, 0.02, 0.5, safety=H,
        desc="판정 폭 = max(DC_TOLERANCE_W, 목표×비율)"),
     _p("DC_POWER_ERROR_SEC", "dc", "DC 유지 이탈 지속 시간", "s", F, 5.0, 1.0, 60.0, safety=H,
@@ -395,11 +395,11 @@ PARAMS: tuple = (
        v1_key="DC_MIN_CURRENT_ABORT_COUNT", v1_period=1.0, v1_default=10, desc="v1: 10회 × DC 제어 1 s"),
     _p("DC_FAIL_ISET_A", "dc", "DC 무출력 판정 설정 전류", "A", F, 0.20, 0.01, 1.0, safety=H,
        src="lib/config.py:517 (고정값)",
-        desc="DC 램프업 중 설정 전류가 이 값 이상인데 파워가 'DC 무출력 판정 파워' 이하인 상태가 'DC 램프업 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 공정을 "
+        desc="DC 올리는 중 설정 전류가 이 값 이상인데 파워가 'DC 무출력 판정 파워' 이하인 상태가 'DC 올리는 중 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 공정을 "
              "중단한다."),
     _p("DC_FAIL_POWER_W", "dc", "DC 무출력 판정 파워", "W", F, 1.0, 0.1, 50.0, safety=H,
        src="lib/config.py:518 (고정값)",
-        desc="DC 램프업 중 설정 전류가 'DC 무출력 판정 설정 전류' 이상인데 파워가 이 값 이하인 상태가 'DC 램프업 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 공정을 "
+        desc="DC 올리는 중 설정 전류가 'DC 무출력 판정 설정 전류' 이상인데 파워가 이 값 이하인 상태가 'DC 올리는 중 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 공정을 "
              "중단한다."),
     _p("DC_FAIL_SEC", "dc", "DC 올리는 중 무출력 허용", "s", F, 15.0, 3.0, 120.0, safety=H,
        v1_key="DC_FAIL_MAX_TICKS", v1_period=1.0, v1_default=15,
@@ -409,18 +409,18 @@ PARAMS: tuple = (
     _p("DC_CONTROL_GAIN", "dc", "DC 전류 보정 이득", "배", F, 1.0, 0.1, 1.0, safety=H,
        desc="ΔI = 이득 × ΔP / V. v1 은 검사가 없어 음수도 허용했다"),
     _p("DC_RAMP_STEP_A", "dc", "DC 올리는 중 전류 상승 상한", "A/s", F, 0.010, 0.001, 0.1, safety=H,
-        desc="DC 램프업 중 1초에 올릴 수 있는 전류의 상한이다. 작을수록 천천히 올라가 파워 도달이 늦어지며, 파워 도달 대기 한도의 예상 시간 계산에도 쓴다."),
+        desc="DC 올리는 중 1초에 올릴 수 있는 전류의 상한이다. 작을수록 천천히 올라가 파워 도달이 늦어지며, 파워 도달 대기 한도의 예상 시간 계산에도 쓴다."),
     _p("DC_MAINTAIN_STEP_UP_A", "dc", "DC 유지 중 전류 상승 상한", "A/s", F, 0.020, 0.001, 0.1, safety=H,
-        desc="DC 파워 유지 중 1초에 올릴 수 있는 전류의 상한이다. 램프업 중에는 'DC 램프업 전류 상승 상한'을 쓴다."),
+        desc="DC 파워 유지 중 1초에 올릴 수 있는 전류의 상한이다. 올리는 중에는 'DC 올리는 중 전류 상승 상한'을 쓴다."),
     _p("DC_MAINTAIN_STEP_DOWN_A", "dc", "DC 전류 하강 상한", "A/s", F, 0.050, 0.001, 0.2,
-        desc="DC 전류를 1초에 내릴 수 있는 상한으로, 램프업과 유지 모두에 쓴다. 측정이 한 번 튀어도 전류가 한꺼번에 크게 떨어지지 않게 한다."),
+        desc="DC 전류를 1초에 내릴 수 있는 상한으로, 천천히 올리기와 유지 모두에 쓴다. 측정이 한 번 튀어도 전류가 한꺼번에 크게 떨어지지 않게 한다."),
     _p("DC_SMALL_ERROR_RATIO", "dc", "DC 작은 오차 경계", "비율", F, 0.01, 0.0, 0.1, safety=L,
         desc="DC 파워 유지 중 오차가 목표 × 이 비율(최소 'DC 목표 도달 허용 오차') 이하이면 작은 오차로 보고 'DC 작은 오차 이득'으로 고친다. 0 이면 작은 오차 구간을 쓰지 "
              "않는다."),
     _p("DC_SMALL_ERROR_GAIN", "dc", "DC 작은 오차 이득", "배", F, 0.5, 0.1, 1.0, safety=L,
         desc="DC 파워 유지 중 작은 오차 구간에서 쓰는 전류 보정 이득이다. 1 이면 보통 보정과 같고, 작을수록 작은 오차를 천천히 고쳐 덜 흔들린다."),
     _p("DC_LIMIT_STALL_SEC", "dc", "DC 상한 정체 시 유지로 넘김", "s", I, 10, 1, 120, safety=L,
-        desc="DC 램프업 중 전류 상한이나 전압 상한 근처(전압 상한 − 20 V)에 걸린 채 목표에 미치지 않는 상태가 이 시간 이어지면, 목표 미달인 채로 유지 단계로 넘긴다. 이렇게 해서 "
+        desc="DC 올리는 중 전류 상한이나 전압 상한 근처(전압 상한 − 20 V)에 걸린 채 목표에 미치지 않는 상태가 이 시간 이어지면, 목표 미달인 채로 유지 단계로 넘긴다. 이렇게 해서 "
              "파워 도달 대기를 끝내고 다음 블록(기본 템플릿에서는 압력 단계)으로 진행한다."),
     _p("DC_OFF_VERIFY_TRIES", "dc", "DC OFF 확인 횟수", "회", I, 3, 1, 10, safety=H,
        src="device/DCpower.py:38", desc="OUTP OFF 뒤 OUTP? 확인 횟수(무응답이면 OFF 재전송)"),
@@ -434,9 +434,9 @@ PARAMS: tuple = (
     _p("RF_MAX_POWER", "rf", "RF 파워 상한(DAC 풀스케일 환산)", "W", F, 600.0, 1.0, 600.0, safety=H,
        src="lib/config.py:561 (고정값)", desc="DAC 카운트 = (P/RF_MAX_POWER)×4000×gain + offset"),
     _p("RF_FWD_FULL_SCALE_W", "rf", "RF Forward ADC 풀스케일", "W", F, 594.5, 1.0, 2000.0, safety=H,
-       src="lib/config.py:558 (고정값)", desc="ADC 4000 카운트에 해당하는 순방향 파워(W)이다. 교정 상수로 v1 값이며 사용자 확인을 마쳤다(2026-10-15)"),
+       src="lib/config.py:558 (고정값)", desc="ADC 4000 카운트에 해당하는 Forward 파워(W)이다. 교정 상수로 v1 값이며 사용자 확인을 마쳤다(2026-10-15)"),
     _p("RF_REF_FULL_SCALE_W", "rf", "RF Reflected ADC 풀스케일", "W", F, 200.0, 1.0, 2000.0, safety=H,
-       src="lib/config.py:559 (고정값)", desc="ADC 4000 카운트에 해당하는 반사 파워(W)이다. v1 값을 그대로 쓰며 사용자 확인을 마쳤다(2026-10-15)"),
+       src="lib/config.py:559 (고정값)", desc="ADC 4000 카운트에 해당하는 Reflected 파워(W)이다. v1 값을 그대로 쓰며 사용자 확인을 마쳤다(2026-10-15)"),
     _p("RF_CAL_OFFSET", "rf", "RF DAC 보정 오프셋", "count", F, 6.79, -400.0, 400.0, safety=H,
        src="UI.py:440 (offset_edit 기본값)", desc="v1 은 화면 입력칸 값을 공정마다 썼다"),
     _p("RF_CAL_GAIN", "rf", "RF DAC 보정 이득", "배", F, 1.0395, 0.5, 1.5, safety=H,
@@ -444,37 +444,37 @@ PARAMS: tuple = (
         desc="RF 목표 파워를 DAC 카운트로 바꿀 때 곱하는 보정 이득이다. DAC = 오프셋 + (파워 ÷ RF 파워 상한) × 4000 × 이득이며, 클수록 같은 파워에 더 큰 DAC 를 "
              "낸다."),
     _p("RF_RAMP_STEP_W", "rf", "RF 천천히 올리기 속도", "W/s", F, 1.0, 0.1, 20.0, safety=H, src="lib/config.py:562 (고정값)",
-        desc="RF 램프업 때 1초마다 스텝 목표를 올리는 폭이다. 작을수록 천천히 올라가며, 공정 중 목표를 바꿀 때도 이 속도로 따라가고 파워 도달 대기 한도 계산에도 쓴다."),
+        desc="RF 천천히 올릴 때 1초마다 스텝 목표를 올리는 폭이다. 작을수록 천천히 올라가며, 공정 중 목표를 바꿀 때도 이 속도로 따라가고 파워 도달 대기 한도 계산에도 쓴다."),
     _p("RF_RAMP_DOWN_STEP_COUNTS", "rf", "RF 천천히 내리기 속도", "count/0.5s", I, 8, 1, 400,
        src="lib/config.py:563 (고정값)", note="v1 이름·주석은 W 지만 실제는 DAC 카운트(RFpower.py:212)",
-        desc="RF 램프다운 때 0.5 초마다 DAC 를 이 카운트씩 내린다. 정지 순서·파워 끄기 블록·시작 때 남은 RF 정리에 쓰며, 'RF 램프다운 한도' 안에 끝나지 않으면 바로 0 으로 "
+        desc="RF 천천히 내리기 때 0.5 초마다 DAC 를 이 카운트씩 내린다. 정지 순서·파워 끄기 블록·시작 때 남은 RF 정리에 쓰며, 'RF 천천히 내리기 한도' 안에 끝나지 않으면 바로 0 으로 "
              "내린다."),
     _p("RF_TOLERANCE_W", "rf", "RF 목표 도달 허용 오차", "W", F, 1.0, 0.1, 20.0, src="lib/config.py:566 (고정값)",
-        desc="RF 순방향 파워가 목표 ± 이 값 안에 들어오면 램프업 도달로 보고, 유지 중 이 범위를 벗어나면 1초마다 DAC 를 1 씩 고친다. 유지 이탈 판정 폭은 이 값과 목표 × 'RF "
+        desc="RF Forward 파워가 목표 ± 이 값 안에 들어오면 도달로 보고, 유지 중 이 범위를 벗어나면 1초마다 DAC 를 1 씩 고친다. 유지 이탈 판정 폭은 이 값과 목표 × 'RF "
              "유지 이탈 비율' 중 큰 값이다."),
     _p("RF_POWER_ERROR_RATIO", "rf", "RF 유지 이탈 비율", "비율", F, 0.10, 0.02, 0.5, safety=H,
-        desc="RF 파워 유지 중 순방향과 목표의 차이가 목표 × 이 비율(최소 'RF 목표 도달 허용 오차')을 넘은 채 'RF 유지 이탈 지속 시간' 이어지면, RF 를 램프다운해 끄고 공정을 "
+        desc="RF 파워 유지 중 Forward와 목표의 차이가 목표 × 이 비율(최소 'RF 목표 도달 허용 오차')을 넘은 채 'RF 유지 이탈 지속 시간' 이어지면, RF 를 천천히 내려 끄고 공정을 "
              "중단한다."),
     _p("RF_POWER_ERROR_SEC", "rf", "RF 유지 이탈 지속 시간", "s", F, 5.0, 1.0, 60.0, safety=H,
        v1_key="RF_POWER_ERROR_MAX_COUNT", v1_period=1.0, v1_default=5, desc="v1: 5회 × RF 제어 1 s"),
     _p("RF_FAIL_DAC_COUNTS", "rf", "RF 무출력 판정 DAC", "count", I, 100, 10, 4000, safety=H,
        src="lib/config.py:567 (고정값)",
-        desc="RF 램프업 중 DAC 가 이 값 이상인데 순방향이 'RF 무출력 판정 순방향' 이하인 상태가 'RF 램프업 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 RF 를 "
+        desc="RF 올리는 중 DAC 가 이 값 이상인데 Forward가 'RF 무출력 판정 Forward' 이하인 상태가 'RF 올리는 중 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 RF 를 "
              "내려 끄고 공정을 중단한다."),
     _p("RF_FAIL_FWD_W", "rf", "RF 무출력 판정 Forward", "W", F, 1.0, 0.1, 50.0, safety=H,
        src="lib/config.py:568 (고정값)",
-        desc="RF 램프업 중 DAC 가 'RF 무출력 판정 DAC' 이상인데 순방향이 이 값 이하인 상태가 'RF 램프업 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 RF 를 "
+        desc="RF 올리는 중 DAC 가 'RF 무출력 판정 DAC' 이상인데 Forward가 이 값 이하인 상태가 'RF 올리는 중 무출력 허용' 시간 이어지면, 출력이 나오지 않는 것으로 보고 RF 를 "
              "내려 끄고 공정을 중단한다."),
     _p("RF_FAIL_SEC", "rf", "RF 올리는 중 무출력 허용", "s", F, 10.0, 3.0, 120.0, safety=H,
        v1_key="RF_FAIL_MAX_TICKS", v1_period=1.0, v1_default=10, desc="v1: 10틱 × 1 s"),
     _p("RF_REFP_ABORT_THRESHOLD", "rf", "RF Reflected 대기 기준", "W", F, 3.0, 0.5, 200.0, safety=H,
-       v1_default=20.0, desc="반사파가 이 값 이상이면 대기 시작(전 구간)"),
+       v1_default=20.0, desc="Reflected가 이 값 이상이면 대기 시작(전 구간)"),
     _p("RF_REFP_WAIT_SEC", "rf", "RF Reflected 대기 허용", "s", I, 60, 1, 600, safety=H, v1_default=15,
-        desc="RF 반사파가 'RF 반사파 대기 기준' 이상이면 램프를 멈추고 기다리는데, 그 상태가 이 시간 이어지면 RF 를 램프다운해 끄고 공정을 중단한다. 파워 도달 대기 한도 계산에는 이 "
+        desc="RF Reflected가 'RF Reflected 대기 기준' 이상이면 올리기를 멈추고 기다리는데, 그 상태가 이 시간 이어지면 RF 를 천천히 내려 끄고 공정을 중단한다. 파워 도달 대기 한도 계산에는 이 "
              "값의 3배를 더한다."),
     _p("STOP_RF_RAMPDOWN_TIMEOUT_SEC", "stop", "RF 천천히 내리기 한도", "s", F, 120.0, 10.0, 600.0,
        src="controller/process_controller.py:392",
-        desc="RF 램프다운이 걸릴 수 있는 한도다. 이 시간에서 1 초를 뺀 시간 안에 DAC 가 0 이 되지 않으면 바로 0 으로 쓰고 다음 단계로 넘어간다."),
+        desc="RF 천천히 내리기가 걸릴 수 있는 한도다. 이 시간에서 1 초를 뺀 시간 안에 DAC 가 0 이 되지 않으면 바로 0 으로 쓰고 다음 단계로 넘어간다."),
 
     # ───────────── RF Pulse(CESAR 1310) ─────────────
     _p("RFPULSE_MAX_POWER", "rfpulse", "RF Pulse 출력 상한", "W", F, 600.0, 1.0, float(dev.CESAR_MAX_POWER_W),
@@ -492,12 +492,12 @@ PARAMS: tuple = (
     _p("RFPULSE_PULSE_MIN_EDGE_US", "rfpulse", "펄스 최소 ON/OFF 시간", "µs", F, 16.0, 0.0, 1000.0,
        src="lib/config.py:617", desc="0 이면 검사하지 않는다. CESAR 1310 명령 96 규칙이다"),
     _p("RFPULSE_FORP_TOLERANCE_PERCENT", "rfpulse", "Forward 허용 오차", "%", F, 5.0, 0.5, 50.0, safety=H,
-        desc="RF Pulse 출력 중 순방향과 목표의 차이가 목표의 이 비율 이상인 상태가 '순방향 이탈 지속 시간' 이어지면 RF Pulse 를 끄고 공정을 중단한다. 공정 중 목표를 바꾼 뒤 "
+        desc="RF Pulse 출력 중 Forward와 목표의 차이가 목표의 이 비율 이상인 상태가 'Forward 이탈 지속 시간' 이어지면 RF Pulse 를 끄고 공정을 중단한다. 공정 중 목표를 바꾼 뒤 "
              "새 목표에 들어왔는지 볼 때도 이 비율을 쓴다."),
     _p("RFPULSE_FORP_SEC", "rfpulse", "Forward 이탈 지속 시간", "s", F, 15.0, 1.0, 120.0, safety=H,
        v1_key="RFPULSE_FORP_CONSECUTIVE_LIMIT", v1_period=5.0, v1_default=3, desc="v1: 3회 × RF Pulse 폴링 5 s"),
     _p("RFPULSE_REFP_LIMIT_WATTS", "rfpulse", "Reflected 상한", "W", F, 20.0, 0.5, 200.0, safety=H,
-        desc="RF Pulse 반사 파워가 이 값 이상인 상태가 '반사파 초과 지속 시간' 이어지면 RF Pulse 를 끄고 공정을 중단한다. RF Pulse 를 쓰는 공정 내내 본다."),
+        desc="RF Pulse Reflected 파워가 이 값 이상인 상태가 'Reflected 초과 지속 시간' 이어지면 RF Pulse 를 끄고 공정을 중단한다. RF Pulse 를 쓰는 공정 내내 본다."),
     _p("RFPULSE_REFP_SEC", "rfpulse", "Reflected 초과 지속 시간", "s", F, 15.0, 1.0, 120.0, safety=H,
        v1_key="RFPULSE_REFP_CONSECUTIVE_LIMIT", v1_period=5.0, v1_default=3, desc="v1: 3회 × RF Pulse 폴링 5 s"),
     _p("RFPULSE_REFP_AUTO_OFF_SEC", "rfpulse", "CESAR Reflected 자동 차단 시간(명령 33)", "s", I, 20, 1, 255, safety=H,
@@ -506,7 +506,7 @@ PARAMS: tuple = (
     _p("RFPULSE_VERIFY_PULSE_CONFIG", "rfpulse", "펄스 설정 되읽기 불일치 시 중단", "", B, True,
        desc="false 면 경고만"),
     _p("RFPULSE_RAW_LOG", "rfpulse", "RF Pulse 프레임 원문 기록", "", B, True, safety=L, apply=LIVE,
-       desc="로컬 파일에만 쓴다(v1 은 NAS 공정 로그에 썼다)"),
+       desc="노트북 파일에만 쓴다(v1 은 NAS 공정 로그에 썼다)"),
     _p("STOP_RFPULSE_OFF_TIMEOUT_SEC", "stop", "RF Pulse OFF 대기 한도", "s", F, 30.0, 5.0, 120.0,
        src="controller/process_controller.py:1980",
         desc="정지 순서에서 RF Pulse 끄기 결과를 기다리는 한도다. 넘으면 기다리지 않고 다음 단계(가스 유량 끄기)로 넘어간다."),
@@ -523,12 +523,12 @@ PARAMS: tuple = (
        desc="A 뒤 약 5.9 s·B 뒤 약 4.9 s 무응답(실측). 이 동안 품질 suppressed, 실패로 세지 않음"),
     _p("IG_FILAMENT_ON_TIMEOUT_SEC", "ig", "Filament ON 결과 기한", "s", F, 20.0, 10.0, 120.0,
        src="lib/config.py:749",
-        desc="필라멘트 켜기를 보낸 뒤 필라멘트와 방출이 모두 확인되기를 기다리는 기한이다. 넘으면 켜기 실패로 보며, 공정의 필라멘트 켜기 단계에서 실패하면 공정을 중단한다."),
+        desc="Filament 켜기를 보낸 뒤 Filament와 Emission이 모두 확인되기를 기다리는 기한이다. 넘으면 켜기 실패로 보며, 공정의 Filament 켜기 단계에서 실패하면 공정을 중단한다."),
     _p("IG_FILAMENT_OFF_TIMEOUT_SEC", "ig", "Filament OFF 확인 기한", "s", F, 20.0, 10.0, 120.0,
        src="controller/process_controller.py:39 (드라이버 기한 20 s)",
-        desc="필라멘트 끄기를 보낸 뒤 꺼짐이 확인되기를 기다리는 기한이다. 넘으면 끄기 실패로 기록하며, 공정은 경고만 남기고 계속한다."),
+        desc="Filament 끄기를 보낸 뒤 꺼짐이 확인되기를 기다리는 기한이다. 넘으면 끄기 실패로 기록하며, 공정은 경고만 남기고 계속한다."),
     _p("IG_SETTLE_SEC", "ig", "Emission 뒤 판정 제외 시간", "s", F, 15.0, 0.0, 120.0, src="lib/config.py:753",
-        desc="필라멘트 방출이 처음 확인된 뒤 이 시간 동안의 이온 압력은 베이스 압력 도달 판정에 쓰지 않는다. 0 이면 바로 판정한다."),
+        desc="Filament Emission이 처음 확인된 뒤 이 시간 동안의 이온 압력은 베이스 압력 도달 판정에 쓰지 않는다. 0 이면 바로 판정한다."),
     _p("IG_VALUE_MAX_AGE_SEC", "ig", "베이스 판정에 쓰는 값 나이 상한", "s", F, 2.0, 1.0, 10.0,
        src="controller/process_controller.py:36",
         desc="v2 에서는 사용하지 않는다. 베이스 판정은 품질이 정상·늦음인 값만 쓴다(v1 에서는 이 나이보다 오래된 값을 베이스 판정에 쓰지 않았음)"),
@@ -540,7 +540,7 @@ PARAMS: tuple = (
        src="device/IonGauge.py:377 (relight_lockout_sec)", desc="매뉴얼상 끈 뒤 4 s 안에는 다시 켤 수 없어 1 s 여유를 더했다"),
     _p("IG_MAX_RELIGHTS", "ig", "대기 중 Filament 재점등 횟수", "회", I, 2, 0, 10,
        src="controller/process_controller.py:37",
-        desc="베이스 압력 대기 중 필라멘트가 꺼지거나 다시 켜기에 실패하면 이 횟수까지 다시 켠다. 횟수를 다 쓰면 공정을 중단하고, 0 이면 다시 켜지 않는다."),
+        desc="베이스 압력 대기 중 Filament가 꺼지거나 다시 켜기에 실패하면 이 횟수까지 다시 켠다. 횟수를 다 쓰면 공정을 중단하고, 0 이면 다시 켜지 않는다."),
     _p("IG_BASE_LOG_INTERVAL_SEC", "ig", "베이스 대기 기록 간격", "s", I, 5, 1, 600, safety=L, apply=LIVE,
        src="lib/config.py:766",
         desc="v2 에서는 사용하지 않는다(v1 에서 베이스 대기 진행 기록을 남기던 간격)"),
@@ -585,14 +585,14 @@ PARAMS: tuple = (
     _p("HEATER_TC2_TC1_WARN_C", "heater", "TC2 단독: TC1 편차 안내 기준", "°C", F, 15.0, 3.0, 100.0, safety=L,
        src="lib/config.py(6e0685b)",
        desc="tc2 모드 기록용 안내(제어에 영향 없음): 셔터 닫힘·r1 도달·|TC2 − SV2| ≤ HEATER_SOAK_TOLERANCE 에서 "
-            "|TC1 − 목표| 가 이 값을 넘은 채 HEATER_TC2_TC1_WARN_SEC 이상이면 경고·사건 1회(HEATER_TC2_TC1_DEVIATION). 공정은 계속"),
+            "|TC1 − 목표| 가 이 값을 넘은 채 HEATER_TC2_TC1_WARN_SEC 이상이면 경고·기록 1회(HEATER_TC2_TC1_DEVIATION). 공정은 계속"),
     _p("HEATER_TC2_TC1_WARN_SEC", "heater", "TC2 단독: TC1 편차 안내 지속", "s", F, 120.0, 30.0, 1800.0, safety=L,
        src="lib/config.py(6e0685b)",
         desc="TC2 단독 제어에서 셔터가 닫혀 있고 기준값이 목표에 닿았으며 TC2 가 TC2 목표 ± '도달 판정 허용 편차' 안일 때, TC1 편차가 'TC2 단독: TC1 편차 안내 기준'을 "
              "넘은 채 이 시간 이상 이어지면 경고를 한 번 남긴다. 제어와 공정에는 영향이 없다."),
     _p("HEATER_TC2_HOLDBACK_C", "heater", "TC2 단독: 홀드백 폭(TC1 눈금)", "°C", F, 20.0, 2.0, 100.0,
        src="lib/config.py(6e0685b)",
-       desc="tc2 모드에서 (SV2 − TC2) 가 매핑 기울기 × 이 값보다 크면 r1(목표 램프)을 세운다. 래더 홀드백(cascade 의 TC1 홀드백)과는 별개이다. 10 이면 램프 중 "
+       desc="tc2 모드에서 (SV2 − TC2) 가 매핑 기울기 × 이 값보다 크면 r1(목표 승온)을 세운다. 래더 홀드백(cascade 의 TC1 홀드백)과는 별개이다. 10 이면 램프 중 "
             "TC2 추종 지연(14~27 °C)에 자주 걸려 600 °C 도달이 승온 한도를 넘었다(v1 시뮬레이터, HEATER_HOLDBACK_C·D00021)"),
     _p("HEATER_CASCADE_TI_SEC", "heater", "바깥 루프 적분 시간", "s", F, 600.0, 60.0, 7200.0, src="lib/config.py(f188f28)",
         desc="2단 제어(cascade)에서 TC1 오차를 TC2 목표 보정으로 쌓아 가는 적분 시간이다. 클수록 보정이 천천히 따라가며, 공정 승온 대기 한도에 이 값의 2배가 더해진다."),
@@ -607,7 +607,7 @@ PARAMS: tuple = (
     _p("HEATER_CASCADE_ALARM_ACTION", "heater", "TC1 탈락 의심 시", "", E, "abort", enum=("abort", "warn"), safety=H,
        src="lib/config.py(f188f28)", desc="abort = 공정 소유면 공정 중단·히터 레시피면 레시피 중단·수동이면 경고 / warn = 경고만"),
     _p("HEATER_SHUTTER_SETTLE_TOL_C", "heater", "셔터 전 정착 허용 폭", "°C", F, 2.0, 0.5, 10.0, src="lib/config.py(3328872)",
-       desc="메인 셔터 열기 직전 TC1 이 목표 ±이 값 안에 정해진 시간 동안 이어지면 연다. 2단 제어에서만 쓰고 tc2·tc1 에서는 쓰지 "
+       desc="Main 셔터 열기 직전 TC1 이 목표 ±이 값 안에 정해진 시간 동안 이어지면 연다. 2단 제어에서만 쓰고 tc2·tc1 에서는 쓰지 "
             "않는다(HEATER_SHUTTER_SETTLE_SEC, HEATER_CTRL_MODE=cascade)"),
     _p("HEATER_SHUTTER_SETTLE_SEC", "heater", "셔터 전 정착 연속 시간", "s", F, 60.0, 10.0, 600.0,
        src="lib/config.py(3328872)", desc="연속 시간은 승온 대기를 통과한 뒤부터 센다. 이미 맞으면 바로 통과한다"),
@@ -617,18 +617,18 @@ PARAMS: tuple = (
        enum=("proceed", "abort"), safety=H, src="lib/config.py(3328872)",
        desc="proceed = 경고 후 셔터 열고 진행 / abort = 알리고 공정 중단"),
     _p("HEATER_WAIT_TIMEOUT_SEC", "heater", "승온 대기 최소 한도", "s", I, 5400, 600, 43200, v1_default=3600,
-       desc="실제 한도 = min(max(이 값, 예상 램프 + MARGIN), MAX)"),
+       desc="실제 한도 = min(max(이 값, 예상 승온 + MARGIN), MAX)"),
     _p("HEATER_WAIT_TIMEOUT_MARGIN_SEC", "heater", "승온 대기 여유", "s", F, 1800.0, 0.0, 14400.0,
        src="controller/process_controller.py:26, heater_recipe.py:54 (중복 정의)",
-        desc="승온 대기 한도를 정할 때 예상 램프 시간에 더하는 여유다. 한도는 '승온 대기 최소 한도'와 예상 램프 + 이 값 중 큰 값(절대 상한 이하)이며, 공정 승온 대기와 히터 레시피 "
+        desc="승온 대기 한도를 정할 때 예상 승온 시간에 더하는 여유다. 한도는 '승온 대기 최소 한도'와 예상 승온 + 이 값 중 큰 값(절대 상한 이하)이며, 공정 승온 대기와 히터 레시피 "
              "스텝에 쓴다."),
     _p("HEATER_WAIT_TIMEOUT_MAX_SEC", "heater", "승온 대기 절대 상한", "s", F, 43200.0, 600.0, 86400.0,
        safety=H, src="controller/process_controller.py:27, heater_recipe.py:55 (중복 정의)",
-        desc="예상 램프 시간으로 계산한 승온 대기 한도의 절대 상한이다. 한도를 넘으면 공정은 승온 대기에서 중단하고, 히터 레시피는 그 스텝에서 레시피를 "
+        desc="예상 승온 시간으로 계산한 승온 대기 한도의 절대 상한이다. 한도를 넘으면 공정은 승온 대기에서 중단하고, 히터 레시피는 그 스텝에서 레시피를 "
              "중단한다(HEATER_WAIT_TIMEOUT)."),
     _p("HEATER_RAMP_DONE_TOL_C", "heater", "승온 완료 판정 폭", "°C", F, 0.15, 0.05, 5.0, safety=L,
        src="controller/process_controller.py:43, heater_recipe.py:59",
-        desc="램프가 끝났는지 볼 때 쓰는 폭이다. TC1 직접 제어에서는 래더 램프 중간 목표가, 2단·TC2 단독 제어에서는 기준값의 최종 목표가 목표와 이 값 이하로 차이 나야 램프 완료로 "
+        desc="램프가 끝났는지 볼 때 쓰는 폭이다. TC1 직접 제어에서는 래더 승온 중간 목표가, 2단·TC2 단독 제어에서는 기준값의 최종 목표가 목표와 이 값 이하로 차이 나야 램프 완료로 "
              "보며, 공정 도달 판정과 히터 레시피의 RAMP 에서 SOAK 로 넘어가는 판정에 쓴다."),
     _p("HEATER_TC_BAD_LIMIT_SEC", "heater", "TC 이상 지속 시 레시피 중단", "s", F, 60.0, 5.0, 600.0,
        safety=H, src="controller/heater_recipe.py:47",
@@ -683,7 +683,7 @@ PARAMS: tuple = (
        note="래더가 10.0 으로 강제 — 되읽기 일치용",
         desc="PLC 래더의 감속 구간에 쓰는 값이다. 래더가 10.0 °C 로 고정하므로 되읽기 확인이 맞도록 10 으로만 둘 수 있다(D00027)."),
     _p("HEATER_SLOW_RATE_C_PER_MIN", "heater_plc", "D00028 감속 속도", "°C/min", F, 60.0, 6.0, 600.0,
-       v1_default=6.0, desc="60 으로 열어 래더가 속도를 막지 않게 한다. 실제 램프는 파이썬 감속 접근이 정한다"),
+       v1_default=6.0, desc="60 으로 열어 래더가 속도를 막지 않게 한다. 실제 승온은 파이썬 감속 접근이 정한다"),
 
     # ───────────── 히터 감속 접근(heater_ramp) ─────────────
     _p("HEATER_APPROACH_ZONE_C", "heater_ramp", "목표 직전 감속 구간", "°C", F, 20.0, 0.0, 200.0,
@@ -691,7 +691,7 @@ PARAMS: tuple = (
     _p("HEATER_APPROACH_MIN_RATE_C_PER_MIN", "heater_ramp", "도착 속도", "°C/min", F, 1.0, 0.1, 6.0,
         desc="목표 직전 감속 구간 끝(목표에 닿는 순간)의 승온 속도다. 작을수록 목표 직전에 더 천천히 다가가 승온 시간이 길어진다."),
     _p("HEATER_APPROACH_LEAD_C", "heater_ramp", "SV 앞서기 폭", "°C", F, 1.0, 0.2, 10.0,
-        desc="TC1 직접 제어에서 프로그램이 PLC 에 쓰는 목표가 래더 램프 중간 목표보다 이 값 넘게 앞서지 않게 한다(D00012·D00019)."),
+        desc="TC1 직접 제어에서 프로그램이 PLC 에 쓰는 목표가 래더 승온 중간 목표보다 이 값 넘게 앞서지 않게 한다(D00012·D00019)."),
 
     # ───────────── 히터 유지 모드·포화(heater_hold) ─────────────
     _p("HEATER_HOLD_MODE", "heater_hold", "도달 후 유지 모드", "", E, "tc2", enum=("off", "dac", "tc2"),
@@ -702,7 +702,7 @@ PARAMS: tuple = (
         desc="진입 허용 범위 안의 표본을 이 시간 동안 모은 뒤 출력·온도 변화가 작으면, 그 평균 출력(DAC 고정) 또는 평균 TC2(TC2 추종)로 유지 모드에 들어간다. 히터 제어 구조가 "
              "TC1 직접 제어일 때만 쓴다."),
     _p("HEATER_HOLD_MV_ARRIVE_TOL_C", "heater_hold", "한 번은 들어와야 하는 범위", "°C", F, 1.0, 0.2, 10.0,
-        desc="램프가 끝난 뒤 TC1 이 목표 ± 이 값 안에 한 번은 들어와야 유지 모드 측정을 시작하며, 진입 허용 범위보다 클 수 없다. 히터 제어 구조가 TC1 직접 제어일 때만 쓴다."),
+        desc="승온이 끝난 뒤 TC1 이 목표 ± 이 값 안에 한 번은 들어와야 유지 모드 측정을 시작하며, 진입 허용 범위보다 클 수 없다. 히터 제어 구조가 TC1 직접 제어일 때만 쓴다."),
     _p("HEATER_HOLD_MV_DRIFT_PV_C", "heater_hold", "PV 드리프트 하한", "°C", F, 0.5, 0.1, 10.0, safety=L,
         desc="유지 모드 측정 창의 앞 절반과 뒤 절반의 TC1 평균 차이가 허용값을 넘으면 아직 정착 전으로 보고 다시 잰다. 허용값은 이 값과 진입 허용 범위 × 'PV 드리프트 비율' 중 큰 "
              "값이며, TC1 직접 제어일 때만 쓴다."),
@@ -771,10 +771,10 @@ PARAMS: tuple = (
     _p("HEATER_RECIPE_RAMP_MAX_C_PER_MIN", "heater_recipe", "레시피 승온 상한", "°C/min", F, 60.0, 6.0, 600.0,
        src="core/params.py:364 (공정 레시피 heater_ramp 60 초과 오류)",
        note="v1 히터 레시피에는 상한이 없다 — v2 는 공정 레시피와 같은 60 °C/min 을 히터 레시피에도(v2 방식 유지, 2026-10-20)",
-        desc="승온 속도로 넣을 수 있는 상한이다. 히터 레시피 스텝, 공정 레시피의 히터 램프 칸, 히터 승온 블록, 공정 중 승온 속도 수정에 모두 쓴다."),
+        desc="승온 속도로 넣을 수 있는 상한이다. 히터 레시피 스텝, 공정 레시피의 히터 승온 칸, 히터 승온 블록, 공정 중 승온 속도 수정에 모두 쓴다."),
     _p("HEATER_GAS_SP1_TIMEOUT_SEC", "heater_gas", "히터 가스 SP1 도달 한도", "s", F, 300.0, 30.0, 1800.0,
        src="controller/heater_atmosphere.py:55",
-        desc="히터 가스를 준비할 때 챔버 압력이 정한 압력에 도달하기를 기다리는 한도다. 넘으면 가스 준비 실패로 보고 유량 끄기·MFC 밸브 열기·차단밸브 닫기를 하며 히터는 켜지 않는다."),
+        desc="히터 가스를 준비할 때 챔버 압력이 정한 압력에 도달하기를 기다리는 한도다. 넘으면 가스 준비 실패로 보고 유량 끄기·MFC 밸브 열기·밸브 닫기를 하며 히터는 켜지 않는다."),
     _p("HEATER_GAS_MFC_TIMEOUT_SEC", "heater_gas", "히터 가스 MFC 명령 한도", "s", F, 60.0, 5.0, 600.0,
        src="controller/heater_atmosphere.py:43",
         desc="v2 에서는 사용하지 않는다. 히터 가스의 MFC 명령 한도는 프로그램에 정한 60 s 가 대신한다(v1 heater_atmosphere MFC_TIMEOUT_SEC, "
@@ -788,7 +788,7 @@ PARAMS: tuple = (
         desc="시작 전 정리에서 DC·RF·RF Pulse 를 끈 뒤 다음 단계로 가기 전에 기다리는 시간이다. 정수 초로 반올림하며, 블록 값을 비우면 이 값을 쓴다."),
     _p("GAS_STABILIZE_SEC", "process", "SP4 ON 뒤 압력 안정화", "s", F, 60.0, 0.0, 600.0,
        src="controller/process_controller.py:577",
-        desc="기본 템플릿에서 가스를 넣고 가스 안정화 설정점을 고른 뒤 압력이 자리 잡도록 기다리는 시간이다(정수 초로 반올림). 이 동안 압력 도달 판정은 하지 않는다."),
+        desc="기본 템플릿에서 가스를 넣고 가스 안정화 SP를 고른 뒤 압력이 자리 잡도록 기다리는 시간이다(정수 초로 반올림). 이 동안 압력 도달 판정은 하지 않는다."),
     _p("SP3_MTORR", "process", "압력 1단계(SP3)", "mTorr", F, 15.0, 1.0, 100.0,
        src="controller/process_controller.py:619",
        desc="WP < 이 값일 때만 거친다. 값 출처(SP3_SOURCE)가 프로그램 값일 때 장비에 쓰는 값(장비 값이면 장비에서 읽은 값으로 비교)"),
@@ -839,7 +839,7 @@ PARAMS: tuple = (
         desc="파워 도달 대기 한도의 절대 상한이다. 예상 시간으로 계산한 한도가 이 값을 넘으면 이 값을 쓴다."),
     _p("POWER_WAIT_EST_FACTOR", "process", "파워 대기 예상 시간 배수", "배", F, 1.5, 1.0, 5.0, safety=L,
        src="controller/process_controller.py:997",
-        desc="파워 도달 대기 한도를 계산할 때 예상 도달 시간에 곱하는 배수다. 예상 도달 시간은 DC·RF·RF Pulse 중 가장 오래 걸리는 장비의 예상 램프 시간이다."),
+        desc="파워 도달 대기 한도를 계산할 때 예상 도달 시간에 곱하는 배수다. 예상 도달 시간은 DC·RF·RF Pulse 중 가장 오래 걸리는 장비의 예상 승온 시간이다."),
     _p("POWER_WAIT_EST_MARGIN_SEC", "process", "파워 대기 예상 여유", "s", F, 120.0, 0.0, 1800.0, safety=L,
        src="controller/process_controller.py:997",
         desc="파워 도달 대기 한도를 계산할 때 예상 도달 시간 × 배수에 더하는 여유다. 클수록 한도가 길어진다."),
@@ -847,7 +847,7 @@ PARAMS: tuple = (
     # ───────────── 정지(stop) ─────────────
     _p("STOP_FLOW_OFF_TIMEOUT_SEC", "stop", "STOP 유량 OFF 확인 한도(채널당)", "s", F, 6.0, 2.0, 60.0,
        src="controller/process_controller.py:31",
-        desc="STOP·ALL STOP 정지 순서의 가스 유량 끄기 단계에서 유량 꺼짐 확인을 기다리는 한도다. 넘으면 기다리지 않고 다음 단계로 넘어간다."),
+        desc="STOP·ALL STOP 정지 순서의 가스 유량 정지 단계에서 유량 꺼짐 확인을 기다리는 한도다. 넘으면 기다리지 않고 다음 단계로 넘어간다."),
     _p("STOP_EXHAUST_WAIT_SEC", "stop", "STOP MFC 밸브 열기(배기) 대기", "s", F, 8.0, 1.0, 60.0,
        src="controller/process_controller.py:1922",
         desc="STOP·ALL STOP 정지 순서의 MFC 밸브 열기(배기) 단계에서 밸브 열림 확인을 기다리는 한도다. 넘으면 기다리지 않고 다음 단계로 넘어간다."),
@@ -874,7 +874,7 @@ PARAMS: tuple = (
 
     # ───────────── 기록(record) ─────────────
     _p("SNAPSHOT_RETENTION_DAYS", "record", "1초 기록 보관 기간", "일", I, 180, 7, 3650, safety=L, apply=RESTART, src=_V2,
-        desc="로컬 기록 폴더의 일별 기록 파일(1초 스냅샷·이벤트, SQLite·CSV)을 이 기간만 남긴다. 날이 바뀔 때 기간이 지난 로컬 파일을 지우며, NAS 사본은 지우지 않는다."),
+        desc="노트북 기록 폴더의 일별 기록 파일(1초 스냅샷·이벤트, SQLite·CSV)을 이 기간만 남긴다. 날이 바뀔 때 기간이 지난 노트북 파일을 지우며, NAS 사본은 지우지 않는다."),
     _p("NAS_SYNC_PERIOD_SEC", "record", "NAS 사본 주기(지난 날 파일)", "s", I, 60, 10, 3600, safety=L, apply=RESTART,
        src=_V2,
         desc="지난 날 기록 파일(.sqlite·.csv)을 NAS 사본 폴더로 복사하는 주기다. 크기가 같은 파일은 건너뛰고 실패하면 다음 회차에 다시 하며, 오늘 DB 사본은 'NAS 오늘 DB "
