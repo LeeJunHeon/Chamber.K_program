@@ -666,7 +666,9 @@ class MfcDriver:
     def _l0_gen(self, name: str, bits: str):
         """L0 쓰기 → R69 확인, 다르면 L0 1회 다시(v1 _set_onoff_mask_and_verify, MFC.py:1131-1170)."""
         cmd = f"L0{bits}"
-        self.onoff_bits = None                           # 보내는 동안은 모름
+        prev = self.onoff_bits if isinstance(self.onoff_bits, str) and len(self.onoff_bits) == 4 else None
+        if not (prev is not None and prev[:2] == "00" and bits[:2] == "00"):
+            self.onoff_bits = None                       # 보내는 동안은 모름 — Ar·O₂ 가 꺼진 채로 다시 끄기만 하면 그대로(영점 보호 시간이 끊기지 않게)
         yield ("w", cmd)
         yield from self._verify_loop(name, "R69", lambda a: parse_r69(a or "") == bits, L0_TRIES, resend=cmd)
         self.onoff_bits = bits

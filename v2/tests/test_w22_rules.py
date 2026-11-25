@@ -85,6 +85,16 @@ def test_zero_sent_after_flow_off_hold(tmp_path):
     assert not [e for e in r.ev("warn") if e.code == "ZERO_SKIPPED"]
 
 
+def test_zero_sent_with_default_hold_when_flow_was_off(tmp_path):
+    """기본 ZERO_MIN_IDLE_SEC(10 s) — 유량이 꺼진 채 대기했으면 공정 시작의 유량 끄기(L0 0000) 다시 보내기가 시간을 끊지 않는다."""
+    r = R(tmp_path, dict(FAST, IG_ENABLED=False))
+    r.on(20, r.cmd("PROCESS_START", {"row": SHORT}))
+    r.run(70)
+    w = _mfc_writes(r)
+    assert "Z1" in w and "L5 1" in w, w
+    assert not [e for e in r.ev("warn") if e.code == "ZERO_SKIPPED"]
+
+
 def test_zero_blocked_by_gauge_a_when_ig_connected(tmp_path):
     r = R(tmp_path, dict(FAST, IG_ENABLED=True, ZERO_MIN_IDLE_SEC=1.0))
     r.on(1, lambda: setattr(r.rig.sims["ig"], "conv_a_torr", 5.0) if hasattr(r.rig.sims["ig"], "conv_a_torr") else None)
