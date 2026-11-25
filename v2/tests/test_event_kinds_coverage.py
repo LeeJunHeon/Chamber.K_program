@@ -33,7 +33,8 @@ def test_code_event_sites_all_named():
     code = _code_event_kinds()
     up = {k for s, k in code if s == "uplink"}
     assert up == {"uplink_up", "uplink_down", "uplink_auth_failed", "uplink_conflict", "uplink_gap", "uplink_spool_loaded",
-                  "uplink_spool_error", "uplink_spool_full", "uplink_too_large", "uplink_bad_command"}
+                  "uplink_spool_error", "uplink_spool_full", "uplink_too_large", "uplink_bad_command",
+                  "uplink_recipes", "uplink_recipes_failed"}                     # W-22 F 웹 레시피 사본
     assert sorted(code - set(KINDS)) == []
     for k in code:
         e = KINDS[k]

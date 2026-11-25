@@ -5,10 +5,11 @@
 - hmi      : 노트북 로컬 화면(로그인 없음, 127.0.0.1). 받는 명령은 CommandDef.hmi 로 나뉜다(5-20 ②).
              always  — 늘 받음: STOP·ALL STOP·부저 정지·히터 정지, 공정 중 값 바꾸기(PROCESS_ADJUST source local, 5-4)·
                        건너뛰기·일시정지·재개(5-15)
-             operate — 설정 LOCAL_HMI_CONTROL 이 '보기와 정지만'(view_stop)이 아니면 받음(HMI_OPERATE: 공정 시작·적재 레시피
-                       시작·해제·순서 고치기·PLC 버튼·필라멘트·히터 명령·수동 조작). view_stop 이면 HMI_CONTROL_OFF 로 거부.
+             operate — 설정 LOCAL_HMI_CONTROL 이 '보기와 정지만'(view_stop)이 아니면 받음(HMI_OPERATE: 공정 시작·레시피 적재
+                       (웹 레시피 사본에서 id 로만 — W-22 F)·적재 레시피 시작·해제·순서 고치기·PLC 버튼·필라멘트·히터 명령·수동 조작).
+                       view_stop 이면 HMI_CONTROL_OFF 로 거부.
                        잠금(LOCAL_HMI_RELOCK_MIN)은 노트북 화면이 한다 — 장비는 hello 로 설정·잠금 시간·지금 받는 명령을 알린다
-             그 밖(설정 적용·되돌리기·레시피 적재·내부 조치)은 노트북에서 받지 않는다(SOURCE_NOT_ALLOWED)
+             그 밖(설정 적용·되돌리기·컨트롤러 값 읽기·바꾸기·내부 조치)은 노트북에서 받지 않는다(SOURCE_NOT_ALLOWED)
 - internal : 안전 엔진·공정 엔진 — 안전 조치(safety_rules 의 action)
 
 v1 근거: integrations/erp_commands.py(명령·거부 규칙), main.py:_erp_exec_heater_command, core/process_service.py.
@@ -72,6 +73,11 @@ CHK_REASONS: tuple = (
     Reason("PROCESS_NOT_PAUSED", "일시정지 중 아님", "reject"),
     Reason("MANUAL_ACTIVE", "수동 조작 중", "reject"),
     Reason("MANUAL_BUSY", "앞 조작 진행 중", "reject"),
+    Reason("GAS_ALREADY_ON", "가스가 켜져 있음", "reject"),
+    Reason("SHUTTER_ALREADY", "셔터가 이미 그 상태", "reject"),
+    Reason("DEVICE_PARAM_BUSY", "컨트롤러 값을 바꾸는 중", "reject"),
+    Reason("RECIPE_COPY_MISSING", "장비 사본에 없는 레시피", "reject"),
+    Reason("RECIPE_COPY_STALE", "화면이 본 레시피와 사본이 다름", "reject"),
     Reason("MANUAL_BLOCK_NOT_ALLOWED", "수동 조작에서 받지 않는 조작", "reject"),
     Reason("MANUAL_NOT_ACTIVE", "수동 조작 중 아님", "reject"),
     # 공정 중단(abort)
@@ -145,6 +151,15 @@ CHK_REASONS: tuple = (
     Reason("OUTPUTS_LEFT_ON", "일부러 남긴 출력", "info"),
     Reason("AUTO_END_STOP", "끝 정지 덧붙임", "info"),
     Reason("HEATER_HANDOVER", "히터를 켠 채 넘김", "info"),
+    Reason("MANUAL_INTERRUPT", "끼어든 조작으로 중단", "info"),
+    Reason("ZERO_SKIPPED", "영점 건너뜀", "info"),
+    Reason("RF_REFP_WAIT", "Reflected 대기 시작", "info"),
+    Reason("RF_REFP_WAIT_END", "Reflected 대기 끝", "info"),
+    Reason("RF_UNCOMMANDED", "명령 없는 RF 출력", "info"),
+    Reason("RF_UNCOMMANDED_END", "명령 없는 RF 출력 끝", "info"),
+    Reason("DEVICE_PARAM_MISMATCH", "컨트롤러 값이 다르게 읽힘", "info"),
+    Reason("TARGETS_FILLED", "장착 타겟을 레시피에 채움", "info"),
+    Reason("TARGETS_READ_FAILED", "장착 타겟 읽기 실패", "info"),
     Reason("OUTPUTS_CLEANUP", "남은 출력 정리", "info"),
     Reason("HEATER_NO_TARGET", "히터 목표 없어 건너뜀", "info"),
     Reason("RF_OFF_FAILED", "RF 끄기 결과 오류", "info"),
@@ -289,10 +304,15 @@ COMMANDS: tuple = (
        _a("name", "str", False, desc="실행 이름(공정 기록)이다. 비우면 행의 process_name, 그것도 없으면 Single CHK 이다")),
       desc="한 행 공정 또는 블록 레시피 하나를 바로 시작한다(row·blocks)", v1="PROCESS_START"),
     C("RECIPE_LOAD", "공정 레시피 적재", (WEB,), "operator", IDLE_STATES, ("RECIPE_VALID", "IG_FOR_BASE"),
-      (_a("name", "str"), _a("rows", "rows", False, desc="행 목록이다. v1 행·딜레이 행·블록 행 {process_name, blocks} 을 쓸 수 "
-                                                         "있다(recipe.PROCESS_COLUMNS)"),
-       _a("blocks", "rows", False, desc="rows 대신 쓰는 블록 목록 하나이다(블록 행 하나와 같다)")),
-      desc="공정 레시피(행 목록 또는 블록 레시피 하나)를 장비에 올린다. 블록 레시피 검사는 값 범위·꺼진 장비만 본다(순서 규칙 없음, rows·blocks)", v1="RECIPE_PROCESS_RUN"),
+      (_a("name", "str", False, desc="레시피 이름이다. id 로 사본에서 고르면 사본의 이름을 쓴다"),
+       _a("rows", "rows", False, desc="행 목록이다. v1 행·딜레이 행·블록 행 {process_name, blocks} 을 쓸 수 "
+                                     "있다(recipe.PROCESS_COLUMNS)"),
+       _a("blocks", "rows", False, desc="rows 대신 쓰는 블록 목록 하나이다(블록 행 하나와 같다)"),
+       _a("id", "str", False, desc="웹 레시피 id 이다. rows·blocks 가 없으면 장비의 웹 레시피 사본에서 그 행을 꺼내 다시 검사해 적재한다"
+                                   "(recipe_copy, W-22). 노트북은 이 길로만 적재한다"),
+       _a("updatedAt", "str", False, desc="화면이 본 웹 수정 시각이다. 사본과 다르면 RECIPE_COPY_STALE. 공정 기록에 남는다")),
+      desc="공정 레시피(행 목록 또는 블록 레시피 하나)를 장비에 올린다. 블록 레시피 검사는 값 범위·꺼진 장비만 본다(순서 규칙 없음, rows·blocks). "
+           "id 만 주면 장비의 웹 레시피 사본에서 꺼내 적재한다(RECIPE_COPY_MISSING·RECIPE_COPY_STALE)", v1="RECIPE_PROCESS_RUN"),
     C("RECIPE_CLEAR", "레시피 적재 해제", (WEB,), "operator", (ANY_STATE,),
       desc="적재가 없으면 아무것도 하지 않고 성공, 공정 중이면 PROCESS_RUNNING(v1 B5)", v1="RECIPE_CLEAR"),
     C("RECIPE_START", "적재 레시피 시작", (WEB,), "operator", IDLE_STATES,
@@ -324,7 +344,10 @@ COMMANDS: tuple = (
         desc="히터용으로 넣은 가스·압력을 해제한다. 유량을 끄고 MFC 밸브를 연 뒤 밸브를 닫으며, 공정이 돌지 않을 때만 받는다."),
     C("HEATER_RECIPE_RUN", "히터 레시피 시작", (WEB,), "operator", (ANY_STATE,),
       ("HEATER_ENABLED", "PLC_LINK_UP", "HEATER_ITL", "HEATER_NO_FAULT", "HEATER_RECIPE_IDLE", "HEATER_NOT_PROCESS_OWNED"),
-      (_a("name", "str"), _a("steps", "rows", desc="recipe.HEATER_STEP_COLUMNS"), _a("gas", "obj", False, desc="recipe.HEATER_GAS_COLUMNS")),
+      (_a("name", "str", False), _a("steps", "rows", False, desc="recipe.HEATER_STEP_COLUMNS 형식이다. id 가 없으면 필요하다"),
+       _a("gas", "obj", False, desc="recipe.HEATER_GAS_COLUMNS"),
+       _a("id", "str", False, desc="웹 히터 레시피 id 이다. steps 가 없으면 장비의 웹 레시피 사본에서 꺼낸다(W-22)"),
+       _a("updatedAt", "str", False, desc="화면이 본 웹 수정 시각이다. 사본과 다르면 RECIPE_COPY_STALE")),
       v1="RECIPE_HEATER_RUN",
         desc="히터 레시피를 검사한 뒤 첫 스텝부터 실행한다. 가스를 고르면 가스·압력을 먼저 준비한 뒤 시작하며, 히터 인터락이 정상이 아니거나 히터 이상이거나 공정이 히터를 쓰는 중이면 "
              "거부된다."),
@@ -381,6 +404,20 @@ COMMANDS: tuple = (
     C("MANUAL_END", "수동 조작 끝내기", (WEB,), "operator", (ANY_STATE,), (),
       desc="STOP 과 같은 정지 순서로 가스·파워·셔터를 모두 끄고 수동 조작을 끝낸다. 수동 조작 중이 아니면 받지 않고, 정지 순서 중이면 아무것도 하지 않고 "
            "성공한다(run_end done·MANUAL_END·MANUAL_NOT_ACTIVE)", v1="v2"),
+    # 컨트롤러 값(W-22 E) — 장비 안에 저장된 설정값(MFC GPC3000). 읽기는 질의만, 바꾸기는 관리자·대기 중에 정한 몇 가지만(dev_params)
+    C("DEVICE_PARAMS_READ", "컨트롤러 값 읽기", (WEB,), "operator", (ANY_STATE,),
+      desc="MFC 컨트롤러에 저장된 값(SP1~5 설정값·종류·Gain·P.Lead, 자동 제어 방식, 밸브 종류·제어 방향·센서 범위·단위, 공정 한계, "
+           "유량 범위·단위, 상태, 버전)을 다시 읽는다. 질의만 보내고 1초 읽기에 넣지 않으며, 공정·수동 조작 중이면 끝난 뒤에 읽는다. "
+           "Ion Gauge 값(자동 필라멘트·셋포인트)은 늘 읽는 상태 응답에서 함께 보인다(state.devParams)", v1="v2"),
+    C("DEVICE_PARAM_WRITE", "컨트롤러 값 바꾸기", (WEB,), "admin", IDLE_STATES, (),
+      (_a("device", "enum", enum=("mfc",)), _a("item", "enum", enum=("sp", "gain", "lead", "auto", "limit"),
+                                                desc="sp SP 설정값(mTorr)·gain Gain(%)·lead P.Lead(s)·auto 자동 제어 방식(0 Self-Tuning·1 PID)·"
+                                                     "limit 공정 한계(%FS)"),
+       _a("no", "int", False, min=1, max=5, desc="SP 번호 1~5 또는 공정 한계 번호 1~4(auto 는 비운다)"),
+       _a("value", "float", desc="dev_params.WRITE_ITEMS 의 범위")),
+      desc="MFC 컨트롤러 값 하나를 바꾸고 되읽어 확인한다(SP1~5 설정값·Gain·P.Lead·자동 제어 방식·공정 한계만). 관리자만, 공정·수동 조작·"
+           "히터 레시피·히터 가스가 없을 때만 받으며 bench·노트북에서는 받지 않는다. 결과는 기록(param_write: 누가·항목·이전 → 새 값)과 "
+           "state.devParams.mfc.write 로 알린다(DEVICE_PARAM_BUSY·DEVICE_PARAM_MISMATCH)", v1="v2"),
     # 설정
     C("CONFIG_APPLY", "설정 적용", (WEB,), "admin", (ANY_STATE,), ("CONFIG_LIVE_ONLY_IN_PROCESS",),
       (_a("version", "int", min=1), _a("values", "obj"), _a("schemaHash", "str")),
@@ -419,19 +456,19 @@ COMMANDS: tuple = (
 )
 
 # bench 에서도 받는 명령(장비에 쓰지 않음) — 이 목록 한 곳만(core·묶음 commands[].benchOk 가 같은 값을 본다)
-_BENCH_OK = frozenset({"RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK"})
+_BENCH_OK = frozenset({"RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK", "DEVICE_PARAMS_READ"})   # 컨트롤러 값 읽기는 질의만
 assert _BENCH_OK <= {c.kind for c in COMMANDS}
 COMMANDS = tuple(replace(c, bench_ok=c.kind in _BENCH_OK) for c in COMMANDS)
 
 # 노트북 조작(5-20 ②) — 설정 LOCAL_HMI_CONTROL 이 view_stop 이 아니면 노트북에서도 받는 명령(관리자 설정·내부 조치는 넣지 않는다).
 # 위 표에서 hmi 경로가 있는 명령(정지·공정 중 값 바꾸기·건너뛰기·일시정지·재개)은 always — 설정과 상관없이 늘 받는다.
 HMI_CONTROL_VALUES = ("view_stop", "unlock", "always")
-HMI_OPERATE = ("PROCESS_START", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT", "PLC_BUTTON", "IG_FILAMENT",
+HMI_OPERATE = ("PROCESS_START", "RECIPE_LOAD", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT", "PLC_BUTTON", "IG_FILAMENT",
                "HEATER_SV", "HEATER_ON", "HEATER_OFF", "HEATER_RESET", "HEATER_GAS_RELEASE", "HEATER_RECIPE_RUN",
                "HEATER_RECIPE_STOP", "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP", "MANUAL_BLOCK", "MANUAL_END")
 assert set(HMI_OPERATE) <= {c.kind for c in COMMANDS}
 # 수동 조작 중(5-20 ③): 공정을 새로 시작하는 명령은 MANUAL_ACTIVE, 필라멘트는 공정이 없을 때처럼(허용 상태를 대기로 본다)
-MANUAL_EXCLUSIVE = ("PROCESS_START", "RECIPE_LOAD", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT")
+MANUAL_EXCLUSIVE = ("PROCESS_START", "RECIPE_LOAD", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT", "DEVICE_PARAM_WRITE")
 IDLE_IN_MANUAL = ("IG_FILAMENT",)
 COMMANDS = tuple(replace(c, hmi="always") if HMI in c.sources else
                  replace(c, hmi="operate", sources=c.sources + (HMI,)) if c.kind in HMI_OPERATE else c for c in COMMANDS)
@@ -690,6 +727,20 @@ REASON_HELP: dict = {
     "OUTPUTS_LEFT_ON": "공정 끝에서 뺀 단계의 출력을 켜 둔 채 끝냈습니다.",
     "AUTO_END_STOP": "레시피 끝에 공정 끝이 없어 덧붙였습니다.",
     "HEATER_HANDOVER": "공정이 끝난 뒤 히터를 켠 채 히터 카드 조작으로 넘겼습니다.",
+    "GAS_ALREADY_ON": "가스가 켜져 있습니다. 유량은 값 바꾸기로 바꾸세요.",
+    "SHUTTER_ALREADY": "셔터가 이미 그 상태라 보내지 않았습니다.",
+    "MANUAL_INTERRUPT": "파워 끄기나 셔터 닫기가 끼어들어 진행 중이던 조작을 멈췄습니다.",
+    "ZERO_SKIPPED": "가스가 흐를 수 있어 영점을 보내지 않았습니다. 가스를 끄고 MFC 밸브를 연 뒤 기다리세요.",
+    "RF_REFP_WAIT": "RF Reflected 가 기준을 넘어 올리기를 멈추고 기다립니다.",
+    "RF_REFP_WAIT_END": "RF Reflected 대기가 끝났습니다.",
+    "RF_UNCOMMANDED": "RF 가 명령 없이 출력 중입니다. RF 전원 앞면(LOCAL)에서 켰는지 확인하세요.",
+    "RF_UNCOMMANDED_END": "명령 없이 나오던 RF 출력이 멈췄습니다.",
+    "DEVICE_PARAM_BUSY": "앞에서 바꾼 컨트롤러 값을 아직 확인하는 중입니다. 끝난 뒤 다시 하세요.",
+    "DEVICE_PARAM_MISMATCH": "컨트롤러 값을 쓴 뒤 되읽은 값이 다릅니다. 컨트롤러 값을 다시 읽어 확인하세요.",
+    "RECIPE_COPY_MISSING": "고른 레시피가 장비 사본에 없습니다. 웹과 다시 맞춘 뒤 고르세요.",
+    "RECIPE_COPY_STALE": "웹에서 레시피가 바뀌어 화면이 본 것과 장비 사본이 다릅니다. 목록을 다시 보고 고르세요.",
+    "TARGETS_FILLED": "레시피에 타겟 이름이 비어 있어 재고관리의 장착 타겟으로 채웠습니다.",
+    "TARGETS_READ_FAILED": "재고관리에서 장착 타겟을 읽지 못했습니다. 공정은 그대로 진행합니다.",
     "OUTPUTS_CLEANUP": "STOP 으로 지난 공정이 남긴 출력을 정리했습니다.",
     "HEATER_NO_TARGET": "히터 목표가 없어 히터 대기 단계를 건너뛰었습니다.",
     "RF_OFF_FAILED": "파워 끄기 중 RF 끄기 결과가 오류였습니다.",

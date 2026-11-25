@@ -132,6 +132,8 @@ class ProcessEngine:
         self.events: "collections.deque[ProcEvent]" = collections.deque(maxlen=EVENTS_KEEP)
         # 레시피
         self.recipe_name = ""
+        self.recipe_origin: Optional[Dict[str, Any]] = None     # 적재한 레시피의 웹 id·웹 수정 시각(W-22 F — 공정 기록에)
+        self.targets: Optional[Callable[[], Optional[Dict[str, Any]]]] = None   # 장착 타겟(W-22 G — 조립이 재고 읽기로 바꾼다)
         self.rows: List[Dict[str, Any]] = []
         self.list_active = False
         self.csv_index = -1
@@ -146,7 +148,7 @@ class ProcessEngine:
         self.end_kind: Optional[str] = None     # done / aborted / error
         self.end_code: Optional[str] = None
         self.dcc = DcControl(cfg, dc, self._dev_msg)
-        self.rfc = RfControl(cfg, plc, self._dev_msg)
+        self.rfc = RfControl(cfg, plc, self._dev_msg, on_refp=self._refp_event)
         self.filament_by_process = False
         self.dc_on = self.rf_on = self.rfp_on = False     # 이번 행에서 출력 명령을 냈다(v1 is_dc_on·is_rf_on·is_rfpulse_on)
         self.comm_aborted = False
@@ -173,6 +175,8 @@ class ProcessEngine:
         self.cleaning = False                   # 공정 밖 STOP 정리 중
         self.reject_detail = ""                 # 마지막 적재·시작·수정 거부의 이유 문구(첫 오류 — core 가 cmd_result.detail 로)
         self.last_view = None
+        self._zero_since: Optional[float] = None       # 영점 보호(W-22) — 조건(유량 꺼짐·가스 밸브 닫힘·MFC 밸브 열림·Gauge A 범위 아래)이 이어진 첫 시각
+        self._zero_why = "장비 값을 기다리는 중"
         self._end_stop_resume = False
         # 셔터 전 히터 정착(HEATER_SETTLE, v1 3328872) — 승온 대기 통과 뒤부터 TC1 범위 안 연속 시간을 센다(행이 끝나면 지움)
         self.settle_track: Optional[SettleTracker] = None
@@ -310,6 +314,15 @@ class ProcessEngine:
                              {"target": target, "on": bool(on), "source": source, "by": by, "t": self.clock.wall(),
                               "run_id": self.run_id or None, "state": self.state, "level": "info"}))
 
+    def _refp_event(self, phase: str, d: Dict[str, Any]) -> None:
+        """반사파 대기(S32) 시작·끝 — 한 번씩(W-22)."""
+        if phase == "start":
+            text = f"반사파 대기 시작 · {d['ref_w']:.1f} W ≥ {d['threshold']:g} W · 최대 {d['max_s']} s"
+            self._emit(ProcEvent("refp_wait", text, "RF_REFP_WAIT", dict(d, phase="start", level="warn", run_id=self.run_id or None)))
+        else:
+            text = f"반사파 대기 끝 · {d.get('why', '')}"
+            self._emit(ProcEvent("refp_wait", text, "RF_REFP_WAIT_END", dict(d, phase="end", level="info", run_id=self.run_id or None)))
+
     def _dev_msg(self, level: str, text: str) -> None:
         self._emit(ProcEvent("message", text, None, {"level": level}))
 
@@ -365,7 +378,7 @@ class ProcessEngine:
             return "MANUAL_ACTIVE"
         return None
 
-    def load(self, name: str, rows: List[Dict[str, Any]]) -> Optional[str]:
+    def load(self, name: str, rows: List[Dict[str, Any]], origin: Optional[Dict[str, Any]] = None) -> Optional[str]:
         with self._lock:
             self.reject_detail = ""
             if self._manual_reject():
@@ -377,6 +390,7 @@ class ProcessEngine:
                 self._clear_recipe()                    # v1 B2: 적재 실패는 이전 적재도 해제
                 return err
             self.recipe_name, self.rows = name or "", checked
+            self.recipe_origin = dict(origin) if origin and (origin.get("id") or origin.get("updatedAt")) else None
             self.list_active, self.csv_index = False, -1
             self._set_state("LOADED")
             return None
@@ -440,6 +454,7 @@ class ProcessEngine:
 
     def _clear_recipe(self) -> None:
         self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
+        self.recipe_origin = None
         if self.state == "LOADED":
             self._set_state("IDLE")
 
@@ -516,11 +531,16 @@ class ProcessEngine:
                 return "PROCESS_RUNNING"
             if not self.manual and self.state not in ("IDLE", "LOADED"):
                 return "STATE_NOT_ALLOWED"                    # 끝난 직후(DONE·ABORTED) — 정리된 뒤에
-            if self.manual and self.state != "MANUAL_WAIT":
-                b = self.block
-                self.reject_detail = f"블록 {b.no} {b.type} 실행 중 — 끝난 뒤에" if b is not None else "블록 실행 중"
-                return "MANUAL_BUSY"
             t = block.get("type") if isinstance(block, dict) else None
+            interrupt = False
+            if self.manual and self.state != "MANUAL_WAIT":
+                # 끼어들기(W-22) — 파워 끄기·셔터 닫기만 진행 중 블록을 '중단(끼어든 조작)'으로 끝내고 바로 실행한다
+                if t == "power_off" or (t == "shutter" and str((block.get("params") or {}).get("action", "")).startswith("close")):
+                    interrupt = True
+                else:
+                    b = self.block
+                    self.reject_detail = f"블록 {b.no} {b.type} 실행 중 — 끝난 뒤에" if b is not None else "블록 실행 중"
+                    return "MANUAL_BUSY"
             if t not in BK.MANUAL_BLOCK_TYPES:
                 self.reject_detail = (f"수동 조작에서 쓰지 않는 블록: {t!r} — 쓸 수 있는 블록: "
                                       + ", ".join(BK.MANUAL_BLOCK_TYPES))[:300]
@@ -530,7 +550,16 @@ class ProcessEngine:
                 self._emit(ProcEvent("reject", "; ".join(errs[:5]), _row_error_code(errs), {"errors": errs}))
                 return self._reject(_row_error_code(errs), errs[0])[1]
             b = bl[0]
+            why = self._manual_state_reject(b)
+            if why:
+                return why
             u = BK.uses_of([b])
+            if interrupt:
+                why = self._device_guard(u)
+                if why:
+                    return why
+                self._manual_interrupt(b, by, source)
+                return None
             if not self.manual:
                 if self.rows:
                     return "RECIPE_LOADED"
@@ -547,6 +576,45 @@ class ProcessEngine:
                 return why
             self._manual_append(b, by, source)
             return None
+
+    def _manual_state_reject(self, b: dict) -> Optional[str]:
+        """수동 조작 장비 상태 규칙(W-22) — 가스가 켜져 있으면 가스 주입 거부, 이미 그 상태인 셔터 열기·닫기 거부."""
+        v = self.last_view
+        get = (lambda k: v.get(k)) if v is not None else (lambda k: None)
+        p = b.get("params") or {}
+        if b.get("type") == "gas_intro":
+            bits = getattr(self.mfc, "onoff_bits", None)
+            on = isinstance(bits, str) and len(bits) == 4 and (bits[0] == "1" or bits[1] == "1")
+            if on or get("plc.ar_valve") is True or get("plc.o2_valve") is True:
+                self.reject_detail = "유량 켜짐" if on else "가스 밸브 열림"
+                return "GAS_ALREADY_ON"
+        if b.get("type") == "shutter":
+            act = str(p.get("action", ""))
+            want = True if act.startswith("open") else False if act.startswith("close") else None
+            cols = [{"g1": "plc.s1", "g2": "plc.s2", "ms": "plc.ms"}.get(str(x)) for x in (p.get("targets") or [])]
+            if want is not None and cols and all(c is not None and get(c) is want for c in cols):
+                self.reject_detail = "이미 열려 있음" if want else "이미 닫혀 있음"
+                return "SHUTTER_ALREADY"
+        return None
+
+    def _manual_interrupt(self, nb: dict, by: Optional[str], source: str) -> None:
+        """진행 중 수동 조작 블록을 '중단(끼어든 조작)'으로 끝내고 nb(파워 끄기·셔터 닫기)를 바로 실행한다(W-22)."""
+        now = self.clock.monotonic()
+        b, r = self.block, self.runner
+        if self.paused is not None:
+            self._end_pause(now, resumed=False)
+        if b is not None and r is not None:
+            self._block_end("aborted", "MANUAL_INTERRUPT")
+            i = r.idx + 1
+            while i < len(r.steps) and r.steps[i].block == b.index:
+                i += 1
+            r.skip_to(i, now)
+            self._emit(ProcEvent("manual", f"수동 조작 블록 {b.no} {b.type} 중단 — 끼어든 조작 {nb.get('type')} ({by or source})",
+                                 "MANUAL_INTERRUPT", {"by": by, "source": source, "no": b.no, "type": b.type, "label": b.label,
+                                                      "result": "aborted", "reason": "MANUAL_INTERRUPT",
+                                                      "run_id": self.run_id or None, "t": self.clock.wall(), "level": "info"}))
+        self.block_idx = -1
+        self._manual_append(nb, by, source)
 
     def _manual_append(self, b: dict, by: Optional[str], source: str) -> None:
         """수동 대기 중 다음 블록 — 같은 스텝 실행기 뒤에 붙여 이어서 실행."""
@@ -837,6 +905,7 @@ class ProcessEngine:
             if ended_list:
                 self._emit(ProcEvent("list_done" if kind_ == "done" else "list_cancel", self.recipe_name))
                 self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
+                self.recipe_origin = None
             self._settle_pending = True
 
     def program_exit(self) -> bool:
@@ -862,6 +931,7 @@ class ProcessEngine:
             if self.list_active:
                 self._emit(ProcEvent("list_cancel", self.recipe_name, "PROGRAM_EXIT"))
                 self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
+                self.recipe_origin = None
             self._set_state("ABORTED")
             return True
 
@@ -873,6 +943,7 @@ class ProcessEngine:
     def _cancel_list(self, code: str) -> None:
         self._emit(ProcEvent("list_cancel", self.recipe_name, code))
         self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
+        self.recipe_origin = None
         self._set_state("ABORTED")
         self._settle_pending = True
 
@@ -883,6 +954,7 @@ class ProcessEngine:
             if self.csv_index >= len(self.rows):
                 self._emit(ProcEvent("list_done", self.recipe_name))
                 self.recipe_name, self.rows, self.list_active, self.csv_index = "", [], False, -1
+                self.recipe_origin = None
                 self._set_state("DONE")
                 self._settle_pending = True
                 return
@@ -918,6 +990,32 @@ class ProcessEngine:
 
     def _dev_sp(self) -> Dict[int, float]:
         return dict(getattr(self.mfc, "sp_device", None) or {})
+
+    def _fill_targets(self, row: Dict[str, Any], params: Dict[str, Any], blocks: List[dict]) -> Dict[str, str]:
+        """레시피의 G1·G2 타겟 이름이 비어 있으면 재고관리 장착 타겟으로 채운다(W-22 G — 레시피 값이 먼저, 그 Gun 을 쓸 때만).
+        채운 것만 돌려준다. 장착 타겟을 모르면(읽기 없음·실패·빈 자리) 그대로."""
+        t = self.targets() if self.targets is not None else None
+        if not t:
+            return {}
+        if "blocks" in row:
+            used = set()
+
+            def walk(bs):
+                for b in bs:
+                    if b["type"] == "shutter" and b["params"].get("action") == "open":
+                        used.update(str(x) for x in (b["params"].get("targets") or []))
+                    if b.get("blocks"):
+                        walk(b["blocks"])
+            walk(blocks)
+        else:
+            used = {g for g in ("g1", "g2") if params.get(f"use_{g}")}
+        out = {}
+        for g in ("g1", "g2"):
+            m, k = t.get(g), f"{g}_target_name"
+            if g in used and m and m.get("text") and not str(params.get(k) or "").strip():
+                params[k] = m["text"]
+                out[g] = m["text"]
+        return out
 
     def _start_row(self, row: Dict[str, Any], name: str, manual: bool = False) -> None:
         """행 시작 — 블록 행은 그 블록, v1 행은 기본 템플릿 블록(blocks.template_blocks). manual = 수동 조작 첫 블록
@@ -961,12 +1059,21 @@ class ProcessEngine:
         self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, h, self._step_event, cfg=self.cfg,
                                  resolve=self._resolve, on_step_done=self._on_step_done)
         self.runner.sp_expect = sp_expect
+        self.runner.zero_ok = self.zero_ok
         if self.safety is not None:
             self.safety.engine.new_run()
+        if self.rows and self.recipe_origin and not manual:     # 적재 레시피의 웹 id·웹 수정 시각(W-22 F — 공정 기록)
+            params["recipe_id"] = self.recipe_origin.get("id")
+            params["recipe_updated_at"] = self.recipe_origin.get("updatedAt")
+        filled = {} if manual else self._fill_targets(row, params, blocks)
+        self.params = params
         start = {"name": name, "params": dict(params), "run_id": self.run_id, "blocks": [b.record() for b in insts]}
         if manual:
             start.update(manual=True, by=self.manual_by, source=self.manual_source)
         self._emit(ProcEvent("run_start", name, data=start))
+        if filled:
+            self._emit(ProcEvent("targets", "장착 타겟을 채웠습니다 · " + " · ".join(f"{g.upper()} {t}" for g, t in filled.items()),
+                                 "TARGETS_FILLED", dict(filled, level="info", run_id=self.run_id)))
         self._emit(ProcEvent("steps", name, data={"steps": [s.unit() for s in steps if not s.internal]}))
         if insts and insts[-1].auto:
             self._emit(ProcEvent("auto_end_stop", f"목록 끝이 정상 끝 정지가 아니어서 '{insts[-1].label}'(블록 {insts[-1].no}) 덧붙임",
@@ -1041,10 +1148,47 @@ class ProcessEngine:
     def on_tick_start(self, tick) -> None:
         self._next_tick_mono = tick.t_mono + 1.0
 
+    # ── 영점 보호(W-22) ──
+    def _zero_cond(self, view) -> str:
+        """영점을 보내도 되는 조건 — 맞으면 "", 아니면 이유. GPC3000 매뉴얼: 압력 센서 영점은 베이스 압력에서(±8 %FS 안),
+        MFC 영점은 가스가 흐르지 않을 때. 2026-11-25 실제 장비에서 가스가 흐르는 중 영점이 잡혀 압력·유량이 음수로 밀렸다."""
+        bits = getattr(self.mfc, "onoff_bits", None)
+        if not isinstance(bits, str) or len(bits) != 4:
+            return "유량 켜짐 상태를 모름"
+        if bits[0] == "1" or bits[1] == "1":
+            return "유량 켜짐"
+        if view.get("plc.ar_valve") is not False or view.get("plc.o2_valve") is not False:
+            return "가스 밸브 열림"
+        v = view.get("mfc.valve_pct")
+        if not isinstance(v, (int, float)) or v < 99.0:
+            return "MFC 밸브가 열려 있지 않음"
+        if self.cfg.get("IG_ENABLED") and view.get("ig.q") == "ok" and view.get("ig.a_state") != "below":
+            return "Gauge A 가 범위 아래가 아님"
+        return ""
+
+    def _zero_track(self, view, now: float) -> None:
+        why = self._zero_cond(view)
+        self._zero_why = why
+        if why:
+            self._zero_since = None
+        elif self._zero_since is None:
+            self._zero_since = now
+
+    def zero_ok(self) -> tuple:
+        """(영점을 보내도 되나, 아니면 이유) — 조건이 ZERO_MIN_IDLE_SEC 이상 이어졌을 때만."""
+        if self._zero_since is None:
+            return False, self._zero_why
+        need = float(self.cfg.get("ZERO_MIN_IDLE_SEC", 10.0))
+        held = self.clock.monotonic() - self._zero_since
+        if held + 1e-9 < need:
+            return False, f"조건이 {held:.0f} s 이어짐 — {need:g} s 필요"
+        return True, ""
+
     def on_row(self, view) -> None:
         with self._lock:
             now = self.clock.monotonic()
             self.last_view = view
+            self._zero_track(view, now)
             if self._settle_pending and self.state in ("DONE", "ABORTED"):
                 self._settle_pending = False
                 self._set_state("LOADED" if self.rows else "IDLE")

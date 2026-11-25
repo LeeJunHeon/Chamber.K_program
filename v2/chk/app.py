@@ -20,6 +20,8 @@
   5 웹 연결(uplink — 계약은 common.messages): prod·bench 는 연결, sim 은 안 함. UPLINK_IN_SIM 이면 sim 도 — 이때 EQUIPMENT_ID 가
     -SIM 으로 끝나야 한다(아니면 1 단계에서 시작 거부, 종료 코드 2). UPLINK_URL 이 비면 경고만(웹 연결 없이 운전).
     주소는 호스트만 콘솔·로그에, 토큰은 어디에도. http 주소면 시작 때 경고 한 번. 조립 뒤·worker 시작 전에 붙는다(hello 부터 받게).
+  6 장착 타겟(재고관리 읽기, W-22 G — targets.py): INVENTORY_API_URL 이 있으면 자기 스레드로 읽는다. sim 은 루프백 주소(시험용
+    가짜 서버)만 — 진짜 재고관리에 묻지 않는다.
 버전은 .git 의 HEAD·ref 파일을 읽어서(git 명령을 실행하지 않음), 못 읽으면 unknown.
 
 종료(v1 main.py:4977 closeEvent 와 같은 조건)
@@ -144,6 +146,7 @@ class App:
         self._session_hwnd = None
         self.sims = None
         self.uplink = None
+        self.targets = None                                # 재고관리 읽기(W-22 G)
 
     # ───────── 1 설정 ─────────
     def load_config(self) -> bool:
@@ -271,6 +274,7 @@ class App:
                 return EXIT_GUARD
             self._start_log_consumer()
             self.start_uplink(s)
+            self.start_targets(s)
             s.start(ready_timeout_s=float(self.cfg["CONNECT_INIT_TIMEOUT_SEC"]) + 3.0)
             down = [k for k, w in s.workers.items() if s.enabled[k] and not w.ready]
             msg = "장비 연결: " + ", ".join(f"{k} {'준비' if s.workers[k].ready else '연결 안 됨(재시도 중)'}"
@@ -357,6 +361,20 @@ class App:
             return
         self.uplink = s.uplink = up
         up.start()
+
+    def start_targets(self, s: ChkSystem) -> None:
+        """재고관리 장착 타겟 읽기(W-22 G — targets.py). 주소가 비면 안 함, sim 은 루프백(시험용 가짜 서버)만."""
+        from v2.chk import targets as TG
+        url = str(self.cfg.get("INVENTORY_API_URL") or "")
+        if not url:
+            return
+        if RunMode(self.cfg["RUN_MODE"]) is RunMode.SIM and not TG.is_loopback(url):
+            self.log.info("장착 타겟: sim 은 재고관리에 묻지 않음(루프백 주소만 — %s)", urlsplit(url).hostname)
+            return
+        tr = TG.TargetReader(url, wall=s.clock.wall, on_event=s._ev)
+        s.targets = s.core.targets = tr
+        self.targets = tr
+        tr.start()
 
     def _start_log_consumer(self) -> None:
         """장비 메시지(state 제외)를 로그 파일로 — MessageHub 의 소비자 하나(느리면 그 소비자만 끊기고 다시 붙는다)."""
@@ -573,6 +591,8 @@ class App:
             self._tick_thread.join(3.0)
         if self.uplink is not None:
             self.uplink.stop()                             # 남은 메시지는 보관함에(다음 시작 때 올림)
+        if getattr(self, "targets", None) is not None:
+            self.targets.stop()
         if self.server is not None:
             self.server.stop()
         if self._log_thread is not None:

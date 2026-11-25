@@ -243,7 +243,7 @@ def test_sim_action_failure_stays_error(tmp_path):
 def test_bench_ok_single_definition():
     ok = {c["kind"] for c in W.bundle(defaults(P.PARAMS))["commands"] if c["benchOk"]}
     assert ok == set(core.NO_DEVICE_WRITE) == {c.kind for c in C.COMMANDS if c.bench_ok}
-    assert ok == {"RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK"}
+    assert ok == {"RECIPE_LOAD", "RECIPE_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK", "DEVICE_PARAMS_READ"}   # W-22 E 질의만
     assert all(isinstance(c["benchOk"], bool) for c in W.bundle(defaults(P.PARAMS))["commands"])
 
 

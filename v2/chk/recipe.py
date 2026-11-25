@@ -55,7 +55,7 @@ PROCESS_COLUMNS: tuple = (
     Col("dc_power", "float", "W", "if:use_dc", min=0.0, min_exclusive=True, param_max="DC_MAX_POWER", v1_name="dc_power"),
     Col("use_dc_delay", "bool", "", "optional", v1_name="use_dc_delay"),
     Col("use_rf", "bool", "", "optional", v1_name="use_rf_power"),
-    Col("rf_power", "float", "W", "if:use_rf", min=0.0, min_exclusive=True, param_max="RF_MAX_POWER", v1_name="rf_power"),
+    Col("rf_power", "float", "W", "if:use_rf", min=0.0, min_exclusive=True, param_max="RF_OPERATING_MAX_W", v1_name="rf_power"),
     Col("use_rf_pulse", "bool", "", "optional", v1_name="use_rf_pulse"),
     Col("rf_pulse_power", "float", "W", "if:use_rf_pulse", min=0.0, min_exclusive=True, param_max="RFPULSE_MAX_POWER",
         v1_name="rf_pulse_power"),

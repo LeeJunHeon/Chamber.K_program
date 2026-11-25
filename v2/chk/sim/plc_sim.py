@@ -18,7 +18,8 @@
   - MV 인터록 M00032 = MV(M00003) ∧ 진공(¬ATM) ∧ ¬주입 고장. 도어 올림·내림은 소프트웨어 상호배타라 모델 안 함.
   - 진공 센서: ATM = 챔버 압력 > 700 Torr. Air·G1·G2·Water 는 설정값.
   - RF: DAC enable(M00200) ∧ D40>0 → 순방향 = D40/4000 × RF_GEN_FULL_W(1차 지연 0.5 s), 반사 = 순방향 × 반사 비율
-    (+ 주입 W). ADC: 순방향 4000 = 594.5 W, 반사 4000 = 200 W(드라이버와 같은 스케일).
+    (+ 주입 W). ADC: 순방향 4000 = 594.5 W, 반사 4000 = 600 W(드라이버 기본 스케일 — W-22 에서 200 → 600).
+    rf_local_w = 앞면(LOCAL)에서 켠 출력(W-22 시험 — 명령 없이 나오는 RF): enable·D40 과 상관없이 그만큼 나온다.
   - 압력: 공용 챔버 모델(v2.chk.sim.chamber.Chamber) — PLC 시뮬레이터는 밸브 코일 상태를 챔버에 넣고 압력을 읽는다.
     IG·DC(이후 MFC·RF Pulse) 시뮬레이터가 같은 챔버를 쓴다.
   - 재기동(restart): 메모리 전체 초기화(D60 마커 포함) — 래더 초기값만 남는다.
@@ -49,6 +50,7 @@ WD_TON_S = float(D.HEATER_WD_TON_SEC)
 RF_GEN_FULL_W = 600.0   # DAC 4000 = 600 W(YSR-06MF 정격)
 RF_TAU_S = 0.5
 RF_REF_RATIO = 0.01     # 정상 반사 1 %
+RF_REF_SIM_FULL_W = 600.0   # 반사 ADC 4000 = 600 W — 드라이버 기본 RF_REF_FULL_SCALE_W 와 같게(W-22, 2026-11-25 실제 장비 두 점)
 COIL_N, REG_N = 1024, 256
 LADDER_INIT = {13: 5000, 18: 1200, 20: 2, 21: 20, 26: 5500, 27: 100, 28: 1, 34: 11500}
 
@@ -84,6 +86,7 @@ class PlcSim(SimDevice):
         self.sv_ramp = T_AMB
         self.integ = 0.0
         self.rf_fwd_w = 0.0
+        self.rf_local_w = 0.0          # 앞면(LOCAL) 출력(W-22 시험)
         self.wd_last_val = self.regs[A["heater_wd"]]
         self.wd_last_change = self.t
         self.coils[A["mv"]] = True    # 진공 운전 중 상태로 시작
@@ -167,6 +170,7 @@ class PlcSim(SimDevice):
         self.T += (HEAT_GAIN * p - (self.T - T_AMB)) / TAU_HEAT * dt
         # RF
         target_w = (r[A["rf_dac"]] / D.RF_DAC_FULL_SCALE * RF_GEN_FULL_W) if c[A["rf_dac_enable"]] else 0.0
+        target_w = max(target_w, self.rf_local_w)
         self.rf_fwd_w += (target_w - self.rf_fwd_w) * min(1.0, dt / RF_TAU_S)
         # 압력 — 공용 챔버(밸브 코일 상태를 넣고 시각을 같이 진행)
         self.chamber.set_valves(**{k: c[A[k]] for k in ("mv", "turbo", "rotary", "rv", "fv", "vent")})
@@ -208,7 +212,7 @@ class PlcSim(SimDevice):
         fwd = self.rf_fwd_w
         ref = fwd * RF_REF_RATIO + (self.ref_inject_w if fwd > 1.0 else 0.0)
         r[A["rf_fwd_adc"]] = max(0, min(4000, int(round(fwd / 594.5 * 4000))))
-        r[A["rf_ref_adc"]] = max(0, min(4000, int(round(ref / 200.0 * 4000))))
+        r[A["rf_ref_adc"]] = max(0, min(4000, int(round(ref / RF_REF_SIM_FULL_W * 4000))))
         c[A["atm"]] = self.chamber.pressure > 700.0
         for k, v in self.sensors.items():
             c[A[k]] = v

@@ -1089,6 +1089,7 @@ class Atmosphere:
         self.channels: List[int] = []
         self.buttons: List[str] = []
         self.params: Dict[str, Any] = {}
+        self.zero_ok: Optional[Callable[[], tuple]] = None      # 영점 보호(W-22 — 공정 엔진의 zero_ok, system 이 넣는다)
 
     def is_active(self) -> bool:
         return self.state in (self.PREPARING, self.READY, self.RELEASING)
@@ -1119,7 +1120,9 @@ class Atmosphere:
         steps = (build_gas_pre_steps(self.channels, "") + build_gas_intro_steps(self.channels, flows, self.buttons, "")
                  + build_pressure_stage_steps(1, sp1, f"히터 분위기(SP1={sp1:.2f})", self.cfg,
                                               float(self.cfg["HEATER_GAS_SP1_TIMEOUT_SEC"]), fail_on_timeout=True))
-        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, name="heater_gas", cfg=self.cfg)
+        self.runner = StepRunner(self.clock, steps, self.mfc, self.plc, name="heater_gas", cfg=self.cfg,
+                                 on_event=lambda e: self._msg("warn", f"[가스] {e.detail}") if e.kind == "warn" else None)
+        self.runner.zero_ok = self.zero_ok
         self.state = self.PREPARING
         self._msg("info", f"[가스] 도입 시작 · 목표 {sp1:.2f} mTorr ({len(steps)}단계)")
         return None

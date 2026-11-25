@@ -50,11 +50,31 @@ def test_mfc_lists():
         assert mfc(no, "bench"), no
     for ok in ("Q1 20.0", "Q2 5.5", "L01000", "L5 1", "Z1", "S1 0.50", "D1", "D4", "O", "C", "H", "R69"):
         assert mfc(ok) is None, ok
-    for bad in ("E03", "F0", "G2", "J1", "A1", "T1 1", "B1", "N0", "U0", "X1 1", "M1 10", "V50", "W11.000", "W51",
-                "P1 10", "Y1 1", "Z2 1", "Z3", "Z4", "D6", "Q5 10.0", "Q8 1"):
+    for bad in ("E03", "F0", "G2", "J1", "A1", "T1 1", "B1", "N0", "U0", "V50", "W11.000", "W51",
+                "Y1 1", "Z2 1", "Z3", "Z4", "D6", "Q5 10.0", "Q8 1"):
         why = mfc(bad)
         assert why and "금지" in why, (bad, why)
     assert "IG 의 E·F 와 다르다" in mfc("E03")
+
+
+def test_mfc_param_writes_exception():
+    """W-22 E — 사용자 결정 2026-11-25: 컨트롤러 값 바꾸기 네 꼴(M1~M5 정수·X1~X5 소수 둘째 자리·V0/V1·P1~P4 수)만 prod·sim 에서
+    통과. 꼴이 다른 M·X·V·P 와 나머지 설정 명령은 계속 금지, bench 는 질의만."""
+    ok = ("M1 10", "M5 9999", "M3 1", "X1 1", "X2 0.01", "X5 2.00", "X4 0.5", "V0", "V1", "P1 10", "P4 0.00", "P2 99.5")
+    for c in ok:
+        assert mfc(c) is None, c
+        assert mfc(c, "sim") is None, c
+        assert mfc(c, "bench"), c                                     # bench 는 질의만
+    for bad in ("M6 1", "M0 1", "M1 10000", "M1 1.5", "M1 -1", "M1", "X6 1", "X1 0.123", "X1 10", "X1 -0.5", "X1",
+                "V2", "V", "V 1", "V01", "P5 1", "P0 1", "P1 -1", "P1", "M1  10", "X1 1.", "P1 1e2"):
+        why = mfc(bad)
+        assert why and "금지" in why, (bad, why)
+    for still in ("E03", "F0", "G2", "J1", "A1", "T1 1", "B1", "N0", "U0", "W11.000", "Y1 1", "Z2 1", "Z3", "Z4",
+                  "D6", "Q5 10.0", "Q6 1", "Q7 1", "Q8 1"):
+        assert "금지" in mfc(still), still
+    assert [rx.pattern for rx in G.MFC_PARAM_WRITES] == [r"M[1-5] \d{1,4}", r"X[1-5] \d(?:\.\d{1,2})?", r"V[01]",
+                                                          r"P[1-4] \d+(?:\.\d+)?"]
+    assert "사용자 결정 2026-11-25" in G.__doc__ and "bench 는 질의만" in G.__doc__
 
 
 def test_ig_plc_rfp_lists():

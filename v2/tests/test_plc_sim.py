@@ -80,11 +80,11 @@ def test_rf_dac_to_adc():
     sim.coils[A["rf_dac_enable"]] = True
     sim.advance_to(5.0)
     fwd = sim.reg("rf_fwd_adc") * 594.5 / 4000
-    ref = sim.reg("rf_ref_adc") * 200.0 / 4000
+    ref = sim.reg("rf_ref_adc") * 600.0 / 4000                      # 반사 4000 = 600 W(W-22)
     assert abs(fwd - 300.0) < 1.0 and abs(ref - 3.0) < 0.2
     sim.ref_inject_w = 40.0
     sim.advance_to(5.2)
-    assert sim.reg("rf_ref_adc") * 200.0 / 4000 > 40.0
+    assert sim.reg("rf_ref_adc") * 600.0 / 4000 > 40.0
     sim.coils[A["rf_dac_enable"]] = False
     sim.advance_to(10.0)
     assert sim.reg("rf_fwd_adc") < 5

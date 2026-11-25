@@ -11,9 +11,9 @@ from v2.chk import params as P
 from v2.chk import safety_rules as SR
 from v2.chk import web_schema as W
 
-PINNED = (22, "833e0f1992b538932da6e1dcb7e15753816d10f6f0b5ad0e83ad558827a4a986")
+PINNED = (23, "cd8f9435c4ce156b648418094652ff819d8ae0d5738c190ebf0a06a2b72af089")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "overriddenKeys", "params", "crossRules", "dropped", "commands", "preconditions",
-       "reasons", "plcButtons", "recipe", "blocks", "manual", "adjust", "stopSequence", "allStopSequence", "states", "events",
+       "reasons", "plcButtons", "recipe", "blocks", "manual", "devParams", "adjust", "stopSequence", "allStopSequence", "states", "events",
        "eventKinds", "eventSources", "paramGroups", "snapshot"]
 
 

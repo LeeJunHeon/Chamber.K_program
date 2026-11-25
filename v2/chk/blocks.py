@@ -219,7 +219,7 @@ BLOCK_DEFS: tuple = (
         "SHUTTER", ("GUN_SHUTTER", "MAIN"), steps="PLC_CMD(S1·S2·MS) — 쓰기 뒤 0.8 s", v1="pc:582-597"),
     BlockDef("power_on", "파워 켜기", (
         P("dc_power", "float", "W", None, min=0.0, min_exclusive=True, param_max="DC_MAX_POWER"),
-        P("rf_power", "float", "W", None, min=0.0, min_exclusive=True, param_max="RF_MAX_POWER"),
+        P("rf_power", "float", "W", None, min=0.0, min_exclusive=True, param_max="RF_OPERATING_MAX_W"),
         P("rfp_power", "float", "W", None, min=0.0, min_exclusive=True, param_max="RFPULSE_MAX_POWER"),
         P("rfp_freq_khz", "float", "kHz", None, param_min="RFPULSE_PULSE_FREQ_MIN_HZ", param_max="RFPULSE_PULSE_FREQ_MAX_HZ",
           param_scale=0.001, desc="장비에는 Hz = round(kHz × 1000). 비우면 장비값 유지"),
@@ -1069,7 +1069,7 @@ ADJUST_ITEMS: tuple = (
     AdjustItem("dc", "power", "dc.power", P("value", "float", "W", min=0.0, min_exclusive=True, param_max="DC_MAX_POWER",
                                             required=True),
                "DcControl 목표 — 지금 정전류 루프가 따라감(CURR 쓰기)", "DC 를 켰으면", ("S31C",), True),
-    AdjustItem("rf", "power", "rf.power", P("value", "float", "W", min=0.0, min_exclusive=True, param_max="RF_MAX_POWER",
+    AdjustItem("rf", "power", "rf.power", P("value", "float", "W", min=0.0, min_exclusive=True, param_max="RF_OPERATING_MAX_W",
                                             required=True),
                "RfControl 목표 — RF_RAMP_STEP_W(1 W/s) 램프로 올리거나 내림, 도달하면 유지", "RF 를 켰으면", ("S33B",), True),
     AdjustItem("rfpulse", "power", "rfpulse.power", P("value", "float", "W", min=0.0, min_exclusive=True,

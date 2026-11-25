@@ -132,7 +132,8 @@ def test_core_heater_sv_rejects_with_detail_and_uses_plc_limit(tmp_path):
         out["650"] = core.command("HEATER_SV", {"value": 650}, cid="h")
         out["on650"] = core.command("HEATER_ON", {"value": 650}, cid="i")
         out["ar"] = core.command("HEATER_ON", {"value": 100, "use_ar": True, "ar_flow": 1000.0, "wp_mtorr": 5.0}, cid="j")
-        out["hmi"] = core.command("RECIPE_LOAD", {"name": 5}, source=Source.HMI, cid="k")        # 노트북에서 받지 않는 명령
+        out["hmi"] = core.command("DEVICE_PARAM_WRITE", {"value": "x"}, source=Source.HMI, cid="k")   # 노트북에서 받지 않는 명령
+        # (RECIPE_LOAD 는 W-22 F 부터 노트북 조작 — 웹 레시피 사본에서 id 로만)
         out["hmi_plc"] = core.command("PLC_BUTTON", {"target": "mv", "on": "x"}, source=Source.HMI, cid="l")  # 5-20 ② 받음
     r.on(5, go)
     r.run(8)

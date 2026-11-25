@@ -557,7 +557,7 @@ def test_nan_and_inf_become_null_in_spool_and_post(tmp_path):
         eid = rig.hub.recent[-1]["id"]
         rig.hub.publish("state", {"snapshot": {"dc.p": float("nan"), "ig.ion_torr": float("inf"), "proc.run_id": None}})
         assert web.wait(lambda: eid in {m["id"] for m in web.messages()} and web.states >= 1, 5)
-        ctx = web.messages("event")[-1]["data"]["context"]
+        ctx = next(m for m in web.messages("event") if m["id"] == eid)["data"]["context"]   # 웹 레시피 사본 사건(W-22)과 섞여도
         assert ctx["v"] is None and ctx["w"] is None
         assert web.posts and all(p["code"] == 200 for p in web.posts)       # 400 없음
     finally:

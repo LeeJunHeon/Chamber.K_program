@@ -17,6 +17,12 @@
 - bench(장비 쓰기 금지)에서는 장비에 쓰는 명령을 BENCH_READ_ONLY 로 거부한다 — worker 도 막지만 결과가 accepted 로 보이지 않게.
 - 수동 조작(5-20 ③): MANUAL_BLOCK·MANUAL_END → 공정 엔진(manual_block·manual_end). 수동 조작 중 공정 시작·적재·시작·해제·
   순서 고치기는 MANUAL_ACTIVE, 필라멘트는 공정이 없을 때처럼(허용 상태를 대기로 본다).
+- 웹 레시피 사본(W-22 F): RECIPE_LOAD·HEATER_RECIPE_RUN 에 rows·steps 없이 id(+ updatedAt)만 오면 사본(recipe_copy)에서 꺼낸다 —
+  행은 장비가 다시 검사(적재와 같은 길), updatedAt 이 다르면 RECIPE_COPY_STALE, 없으면 RECIPE_COPY_MISSING. 노트북의 RECIPE_LOAD 는
+  이 길만(행을 직접 보내면 BAD_ARGS — 편집은 웹에서만). 공정 기록에 레시피 id·웹 수정 시각(origin)이 남는다.
+- 컨트롤러 값(W-22 E): DEVICE_PARAMS_READ → MFC 드라이버 params_request(질의만 — bench 도 받는다, 공정 중이면 끝난 뒤 읽음).
+  DEVICE_PARAM_WRITE(관리자 — 웹이 role 로) → 대기·적재 상태에서 공정·정지 순서·남은 출력 정리·수동 조작·히터 레시피·히터 가스가
+  없을 때만, 범위는 dev_params.check_write, 앞 바꾸기를 확인하는 중이면 DEVICE_PARAM_BUSY. bench·노트북은 받지 않는다.
 """
 from __future__ import annotations
 
@@ -26,6 +32,8 @@ from typing import Any, Callable, Dict, Optional
 
 from v2.common.commands import Source
 from v2.chk import commands as C
+from v2.chk import dev_params as DP
+from v2.chk import targets as TG
 from v2.chk.heater_engine import parse_recipe_steps
 from v2.chk import recipe as RC
 
@@ -50,8 +58,12 @@ class Rejected(Exception):
 
 class ChkCore:
     def __init__(self, cfg: Dict[str, Any], process, heater, safety, plc, ig, links: Dict[str, Callable[[], bool]],
-                 on_result: Optional[Callable[..., None]] = None, config=None, writes_allowed: bool = True) -> None:
+                 on_result: Optional[Callable[..., None]] = None, config=None, writes_allowed: bool = True, mfc=None,
+                 recipe_copy=None) -> None:
         self.cfg, self.process, self.heater, self.safety, self.plc, self.ig = cfg, process, heater, safety, plc, ig
+        self.mfc = mfc                          # 컨트롤러 값(W-22 E) — 없으면 그 명령은 UNKNOWN_COMMAND
+        self.recipe_copy = recipe_copy          # 웹 레시피 사본(W-22 F) — 없으면 id 적재는 RECIPE_COPY_MISSING
+        self.targets = None                     # 재고관리 읽기(W-22 G — app 이 붙인다). 공정 시작 전에 새로 읽는다
         self.links = links
         self.on_result = on_result
         self.config = config                    # system.ConfigApply(없으면 설정 명령은 UNKNOWN_COMMAND)
@@ -72,6 +84,12 @@ class ChkCore:
         args = dict(args or {})
         by = str(by) if by else self.default_by(source, args)
         detail = ""
+        tr = self.targets
+        if tr is not None and kind in ("PROCESS_START", "RECIPE_START") and self.process.state in C.IDLE_STATES:
+            try:
+                tr.refresh_wait(TG.START_WAIT_S)          # 장착 타겟을 새로 읽고 시작(최대 3 s — 잠금 밖에서, W-22 G)
+            except Exception:
+                pass
         try:
             if kind == "ALL_STOP":
                 r = self._run(kind, args, source, by)
@@ -132,12 +150,19 @@ class ChkCore:
                 raise Rejected("BAD_ARGS", "row 또는 blocks 하나 필요")
             return self._why(p, lambda: p.start_manual(a["row"], str(a.get("name") or "")))
         if kind == "RECIPE_LOAD":
+            origin = self._origin(a, "web" if source != Source.HMI else "local")
+            if "rows" not in a and "blocks" not in a and a.get("id") is not None:    # 웹 레시피 사본에서(W-22 F)
+                r = self._copy_recipe(a, "process")
+                return self._why(p, lambda: p.load(r["name"], r["rows"], origin=dict(origin, name=r["name"], via="copy")))
+            if source == Source.HMI:
+                raise Rejected("BAD_ARGS", "노트북은 웹 레시피 사본에서 골라 적재합니다(id). 레시피 편집은 웹에서 하세요")
             if isinstance(a.get("blocks"), list) and "rows" not in a:      # 블록 목록 하나 = 블록 행 하나
                 return self._why(p, lambda: p.load(str(a.get("name") or ""),
-                                                   [{"process_name": str(a.get("name") or ""), "blocks": a["blocks"]}]))
+                                                   [{"process_name": str(a.get("name") or ""), "blocks": a["blocks"]}],
+                                                   origin=origin))
             if not isinstance(a.get("rows"), list):
-                raise Rejected("BAD_ARGS", "rows 또는 blocks 하나 필요")
-            return self._why(p, lambda: p.load(str(a.get("name") or ""), a["rows"]))
+                raise Rejected("BAD_ARGS", "rows·blocks·id 중 하나 필요")
+            return self._why(p, lambda: p.load(str(a.get("name") or ""), a["rows"], origin=origin))
         if kind == "RECIPE_CLEAR":
             return p.clear()
         if kind == "PROCESS_ADJUST":
@@ -170,9 +195,16 @@ class ChkCore:
             self.plc.set_button(btn.addr, bool(a["on"]))
             self._note_plc_manual(btn.target, bool(a["on"]), source, by)
             return None
+        if kind == "HEATER_RECIPE_RUN" and "steps" not in a:
+            if a.get("id") is None:
+                raise Rejected("BAD_ARGS", "steps 또는 id 하나 필요")
+            r = self._copy_recipe(a, "heater")                      # 웹 히터 레시피 사본에서(W-22 F)
+            a = dict(a, name=r["name"], steps=r["rows"], gas=r.get("gas"))
         if kind in ("HEATER_ON", "HEATER_OFF", "HEATER_SV", "HEATER_RESET", "HEATER_STOP", "HEATER_GAS_RELEASE",
                     "HEATER_RECIPE_RUN", "HEATER_RECIPE_STOP", "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP"):
             return self._heater(kind, a)
+        if kind in ("DEVICE_PARAMS_READ", "DEVICE_PARAM_WRITE"):
+            return self._dev_params(kind, a, by)
         if kind == "IG_FILAMENT":
             last = self.plc.last
             atm = None if last is None else last.values.get("plc.atm")
@@ -183,6 +215,46 @@ class ChkCore:
             (self.ig.filament_on if a.get("on") else self.ig.filament_off)()
             return None
         return "UNKNOWN_COMMAND"
+
+    @staticmethod
+    def _origin(a: dict, via: str) -> dict:
+        """공정 기록에 남길 레시피 출처(웹 id·웹 수정 시각) — 없으면 빈 값."""
+        rid, upd = a.get("id"), a.get("updatedAt")
+        return {"id": rid if isinstance(rid, str) else None, "updatedAt": upd if isinstance(upd, str) else None, "via": via}
+
+    def _copy_recipe(self, a: dict, kind: str) -> dict:
+        rc = self.recipe_copy
+        r = rc.get(a.get("id")) if rc is not None else None
+        if r is None or r["kind"] != kind:
+            raise Rejected("RECIPE_COPY_MISSING", "고른 레시피가 장비 사본에 없습니다. 웹과 다시 맞춘 뒤 고르세요")
+        upd = a.get("updatedAt")
+        if upd is not None and upd != r["updatedAt"]:
+            raise Rejected("RECIPE_COPY_STALE", f"웹에서 레시피가 바뀌었습니다(사본 {r['updatedAt']}). 목록을 다시 보고 고르세요")
+        return r
+
+    def _dev_params(self, kind: str, a: dict, by: str) -> Optional[str]:
+        m, p, h = self.mfc, self.process, self.heater
+        if m is None or not hasattr(m, "params_request"):
+            return "UNKNOWN_COMMAND"
+        if not self.links.get("mfc", lambda: False)():
+            return "LINK_DOWN"
+        if kind == "DEVICE_PARAMS_READ":
+            m.params_request(by=by, why="다시 읽기")
+            return None
+        if p.active or p.state == "STOPPING" or getattr(p, "cleaning", False) or getattr(p, "list_active", False) \
+                or self.safety.engine.stopping:
+            return "PROCESS_RUNNING"
+        if h.recipe_running:
+            return "HEATER_RECIPE_RUNNING"
+        if h.atm.is_active():
+            return "HEATER_GAS_ACTIVE"
+        if getattr(m, "params_writing", False):
+            raise Rejected("DEVICE_PARAM_BUSY", "앞에서 바꾼 컨트롤러 값을 아직 확인하는 중입니다")
+        err, no, v = DP.check_write(str(a.get("item")), a.get("no"), a.get("value"), float(self.cfg["MFC_PRESSURE_FS_TORR"]))
+        if err:
+            raise Rejected("BAD_ARGS", err)
+        m.param_write(str(a["item"]), no, v, by=by)
+        return None
 
     @staticmethod
     def _why(engine, call: Callable[[], Optional[str]]) -> Optional[str]:

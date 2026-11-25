@@ -280,7 +280,35 @@ class MessageHub:
                                   if st is not None and (st.pending_idle or st.pending_restart) else None),
                 "snapshot": row, "left": dict(getattr(p, "left", {}) or {}),
                 "stopping": s.safety.engine.stopping,
+                "devParams": self.dev_params(),
+                "targets": self.targets(), "recipeCopy": rc.state() if (rc := getattr(s, "recipe_copy", None)) is not None else None,
                 "uplink": up.status() if (up := getattr(s, "uplink", None)) is not None else {"enabled": False}}
+
+    def targets(self) -> Optional[dict]:
+        """장착 타겟(W-22 G) — 재고관리 읽기가 없으면 None(꺼짐·sim)."""
+        t = getattr(self.sys, "targets", None)
+        if t is None:
+            return None
+        v = t.view()
+        return dict(v, readAt=utc_iso(v["readAt"]) if v.get("readAt") else None)
+
+    def dev_params(self) -> Optional[dict]:
+        """컨트롤러 값(W-22 E — 묶음 23) — MFC 는 마지막 읽기(질의) 값·읽은 시각·진행·마지막 바꾸기, Ion Gauge 는 E 응답의 설정 항목."""
+        from v2.chk import dev_params as DP
+        s = self.sys
+        m, ig = getattr(s, "mfc", None), getattr(s, "ig", None)
+        if m is None or not hasattr(m, "params_view"):
+            return None
+        v = m.params_view
+        w = m.params_write
+        mfc = {"state": m.params_state, "progress": m.params_progress(), "writing": bool(m.params_writing),
+               "readAt": utc_iso(v["readAt"]) if v and v.get("readAt") else None,
+               "values": {k: x for k, x in v.items() if k != "readAt"} if v else None,
+               "write": dict(w, at=utc_iso(w["at"])) if w else None}
+        igv = None
+        if ig is not None and getattr(s, "enabled", {}).get("ig", True) and getattr(ig, "last", None) is not None:
+            igv = DP.ig_view(ig.last, utc_iso(ig.last_wall) if getattr(ig, "last_wall", None) else None)
+        return {"mfc": mfc, "ig": igv}
 
 
 def _param_hash() -> str:

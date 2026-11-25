@@ -364,9 +364,15 @@ RF_BLOCK = DeviceBlock("rf", "RF Power", (
         desc="RF DAC 출력 허용 비트다. DAC 를 0 보다 크게 쓰기 전에 켜고, RF 를 끌 때 끈다(M00200)."),
     _f("set_w", F, "W", "목표", ".1f", "core",
         desc="RF 제어의 지금 목표 파워다. RF 를 시작하거나 목표를 바꾸면 그 값이 되고, RF 를 끄면 0 이다."),
-    _f("out_on", B, "", "RF 출력", source="core(D40·순방향)", summary="any",
-       desc="RF 출력이 켜져 있으면 참이다. DAC 설정값이 0 보다 크거나 Forward가 5 W 이상일 때 켜짐으로 본다. DAC 출력 허용(M00200)은 "
-            "v1 정상 종료 뒤에도 켜진 채 남으므로 쓰지 않는다(표시용, 5-21 ②)"),
+    _f("out_on", B, "", "RF 출력", source="core(D40·순방향)", summary="any", detail=True,
+       desc="호환용 값이다(5-21 ②). DAC 설정값이 0 보다 크거나 Forward가 5 W 이상이면 참이다. 화면 표시는 RF 명령 출력(cmd_on)과 "
+            "명령 없는 RF 출력(uncommanded)을 쓴다(W-22)"),
+    _f("cmd_on", B, "", "RF 명령 출력", source="core(M00200·D00040)", summary="any",
+       desc="프로그램이 RF 를 켰으면 참이다. DAC 출력 허용(M00200)이 켜져 있고 DAC 설정값(D00040)이 0 보다 클 때다. 화면은 이 값이 "
+            "거짓이면 Forward·Reflected 를 0 으로 보인다(읽은 값은 상세 보기·기록에 그대로)."),
+    _f("uncommanded", B, "", "명령 없는 RF 출력", source="core(cmd_on·Forward)", summary="any",
+       desc="프로그램이 RF 를 켜지 않았는데 Forward 가 'RF 명령 없는 출력 기준' 이상이면 참이다. RF 전원 앞면(LOCAL)에서 켰을 때 "
+            "생긴다. 시작·끝 때 기록을 남긴다."),
 ), desc="PLC 아날로그 입출력")
 
 MFC_BLOCK = DeviceBlock("mfc", "MFC", (
@@ -382,6 +388,11 @@ MFC_BLOCK = DeviceBlock("mfc", "MFC", (
         desc="Ar 채널에 마지막으로 쓰고 되읽어 확인한 유량 설정값이다. 유량을 꺼도 설정값은 그대로 남고, FLOW ON 뒤 유량 안정화 판정은 이 값을 기준으로 한다."),
     _f("o2_set", F, "sccm", "O₂ 목표", ".2f", "core",
         desc="O₂ 채널에 마지막으로 쓰고 되읽어 확인한 유량 설정값이다. 유량을 꺼도 설정값은 그대로 남고, FLOW ON 뒤 유량 안정화 판정은 이 값을 기준으로 한다."),
+    _f("ar_on", B, "", "Ar 유량 켜짐", "", "core(R69·L0 확인 마스크 1번째)",
+       desc="MFC 의 Ar 채널 유량 켜짐(FLOW ON)이다. 연결 때 R69 로 읽고 L0 를 쓴 뒤 되읽어 확인한 값이며, 쓰는 중·모르면 값이 없다. "
+            "수동 조작의 가스 주입 잠금과 영점 보호가 이 값을 본다(W-22)"),
+    _f("o2_on", B, "", "O₂ 유량 켜짐", "", "core(R69·L0 확인 마스크 2번째)",
+       desc="MFC 의 O₂ 채널 유량 켜짐(FLOW ON)이다. 연결 때 R69 로 읽고 L0 를 쓴 뒤 되읽어 확인한 값이며, 쓰는 중·모르면 값이 없다(W-22)"),
     _f("sp_active", I, "", "사용 중 SP", "d", "core(마지막 D 명령)",
        desc="지금 쓰는 SP 번호 0~5 이다. 0 은 밸브 직접 조작(열기·닫기·정지), 1 은 작업 압력, 2·3·5 는 단계 압력, 4 는 가스 안정화이다"),
     _f("sp_mtorr", F, "mTorr", "작업 압력(SP1)", ".2f", "core", detail=True,
@@ -536,12 +547,16 @@ FIELD_HELP: dict = {
     "rf.fwd_w": "RF Power 가 내는 파워입니다. 목표와 비교해 출력을 맞춥니다.",
     "rf.ref_w": "되돌아오는 파워입니다. 높은 채 오래 이어지면 공정을 멈춥니다.",
     "rf.set_w": "RF Power 의 지금 목표 파워입니다.",
-    "rf.out_on": "RF 출력이 나오고 있으면 켜짐입니다.",
+    "rf.out_on": "RF 출력이 나오고 있으면 켜짐입니다. 화면은 RF 명령 출력을 씁니다.",
+    "rf.cmd_on": "프로그램이 RF 를 켜 두었으면 켜짐입니다.",
+    "rf.uncommanded": "프로그램이 켜지 않았는데 RF 출력이 나오면 켜짐입니다. RF 전원 앞면을 확인하세요.",
     "mfc.ar_sccm": "지금 흐르는 Ar 유량입니다.",
     "mfc.o2_sccm": "지금 흐르는 O₂ 유량입니다.",
     "mfc.pressure_mtorr": "MFC 압력 센서로 잰 챔버 압력입니다.",
     "mfc.valve_pct": "MFC 압력 조절 밸브가 열린 정도입니다. 0 은 닫힘, 100 은 완전 열림입니다.",
     "mfc.ar_set": "Ar 채널에 넣은 목표 유량입니다. 가스를 꺼도 값은 남습니다.",
+    "mfc.ar_on": "MFC 의 Ar 유량이 켜져 있는지입니다. 켜져 있으면 수동 조작의 가스 켜기가 잠깁니다.",
+    "mfc.o2_on": "MFC 의 O₂ 유량이 켜져 있는지입니다. 켜져 있으면 수동 조작의 가스 켜기가 잠깁니다.",
     "mfc.o2_set": "O₂ 채널에 넣은 목표 유량입니다. 가스를 꺼도 값은 남습니다.",
     "mfc.sp_active": "지금 압력을 맞추는 SP 번호입니다. 0 이면 MFC 밸브를 직접 조작하는 중입니다.",
     "mfc.sp_sel_mtorr": "사용 중 SP 의 목표 압력입니다.",

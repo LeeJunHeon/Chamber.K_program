@@ -141,8 +141,10 @@ class DcControl:
 class RfControl:
     IDLE, RAMPING_UP, MAINTAINING = "IDLE", "RAMPING_UP", "MAINTAINING"
 
-    def __init__(self, cfg: Dict[str, Any], plc, emit: Callable[[str, str], None]) -> None:
+    def __init__(self, cfg: Dict[str, Any], plc, emit: Callable[[str, str], None],
+                 on_refp: Optional[Callable[[str, Dict[str, Any]], None]] = None) -> None:
         self.cfg, self.plc, self._emit = cfg, plc, emit
+        self.on_refp = on_refp            # 반사파 대기 시작·끝 사건(W-22 — 한 번씩): (phase "start"|"end", data)
         self.state = self.IDLE
         self.target = 0.0
         self.offset, self.param = 0.0, 1.0
@@ -157,7 +159,7 @@ class RfControl:
         return max(0, min(int(round(self.offset + base * self.param)), D.RF_DAC_FULL_SCALE))
 
     def start(self, target_w: float, offset: float, param: float) -> None:
-        self.target = min(float(target_w), float(self.cfg["RF_MAX_POWER"]))
+        self.target = min(float(target_w), float(self.cfg["RF_OPERATING_MAX_W"]))      # W-22 운전 상한(RF_MAX_POWER 는 환산 기준)
         self.offset, self.param = float(offset), float(param)
         self.step_w, self.pwm, self.ref_waiting, self.reached = 0.0, 0, False, False
         self.down = False
@@ -167,7 +169,7 @@ class RfControl:
 
     def retarget(self, target_w: float) -> None:
         """켜진 채 목표만 바꾼다 — 지금 스텝 목표에서 RF_RAMP_STEP_W(1 W/s)씩 새 목표로(올리든 내리든), 도달하면 유지."""
-        self.target = min(float(target_w), float(self.cfg["RF_MAX_POWER"]))
+        self.target = min(float(target_w), float(self.cfg["RF_OPERATING_MAX_W"]))
         self.reached = False
         self.down = self.target < self.step_w - 1e-9
         if self.state != self.IDLE:
@@ -176,8 +178,15 @@ class RfControl:
         self._emit("info", f"RF 목표 변경 → {self.target:.1f} W (램프 {self.cfg['RF_RAMP_STEP_W']:g} W/s)")
 
     def stop(self) -> None:
+        if self.ref_waiting:
+            self._refp_end("RF 끔")
         self.state = self.IDLE
         self.plc._rf_set_w = 0.0
+
+    def _refp_end(self, why: str) -> None:
+        self.ref_waiting = False
+        if self.on_refp:
+            self.on_refp("end", {"why": why})
 
     @property
     def holding(self) -> bool:
@@ -188,14 +197,19 @@ class RfControl:
         if self.state == self.IDLE or fwd is None:
             return
         c = self.cfg
-        if ref is not None and ref >= float(c["RF_REFP_ABORT_THRESHOLD"]):
+        thr = float(c["RF_REFP_ABORT_THRESHOLD"])
+        # 반사파 대기(S32, W-22) — 기준 이상이면 대기 시작, '기준 − 여유 폭(RF_REFP_HYST_W)' 아래로 내려가야 풀린다.
+        # 그 사이를 오가면 대기를 이어 간다(안전 규칙 S32 의 대기 시간도 이어서 센다). 사건은 시작·끝 한 번씩
+        if ref is not None and (ref >= thr or (self.ref_waiting and ref >= thr - float(c.get("RF_REFP_HYST_W", 0.0)))):
             if not self.ref_waiting:
                 self.ref_waiting = True
-                self._emit("warn", f"반사파 {ref:.1f}W ≥ {c['RF_REFP_ABORT_THRESHOLD']:g}W — 대기(최대 {c['RF_REFP_WAIT_SEC']} s, S32)")
+                if self.on_refp:
+                    self.on_refp("start", {"ref_w": round(float(ref), 1), "threshold": thr, "max_s": c["RF_REFP_WAIT_SEC"]})
+                else:
+                    self._emit("warn", f"반사파 대기 시작 · {ref:.1f} W ≥ {thr:g} W · 최대 {c['RF_REFP_WAIT_SEC']} s")
             return
         if self.ref_waiting:
-            self.ref_waiting = False
-            self._emit("info", f"반사파 안정 ({ref}W) — 재개")
+            self._refp_end("풀림")
         tol = float(c["RF_TOLERANCE_W"])
         full = D.RF_DAC_FULL_SCALE
         if self.state == self.RAMPING_UP:

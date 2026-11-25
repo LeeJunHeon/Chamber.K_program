@@ -346,7 +346,9 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
         # (v1 RFpower.py:100-102·124-131·158-167·210-214). 반사파는 RF 를 켠 뒤만(RFpower.py:79-81),
         # 반사파 대기 중에는 무출력·이탈 판정을 멈춘다(RFpower.py:91-104).
         L("S32", "abort", "tick",
-          lambda v, c: None if v.get("rf.ref_w") is None else v.get("rf.ref_w") >= C["RF_REFP_ABORT_THRESHOLD"],
+          # W-22 — 대기 중(여유 폭 안)이면 기준 아래로 잠깐 내려가도 이어서 센다(RF 제어의 대기 상태 그대로)
+          lambda v, c: None if v.get("rf.ref_w") is None else (v.get("rf.ref_w") >= C["RF_REFP_ABORT_THRESHOLD"]
+                                                                or bool(getattr(c, "rf_ref_waiting", False))),
           _fixed(_abort("RF_REFLECTED_HIGH")), _p("RF_REFP_WAIT_SEC"), states=ACT,
           applies=lambda c: c.uses_rf and bool(getattr(c, "rf_on", False)), block="rf"),
         L("S33A", "abort", "tick",

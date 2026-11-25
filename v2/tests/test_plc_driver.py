@@ -63,7 +63,7 @@ def test_decode_scaling_and_budget():
     res = r.read()
     v = res.value
     assert res.status == Status.OK
-    assert v["rf.fwd_w"] == 594.5 and v["rf.ref_w"] == 100.0         # 순방향 4000 = 594.5 W, 반사 4000 = 200 W
+    assert v["rf.fwd_w"] == 594.5 and v["rf.ref_w"] == 300.0         # 순방향 4000 = 594.5 W, 반사 4000 = 600 W(W-22 기본)
     assert v["heater.pv2"] is None                                    # -1 → 센서 이상
     assert v["heater.pv"] == 600.1
     assert v["plc.mv"] is True and v["plc.mv_interlock"] is True and v["plc.atm"] is False
@@ -83,7 +83,7 @@ def test_rf_scale_from_adc():
     assert v["rf.dac"] == dac and v["rf.dac_enable"] is True and v["rf.set_w"] == 300.0
     gen_w = dac / 4000 * 600.0                                        # 시뮬레이터 발생기
     assert v["rf.fwd_w"] == pytest.approx(gen_w, abs=0.5)             # ADC 4000 = 594.5 W 로 되돌림
-    assert v["rf.ref_w"] == pytest.approx(gen_w * 0.01, abs=0.1)      # ADC 4000 = 200 W
+    assert v["rf.ref_w"] == pytest.approx(gen_w * 0.01, abs=0.2)      # ADC 4000 = 600 W(W-22 기본)
     r.d.rf_off()
     r.c.wait_until(8.0)
     assert r.sim.reg("rf_dac") == 0 and not r.sim.coil("rf_dac_enable")

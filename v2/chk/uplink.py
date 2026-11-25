@@ -6,7 +6,8 @@
               (링 버퍼보다 많이 놓쳤으면 UPLINK_GAP).
   uplink-out  POST {URL}/ingest — UPLINK_INTERVAL_MS 마다 [hello(연결 뒤 첫 POST)] + 보관함(오래된 것부터, 개수·바이트 상한) + 최신 state.
               acked id 만 보관함에서 지운다. 응답 commands 는 SSE 와 같게 처리. needWebSchema 면 webSchema 를 실은 hello 를 한 번 더.
-  uplink-sse  GET {URL}/stream — 명령 받기(주 경로). 끊기면 다시 붙는다.
+  uplink-sse  GET {URL}/stream — 명령 받기(주 경로). 끊기면 다시 붙는다. 붙을 때와 'event: recipes'(웹이 레시피를 저장·지움)를 받을 때
+              웹 레시피 사본을 새로 받는다 — GET {URL}/recipes?equipment= (장비 토큰, 자기 스레드 uplink-recipes, W-22 F → recipe_copy).
 tick·worker·로컬 서버를 막지 않는다 — 허브는 put_nowait, 보관함·명령 기억은 상한, 네트워크는 자기 스레드·시간 제한 UPLINK_TIMEOUT_SEC.
 끊겨도 공정·안전은 그대로(기록·화면에만 — UPLINK_DOWN·state.uplink).
 UPLINK_URL·UPLINK_TOKEN 은 로그·메시지에 쓰지 않는다(주소는 호스트만).
@@ -432,6 +433,11 @@ class Uplink:
         self._cmd_lock = threading.Lock()
         self.done_cmds: "collections.OrderedDict[str, dict]" = collections.OrderedDict()
         self.dup_cmds = 0
+        # 웹 레시피 사본(W-22 F)
+        self._rc_lock = threading.Lock()
+        self._rc_busy = False
+        self._rc_again = False
+        self.recipe_fetches = 0
         # 소비자
         self.last_seq: Optional[int] = None
         self.resubscribes = 0
@@ -578,6 +584,70 @@ class Uplink:
             raise HttpError(None, "timeout" if isinstance(e, TimeoutError) else type(e).__name__)
         finally:
             c.close()
+
+    # ── 웹 레시피 사본(W-22 F) ──
+    def get_recipes(self) -> dict:
+        c = self._conn(float(self.cfg["UPLINK_TIMEOUT_SEC"]))
+        try:
+            q = urlencode({"equipment": self.cfg["EQUIPMENT_ID"]})
+            c.request("GET", f"{self.base}/recipes?{q}", headers=self._headers(Accept="application/json"))
+            r = c.getresponse()
+            data = r.read(8_000_000)
+            if r.status != 200:
+                raise HttpError(r.status, f"HTTP {r.status}")
+            try:
+                out = json.loads(data.decode("utf-8") or "{}")
+            except ValueError:
+                raise HttpError(None, "bad_response")
+            if not isinstance(out, dict) or not isinstance(out.get("recipes"), list):
+                raise HttpError(None, "bad_response")
+            return out
+        except (OSError, http.client.HTTPException) as e:
+            raise HttpError(None, "timeout" if isinstance(e, TimeoutError) else type(e).__name__)
+        finally:
+            c.close()
+
+    def sync_recipes(self, why: str) -> bool:
+        """웹 레시피를 받아 사본을 통째로 바꾼다. 실패하면 사본은 그대로(노트북은 마지막 사본으로 고른다)."""
+        rc = getattr(self.sys, "recipe_copy", None)
+        if rc is None:
+            return False
+        self.recipe_fetches += 1
+        try:
+            d = self.get_recipes()
+            n = rc.replace(d["recipes"], utc_iso(self.sys.clock.wall()), d.get("base") if isinstance(d.get("base"), str) else None)
+        except HttpError as e:
+            rc.failed(f"웹 레시피를 받지 못함({e.what})")
+            self._note("info", "UPLINK_RECIPES_FAILED", f"웹 레시피 사본을 받지 못함({self.where}, {e.what}) — 마지막 사본 그대로",
+                       why=why)
+            return False
+        except Exception as e:                                   # 사본 파일 쓰기 실패 등
+            rc.failed(f"사본을 저장하지 못함({type(e).__name__})")
+            self._note("info", "UPLINK_RECIPES_FAILED", f"웹 레시피 사본을 저장하지 못함({type(e).__name__})", why=why)
+            return False
+        self._note("info", "UPLINK_RECIPES", f"웹 레시피 사본을 웹과 맞춤 · {n}개({why})", count=n, why=why)
+        return True
+
+    def request_recipes(self, why: str) -> None:
+        """자기 스레드로 받기 — 받는 중이면 끝난 뒤 한 번 더(SSE 읽기를 막지 않는다)."""
+        with self._rc_lock:
+            if self._rc_busy:
+                self._rc_again = True
+                return
+            self._rc_busy = True
+
+        def run():
+            w = why
+            while not self._stop.is_set():
+                self.sync_recipes(w)
+                with self._rc_lock:
+                    if not self._rc_again:
+                        self._rc_busy = False
+                        return
+                    self._rc_again, w = False, "웹 알림"
+            with self._rc_lock:
+                self._rc_busy = False
+        threading.Thread(target=run, name="uplink-recipes", daemon=True).start()
 
     # ── 보내기(uplink-out) ──
     def _hello(self) -> dict:
@@ -768,6 +838,7 @@ class Uplink:
         self.sse_connected = True
         self.sse_fails = 0
         self._warned = {k for k in self._warned if not k.startswith("sse:")}
+        self.request_recipes("웹 연결")                          # 붙을 때마다 웹 레시피 사본을 새로(W-22 F)
         ev, data = None, []
         try:
             while not self._stop.is_set():
@@ -785,6 +856,8 @@ class Uplink:
                             self.handle_command(cmd, "sse")
                         else:
                             self._note("warn", "UPLINK_BAD_COMMAND", "웹 명령 JSON 을 읽을 수 없음(sse)")
+                    elif ev == "recipes":
+                        self.request_recipes("웹 알림")              # 웹이 레시피를 저장·지움(W-22 F)
                     ev, data = None, []
                 elif line.startswith(":"):
                     continue

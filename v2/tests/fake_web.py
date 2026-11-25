@@ -1,7 +1,8 @@
 """가짜 웹(시험용, 127.0.0.1 만) — uplink 계약(v2.common.messages)의 웹 쪽을 흉내 내고 실패를 조절한다.
 
 - POST /ingest: 토큰 확인 → 표준 JSON 만(NaN·Infinity 는 웹 JSON.parse 처럼 400) → envelope 을 id 로 한 번만 저장 → {acked, commands?, needWebSchema?}
-- GET /stream: SSE — push() 한 명령을 event: command 로, keepalive_s 마다 ": ka"
+- GET /stream: SSE — push() 한 명령을 event: command 로, keepalive_s 마다 ": ka". notify_recipes() 는 event: recipes(W-22 F)
+- GET /recipes?equipment=: 토큰 확인 → {base, recipes}(recipes 목록 — 시험이 넣는다, recipes_status 면 그 코드)
 - 조절: status(다음 응답 코드 — 함수 또는 값), delay_s(응답 지연), max_messages(넘으면 413), need_schema(한 번), post_commands,
   down()/up()(같은 포트로 내렸다 올림 — 열린 SSE 도 끊음)
 """
@@ -44,6 +45,9 @@ class FakeWeb:
         self.sse_connects = 0
         self.sse_queries: List[dict] = []
         self.auth_seen: List[str] = []
+        self.recipes: List[dict] = []                  # GET /recipes 가 주는 웹 레시피(W-22 F)
+        self.recipes_status: Optional[int] = None
+        self.recipe_gets: List[dict] = []
         self.httpd: Optional[_Srv] = None
         self._socks: List[socket.socket] = []
         self.alive = False
@@ -82,6 +86,13 @@ class FakeWeb:
         with self.lock:
             for q in self.sse_clients:
                 q.put(cmd)
+            return len(self.sse_clients)
+
+    def notify_recipes(self) -> int:
+        """열린 SSE 모두에 event: recipes(웹이 레시피를 저장·지움) — 보낸 연결 수."""
+        with self.lock:
+            for q in self.sse_clients:
+                q.put({"__recipes__": True})
             return len(self.sse_clients)
 
     # ── 조회 ──
@@ -174,6 +185,15 @@ def _handler(web: FakeWeb):
 
         def do_GET(self):
             u = urlsplit(self.path)
+            if u.path == "/dev/chk/recipes":
+                if not self._authed():
+                    return self._json(401, {"error": "auth"})
+                web.recipe_gets.append({k: v[0] for k, v in parse_qs(u.query).items()})
+                if web.recipes_status:
+                    return self._json(web.recipes_status, {"error": "x"})
+                with web.lock:
+                    rs = list(web.recipes)
+                return self._json(200, {"base": "CHK2", "recipes": rs})
             if u.path != "/dev/chk/stream":
                 return self._json(404, {})
             if not self._authed():
@@ -201,6 +221,10 @@ def _handler(web: FakeWeb):
                         continue
                     if cmd is None:
                         break
+                    if cmd.get("__recipes__"):
+                        self.wfile.write(b"event: recipes\ndata: {}\n\n")
+                        self.wfile.flush()
+                        continue
                     self.wfile.write(b"event: command\ndata: " + json.dumps(cmd).encode() + b"\n\n")
                     self.wfile.flush()
             except OSError:

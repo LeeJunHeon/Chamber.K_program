@@ -238,7 +238,8 @@ def test_bench_running_all_commands_and_outputs_turning_on_send_only_allowed_que
                 res.append((c.kind, s.core.command(c.kind, dict(args.get(c.kind, {})), source=src)))
         assert all(r.ok or r.reason for _, r in res)
         # 장비에 쓰지 않는 명령만 받음(RECIPE_CLEAR 는 웹·노트북 — 5-20 ② 기본 '잠금을 푼 뒤 조작')
-        assert [k for k, r in res if r.ok] == ["RECIPE_LOAD", "RECIPE_CLEAR", "RECIPE_CLEAR"]
+        # W-22: 노트북 RECIPE_LOAD 는 사본 id 로만(행 직접은 BAD_ARGS), 컨트롤러 값 읽기는 질의만이라 bench 도 받는다
+        assert [k for k, r in res if r.ok] == ["RECIPE_LOAD", "RECIPE_CLEAR", "RECIPE_CLEAR", "DEVICE_PARAMS_READ"]
         assert [r.reason for k, r in res if k in ("MANUAL_BLOCK", "MANUAL_END")] == ["BENCH_READ_ONLY"] * 4   # 웹·노트북 둘씩
         assert all(r.reason == "BENCH_READ_ONLY" for k, r in res if not r.ok and C.by_kind()[k].hmi == "operate"
                    and r.reason not in ("SOURCE_NOT_ALLOWED", "BAD_ARGS", "STATE_NOT_ALLOWED"))

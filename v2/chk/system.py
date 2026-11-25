@@ -40,6 +40,7 @@ from v2.chk.heater_cascade import LEARNED_FILE
 from v2.chk.heater_engine import HeaterEngine
 from v2.chk.hub import MessageHub
 from v2.chk.process_engine import ProcessEngine
+from v2.chk.recipe_copy import RecipeCopy
 from v2.chk.safety import ChkSafety, SimpleProcess, View
 
 DEVICES = ("plc", "mfc", "dc", "rfpulse", "ig")
@@ -186,7 +187,7 @@ class ChkSystem:
         self.plc = PlcDriver(clock, w["plc"], c, wr, on_event=self._ev,
                              blackbox_sink=lambda name, rows: self.recorder.put_blackbox(name, rows))
         self.mfc = MfcDriver(clock, w["mfc"], c, wr, on_event=self._ev)
-        self.mfc.idle = lambda: not getattr(self, "process", None) or not self.process.active   # 장비 설정점 주기 갱신(5-19 ③ ㉣)
+        self.mfc.idle = lambda: not getattr(self, "process", None) or not self.process.active   # 장비 설정점 주기 갱신(5-19 ③ ㉣)·컨트롤러 값(W-22 E)
         self.dc = DcDriver(clock, w["dc"], c, wr, on_event=self._ev)
         self.rfp = RfPulseDriver(clock, w["rfpulse"], c, wr, on_event=self._ev)
         self.ig = IgDriver(clock, w["ig"], c, wr, on_event=self._ev)
@@ -218,14 +219,20 @@ class ChkSystem:
                                 heater=self.heater, bench=self.policy.mode is RunMode.BENCH)
         if not simple_process:
             self.process.safety = self.safety
+            self.heater.atm.zero_ok = self.process.zero_ok        # 히터 가스 영점도 같은 보호(W-22)
         self.store = store
         if store is not None and not store.values:
             store.load()
         self.config = (ConfigApply(store, c, self.busy, getattr(self.process, "_lock", None) or _NullLock(),
                                    self.hub.config_ack) if store is not None else None)
+        self.recipe_copy = RecipeCopy(Path(data_dir))   # 웹 레시피 사본(W-22 F) — 웹 연결이 채우고 노트북이 고른다
         self.core = ChkCore(c, self.process, self.heater, self.safety, self.plc, self.ig, self.links,
-                            on_result=self.hub.cmd_result, config=self.config, writes_allowed=wr)
+                            on_result=self.hub.cmd_result, config=self.config, writes_allowed=wr, mfc=self.mfc,
+                            recipe_copy=self.recipe_copy)
         self.uplink = None                       # app 이 웹 연결을 붙이면(uplink.Uplink) — state.uplink 로 보인다
+        self.targets = None                      # app 이 재고관리 읽기를 붙이면(targets.TargetReader) — state.targets(W-22 G)
+        if hasattr(self.process, "targets"):
+            self.process.targets = lambda: self.targets.mounted if self.targets is not None else None
         self.plc.fast_listeners.append(self.safety.on_poll)
         self.plc.fast_listeners.append(self.heater.on_poll)
         self._scenario_hook = scenario_hook

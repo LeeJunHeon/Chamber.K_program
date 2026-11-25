@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from v2.common.judge import Persist
 from v2.chk.recipe import pulse_freq_hz
@@ -225,6 +225,9 @@ class StepRunner:
         self.failed: Optional[str] = None
         self.cancelled = False
         self.sp_expect: Dict[int, float] = {}          # 기본 템플릿의 장비 값 단계 → 만들 때 쓴 장비 값(5-19 ③, 공정 엔진이 넣는다)
+        # 영점 보호(W-22) — () → (보내도 되나, 이유). 없으면 지금처럼 늘 보낸다. 안 되면 영점 스텝을 건너뛰고 블록마다 경고 한 번
+        self.zero_ok: Optional[Callable[[], Tuple[bool, str]]] = None
+        self._zero_warned: set = set()
         # 기록 번호는 블록 제어 스텝(internal)을 빼고 센다 — v1 과 같은 "[k/N]"
         self._number()
 
@@ -393,6 +396,12 @@ class StepRunner:
                 m.valve(False, on_done=cb)
             elif cmd == "VALVE_HOLD":
                 m.valve_hold(on_done=cb)
+            elif cmd in ("MFC_ZEROING", "PS_ZEROING") and self.zero_ok is not None and not self.zero_ok()[0]:
+                # 영점 보호(W-22, GPC3000 매뉴얼 Sensor·MFC Zeroing) — 가스가 흐를 수 있으면 영점을 보내지 않고 다음 스텝으로
+                if s.block not in self._zero_warned:
+                    self._zero_warned.add(s.block)
+                    self._emit(StepEvent("warn", f"영점 건너뜀 — 가스가 흐르는 중({self.zero_ok()[1]})", "ZERO_SKIPPED", self.idx))
+                return "next"
             elif cmd == "MFC_ZEROING":
                 m.zero(f"L{4 + int(a['channel'])} 1", on_done=cb)
             elif cmd == "PS_ZEROING":

@@ -97,6 +97,11 @@
                 버전 22(웹 W-21): 블록·상태 이름 '가스 주입'·'증착'·'공정 끝'·'Shutter Delay', 설정·명령·필드 설명의 옛 말을 용어표 말로
                 (Ion Gauge·Filament·Forward·Reflected·인터락·SP·MV·천천히 올리기/내리기), 건너뛰기·일시정지 문구의 '블록' → 단계.
                 스텝·사건 message(v1 대조)·키·값·숫자는 그대로
+                버전 23(W-22): 수동 조작 규칙 사유(GAS_ALREADY_ON·SHUTTER_ALREADY·MANUAL_INTERRUPT·ZERO_SKIPPED), RF 표시 필드
+                (rf.cmd_on·rf.uncommanded — rf.out_on 은 호환으로 남김)·사건(명령 없는 RF 출력·Reflected 대기), 새 설정(RF_OPERATING_MAX_W·
+                RF_UNCOMMANDED_FWD_W·RF_REFP_HYST_W·ZERO_MIN_IDLE_SEC·INVENTORY_API_URL, RF_REF_FULL_SCALE_W 기본 600), 컨트롤러 값
+                (devParams 구역·DEVICE_PARAMS_READ·DEVICE_PARAM_WRITE·state.devParams), 웹 레시피 사본(RECIPE_LOAD·HEATER_RECIPE_RUN 의
+                id·updatedAt, 노트북 RECIPE_LOAD, state.recipeCopy), 장착 타겟(state.targets·사건 출처 inventory)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -128,13 +133,14 @@ from v2.common.paramdef import Scope, schema_hash
 from v2.common.snapshot import TICK_COLUMNS
 from v2.chk import blocks as BK
 from v2.chk import commands as C
+from v2.chk import dev_params as DP
 from v2.chk import params as P
 from v2.chk import process_states as PS
 from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 22
+EXPORT_VERSION = 23
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -163,6 +169,8 @@ EVENTS: tuple = (
      ("by", "source", "no", "type", "label", "params", "result", "reason", "run_id", "t", "level")),
     ("run_end", "행 끝 — summary: 실행된 순서(executed)·마지막 판·건너뛴/멈춘 횟수(수동 조작이면 manual)",
      ("name", "status", "reason", "summary", "manual")),
+    ("refp_wait", "RF Reflected 대기 시작·끝(S32 — 한 번씩, W-22)", ("phase", "ref_w", "threshold", "max_s", "why", "level", "run_id")),
+    ("targets", "레시피 타겟 이름을 재고관리 장착 타겟으로 채움(TARGETS_FILLED, W-22)", ("g1", "g2", "level", "run_id")),
     ("list_done", "레시피 리스트 끝", ()),
     ("list_cancel", "레시피 리스트 취소", ()),
 )
@@ -182,6 +190,9 @@ EVENT_LABEL: Dict[tuple, str] = {
     ("mfc", "fs"): "유량 범위 확인", ("mfc", "fs_not_100"): "유량 범위가 100 이 아님", ("mfc", "scale"): "압력·유량 범위 확인",
     ("mfc", "verify_ok"): "설정 확인됨", ("mfc", "verify_mismatch"): "설정이 다르게 읽힘", ("mfc", "sp_readback"): "압력 SP 확인",
     ("mfc", "remote_state"): "원격 조작 상태", ("mfc", "sp_device"): "장비에 저장된 압력 SP", ("mfc", "read_plan"): "MFC 읽는 방식 바뀜",
+    ("mfc", "params_read"): "컨트롤러 값 읽음", ("mfc", "param_write"): "컨트롤러 값 바꿈",
+    ("process", "targets"): "장착 타겟 채움", ("inventory", "targets_read_failed"): "장착 타겟 읽기 실패",
+    ("inventory", "targets_read_ok"): "장착 타겟 읽기 복구", ("inventory", "targets_changed"): "장착 타겟 바뀜",
     ("dc", "identity"): "장비 확인", ("dc", "syst_err"): "장비 자체 오류 기록", ("dc", "last_state"): "전원 복귀 때 출력 설정",
     ("dc", "protection"): "과전압·과전류 보호 설정", ("dc", "out_check"): "출력 켜짐 확인",
     ("rfp", "identity"): "장비 확인", ("rfp", "auto_off"): "Reflected 자동 차단 설정", ("rfp", "auto_off_read"): "Reflected 자동 차단 읽음",
@@ -212,6 +223,9 @@ EVENT_DESC: Dict[tuple, str] = {
     ("process", "reject"): "공정을 시작하지 않았습니다. 사유를 고친 뒤 다시 시작하세요.",
     ("process", "base_reached"): "챔버가 목표 베이스 압력에 도달했습니다.",
     ("process", "heater_handover"): "공정이 끝났지만 히터를 켠 채 넘겼습니다. 히터 카드에서 끄세요.",
+    ("process", "refp_wait"): "RF Reflected 가 기준을 넘어 올리기를 멈추고 기다리기 시작했거나 끝났습니다. 오래 이어지면 공정이 멈춥니다.",
+    ("plc", "rf_uncommanded"): "프로그램이 켜지 않았는데 RF 출력이 나옵니다. RF 전원 앞면(LOCAL)에서 켰는지 확인하세요.",
+    ("plc", "rf_uncommanded_end"): "명령 없이 나오던 RF 출력이 멈췄습니다.",
     ("process", "cleanup_start"): "지난 공정이 남긴 출력을 끄기 시작했습니다.",
     ("process", "cleanup"): "지난 공정이 남긴 출력을 모두 정리했습니다.",
     ("process", "message"): "공정 중 장비 제어가 남긴 알림입니다. 경고면 내용을 확인하세요.",
@@ -256,6 +270,14 @@ EVENT_DESC: Dict[tuple, str] = {
     ("mfc", "remote_state"): "MFC 원격 조작 상태를 읽었습니다. 정보로만 남깁니다.",
     ("mfc", "sp_device"): "장비에 저장된 압력 SP 값을 읽었습니다.",
     ("mfc", "read_plan"): "MFC 읽기 속도에 따라 읽는 방식을 바꿨습니다.",
+    ("process", "targets"): "레시피에 타겟 이름이 비어 있어 재고관리의 장착 타겟으로 채웠습니다. 공정 기록에 남습니다.",
+    ("inventory", "targets_read_failed"): "재고관리에서 장착 타겟을 읽지 못했습니다. 공정은 그대로 진행합니다.",
+    ("inventory", "targets_read_ok"): "재고관리에서 장착 타겟을 다시 읽었습니다.",
+    ("inventory", "targets_changed"): "재고관리의 Gun1·Gun2 장착 타겟이 바뀌었습니다.",
+    ("uplink", "uplink_recipes"): "웹 레시피 사본을 웹과 맞췄습니다. 노트북에서 이 사본으로 레시피를 고릅니다.",
+    ("uplink", "uplink_recipes_failed"): "웹 레시피 사본을 받지 못했습니다. 노트북은 마지막 사본으로 고릅니다.",
+    ("mfc", "params_read"): "MFC 컨트롤러에 저장된 값을 읽었습니다. 장비 설정 보기의 컨트롤러 값에 보입니다.",
+    ("mfc", "param_write"): "관리자가 MFC 컨트롤러 값을 바꿨습니다. 되읽은 값이 다르면 실패로 남습니다.",
     ("dc", "identity"): "DC Power 의 형명·버전을 읽었습니다.",
     ("dc", "syst_err"): "DC Power 가 남긴 오류 기록을 읽었습니다.",
     ("dc", "last_state"): "전원이 돌아올 때 DC 출력 설정을 읽었습니다. 출력이 켜지는 설정이면 앞면에서 바꾸세요.",
@@ -321,7 +343,7 @@ _M, _D = "main", "detail"
 # event 메시지 context.source → 화면 출처 이름(5-15 — 장비 이름은 DC Power·RF Power·RF Pulse)
 EVENT_SOURCES: tuple = (
     ("process", "공정"), ("safety", "안전"), ("heater", "히터"), ("plc", "PLC"), ("mfc", "MFC"), ("dc", "DC Power"),
-    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "Ion Gauge"), ("uplink", "웹 연결"),
+    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "Ion Gauge"), ("uplink", "웹 연결"), ("inventory", "재고관리"),
 )
 _WORKERS = ("plc", "mfc", "dc", "rfpulse", "ig")
 EVENT_KINDS: tuple = (
@@ -353,6 +375,8 @@ EVENT_KINDS: tuple = (
     ("plc", "heater_config_ok", "히터 설정 확인", _D), ("plc", "heater_config_mismatch", "히터 설정 다름", _M),
     ("plc", "heater_residual_run", "히터 RUN 남음", _M), ("plc", "heater_off_pending", "히터 끄기 보류", _M),
     ("plc", "heater_off_applied", "히터 끄기 적용", _M), ("plc", "heater_off_retry", "히터 끄기 다시", _D),
+    ("process", "refp_wait", "Reflected 대기", _M),
+    ("plc", "rf_uncommanded", "명령 없는 RF 출력", _M), ("plc", "rf_uncommanded_end", "명령 없는 RF 출력 끝", _M),
     ("plc", "heater_wd_delay", "워치독 쓰기 지연", _D), ("plc", "heater_wd_recovered", "워치독 쓰기 복구", _D),
     ("plc", "blackbox", "블랙박스 기록", _D),
     ("mfc", "fs", "풀스케일", _D), ("mfc", "fs_not_100", "풀스케일 100 아님", _M), ("mfc", "scale", "눈금", _D),
@@ -360,6 +384,10 @@ EVENT_KINDS: tuple = (
     ("mfc", "sp_readback", "설정점 되읽기", _D), ("mfc", "remote_state", "원격 상태", _D),
     ("mfc", "sp_device", "설정점 장비 값", _D),
     ("mfc", "read_plan", "읽기 계획", _D),
+    ("mfc", "params_read", "컨트롤러 값 읽기", _D), ("mfc", "param_write", "컨트롤러 값 바꾸기", _M),
+    ("process", "targets", "장착 타겟 채움", _M),
+    ("inventory", "targets_read_failed", "장착 타겟 읽기 실패", _M), ("inventory", "targets_read_ok", "장착 타겟 읽기 복구", _D),
+    ("inventory", "targets_changed", "장착 타겟 바뀜", _D),
     ("dc", "identity", "장비 식별", _D), ("dc", "syst_err", "자기 진단", _D), ("dc", "last_state", "마지막 상태", _D),
     ("dc", "protection", "보호 설정", _D), ("dc", "trip", "보호 트립", _M), ("dc", "out_check", "출력 확인", _D),
     ("dc", "off_confirmed", "꺼짐 확인", _D), ("dc", "off_unconfirmed", "꺼짐 미확인", _M),
@@ -381,6 +409,7 @@ EVENT_KINDS: tuple = (
     ("uplink", "uplink_gap", "웹으로 보낼 기록 일부를 놓침", _M), ("uplink", "uplink_spool_loaded", "미전송 기록 이어서 보냄", _D),
     ("uplink", "uplink_spool_error", "미전송 보관함 쓰기 실패", _M), ("uplink", "uplink_spool_full", "미전송 보관함이 가득 참", _M),
     ("uplink", "uplink_too_large", "너무 큰 기록을 보내지 않음", _D), ("uplink", "uplink_bad_command", "읽을 수 없는 웹 명령을 버림", _D),
+    ("uplink", "uplink_recipes", "웹 레시피 사본 맞춤", _D), ("uplink", "uplink_recipes_failed", "웹 레시피 사본 받기 실패", _M),
 )
 
 
@@ -494,6 +523,22 @@ def definitions() -> Dict[str, Any]:
                    "desc": "블록을 하나씩 실행하는 공정(5-20 ③). 첫 블록이 시작하고(수동 공정 시작과 같은 조건), 블록이 끝나면 "
                            "수동 대기. 감시·안전 규칙·정지 순서는 공정과 같다. 끝내기(MANUAL_END)·STOP·ALL STOP 은 같은 정지 "
                            "순서로 모두 끈다. state.run.manual = {label, waiting, by, source, executed, outputs}"},
+        # 컨트롤러 값(W-22 E — 묶음 23). 바꾸기 범위: sp 는 0 ~ MFC_PRESSURE_FS_TORR × 1000 mTorr(max null)
+        "devParams": {"read": "DEVICE_PARAMS_READ", "write": "DEVICE_PARAM_WRITE",
+                      "writeItems": [{"item": k, "label": v["label"], "nos": [n for n in v["nos"] if n is not None],
+                                      "unit": v["unit"], "min": v["min"], "max": v["max"], "int": v["int"]}
+                                     for k, v in DP.WRITE_ITEMS.items()],
+                      "spTypes": {str(k): v for k, v in DP.SP_TYPE.items()},
+                      "autoModes": {str(k): v for k, v in DP.AUTO_MODE.items()},
+                      "limitLabels": {str(k): v for k, v in DP.LIMIT_LABEL.items()},
+                      "mfcQueries": [f"R{n}" for n in DP.MFC_QUERIES],
+                      "igItems": {f"E{k}": v for k, v in DP.IG_ITEMS.items()},
+                      "state": "state.devParams = {mfc: {state none·reading·waiting·done·failed, progress {done,total}, writing, "
+                               "readAt, values {sp[{no,pct,mtorr,type,typeText,leadS,gainPct}], autoMode, autoModeText, valveType, "
+                               "direction, rangeCode, rangeText, unitCode, unitText, fsTorr, limits[{no,label,pct}], flowFs, "
+                               "flowUnits, status, version, raw, by, why, missing}, write {item,no,label,target,old,new,ok,"
+                               "reason,by,at,cmd,readback}}, ig: {readAt, autoFilamentState, spProtectOff, autoFilament, "
+                               "autoFilamentSpTorr, ionSp1Torr, ionSp2Torr, gasFactor, sensitivity, gaugeASpTorr, gaugeBSpTorr, raw}}"},
         "adjust": {"command": "PROCESS_ADJUST", "items": [a.public() for a in BK.ADJUST_ITEMS],
                    "settleParam": "ADJUST_SETTLE_MAX_SEC"},
         "stopSequence": {"stopFixed": True, "steps": [_seq(s) for s in SR.STOP_SEQUENCE],

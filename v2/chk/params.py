@@ -268,6 +268,10 @@ PARAMS: tuple = (
                "화면 파일은 웹 W-7 에서 넣는다(127.0.0.1:LOCAL_HMI_PORT)"),
     _inst("NAS_COPY_DIR", "NAS 사본 폴더", S, r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CHK2",
           pattern=r".*", safety=L, src=_V2, desc="빈 값이면 NAS 에 복사하지 않는다. 복사는 제어 흐름과 분리된 스레드가 한다"),
+    _inst("INVENTORY_API_URL", "재고관리 장착 타겟 주소", S, "https://vanam.synology.me/inventory/api/chamber-slots",
+          pattern=r"(https?://\S+)?", safety=L, src=_V2,
+          desc="재고관리 서버의 챔버 자리 목록 주소입니다(사내망은 로그인 없이 읽음). 연결할 때·5분마다·공정 시작 때 읽어 Gun1·Gun2 장착 타겟을 "
+               "보입니다. 비우면 읽지 않습니다."),
     _inst("UPLINK_IN_SIM", "sim 에서도 웹 연결(웹 개발용)", B, False, safety=H, src=_V2, locked=True,
           desc="켜면 sim 도 웹에 연결한다(웹 단계 개발용). 진짜 장비 기록과 섞이지 않게 이때 장비 ID 가 -SIM 으로 끝나야 시작한다(아니면 시작 거부). 웹은 hello 의 "
                "runMode 로 sim 장비를 구분한다. 웹에서 바꾸지 않는다(EQUIPMENT_ID)"),
@@ -363,6 +367,9 @@ PARAMS: tuple = (
            "그 전 v1 은 30회 × 1 s)",
        desc="FLOW ON(R69 확인) 뒤 |실제 − 설정| ≤ 설정 × FLOW_ERROR_TOLERANCE 가 되기를 기다리는 시간. 넘으면 공정 중단"
             "(FLOW_STABILIZE_TIMEOUT, v1 '유량 안정화 시간 초과(100초)')"),
+    _p("ZERO_MIN_IDLE_SEC", "mfc", "영점 전 가스 멈춤 시간", "s", F, 10.0, 0.0, 600.0, safety=M, apply=LIVE, src=_V2,
+       desc="유량이 꺼지고 가스 밸브가 닫히고 MFC 밸브가 열린 상태가 이 시간 이어져야 MFC·압력 영점을 보냅니다. Ion Gauge 가 연결돼 있으면 "
+            "Gauge A 가 범위 아래여야 합니다. 아니면 영점을 건너뛰고 기록을 남깁니다."),
     _p("MFC_VALVE_SETTLE_SEC", "mfc", "MFC 밸브 이동 대기", "s", F, 5.0, 0.5, 60.0, safety=L,
        src="lib/config.py:799 (MFC_DELAY_MS_VALVE)", desc="O·C 뒤 R6 로 위치를 확인하기까지"),
     _p("MFC_SP_VERIFY_TOL", "mfc", "압력 SP(SP1·2·3·5) 설정 확인 허용 오차", "장비 단위", F, 0.01, 0.0, 1.0, safety=L,
@@ -431,12 +438,20 @@ PARAMS: tuple = (
        src="device/DCpower.py:32", desc="이후 2배씩, 최대 COMM_OUTAGE_LOG_SEC"),
 
     # ───────────── RF Power(PLC DAC/ADC) ─────────────
-    _p("RF_MAX_POWER", "rf", "RF 파워 상한(DAC 풀스케일 환산)", "W", F, 600.0, 1.0, 600.0, safety=H,
-       src="lib/config.py:561 (고정값)", desc="DAC 카운트 = (P/RF_MAX_POWER)×4000×gain + offset"),
+    _p("RF_MAX_POWER", "rf", "RF DAC 풀스케일(환산 기준)", "W", F, 600.0, 1.0, 600.0, safety=H,
+       src="lib/config.py:561 (고정값)",
+       desc="출력 환산 기준값이다. 상한으로 쓰지 않는다. 바꾸면 같은 입력에서 출력이 달라진다. DAC 카운트 = (P ÷ 이 값) × 4000 × 이득 + "
+            "오프셋이다. RF 파워 상한은 'RF 운전 상한'이다(W-22)."),
+    _p("RF_OPERATING_MAX_W", "rf", "RF 운전 상한", "W", F, 600.0, 1.0, 600.0, safety=M, apply=LIVE, src=_V2,
+       desc="RF 파워로 넣을 수 있는 최대값이다. 레시피 RF 파워, 파워 켜기 블록, 공정 중 값 바꾸기, 수동 조작이 모두 이 값으로 검사합니다."),
+    _p("RF_UNCOMMANDED_FWD_W", "rf", "RF 명령 없는 출력 기준", "W", F, 5.0, 0.5, 100.0, safety=M, apply=LIVE, src=_V2,
+       desc="프로그램이 RF 를 켜지 않았는데 Forward 가 이 값 이상이면 '명령 없이 출력 중'으로 보고 기록을 남깁니다."),
     _p("RF_FWD_FULL_SCALE_W", "rf", "RF Forward ADC 풀스케일", "W", F, 594.5, 1.0, 2000.0, safety=H,
        src="lib/config.py:558 (고정값)", desc="ADC 4000 카운트에 해당하는 Forward 파워(W)이다. 교정 상수로 v1 값이며 사용자 확인을 마쳤다(2026-10-15)"),
-    _p("RF_REF_FULL_SCALE_W", "rf", "RF Reflected ADC 풀스케일", "W", F, 200.0, 1.0, 2000.0, safety=H,
-       src="lib/config.py:559 (고정값)", desc="ADC 4000 카운트에 해당하는 Reflected 파워(W)이다. v1 값을 그대로 쓰며 사용자 확인을 마쳤다(2026-10-15)"),
+    _p("RF_REF_FULL_SCALE_W", "rf", "RF Reflected ADC 풀스케일", "W", F, 600.0, 1.0, 2000.0, safety=H, v1_default=200.0,
+       src="lib/config.py:559 (v1 200) → W-22 기본 600",
+       desc="ADC 4000 카운트에 해당하는 Reflected 파워(W)이다. 2026-11-25 실제 장비 두 점(장비 6 W·화면 2 W, 장비 9 W·화면 3 W)이 "
+            "200 기준의 3배라 기본값을 600 으로 바꿨다. 장비에 저장된 값은 설정 탭에서 바꾼다."),
     _p("RF_CAL_OFFSET", "rf", "RF DAC 보정 오프셋", "count", F, 6.79, -400.0, 400.0, safety=H,
        src="UI.py:440 (offset_edit 기본값)", desc="v1 은 화면 입력칸 값을 공정마다 썼다"),
     _p("RF_CAL_GAIN", "rf", "RF DAC 보정 이득", "배", F, 1.0395, 0.5, 1.5, safety=H,
@@ -469,6 +484,8 @@ PARAMS: tuple = (
        v1_key="RF_FAIL_MAX_TICKS", v1_period=1.0, v1_default=10, desc="v1: 10틱 × 1 s"),
     _p("RF_REFP_ABORT_THRESHOLD", "rf", "RF Reflected 대기 기준", "W", F, 3.0, 0.5, 200.0, safety=H,
        v1_default=20.0, desc="Reflected가 이 값 이상이면 대기 시작(전 구간)"),
+    _p("RF_REFP_HYST_W", "rf", "RF Reflected 대기 여유 폭", "W", F, 1.0, 0.0, 50.0, safety=M, apply=LIVE, src=_V2,
+       desc="Reflected 대기는 'RF Reflected 대기 기준'에서 이 값을 뺀 값 아래로 내려가야 풀립니다. 그 사이를 오가면 대기 시간을 이어서 셉니다."),
     _p("RF_REFP_WAIT_SEC", "rf", "RF Reflected 대기 허용", "s", I, 60, 1, 600, safety=H, v1_default=15,
         desc="RF Reflected가 'RF Reflected 대기 기준' 이상이면 올리기를 멈추고 기다리는데, 그 상태가 이 시간 이어지면 RF 를 천천히 내려 끄고 공정을 중단한다. 파워 도달 대기 한도 계산에는 이 "
              "값의 3배를 더한다."),

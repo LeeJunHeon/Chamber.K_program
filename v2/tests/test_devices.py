@@ -75,9 +75,9 @@ def test_pc_dead_plan_hold_decision():
 def test_rf_scale_confirmed():
     from v2.chk import params as P
     p = P.by_key()
-    assert p["RF_FWD_FULL_SCALE_W"].default == 594.5 and p["RF_REF_FULL_SCALE_W"].default == 200.0
+    assert p["RF_FWD_FULL_SCALE_W"].default == 594.5 and p["RF_REF_FULL_SCALE_W"].default == 600.0
     diff = [x for x in D.RF.diffs if x.item == "반사파 스케일"][0]
-    assert "확인 완료" in diff.manual and "변경 금지" not in diff.action
+    assert "2026-11-25 실제 장비 두 점" in diff.manual and "600 W" in diff.action and "변경 금지" not in diff.action   # W-22
     assert not any("전면 미터" in b for b in D.RF.bench)
 
 

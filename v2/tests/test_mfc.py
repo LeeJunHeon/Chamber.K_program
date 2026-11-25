@@ -98,7 +98,7 @@ def test_alternate_read_quality_and_age():
             assert (x["mfc.valve_pct"], x["mfc.valve_pct.q"], x["mfc.valve_pct.age_s"]) == (100.0, "ok", 0.0)
         else:
             assert (x["mfc.valve_pct"], x["mfc.valve_pct.q"], x["mfc.valve_pct.age_s"]) == (100.0, "stale", 1.0)
-    q = [d.decode().strip() for tt, d in r.sim.received][-12:]
+    q = [x for x in (d.decode().strip() for tt, d in r.sim.received) if x in ("R5", "R60", "R6")][-12:]   # 컨트롤러 값 읽기(W-22) 빼고
     assert q.count("R5") == 6 and q.count("R60") == 3 and q.count("R6") == 3
     r.done()
 

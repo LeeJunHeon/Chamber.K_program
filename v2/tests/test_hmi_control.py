@@ -1,8 +1,9 @@
 """노트북 조작(5-20 ②) — 설정 LOCAL_HMI_CONTROL(보기와 정지만·잠금을 푼 뒤 조작·항상 조작)에 따라 노트북(hmi) 경로가 받는 명령.
 
 - 보기와 정지만(view_stop) = 5-19 까지의 노트북: 정지 넷 + 공정 중 값 바꾸기·건너뛰기·일시정지·재개(hmi = always)
-- 잠금을 푼 뒤 조작·항상 조작: 그 밖에 HMI_OPERATE(공정 시작·적재 레시피 시작·해제·순서 고치기·PLC 버튼·필라멘트·히터)도
-- 설정 적용·되돌리기·레시피 적재·내부 조치는 어느 값이든 노트북에서 받지 않는다(SOURCE_NOT_ALLOWED)
+- 잠금을 푼 뒤 조작·항상 조작: 그 밖에 HMI_OPERATE(공정 시작·레시피 적재(웹 레시피 사본 id 로만 — W-22 F)·적재 레시피 시작·
+  해제·순서 고치기·PLC 버튼·필라멘트·히터)도
+- 설정 적용·되돌리기·컨트롤러 값 읽기·바꾸기·내부 조치는 어느 값이든 노트북에서 받지 않는다(SOURCE_NOT_ALLOWED)
 - 웹 경로는 설정과 상관없이 그대로. 가상 시계·시뮬레이터만(실제 포트 없음).
 """
 import pytest
@@ -17,7 +18,7 @@ from v2.tests.test_process_engine import R, SHORT
 VALUES = ("view_stop", "unlock", "always")
 ALWAYS = {"PROCESS_STOP", "ALL_STOP", "BUZZ_STOP", "HEATER_STOP", "PROCESS_ADJUST", "PROCESS_SKIP", "PROCESS_PAUSE",
           "PROCESS_RESUME"}
-OPERATE = {"PROCESS_START", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT", "PLC_BUTTON", "IG_FILAMENT", "HEATER_SV",
+OPERATE = {"PROCESS_START", "RECIPE_LOAD", "RECIPE_START", "RECIPE_CLEAR", "PROCESS_EDIT", "PLC_BUTTON", "IG_FILAMENT", "HEATER_SV",
            "HEATER_ON", "HEATER_OFF", "HEATER_RESET", "HEATER_GAS_RELEASE", "HEATER_RECIPE_RUN", "HEATER_RECIPE_STOP",
            "HEATER_RECIPE_HOLD", "HEATER_RECIPE_SKIP", "MANUAL_BLOCK", "MANUAL_END"}      # 수동 조작(5-20 ③)
 PATH = {"SOURCE_NOT_ALLOWED", "HMI_CONTROL_OFF"}
@@ -41,8 +42,9 @@ def test_command_table_marks_notebook_paths():
         assert (Source.HMI in c.sources) == bool(c.hmi), k
         if c.hmi == "operate":
             assert c.role == "operator" and Source.WEB in c.sources, k
-    for k in ("CONFIG_APPLY", "CONFIG_ROLLBACK", "RECIPE_LOAD"):
+    for k in ("CONFIG_APPLY", "CONFIG_ROLLBACK", "DEVICE_PARAMS_READ", "DEVICE_PARAM_WRITE"):
         assert by[k].hmi == "" and Source.HMI not in by[k].sources
+    assert by["RECIPE_LOAD"].hmi == "operate"                            # W-22 F — 웹 레시피 사본에서 id 로만(행 직접은 BAD_ARGS)
     assert all(not c.hmi for c in C.COMMANDS if c.role == "system")
     assert "HMI_CONTROL_OFF" in C.reason_codes()
     b = {x["kind"]: x for x in W.bundle(defaults(P.PARAMS))["commands"]}

@@ -11,6 +11,8 @@
   A·B 뒤 IG_FILAMENT_E_BLOCK_MS(1 s)는 E 를 보내지 않는다. 글자 사이는 IG_CHAR_GAP_MS(50 ms, 매뉴얼) 이상 띄운다. B 뒤 IG_RELIGHT_LOCKOUT_SEC 안의 A 는 그만큼 늦춘다.
 연결: F 로 신원 확인('가수 지수' 한 줄) — 아니면 연결 실패.
 bench: A·B 는 worker 가 BENCH_READ_ONLY 로 거부, E·F 는 허용.
+컨트롤러 값(W-22 E): E 의 10·15~23 항목(자동 필라멘트·셋포인트·가스 계수·감도)도 풀어 둔다(IgReading — 읽기만, 바꾸는 명령 없음).
+  화면 값은 dev_params.ig_view, 읽은 시각은 last_wall.
 """
 from __future__ import annotations
 
@@ -143,6 +145,17 @@ class IgReading:
     gas_factor: float
     sensitivity: float
     raw: Tuple[str, str, str]
+    # 컨트롤러 값(W-22 E — 읽기만): 10 필라멘트 상태(자동), 15 셋포인트 보호 해제, 16 자동 필라멘트, 17 자동 필라멘트 SP,
+    # 18·19 이온 SP1·SP2, 22·23 게이지 A·B SP(셋포인트는 xy z = xy × 10^(z−2) Torr). 형식이 다르면 None
+    auto_filament_state: Optional[int] = None
+    sp_protect_off: Optional[bool] = None
+    auto_filament: Optional[bool] = None
+    sp_auto_filament: Optional[float] = None
+    sp_ion1: Optional[float] = None
+    sp_ion2: Optional[float] = None
+    sp_a: Optional[float] = None
+    sp_b: Optional[float] = None
+    items: Tuple[str, ...] = ()
 
 
 def parse_status(lines: List[str]) -> IgReading:
@@ -158,12 +171,27 @@ def parse_status(lines: List[str]) -> IgReading:
         except ValueError:
             raise IgParseError(f"{n}번 항목이 정수가 아님: {it[n - 1]!r}")
 
+    def _opt_int(n: int) -> Optional[int]:
+        try:
+            return int(it[n - 1])
+        except ValueError:
+            return None
+
+    def _sp(n: int) -> Optional[float]:
+        try:
+            return setpoint_from_pair(it[n - 1])
+        except IgParseError:
+            return None
+
     fil = _int(2) == 1
     ion = pressure_from_pair(it[23], "ion", fil)
     a = pressure_from_pair(it[24], "conv")
     b = pressure_from_pair(it[25], "conv")
+    prot, auto = _opt_int(15), _opt_int(16)
     return IgReading(ion[0], a[0], b[0], ion[1], a[1], b[1], _int(1) == 1, fil, _int(3) == 1, _int(5),
-                     _int(20) / 100.0, _int(21) / 10.0, (it[23], it[24], it[25]))
+                     _int(20) / 100.0, _int(21) / 10.0, (it[23], it[24], it[25]),
+                     _opt_int(10), None if prot is None else prot == 1, None if auto is None else auto == 1,
+                     _sp(17), _sp(18), _sp(19), _sp(22), _sp(23), tuple(it))
 
 
 # ───────── 드라이버 ─────────
@@ -182,6 +210,7 @@ class IgDriver:
         self.writes_allowed = writes_allowed
         self.on_event = on_event
         self.last: Optional[IgReading] = None
+        self.last_wall: Optional[float] = None          # 마지막 E 를 푼 벽시계 시각(컨트롤러 값 읽은 시각, W-22 E)
         self.last_result: Optional[tuple] = None    # (on/off, 성공, 문구, 시각) — 마지막 필라멘트 결과
         self.emission_since: Optional[float] = None    # 방출이 처음 확인된 벽시계 시각(베이스 판정의 안정화 기준)
         self._e_block_until = -1.0
@@ -248,6 +277,7 @@ class IgDriver:
             self._emit("parse_error", str(e), "DEVICE_REJECTED")
             raise
         self.last = r
+        self.last_wall = self.clock.wall()
         if r.filament and r.emission:
             if self.emission_since is None:
                 self.emission_since = self.clock.wall()

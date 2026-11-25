@@ -10,6 +10,8 @@
                         연결 때 최신 state 하나 + 최근 메시지(state 제외 — Last-Event-ID 가 있으면 그 뒤부터).
                         15 s 마다 keep-alive 주석. 동시 연결 상한 SSE_MAX(넘으면 503).
   POST /api/v1/command  {id?, kind, args} → ChkCore.command(source=HMI) → {id, ok, reason, detail(거부 이유 문구, 없으면 "")}. 결과는 cmd_result 메시지로도.
+  GET  /api/v1/recipes  웹 레시피 사본 목록(W-22 F — recipe_copy.summary: 웹과 맞춘 시각·종류·이름·행 수·웹 수정 시각·웹 검사 결과)
+  GET  /api/v1/recipes/<id>  사본 하나 전체(행·가스) — 노트북의 요약·검사 보기, '값을 넣어 바로 시작' 채우기
   GET  / · 정적 파일    LOCAL_HMI_STATIC_DIR — 비면 이 저장소의 v2/hmi(폴더 밖 경로 404). 폴더가 비면(.gitkeep 만) 안내 페이지
                         (화면 파일은 웹 W-7 에서 넣는다).
 bench 에서는 쓰기 명령이 BENCH_READ_ONLY — hello 의 runMode·writesAllowed 로 알 수 있다.
@@ -193,6 +195,12 @@ def _handler(srv: LocalServer):
                 return self._json(200, srv.schema())
             if path == "/api/v1/stream":
                 return self._stream()
+            rc = getattr(srv.system, "recipe_copy", None)
+            if path == "/api/v1/recipes" and rc is not None:
+                return self._json(200, rc.summary())
+            if path.startswith("/api/v1/recipes/") and rc is not None:
+                r = rc.get(unquote(path[len("/api/v1/recipes/"):]))
+                return self._json(200, r) if r is not None else self._json(404, {"error": "not_found"})
             if path.startswith("/api/"):
                 return self._json(404, {"error": "not_found"})
             f = srv.static_file(path)

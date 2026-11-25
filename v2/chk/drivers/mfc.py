@@ -28,6 +28,10 @@
     MFC_LINK_RETRY_MS 마다 다시(v1 — 포트가 닫혀 있으면 큐에서 기다림). 영점(L5~L8 1, Z1)은 되읽기 없음.
   횟수·간격 4개(MFC_QUERY_RETRIES·MFC_VERIFY_RETRY_MS·MFC_VERIFY_TRIES·MFC_LINK_RETRY_MS)는 설치값 — 기본값 = v1 값.
 bench: 질의(R…)만 — 설정 명령은 worker 거부 + 드라이버 이중 보호.
+컨트롤러 값(W-22 E — dev_params): 연결 뒤 한 번·DEVICE_PARAMS_READ 때 장비 안의 설정값(SP 값·종류·Gain·P.Lead·자동 제어 방식·
+  밸브·센서·공정 한계·유량 범위·상태·버전)을 질의로 읽는다. 1초 읽기에는 넣지 않는다 — source_read 가 끝난 뒤 그 초에 남는 시간에만
+  읽기 요청 하나(질의 여러 개, 다음 tick 전에 끝나게)를 넣고, 공정·수동 조작 중이거나 설정 명령이 진행 중이면 미룬다(params_state
+  waiting). 바꾸기(param_write)는 쓰기 → 되읽기 비교(MFC_VERIFY_TRIES 회, 다르면 다시 쓰기) → param_write 이벤트(누가·항목·이전 → 새 값·결과).
 """
 from __future__ import annotations
 
@@ -39,6 +43,7 @@ from v2.common.transport import Cancelled
 from v2.common.worker import Request, Result, Status, Worker
 from v2.chk.process_steps import MFC_CMD_GUARD_S
 from v2.chk.drivers.readplan import ReadPlan
+from v2.chk import dev_params as DP
 
 CH_AR, CH_O2 = 1, 2
 L0_TRIES = 2               # v1 _set_onoff_mask_and_verify max_attempts=2
@@ -127,6 +132,7 @@ class MfcDriver:
         self.scale_mismatch: Optional[str] = None      # 연결 때 R33·R34·R74·R75·R37 대조 — 다르면 공정 시작 거부
         self.scale_raw: Dict[int, Optional[str]] = {}
         self.onoff_at_connect: Optional[str] = None     # 연결 때 R69 'bbbb'
+        self.onoff_bits: Optional[str] = None           # 마지막으로 확인된 ON/OFF 마스크(연결 때 R69·L0 확인 뒤) — 영점 보호(W-22)
         self.read_plan = ReadPlan(cfg, "MFC")             # 읽기 계획(5-20 ① — auto 면 느려지면 번갈아, 빨라지면 매초)
         self._q_lat = 0.0                               # 마지막 질의의 응답 시간(보낸 뒤 응답까지, s)
         self.ar_set: Optional[float] = None
@@ -147,6 +153,13 @@ class MfcDriver:
         self._ops = 0                                   # 진행 중인 설정 명령(_op) 수 — 0 이 아니면 기록용 읽기(R6)가 양보
         self._ops_until = 0.0                           # 양보 기한 — 끝 콜백을 못 받은 명령이 R6 를 영영 막지 않게(스텝 한도)
         self.valve_yielded = 0                          # 양보해서 R6 를 보내지 않은 tick 수(시험·점검용)
+        # 컨트롤러 값(W-22 E) — 읽기 상태는 워커 스레드가 바꾸고, 화면 값(params_view)은 통째로 바꿔 넣는다(허브가 읽기만)
+        self._pr: Optional[Dict[str, Any]] = None       # 진행 중 읽기 {todo, raw, by, why, busy, total}
+        self._pr_raw: Dict[int, Optional[str]] = {}      # 마지막으로 읽은 원문(R 번호 → 응답)
+        self.params_view: Optional[Dict[str, Any]] = None   # 마지막 읽기 화면 값 + readAt
+        self.params_state = "none"                       # none / reading / waiting / done / failed
+        self.params_write: Optional[Dict[str, Any]] = None  # 마지막 바꾸기 결과
+        self.params_writing = False
         worker.on_connect = self._on_connect
 
     def _emit(self, kind: str, detail: str, reason: Optional[str] = None) -> None:
@@ -196,9 +209,12 @@ class MfcDriver:
     # ───────── 연결 ─────────
     def _on_connect(self, session) -> None:
         self._last_cmd = -1e9
+        self._conn_raw: Dict[int, Optional[str]] = {}    # 연결 때 읽은 원문 — 연결 뒤 컨트롤러 값 읽기가 다시 묻지 않게(W-22 E)
         for ch, key in ((CH_AR, "MFC_AR_FS_SCCM"), (CH_O2, "MFC_O2_FS_SCCM")):
             try:
-                v = parse_prefixed(self._query(session, f"R{69 + ch}"), f"W{ch}")
+                ans = self._query(session, f"R{69 + ch}")
+                self._conn_raw[69 + ch] = ans
+                v = parse_prefixed(ans, f"W{ch}")
             except Cancelled:
                 raise
             except Exception:
@@ -217,14 +233,17 @@ class MfcDriver:
                 raise
             except Exception:
                 ans = None
+            self._conn_raw[DP.SP_Q[n]] = ans
             self._store_device_sp(n, ans, "연결")
         self._sp_refresh_t = self.clock.monotonic()
         try:                                              # 연결 때 ON/OFF(S51 남은 가스 판단 — 읽기만)
             self.onoff_at_connect = parse_r69(self._query(session, "R69"))
+            self.onoff_bits = self.onoff_at_connect if len(self.onoff_at_connect or "") == 4 else None
         except Cancelled:
             raise
         except Exception:
             self.onoff_at_connect = None
+        self._params_after_connect()
         odd = [f"ch{ch}={v:g}" for ch, v in self.fs.items() if abs(v - 100.0) > 1e-9]
         if odd:
             self._emit("fs_not_100", "MFC 풀스케일이 100 이 아님(" + ", ".join(odd) + "). v1 레시피 유량이 %FS 였을 수 있으니 "
@@ -313,10 +332,13 @@ class MfcDriver:
         if changed:
             self._emit_plan(changed, ms)
         self._refresh_sp(session, self.clock.monotonic())  # ㉣ 계획 판단(took) 뒤 — 갱신 읽기는 번갈아 읽기 판단에 넣지 않는다
+        bits = self.onoff_bits if isinstance(self.onoff_bits, str) and len(self.onoff_bits) == 4 else None
+        out.update({"mfc.ar_on": None if bits is None else bits[0] == "1", "mfc.o2_on": None if bits is None else bits[1] == "1"})
         out.update({"mfc.ar_set": self.ar_set, "mfc.o2_set": self.o2_set, "mfc.sp_active": self.sp_active,
                     "mfc.sp_mtorr": self.sp_mtorr, "mfc.sp_sel_mtorr": self.sp_sel_mtorr(),
                     "mfc.read_plan": plan, "mfc.valve_read": valve})
         out.update({f"mfc.sp{n}_dev_mtorr": self.sp_device.get(n) for n in SP_READ_CMD})
+        self._params_kick(session)                        # 컨트롤러 값 — 이 행은 기다리지 않는다(요청만 넣음, W-22 E)
         return out
 
     def _emit_plan(self, plan: str, ms: Optional[float]) -> None:
@@ -394,6 +416,138 @@ class MfcDriver:
         except Exception:
             return None, "no_reply"
         return (None, "no_reply") if v is None else (round(v, 1), "read")
+
+    # ───────── 컨트롤러 값(W-22 E) ─────────
+    def params_request(self, by: str = "", why: str = "요청") -> None:
+        """DEVICE_PARAMS_READ — 전부 다시 읽기. 읽는 중이면 처음부터 다시(남은 것 + 이미 읽은 것)."""
+        self._pr = {"todo": list(DP.MFC_QUERIES), "raw": {}, "by": by, "why": why, "busy": False,
+                    "total": len(DP.MFC_QUERIES)}
+        self.params_state = "waiting" if not self.idle() else "reading"
+
+    def _params_after_connect(self) -> None:
+        """연결 뒤 한 번 — 연결 때 읽은 질의(SP 값·FS·눈금·상태)는 그 응답을 쓰고 나머지만 묻는다."""
+        raw = dict(getattr(self, "_conn_raw", {}) or {})
+        raw.update({n: v for n, v in (self.scale_raw or {}).items()})
+        todo = [n for n in DP.MFC_QUERIES if n not in raw]
+        self._pr = {"todo": todo, "raw": {n: raw.get(n) for n in DP.MFC_QUERIES if n in raw}, "by": "", "why": "연결",
+                    "busy": False, "total": len(DP.MFC_QUERIES)}
+        self.params_state = "reading" if self.idle() else "waiting"
+
+    def _params_kick(self, session) -> None:
+        """source_read 끝에서 — 남은 질의가 있으면 이번 초의 남는 시간에 읽기 요청 하나를 넣는다(행은 기다리지 않음).
+        공정·수동 조작 중이거나 설정 명령이 진행 중이면 미룬다(waiting). 요청은 다음 tick 읽기 전에 끝나게 마감을 둔다."""
+        pr = self._pr
+        if pr is None or pr["busy"]:
+            return
+        now = self.clock.monotonic()
+        if not self.idle() or (self._ops > 0 and now < self._ops_until):
+            self.params_state = "waiting"
+            return
+        tick0 = session.deadline - float(self.cfg["MFC_READ_DEADLINE_MS"]) / 1000.0
+        end = tick0 + 1.0 - self.gap_s                       # 다음 tick 의 첫 질의가 명령 간격을 지킬 수 있게
+        if max(now, self._last_cmd + self.gap_s) + self.q_timeout_s > end:
+            return
+        pr["busy"] = True
+        self.params_state = "reading"
+        self.worker.submit(Request("read", lambda s: self._params_batch(s, pr, end), deadline=end,
+                                   on_done=lambda r: self._params_done(pr, r), name="mfc:params", confirms_link=False))
+
+    def _params_batch(self, session, pr: Dict[str, Any], end: float) -> None:
+        while pr["todo"]:
+            now = self.clock.monotonic()
+            if max(now, self._last_cmd + self.gap_s) + self.q_timeout_s > end or self._ops > 0 or not self.idle():
+                return
+            n = pr["todo"][0]
+            try:
+                ans: Optional[str] = self._query(session, f"R{n}")
+            except Cancelled:
+                raise
+            except Exception:
+                ans = None                                  # 무응답 — 그 값만 모름(다른 값은 계속 읽는다)
+            pr["raw"][n] = ans or None
+            pr["todo"].pop(0)
+
+    def _params_done(self, pr: Dict[str, Any], r: Result) -> None:
+        pr["busy"] = False
+        if pr is not self._pr:                              # 그 사이 새 읽기 요청 — 이 결과는 버린다
+            return
+        if pr["todo"]:
+            return                                          # 다음 tick 에 이어서
+        self._pr = None
+        self._pr_raw.update(pr["raw"])
+        view = DP.mfc_view(self._pr_raw, float(self.cfg["MFC_PRESSURE_FS_TORR"]))
+        got = sum(1 for n in DP.MFC_QUERIES if pr["raw"].get(n))
+        missing = [f"R{n}" for n in DP.MFC_QUERIES if not pr["raw"].get(n)]
+        view.update({"readAt": self.clock.wall(), "by": pr["by"] or None, "why": pr["why"],
+                     "missing": missing})
+        self.params_view = view
+        self.params_state = "done" if not missing else ("failed" if got == 0 else "done")
+        who = f" · {pr['by']}" if pr["by"] else ""
+        if missing:
+            self._emit("params_read", f"컨트롤러 값을 읽었습니다({pr['why']}{who}) · {got}/{len(DP.MFC_QUERIES)}개 · 못 읽음 "
+                       + ", ".join(missing[:8]) + (" …" if len(missing) > 8 else ""))
+        else:
+            self._emit("params_read", f"컨트롤러 값을 읽었습니다({pr['why']}{who}) · {got}개")
+
+    def params_progress(self) -> Optional[Dict[str, int]]:
+        pr = self._pr
+        return None if pr is None else {"done": pr["total"] - len(pr["todo"]), "total": pr["total"]}
+
+    def param_write(self, item: str, no: Optional[int], value: float, by: str = "", on_done=None) -> None:
+        """DEVICE_PARAM_WRITE — 쓰기 → 되읽기 비교(MFC_VERIFY_TRIES 회, 읽혔는데 다르면 다시 쓰기). 끝나면 param_write 이벤트."""
+        fs_t = float(self.cfg["MFC_PRESSURE_FS_TORR"])
+        cmd, rq, parse, same = DP.write_plan(item, no, value, fs_t)
+        label = DP.item_label(item, no)
+        old = DP.mfc_value(self.params_view, item, no)
+        st: Dict[str, Any] = {"ans": None, "got": None}
+        tries = self.verify_tries
+        self.params_writing = True
+
+        def gen():
+            if item == "sp":
+                self.sp_written.pop(no, None)
+                self.sp_device.pop(no, None)
+            yield ("w", cmd)
+            for k in range(1, tries + 1):
+                ans = yield ("q", rq)
+                st["ans"], st["got"] = ans, parse(ans)
+                if same(st["got"]):
+                    return
+                if k >= tries:
+                    raise MfcVerifyError(f"{label}: {cmd} 뒤 {rq} = {ans!r} ({tries}회)")
+                yield ("sleep", self.verify_retry_s)
+                if st["got"] is not None:
+                    yield ("w", cmd)                         # 값이 읽혔는데 다름 → 다시 쓰기(무응답·형식 다름은 다시 읽기만)
+
+        def done(name, reason, results):
+            self.params_writing = False
+            ok = reason is None
+            if st["ans"] is not None:
+                self._pr_raw[int(rq[1:])] = st["ans"]
+                view = DP.mfc_view(self._pr_raw, fs_t)
+                prev = self.params_view or {}
+                view.update({k: prev.get(k) for k in ("readAt", "by", "why", "missing")})
+                self.params_view = view
+            if item == "sp" and ok:
+                self.sp_written[no] = round(float(value), 3)
+                self.sp_device[no] = round(float(value), 3)
+                if no == 1:
+                    self.sp_mtorr = float(value)
+            new = st["got"]
+            self.params_write = {"item": item, "no": no, "label": label, "target": value, "old": old, "new": new,
+                                 "ok": ok, "reason": reason, "by": by or None, "at": self.clock.wall(), "cmd": cmd,
+                                 "readback": st["ans"]}
+            who = f"{by} · " if by else ""
+            if ok:
+                self._emit("param_write", f"컨트롤러 값을 바꿨습니다 · {who}{label} · {DP.value_text(item, old)} → "
+                                          f"{DP.value_text(item, new)}")
+            else:
+                self._emit("param_write", f"컨트롤러 값을 바꾸지 못했습니다 · {who}{label} · {DP.value_text(item, old)} → 목표 "
+                                          f"{DP.value_text(item, value)} · 되읽은 값 {DP.value_text(item, new)} ({reason})",
+                           "DEVICE_PARAM_MISMATCH")
+            if on_done:
+                on_done(name, reason, results)
+        self._op(f"param_{item}{no or ''}", gen(), done)
 
     # ───────── 쓰기(v1 재시도 — 한 I/O 씩 worker 요청) ─────────
     def _op(self, name: str, gen, on_done=None) -> None:
@@ -512,8 +666,10 @@ class MfcDriver:
     def _l0_gen(self, name: str, bits: str):
         """L0 쓰기 → R69 확인, 다르면 L0 1회 다시(v1 _set_onoff_mask_and_verify, MFC.py:1131-1170)."""
         cmd = f"L0{bits}"
+        self.onoff_bits = None                           # 보내는 동안은 모름
         yield ("w", cmd)
         yield from self._verify_loop(name, "R69", lambda a: parse_r69(a or "") == bits, L0_TRIES, resend=cmd)
+        self.onoff_bits = bits
 
     def set_onoff(self, bits: str, on_done=None) -> None:
         if not re.fullmatch(r"[01]{4}", bits):

@@ -167,6 +167,23 @@ class MfcSim(SimDevice):
         if m:
             self.sp[int(m.group(1)) - 1] = float(m.group(2))
             return
+        # 컨트롤러 값 바꾸기(W-22 E) — Gain M1~M5·P.Lead X1~X5·자동 제어 방식 V0/V1·공정 한계 P1~P4(되읽기 R46~R50·R41~R45·R51·R11~R14)
+        m = re.fullmatch(r"M([1-5])\s+(\d+)", cmd)
+        if m:
+            self.info[45 + int(m.group(1))] = f"M{m.group(1)}+{int(m.group(2))}"
+            return
+        m = re.fullmatch(r"X([1-5])\s+(\d+(?:\.\d+)?)", cmd)
+        if m:
+            self.info[40 + int(m.group(1))] = f"X{m.group(1)}+{float(m.group(2)):.2f}"
+            return
+        m = re.fullmatch(r"V([01])", cmd)
+        if m:
+            self.info[51] = f"V{m.group(1)}"
+            return
+        m = re.fullmatch(r"P([1-4])\s+(\d+(?:\.\d+)?)", cmd)
+        if m:
+            self.info[10 + int(m.group(1))] = f"P{m.group(1)}+{float(m.group(2)):.2f}"
+            return
         m = re.fullmatch(r"D([1-5])", cmd)
         if m:
             self.sp_sel = int(m.group(1))

@@ -4,7 +4,7 @@
   - 1초 tick 읽기는 스냅샷 묶기(SnapshotBus)의 소스 read 로, 그 사이 250 ms 내부 폴링은 PlcFastPoller 가 한다.
   - 값 이름·주소는 snapshot_fields 의 plc·heater·rf 블록 source("plc:<devices.PLC_ADDRS 이름>")를 그대로 따른다.
   - 온도 레지스터는 부호 있는 0.1 °C(-1 = 센서 이상 → None). RF: 순방향 ADC 4000 = RF_FWD_FULL_SCALE_W(594.5 W),
-    반사 ADC 4000 = RF_REF_FULL_SCALE_W(200 W) — 사용자 확인값.
+    반사 ADC 4000 = RF_REF_FULL_SCALE_W(기본 600 W — W-22, 2026-11-25 실제 장비 두 점이 200 기준의 3배).
 쓰기는 모두 worker 의 write·safety 요청으로만 — bench 에서는 worker 가 BENCH_READ_ONLY 로 거부하고,
   그와 별도로 이 드라이버의 Modbus 클라이언트도 읽기 전용이 된다(연결 초기화의 쓰기까지 막는 이중 보호).
 연결할 때(prod·sim): 보류된 히터 OFF 적용 → 히터 한계값 쓰기 + 되읽기 확인(S13) → 재기동 감지 마커 쓰기.
@@ -180,8 +180,25 @@ class PlcDriver:
         out["heater.current_est"] = round(heater_est_current(out["heater.mv"], cfg), 1)
         out["plc.marker_ok"] = None if self._marker is None else (regs[cfg["PLC_SESSION_MARK_REG"]] == self._marker)
         out["rf.set_w"] = self._rf_set_w
-        out["rf.out_on"] = D.rf_output_on(out.get("rf.dac"), out.get("rf.fwd_w"))   # 표시용(5-21 ②)
+        out["rf.out_on"] = D.rf_output_on(out.get("rf.dac"), out.get("rf.fwd_w"))   # 호환용(5-21 ② — 화면은 cmd_on·uncommanded)
+        # W-22 — 명령으로 켠 출력 = DAC 출력 허용(M00200) 켜짐 그리고 DAC 설정값(D00040) > 0, 명령 없이 출력 = 그 밖인데 Forward ≥ 기준
+        en, dac, fwd = out.get("rf.dac_enable"), out.get("rf.dac"), out.get("rf.fwd_w")
+        cmd_on = None if en is None or dac is None else (en is True and dac > 0)
+        out["rf.cmd_on"] = cmd_on
+        out["rf.uncommanded"] = None if cmd_on is None or fwd is None else (not cmd_on and fwd >= float(cfg["RF_UNCOMMANDED_FWD_W"]))
         return out
+
+    def rf_uncommanded_track(self, row: Dict[str, Any]) -> None:
+        """명령 없는 RF 출력(W-22) — 시작·끝 때 사건 한 번씩(표시 값과 같은 판정)."""
+        u = row.get("rf.uncommanded")
+        if u is None or u == getattr(self, "_rf_unc", False):
+            return
+        self._rf_unc = u
+        if u:
+            self._emit("rf_uncommanded", f"RF 가 명령 없이 출력 중 — RF 전원 앞면(LOCAL)에서 켰는지 확인 · Forward {row.get('rf.fwd_w')} W",
+                       "RF_UNCOMMANDED", fwd_w=row.get("rf.fwd_w"))
+        else:
+            self._emit("rf_uncommanded_end", "명령 없는 RF 출력 끝", "RF_UNCOMMANDED_END", fwd_w=row.get("rf.fwd_w"))
 
     def _after_poll(self, poll: PlcPoll) -> None:
         self.last = poll
@@ -216,7 +233,9 @@ class PlcDriver:
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
         """스냅샷 묶기의 소스 read — 정각 회차 폴링."""
-        return dict(self._poll(session).values)
+        vals = dict(self._poll(session).values)
+        self.rf_uncommanded_track(vals)
+        return vals
 
     def fast_poll_request(self) -> Request:
         return Request("read", self._poll, deadline=self.clock.monotonic() + self.cfg["PLC_READ_DEADLINE_MS"] / 1000.0,
