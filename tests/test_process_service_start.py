@@ -54,6 +54,8 @@ class FakePorts:
     def show_manual_inputs(self, inputs): self._r("show_manual_inputs", inputs)   # B1
     def apply_params_to_ui(self, params): self._r("apply_params_to_ui", params)
     def build_csv_params(self, row): return self._r("build_csv_params", row)
+    # 재고관리 타겟 채우기 — 부른 순서(calls)에는 남기지 않는다(기존 순서 시험이 그대로). 문장은 ret["fill_targets"]
+    def fill_targets(self, params): return list(self.ret.get("fill_targets") or [])
     def check_csv_row(self, row): return self._r("check_csv_row", row)            # E3
     def open_process_log(self, prefix): self._r("open_process_log", prefix)
     def reset_stats(self): self._r("reset_stats")
