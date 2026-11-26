@@ -283,17 +283,17 @@ def test_bundle_exports_new_keys_choices_and_groups():
     for k, bauds in BAUDS.items():
         assert ps[k]["type"] == "int" and ps[k]["choices"] == list(bauds) and ps[k]["enum"] is None
         assert ps[k]["scope"] == "install" and ps[k]["apply"] == "restart"
-        assert "PC 쪽 설정이다. 장비 쪽도 같은 값이어야 한다" in ps[k]["desc"]
+        assert "PC 쪽 설정이므로 장비 쪽도" in ps[k]["desc"] and "같은 값으로 맞춰야 합니다" in ps[k]["desc"]
     assert ps["PLC_STOPBITS"]["choices"] == [1, 2] and ps["PLC_STOPBITS"]["type"] == "int"
     assert ps["PLC_PARITY"]["enum"] == ["none", "even", "odd"] and ps["PLC_PARITY"]["choices"] is None
     assert ps["DC_DELIMITER"]["enum"] == ["LF", "CR", "CRLF"] and ps["DC_DELIMITER"]["default"] == "LF"
     assert ps["FLOW_ERROR_SEC"]["choices"] is None                                   # 그 밖의 키는 목록 없음
     for k in ("PLC_PARITY", "PLC_STOPBITS", "PLC_SLAVE_ID", "DC_DELIMITER", "RFPULSE_PARITY", "RFPULSE_ADDR"):
-        assert "PC 쪽 설정이다. 장비 쪽도 같은 값이어야 한다" in ps[k]["desc"], k
+        assert "PC 쪽 설정이므로 장비 쪽도" in ps[k]["desc"] and "같은 값으로 맞춰야 합니다" in ps[k]["desc"], k
     for k, where in (("PLC_BAUD", "XG5000 기본 파라미터 Cnet"), ("DC_BAUD", "앞면 I/O 메뉴"), ("RFPULSE_BAUD", "앞면"),
                      ("IG_BAUD", "내부 DIP S1"), ("MFC_BAUD", "장비 메뉴")):
-        assert where in ps[k]["desc"], k
-    assert "unit address is always 1" in ps["RFPULSE_ADDR"]["desc"] and ps["RFPULSE_ADDR"]["default"] == 1
+        assert where in ps[k]["desc"] + ps[k]["note"], k                       # W-23 D: 장비 쪽 이름은 note 에도
+    assert "unit address is always 1" in ps["RFPULSE_ADDR"]["note"] and ps["RFPULSE_ADDR"]["default"] == 1
     assert (ps["RFPULSE_ADDR"]["min"], ps["RFPULSE_ADDR"]["max"]) == (0, 31)
     for k in NEW_TIMING:
         assert k in ps, k

@@ -66,6 +66,7 @@ IMPLEMENTED_IN: Dict[str, str] = {
     "S46": "on_hold", "S47": "recipe.check_process_row", "S48": "config_store.apply",
     "S49": "engine", "S50": "drivers/dc.py 연결 초기화(DC_SET_PROTECTION)",
     "S51": "ChkSafety.first_read(장비별 첫 정상 행 — 프로그램이 켜진 뒤 한 번)",
+    "S52": "engine(W-23 — MFC 통신 두절)",
 }
 
 # 표와 평가 위치가 다른 규칙(이유)
@@ -379,6 +380,7 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
           states=ACT, applies=lambda c: c.watching("flow"), block="mfc"),
         L("S38B", "notify", "tick", lambda v, c: _pressure_dev(C, v, c), _fixed(_note("warn", "PRESSURE_DEVIATION")), _p("MFC_PRESSURE_WARN_SEC"),
           states=ACT, applies=lambda c: c.watching("pressure"), block="mfc"),
+        L("S52", "abort", "tick", _age_ge(C, "mfc", "MFC_COMM_LOSS_ABORT_SEC"), _fixed(_abort("MFC_COMM_LOSS")), states=ACT),
         L("S39B", "abort", "tick", _age_ge(C, "ig", "IG_COMM_LOSS_ABORT_SEC", skip_suppressed=True),
           _fixed(_abort("IG_COMM_LOST")), states=ACT, applies=lambda c: c.block_type == "base_wait"),
         L("S49", "abort", "tick", g("rfp.itl_open"), _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_FAULT")), states=ACT,

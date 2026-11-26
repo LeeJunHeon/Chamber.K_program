@@ -160,6 +160,9 @@ class MfcDriver:
         self.params_state = "none"                       # none / reading / waiting / done / failed
         self.params_write: Optional[Dict[str, Any]] = None  # 마지막 바꾸기 결과
         self.params_writing = False
+        self._pr_done_t: Optional[float] = None          # 마지막 읽기를 끝낸 시각(주기 다시 읽기 — W-23 H6)
+        self._pr_busy_seen = False                       # 공정·수동 조작을 본 뒤 — 끝나면 한 번 다시 읽기
+        self._prog_touched: set = set()                  # 앞 읽기 뒤 프로그램이 쓴 질의 번호(바뀜 경고에서 뺀다)
         worker.on_connect = self._on_connect
 
     def _emit(self, kind: str, detail: str, reason: Optional[str] = None) -> None:
@@ -436,11 +439,23 @@ class MfcDriver:
     def _params_kick(self, session) -> None:
         """source_read 끝에서 — 남은 질의가 있으면 이번 초의 남는 시간에 읽기 요청 하나를 넣는다(행은 기다리지 않음).
         공정·수동 조작 중이거나 설정 명령이 진행 중이면 미룬다(waiting). 요청은 다음 tick 읽기 전에 끝나게 마감을 둔다."""
+        now = self.clock.monotonic()
+        idle = self.idle()
+        if not idle:
+            self._pr_busy_seen = True
+        elif self._pr is None:                            # 자동 다시 읽기(W-23 H6) — 공정·수동 조작이 끝난 뒤 한 번, 대기 중 주기
+            period = float(self.cfg.get("DEVICE_PARAMS_REFRESH_MIN", 0) or 0) * 60.0
+            if self._pr_busy_seen:
+                self._pr_busy_seen = False
+                self.params_request(why="공정 끝")
+            elif period > 0 and self._pr_done_t is not None and now - self._pr_done_t >= period:
+                self.params_request(why="주기")
+        elif self._pr_busy_seen and len(self._pr["todo"]) == len(DP.MFC_QUERIES):
+            self._pr_busy_seen = False                    # 미뤄 둔 읽기가 아직 하나도 읽지 않았다 — 공정 끝 뒤에 전부 읽으므로 따로 안 읽는다
         pr = self._pr
         if pr is None or pr["busy"]:
             return
-        now = self.clock.monotonic()
-        if not self.idle() or (self._ops > 0 and now < self._ops_until):
+        if not idle or (self._ops > 0 and now < self._ops_until):
             self.params_state = "waiting"
             return
         tick0 = session.deadline - float(self.cfg["MFC_READ_DEADLINE_MS"]) / 1000.0
@@ -474,8 +489,16 @@ class MfcDriver:
         if pr["todo"]:
             return                                          # 다음 tick 에 이어서
         self._pr = None
+        self._pr_done_t = self.clock.monotonic()
+        prev = self.params_view
         self._pr_raw.update(pr["raw"])
         view = DP.mfc_view(self._pr_raw, float(self.cfg["MFC_PRESSURE_FS_TORR"]))
+        # 앞 읽기와 달라진 값 중 프로그램이 쓰지 않은 것 — 장비 앞면에서 바꿨을 수 있다(W-23 H6, 경고 한 줄)
+        diffs = DP.diff_views(prev, view, skip=self._prog_touched, read=set(n for n in DP.MFC_QUERIES if pr["raw"].get(n)))
+        self._prog_touched = set()
+        if prev is not None and diffs:
+            self._emit("params_changed", "컨트롤러 값이 바뀌었습니다 · " + " · ".join(f"{k} {a} → {b}" for k, a, b in diffs[:6])
+                       + (" …" if len(diffs) > 6 else "") + " — 장비 앞면에서 바꿨는지 확인하세요", "DEVICE_PARAMS_CHANGED")
         got = sum(1 for n in DP.MFC_QUERIES if pr["raw"].get(n))
         missing = [f"R{n}" for n in DP.MFC_QUERIES if not pr["raw"].get(n)]
         view.update({"readAt": self.clock.wall(), "by": pr["by"] or None, "why": pr["why"],
@@ -502,6 +525,7 @@ class MfcDriver:
         st: Dict[str, Any] = {"ans": None, "got": None}
         tries = self.verify_tries
         self.params_writing = True
+        self._prog_touched.add(int(rq[1:]))
 
         def gen():
             if item == "sp":
@@ -708,6 +732,8 @@ class MfcDriver:
         hw = float(cmd.split(" ", 1)[1])                       # 장비에 보낸 글자(소수 둘째 자리)와 비교 — v1 float(val_str)
         tol = float(self.cfg["MFC_SP_VERIFY_TOL"])
         rd, tries = SP_READ_CMD[n], self.verify_tries
+
+        self._prog_touched.add(DP.SP_Q[n])                     # 프로그램이 쓴 값 — 컨트롤러 값 바뀜 경고에서 뺀다(W-23 H6)
 
         def gen():
             self.sp_written.pop(n, None)                       # 쓰는 동안·확인 못 하면 그 설정점 값은 모름

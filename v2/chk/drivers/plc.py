@@ -115,6 +115,7 @@ class PlcDriver:
         self._wd = 0
         self._rf_set_w: Optional[float] = None
         self._rf_enabled = False
+        self._rf_gen = 0               # RF 끄기 세대(W-23 H4) — 끄기·ALL STOP·램프다운 때 +1, 그 전에 만든 DAC 쓰기는 늦게 실행돼도 버린다
         self._outage_since: Optional[float] = None
         self._outage_dumped = False
         worker.on_connect = self._on_connect
@@ -400,10 +401,23 @@ class PlcDriver:
                           lambda s: self._client(s).write_coil(_ADDR["heater_pv_sel"].addr, on),
                           kind="safety" if urgent else "write", on_done=on_done)
 
+    def _rf_kill(self) -> None:
+        """RF 끄기 세대 +1 — 이 뒤에 실행되는, 그 전에 만든 DAC 쓰기(값 > 0 이면 M00200 을 다시 켬)는 버린다(W-23 H4)."""
+        self._rf_gen += 1
+
+    def _rf_stale(self, gen: int, what: str) -> bool:
+        if gen == self._rf_gen:
+            return False
+        self._emit("rf_write_dropped", f"RF 를 끈 뒤 늦게 실행된 쓰기를 버림({what})")
+        return True
+
     def rf_set_power(self, watts: float, on_done=None) -> None:
         dac = rf_power_to_dac(watts, self.cfg)
+        gen = self._rf_gen
 
         def fn(s):
+            if self._rf_stale(gen, f"RF {watts} W"):
+                return
             c = self._client(s)
             if dac > 0 and not self._rf_enabled:
                 c.write_coil(_ADDR["rf_dac_enable"].addr, True)
@@ -413,6 +427,8 @@ class PlcDriver:
         self.submit_write(f"RF={watts}W(DAC {dac})", fn, on_done=on_done)
 
     def rf_off(self, on_done=None) -> None:
+        self._rf_kill()
+
         def fn(s):
             c = self._client(s)
             c.write_reg(_ADDR["rf_dac"].addr, 0)
@@ -423,8 +439,11 @@ class PlcDriver:
     def rf_write_dac(self, counts: int, on_done=None) -> None:
         """RF 제어 루프의 DAC 쓰기(write 우선순위) — 0 보다 크면 enable 을 먼저 켠다(v1 send_rfpower_command)."""
         counts = max(0, min(D.RF_DAC_FULL_SCALE, int(counts)))
+        gen = self._rf_gen
 
         def fn(s):
+            if self._rf_stale(gen, f"DAC {counts}"):
+                return
             c = self._client(s)
             if counts > 0 and not self._rf_enabled:
                 c.write_coil(_ADDR["rf_dac_enable"].addr, True)
@@ -433,8 +452,10 @@ class PlcDriver:
         self.submit_write(f"RF DAC={counts}", fn, on_done=on_done)
 
     def rf_set_dac(self, counts: int, on_done=None) -> None:
-        """RF DAC 원시값(램프다운 단계용, safety 우선순위). enable 은 건드리지 않는다."""
+        """RF DAC 원시값(램프다운 단계용, safety 우선순위). enable 은 건드리지 않는다. 램프다운이 시작되면 그 전에 만든
+        제어 루프 DAC 쓰기는 버린다(세대 +1 — W-23 H4)."""
         counts = max(0, int(counts))
+        self._rf_kill()
 
         def fn(s):
             self._client(s).write_reg(_ADDR["rf_dac"].addr, counts)
@@ -469,6 +490,7 @@ class PlcDriver:
                 start = prev = a
         runs.append((start, prev))
         run_off = {"ok": False}
+        self._rf_kill()                                   # ALL STOP — 그 전에 만든 RF DAC 쓰기는 버린다(W-23 H4)
 
         def fn(s):
             c = self._client(s)

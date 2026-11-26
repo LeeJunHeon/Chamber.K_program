@@ -9,7 +9,8 @@ MFC(GPC3000) — 읽기(질의만 — cmd_guard bench 허용 목록 안):
   1초 읽기에는 넣지 않는다 — 1초 읽기가 끝난 뒤 그 초에 남는 시간에만 질의 요청(읽기 우선순위 — 공정 명령이 먼저)을 넣고,
   공정·수동 조작 중이거나 설정 명령이 진행 중이면 끝날 때까지 미룬다(drivers/mfc.py params_*).
 MFC — 바꾸기(DEVICE_PARAM_WRITE, 관리자, 대기·적재 상태만 — 범위는 아래 WRITE_ITEMS):
-  SP1~5 값(S1~S5, mTorr ↔ %FS), Gain(M1~M5 정수 1~9999 %), P.Lead(X1~X5 0.01~2.00 s, 소수 둘째 자리), 자동 제어 방식(V0·V1),
+  SP1~5 값(S1~S5, mTorr ↔ %FS), Gain(M1~M5 정수 1~9999 %), P.Lead(X1~X5 0.01~2.00 s, 소수 둘째 자리), 자동 제어 방식(PID 로만 — V1.
+  Self-Tuning V0 은 W-23 에서 막음: 매뉴얼상 '구현 중'이고 Learn 을 먼저 돌려야 함),
   공정 한계(P1~P4 %FS 0~100). 쓰고 되읽어 비교(MFC_VERIFY_TRIES 회, 다르면 다시 쓰기) — 다르면 실패 이벤트. 장비 밖으로 나가는 글자는
   cmd_guard 의 좁은 허용 정규식(사용자 결정 2026-11-25)과 같아야 한다.
 Ion Gauge(934) — E 응답(26항목)의 10·15~23 항목을 읽기만(바꾸지 않음): 10 필라멘트 상태(자동), 15 셋포인트 보호 해제,
@@ -27,6 +28,8 @@ MFC_QUERIES: tuple = (1, 2, 3, 4, 10, 26, 27, 28, 29, 30, 41, 42, 43, 44, 45, 46
 CONNECT_REUSE = (1, 2, 3, 4, 10, 33, 34, 37, 70, 71, 74, 75)   # 연결 때 이미 읽는 질의 — 연결 뒤 읽기는 그 응답을 쓴다
 SP_TYPE = {0: "위치", 1: "압력"}
 AUTO_MODE = {0: "Self-Tuning", 1: "PID"}
+VALVE_TYPE = {1: "Standard 253", 2: "Fast 253", 3: "653", 4: "Custom"}   # R23 J(W-23 G1 — 웹 lib/ops2/chk/devWords.ts 와 같은 표)
+DIRECTION = {0: "Direct", 1: "Reverse"}                                 # R32 N
 LIMIT_LABEL = {1: "공정 한계 1 하한", 2: "공정 한계 1 상한", 3: "공정 한계 2 하한", 4: "공정 한계 2 상한"}
 _NUM = r"([+\-]?\d+(?:\.\d+)?)"
 
@@ -54,7 +57,7 @@ WRITE_ITEMS: Dict[str, dict] = {
     "sp": {"label": "SP{n} 설정값", "nos": (1, 2, 3, 4, 5), "unit": "mTorr", "min": 0.0, "max": None, "int": False},
     "gain": {"label": "SP{n} Gain", "nos": (1, 2, 3, 4, 5), "unit": "%", "min": 1, "max": 9999, "int": True},
     "lead": {"label": "SP{n} P.Lead", "nos": (1, 2, 3, 4, 5), "unit": "s", "min": 0.01, "max": 2.0, "int": False},
-    "auto": {"label": "자동 제어 방식", "nos": (None,), "unit": "", "min": 0, "max": 1, "int": True},
+    "auto": {"label": "자동 제어 방식", "nos": (None,), "unit": "", "min": 1, "max": 1, "int": True},   # PID(1)로만(W-23)
     "limit": {"label": "{lim}", "nos": (1, 2, 3, 4), "unit": "%FS", "min": 0.0, "max": 100.0, "int": False},
 }
 
@@ -93,6 +96,8 @@ def check_write(item: str, no: Any, value: Any, fs_torr: float) -> Tuple[Optiona
         if abs(v * 100 - round(v * 100)) > 1e-6:
             return "P.Lead 는 소수 둘째 자리까지입니다", no, None
         v = round(v, 2)
+    if item == "auto" and v != 1:
+        return "Self-Tuning 은 장비 앞면에서 바꿉니다(원격으로는 PID 로 바꾸기만)", no, None
     if v < lo - 1e-9 or v > hi + 1e-9:
         u = spec["unit"]
         return f"{item_label(item, no)} {v:g} — 범위 {lo:g} ~ {hi:g}{(' ' + u) if u else ''}", no, None
@@ -190,3 +195,43 @@ def ig_view(r, read_at: Optional[str]) -> Optional[dict]:
             "ionSp2Torr": r.sp_ion2, "gasFactor": r.gas_factor, "sensitivity": r.sensitivity,
             "gaugeASpTorr": r.sp_a, "gaugeBSpTorr": r.sp_b,
             "raw": {f"E{n}": r.items[n - 1] for n in sorted(IG_ITEMS) if r.items and len(r.items) >= n}}
+
+
+def _diff_items(v: Optional[dict]):
+    """(질의 번호, 화면 이름, 값 글) — 바뀜 비교용. 상태(R37)·버전(R38)은 운전에 따라·원래 바뀌므로 넣지 않는다."""
+    if not v:
+        return []
+    out = []
+    for x in v.get("sp") or []:
+        n = x["no"]
+        out += [(SP_Q[n], f"SP{n} 설정값", None if x.get("mtorr") is None else f"{x['mtorr']:g} mTorr"),
+                (45 + n, f"SP{n} Gain", None if x.get("gainPct") is None else f"{x['gainPct']}"),
+                (40 + n, f"SP{n} P.Lead", None if x.get("leadS") is None else f"{x['leadS']:g} s"),
+                (25 + n, f"SP{n} 종류", x.get("typeText"))]
+    vt, dr = v.get("valveType"), v.get("direction")
+    out += [(51, "자동 압력 제어 방식", v.get("autoModeText")), (23, "밸브 종류", VALVE_TYPE.get(vt, _s(vt))),
+            (32, "제어 방향", DIRECTION.get(dr, _s(dr))),
+            (33, "압력 센서 범위", f"{v['fsTorr']:g} Torr" if v.get("fsTorr") is not None else _s(v.get("rangeCode"))),
+            (34, "압력 단위", v.get("unitText") or _s(v.get("unitCode")))]
+    for x in v.get("limits") or []:
+        out.append((10 + x["no"], x.get("label") or f"공정 한계 {x['no']}", None if x.get("pct") is None else f"{x['pct']:g} %FS"))
+    fs, fu = v.get("flowFs") or [None, None], v.get("flowUnits") or [None, None]
+    out += [(70, "Ar 풀스케일", _s(fs[0])), (71, "O₂ 풀스케일", _s(fs[1])), (74, "Ar 유량 단위", fu[0]), (75, "O₂ 유량 단위", fu[1])]
+    return out
+
+
+def _s(x) -> Optional[str]:
+    return None if x is None else (f"{x:g}" if isinstance(x, float) else str(x))
+
+
+def diff_views(old: Optional[dict], new: Optional[dict], skip=(), read=None) -> list:
+    """앞 읽기와 이번 읽기에서 달라진 값 [(이름, 앞, 지금)] — skip(프로그램이 쓴 질의)·이번에 읽지 못한 질의·모름은 뺀다."""
+    a = {n: (k, t) for n, k, t in _diff_items(old)}
+    out = []
+    for n, k, t in _diff_items(new):
+        if n in skip or (read is not None and n not in read) or n not in a:
+            continue
+        before = a[n][1]
+        if before is not None and t is not None and before != t:
+            out.append((k, before, t))
+    return out

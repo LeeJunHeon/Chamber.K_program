@@ -360,9 +360,19 @@ class ProcessEngine:
             dur = float(s.params["timeout_sec"])
         elif s.action == "MFC_CMD" and s.params[0] == "WAIT_PRESSURE":
             dur = float(s.params[1]["timeout_sec"])
+        elif s.action == "MFC_CMD" and cur.extra.get("zero_wait"):          # 영점 대기(W-23) — 한도까지 남은 초
+            dur = float(self.cfg.get("ZERO_WAIT_MAX_SEC", 30.0))
         else:
             return None
         return max(0, int(round(dur - (now - cur.t0))))
+
+    def wait_text(self) -> Optional[str]:
+        """지금 단계 안의 기다림 이름(화면 state.run.waitText) — 영점 대기면 '영점 대기 n s'(기다린 초)."""
+        r = self.runner
+        if r is None or self.state not in ACT or r.step is None or r.cur is None or not r.cur.extra.get("zero_wait"):
+            return None
+        now = self.paused["t0"] if self.paused is not None else self.clock.monotonic()
+        return f"영점 대기 {max(0, int(now - r.cur.t0))} s"
 
     def ui_check(self) -> Dict[str, Any]:
         """v1 골든 check 와 같은 뜻의 값(process_running·csv_mode·csv_index·csv_delay_active)."""
@@ -1181,7 +1191,7 @@ class ProcessEngine:
         need = float(self.cfg.get("ZERO_MIN_IDLE_SEC", 10.0))
         held = self.clock.monotonic() - self._zero_since
         if held + 1e-9 < need:
-            return False, f"조건이 {held:.0f} s 이어짐 — {need:g} s 필요"
+            return False, f"조건 유지 {held:.0f} s(필요 {need:g} s)"
         return True, ""
 
     def on_row(self, view) -> None:
@@ -1512,6 +1522,9 @@ class ProcessEngine:
         b = self.block
         out = {"revision": self.revision, "current": b.no if b is not None else None, "paused": self._pause_public(),
                "blocksVersion": self.blocks_version}
+        wt = self.wait_text()
+        if wt:
+            out["waitText"] = wt                          # 영점 대기 n s(W-23)
         if self.manual:                                   # 수동 조작(5-20 ③) — 화면 이름 "수동 조작 중"
             out["manual"] = {"label": "수동 조작 중", "waiting": self.state == "MANUAL_WAIT", "by": self.manual_by,
                              "source": self.manual_source, "executed": [dict(e) for e in self.exec_log],

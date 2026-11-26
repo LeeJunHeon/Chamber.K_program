@@ -186,8 +186,10 @@ def uplink_down(tmp: Path) -> List[dict]:
 
 def bundle_for_web() -> dict:
     b = W.bundle()
-    for k in ("params", "crossRules", "dropped", "recipe", "adjust", "preconditions"):
+    for k in ("crossRules", "dropped", "recipe", "adjust", "preconditions"):
         b.pop(k, None)
+    # 설정은 화면 이름·설명만(W-23 D — 웹 문구 검사 ops2:chk-wording 이 설정 설명에도 장비와 같은 패턴을 건다)
+    b["params"] = [{"key": p["key"], "group": p["group"], "label": p["label"], "desc": p["desc"]} for p in b["params"]]
     return b
 
 

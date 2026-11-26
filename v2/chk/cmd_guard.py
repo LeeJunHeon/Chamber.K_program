@@ -7,8 +7,9 @@
 막으면 CommandBlocked(사유 COMMAND_BLOCKED) + 이벤트. 드라이버 안의 bench 거부(이중 보호)와 별개로 마지막 관문이다.
 
 예외(사용자 결정 2026-11-25, W-22 E 컨트롤러 값 바꾸기): MFC prod·sim 허용 목록에 아래 네 가지 쓰기만 좁은 정규식으로 더한다
-  (MFC_PARAM_WRITES) — Gain M1~M5 정수(1~4자리), P.Lead X1~X5 소수 둘째 자리까지, 자동 제어 방식 V0·V1, 공정 한계 P1~P4 수.
-  그 밖의 E·F·G·J·A·T·B·N·U·W·Y·Z2~Z4·D6·Q5~Q8 과 이 꼴이 아닌 M·X·V·P(번호 밖·소수 셋째 자리·부호 등)는 계속 막는다.
+  (MFC_PARAM_WRITES) — Gain M1~M5 정수(1~4자리), P.Lead X1~X5 소수 둘째 자리까지, 자동 제어 방식 PID(V1)만, 공정 한계 P1~P4 수.
+  W-23(사용자 결정 2026-11-26)에서 Self-Tuning(V0)을 뺐다 — 매뉴얼상 Self-Tuning 은 '구현 중'이고 Learn 을 먼저 돌려야 해 원격으로
+  바꾸지 않는다. 그 밖의 E·F·G·J·A·T·B·N·U·W·Y·Z2~Z4·D6·Q5~Q8 과 이 꼴이 아닌 M·X·V·P(V0·번호 밖·소수 셋째 자리·부호 등)는 계속 막는다.
   bench 는 질의만(이 예외는 bench 목록에 넣지 않는다). 값의 범위는 명령 검사(dev_params.WRITE_ITEMS)가 본다.
 근거(인쇄 쪽): DC(ODA EX) 명령표 [DC p.86-87], 질의 설명 [p.88-98]. MFC(GPC3000) 명령 요약 [MFC p.73-79],
 질의 표 [p.80-88]. IG(934) 표 3.4 [IG p.53-54]. RF Pulse(CESAR) AE Bus 명령 번호.
@@ -57,7 +58,7 @@ MFC_PROD_WRITES = (re.compile(rf"Q[1-4] {_NUM}"), re.compile(r"L0[01]{4}"), re.c
                    re.compile(rf"S[1-5] {_NUM}"), re.compile(r"D[1-5]"), re.compile(r"[OCH]"))
 # S5·D5(설정점 5 값·선택 [MFC p.73])는 SP5 단계(v1 a78b5ce)가 쓴다. 되읽기 R10(SP5 값)은 위 질의 목록에 이미 있다 — bench 는 질의만
 # 컨트롤러 값 바꾸기(사용자 결정 2026-11-25, W-22 E) — 이 네 꼴만. 되읽기 R46~R50·R41~R45·R51·R11~R14 는 위 질의 목록에 있다
-MFC_PARAM_WRITES = (re.compile(r"M[1-5] \d{1,4}"), re.compile(r"X[1-5] \d(?:\.\d{1,2})?"), re.compile(r"V[01]"),
+MFC_PARAM_WRITES = (re.compile(r"M[1-5] \d{1,4}"), re.compile(r"X[1-5] \d(?:\.\d{1,2})?"), re.compile(r"V1"),
                     re.compile(rf"P[1-4] {_NUM}"))
 MFC_FORBIDDEN = (
     (re.compile(r"[EF]"), "E·F(압력 레인지·단위 설정) [MFC p.74] — IG 의 E·F 와 다르다"),

@@ -80,12 +80,14 @@ def test_reread_on_request_and_deferred_while_busy():
 @pytest.mark.parametrize("item,no,value,cmd,query,raw", [
     ("gain", 1, 120, "M1 120", "R46", "M1+120"),
     ("lead", 2, 0.5, "X2 0.50", "R42", "X2+0.50"),
-    ("auto", None, 0, "V0", "R51", "V0"),
+    ("auto", None, 1, "V1", "R51", "V1"),
     ("limit", 2, 90.0, "P2 90.00", "R12", "P2+90.00"),
     ("sp", 3, 15.0, "S3 1.50", "R3", "S3+001.50"),
 ])
 def test_write_readback_and_event(item, no, value, cmd, query, raw):
     r = Rig()
+    if item == "auto":
+        r.sim.info[51] = "V0"                                           # 장비 앞면에서 Self-Tuning — 원격으로는 PID 로만(W-23 H5)
     r.run(30)
     old = DP.mfc_value(r.d.params_view, item, no)
     t0 = r.c.monotonic()
@@ -132,12 +134,12 @@ def test_bench_reads_but_never_writes():
 
 
 def test_check_write_ranges():
-    ok = [("gain", 1, 1), ("gain", 5, 9999), ("lead", 1, 0.01), ("lead", 5, 2.0), ("auto", None, 1), ("auto", None, 0),
+    ok = [("gain", 1, 1), ("gain", 5, 9999), ("lead", 1, 0.01), ("lead", 5, 2.0), ("auto", None, 1),
           ("limit", 4, 100.0), ("limit", 1, 0.0), ("sp", 5, 1000.0), ("sp", 1, 0.0)]
     for item, no, v in ok:
         assert DP.check_write(item, no, v, 1.0)[0] is None, (item, no, v)
     bad = [("gain", 1, 0), ("gain", 1, 10000), ("gain", 1, 1.5), ("lead", 1, 0.005), ("lead", 1, 2.01), ("lead", 1, 0.123),
-           ("auto", None, 2), ("limit", 1, 101), ("limit", 1, -1), ("limit", 5, 1), ("sp", 1, 1000.1), ("sp", 6, 1),
+           ("auto", None, 2), ("auto", None, 0), ("limit", 1, 101), ("limit", 1, -1), ("limit", 5, 1), ("sp", 1, 1000.1), ("sp", 6, 1),
            ("gain", None, 10), ("nope", 1, 1), ("gain", 1, True), ("gain", 1, "10")]
     for item, no, v in bad:
         assert DP.check_write(item, no, v, 1.0)[0], (item, no, v)
@@ -236,3 +238,46 @@ def test_core_rejects_manual_bench_heater(tmp_path):
         assert rig.mfc.params_state == "done"
     finally:
         rig.stop()
+
+
+# ───────── W-23 H6 자동 다시 읽기·바뀜 경고 ─────────
+def test_reread_after_run_and_change_warning():
+    r = Rig(cfg={"DEVICE_PARAMS_REFRESH_MIN": 0})
+    r.run(30)
+    assert r.d.params_state == "done"
+    busy = [True]
+    r.d.idle = lambda: not busy[0]
+    r.run(3)                                                            # 공정 중(읽지 않음)
+    r.sim.info[46] = "M1+400"                                           # 장비 앞면에서 바꿈
+    busy[0] = False
+    r.run(60)
+    reads = [e for e in r.events if e.kind == "params_read"]
+    assert len(reads) == 2 and "공정 끝" in reads[1].detail
+    ch = [e for e in r.events if e.kind == "params_changed"]
+    assert len(ch) == 1 and ch[0].reason == "DEVICE_PARAMS_CHANGED"
+    assert ch[0].detail == "컨트롤러 값이 바뀌었습니다 · SP1 Gain 100 → 400 — 장비 앞면에서 바꿨는지 확인하세요"
+    r.done()
+
+
+def test_periodic_reread_and_program_writes_not_warned():
+    r = Rig(cfg={"DEVICE_PARAMS_REFRESH_MIN": 1})
+    r.run(30)
+    assert _write(r, "gain", 2, 150) is None                            # 프로그램이 쓴 값 — 다음 읽기에서 경고하지 않음
+    r.sim.sp[0] = 7.0                                                   # SP1 도 공정이 쓴 것처럼
+    r.d._prog_touched.add(1)
+    r.run(120)
+    reads = [e for e in r.events if e.kind == "params_read"]
+    assert len(reads) >= 2 and "주기" in reads[1].detail
+    assert not [e for e in r.events if e.kind == "params_changed"]
+    assert P.by_key()["DEVICE_PARAMS_REFRESH_MIN"].default == 10
+    r.done()
+
+
+def test_diff_words_for_codes():
+    """W-23 G1 — 바뀜 경고도 코드가 아닌 말(밸브 종류·제어 방향·센서 범위)."""
+    base = {23: "J1", 32: "N0", 33: "E11", 34: "F01"}
+    a = DP.mfc_view(dict(base), 1.0)
+    b = DP.mfc_view({**base, 23: "J2", 32: "N1"}, 1.0)
+    d = DP.diff_views(a, b)
+    assert ("밸브 종류", "Standard 253", "Fast 253") in d and ("제어 방향", "Direct", "Reverse") in d
+    assert [x for x in DP._diff_items(a) if x[0] == 33][0][2] == "1 Torr"

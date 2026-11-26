@@ -102,6 +102,10 @@
                 RF_UNCOMMANDED_FWD_W·RF_REFP_HYST_W·ZERO_MIN_IDLE_SEC·INVENTORY_API_URL, RF_REF_FULL_SCALE_W 기본 600), 컨트롤러 값
                 (devParams 구역·DEVICE_PARAMS_READ·DEVICE_PARAM_WRITE·state.devParams), 웹 레시피 사본(RECIPE_LOAD·HEATER_RECIPE_RUN 의
                 id·updatedAt, 노트북 RECIPE_LOAD, state.recipeCopy), 장착 타겟(state.targets·사건 출처 inventory)
+                버전 24(W-23): 설정 설명(params desc) 운전자 말로 정리(개발 메모는 note), 새 설정(ZERO_WAIT_MAX_SEC·
+                MFC_COMM_LOSS_ABORT_SEC·KEEP_AWAKE·DEVICE_PARAMS_REFRESH_MIN), 새 사유(MFC_COMM_LOSS·DEVICE_PARAMS_CHANGED)·
+                안전 규칙 S52, 사건(컨트롤러 값 바뀜·늦은 RF 쓰기 버림·절전 막기, 출처 app), 자동 제어 방식 쓰기는 PID(1)만,
+                runState.waitText(영점 대기 n s)
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -140,7 +144,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 23
+EXPORT_VERSION = 24
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -191,6 +195,8 @@ EVENT_LABEL: Dict[tuple, str] = {
     ("mfc", "verify_ok"): "설정 확인됨", ("mfc", "verify_mismatch"): "설정이 다르게 읽힘", ("mfc", "sp_readback"): "압력 SP 확인",
     ("mfc", "remote_state"): "원격 조작 상태", ("mfc", "sp_device"): "장비에 저장된 압력 SP", ("mfc", "read_plan"): "MFC 읽는 방식 바뀜",
     ("mfc", "params_read"): "컨트롤러 값 읽음", ("mfc", "param_write"): "컨트롤러 값 바꿈",
+    ("mfc", "params_changed"): "컨트롤러 값이 바뀜", ("plc", "rf_write_dropped"): "RF 늦은 쓰기 버림",
+    ("app", "keep_awake_on"): "절전 막기 시작", ("app", "keep_awake_off"): "절전 막기 끝",
     ("process", "targets"): "장착 타겟 채움", ("inventory", "targets_read_failed"): "장착 타겟 읽기 실패",
     ("inventory", "targets_read_ok"): "장착 타겟 읽기 복구", ("inventory", "targets_changed"): "장착 타겟 바뀜",
     ("dc", "identity"): "장비 확인", ("dc", "syst_err"): "장비 자체 오류 기록", ("dc", "last_state"): "전원 복귀 때 출력 설정",
@@ -271,6 +277,10 @@ EVENT_DESC: Dict[tuple, str] = {
     ("mfc", "sp_device"): "장비에 저장된 압력 SP 값을 읽었습니다.",
     ("mfc", "read_plan"): "MFC 읽기 속도에 따라 읽는 방식을 바꿨습니다.",
     ("process", "targets"): "레시피에 타겟 이름이 비어 있어 재고관리의 장착 타겟으로 채웠습니다. 공정 기록에 남습니다.",
+    ("mfc", "params_changed"): "프로그램이 바꾸지 않은 MFC 컨트롤러 값이 달라졌습니다. 장비 앞면에서 바꿨는지 확인하세요.",
+    ("plc", "rf_write_dropped"): "RF 를 끈 뒤 늦게 실행된 RF 출력 쓰기를 버렸습니다. RF 가 다시 켜지지 않게 한 것입니다.",
+    ("app", "keep_awake_on"): "운전 중이라 장비 노트북이 절전 모드로 들어가지 않게 막기 시작했습니다.",
+    ("app", "keep_awake_off"): "절전 막기를 풀었습니다.",
     ("inventory", "targets_read_failed"): "재고관리에서 장착 타겟을 읽지 못했습니다. 공정은 그대로 진행합니다.",
     ("inventory", "targets_read_ok"): "재고관리에서 장착 타겟을 다시 읽었습니다.",
     ("inventory", "targets_changed"): "재고관리의 Gun1·Gun2 장착 타겟이 바뀌었습니다.",
@@ -343,7 +353,7 @@ _M, _D = "main", "detail"
 # event 메시지 context.source → 화면 출처 이름(5-15 — 장비 이름은 DC Power·RF Power·RF Pulse)
 EVENT_SOURCES: tuple = (
     ("process", "공정"), ("safety", "안전"), ("heater", "히터"), ("plc", "PLC"), ("mfc", "MFC"), ("dc", "DC Power"),
-    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "Ion Gauge"), ("uplink", "웹 연결"), ("inventory", "재고관리"),
+    ("rfp", "RF Pulse"), ("rfpulse", "RF Pulse"), ("ig", "Ion Gauge"), ("uplink", "웹 연결"), ("inventory", "재고관리"), ("app", "프로그램"),
 )
 _WORKERS = ("plc", "mfc", "dc", "rfpulse", "ig")
 EVENT_KINDS: tuple = (
@@ -385,6 +395,8 @@ EVENT_KINDS: tuple = (
     ("mfc", "sp_device", "설정점 장비 값", _D),
     ("mfc", "read_plan", "읽기 계획", _D),
     ("mfc", "params_read", "컨트롤러 값 읽기", _D), ("mfc", "param_write", "컨트롤러 값 바꾸기", _M),
+    ("mfc", "params_changed", "컨트롤러 값 바뀜", _M), ("plc", "rf_write_dropped", "RF 늦은 쓰기 버림", _D),
+    ("app", "keep_awake_on", "절전 막기 시작", _D), ("app", "keep_awake_off", "절전 막기 끝", _D),
     ("process", "targets", "장착 타겟 채움", _M),
     ("inventory", "targets_read_failed", "장착 타겟 읽기 실패", _M), ("inventory", "targets_read_ok", "장착 타겟 읽기 복구", _D),
     ("inventory", "targets_changed", "장착 타겟 바뀜", _D),

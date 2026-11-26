@@ -397,10 +397,19 @@ class StepRunner:
             elif cmd == "VALVE_HOLD":
                 m.valve_hold(on_done=cb)
             elif cmd in ("MFC_ZEROING", "PS_ZEROING") and self.zero_ok is not None and not self.zero_ok()[0]:
-                # 영점 보호(W-22, GPC3000 매뉴얼 Sensor·MFC Zeroing) — 가스가 흐를 수 있으면 영점을 보내지 않고 다음 스텝으로
+                # 영점 보호(W-22·W-23, GPC3000 매뉴얼 Sensor·MFC Zeroing) — 조건(유량 꺼짐·가스 밸브 닫힘·MFC 밸브 열림·Gauge A
+                # 범위 아래)이 ZERO_MIN_IDLE_SEC 이어질 때까지 기다렸다 보낸다. ZERO_WAIT_MAX_SEC 를 넘으면 그 블록의 영점만 건너뛰고
+                # 실제 이유로 경고 한 번. 기다리는 동안은 영점 대기(zero_wait_s — 화면 '영점 대기 n s')
+                waited = now - cur.t0
+                lim = float((self.cfg or {}).get("ZERO_WAIT_MAX_SEC", 30.0))
+                if s.block not in self._zero_warned and waited < lim:
+                    cur.issued = False
+                    cur.extra["zero_wait"] = True
+                    return "wait"
+                cur.extra.pop("zero_wait", None)
                 if s.block not in self._zero_warned:
                     self._zero_warned.add(s.block)
-                    self._emit(StepEvent("warn", f"영점 건너뜀 — 가스가 흐르는 중({self.zero_ok()[1]})", "ZERO_SKIPPED", self.idx))
+                    self._emit(StepEvent("warn", f"영점 건너뜀 — {self.zero_ok()[1]}", "ZERO_SKIPPED", self.idx))
                 return "next"
             elif cmd == "MFC_ZEROING":
                 m.zero(f"L{4 + int(a['channel'])} 1", on_done=cb)

@@ -254,8 +254,9 @@ def test_casc_state_label_matches_engine_text():
 # 5-18 — MFC 읽기 계획 설명이 드라이버 동작(R5·R60·R6, 번갈아 읽기, R6 양보)과 같은 말
 def test_mfc_read_plan_desc_matches_driver():
     from v2.chk import devices as D
-    d = P.by_key()["MFC_READ_PLAN"].desc
-    for w in ("R5", "R60", "R6", "짝수 초", "홀수 초", "양보", "돌아온다", "MFC_READ_PLAN_SLOW_N"):
+    p = P.by_key()["MFC_READ_PLAN"]
+    d = p.desc + " " + p.note                       # W-23 D: 명령 글자·키 이름은 note 로(상세 보기)
+    for w in ("R5", "R60", "R6", "짝수 초", "홀수 초", "양보", "MFC_READ_PLAN_SLOW_N"):
         assert w in d, w
     assert P.by_key()["MFC_READ_PLAN_SLOW_PCT"].default == 60            # 처음 기준(마감의 60 %)은 설정으로(5-20 ①)
     assert "R5+R60" not in d and "실패하면" not in d
@@ -430,3 +431,51 @@ def test_everyday_fields_have_help():
     assert miss == []
     # 거부·중단·실패·경고(정보 중 경고만인 것 포함) 사유는 help 가 있다 — 지금은 162개 모두
     assert all(r.get("help") for r in b["reasons"])
+
+
+# ───────────── W-23 D 설정 설명(desc) 규칙 ─────────────
+# desc 는 운전자·관리자가 읽는 말 1~2문장(…합니다/…입니다). 개발 메모·v1 출처·설정 키·명령 글자·규칙 번호·결정 날짜는 note 로.
+DESC_BAD = (
+    ("설정 키", r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b"),
+    ("v1·v2", r"(?<![A-Za-z])[vV][12](?![0-9A-Za-z])"),
+    ("작업·결정 번호", r"(?<![\d.])\d{1,2}-\d{1,2}(?![\d])|W-\d+|[①-⑳]|20\d\d-\d\d-\d\d"),
+    ("파일 이름", r"\w+\.(py|json|cmd|txt)\b"),
+    ("장비 명령 글자", r"(?<![A-Za-z0-9])(R\d{1,3}|MEAS:\w+\??|OUTP\??|FACT:[\w-]+\??|VOLT:\w+\??|CURR:\w+\??|SYST:\w+\??|"
+                  r"\*IDN\?|\*RST|APPLy|[QSDLMXVPWZ]\d{1,3}|D0\d{4}|M0\d{4}|X\d\d|S\d\d[A-Z]?)(?![A-Za-z0-9])"),
+    ("금지 문구", r"—|안 ?(함|씀|됨)(?![가-힣])|못 ?함(?![가-힣])|미룸|(?<![가-힣])(켬|끔)(?![가-힣])"),
+    ("옛 말", "|".join(("인터록", "이온 게이지", "필라멘트", "디개스", "방출", "냉각수", "도어", "차단 ?밸브", "메인 밸브", "순방향",
+                      "반사", "설정점", "램프", "블록", "스텝", "사건", "로컬", "시퀀스", "벤트", "로터리", "터보 펌프", "가스 도입",
+                      "정상 끝 정지", "셔터 딜레이"))),
+)
+
+
+def desc_problems(text: str) -> list:
+    """설정 desc 한 줄의 규칙 위반 이름 목록(빈 목록 = 맞음) — 웹 문구 검사(scripts/ops2-chk-wording.mjs)와 같은 패턴."""
+    out = [name for name, pat in DESC_BAD if re.search(pat, text)]
+    sents = [x for x in re.split(r"(?<=\.)\s+", text.strip()) if x]
+    if not sents or any(not re.search(r"니다(\([^()]*\))?\.$", x) for x in sents):     # 끝 괄호 덧말은 허용
+        out.append("문장 끝(…합니다/…입니다)")
+    if len(sents) > 2:
+        out.append("2문장 넘음")
+    return out
+
+
+def test_param_desc_rules():
+    hits = [(p.key, desc_problems(p.desc), p.desc) for p in P.PARAMS if desc_problems(p.desc)]
+    assert hits == [], hits[:5]
+    assert len(P.PARAMS) >= 293
+
+
+def test_param_desc_check_catches_patterns():
+    """검사 자체가 패턴을 잡는다(빈 검사가 늘 통과하지 않게)."""
+    for bad in ("유량 안정화 시간입니다(FLOW_STABILIZE_SEC).", "v1 과 같습니다.", "5-19 ③ 결정입니다.", "R5 로 읽습니다.",
+                "PLC D00040 을 씁니다.", "켬 상태입니다.", "인터록을 겁니다.", "정지한다.", "한 줄. 두 줄입니다.",
+                "하나입니다. 둘입니다. 셋입니다.", "S32 규칙입니다.", "process_engine.py 에 있습니다."):
+        assert desc_problems(bad), bad
+    assert desc_problems("'유량 안정화 시간' 동안 기다립니다. 바꾸면 다음 공정부터 씁니다.") == []
+
+
+def test_sp_source_desc_names_pressure_steps():
+    by = P.by_key()
+    for n in (2, 3, 4, 5):
+        assert f"'{by[f'SP{n}_MTORR'].label}'" in by[f"SP{n}_SOURCE"].desc

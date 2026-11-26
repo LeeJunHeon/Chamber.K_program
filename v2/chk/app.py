@@ -22,6 +22,7 @@
     주소는 호스트만 콘솔·로그에, 토큰은 어디에도. http 주소면 시작 때 경고 한 번. 조립 뒤·worker 시작 전에 붙는다(hello 부터 받게).
   6 장착 타겟(재고관리 읽기, W-22 G — targets.py): INVENTORY_API_URL 이 있으면 자기 스레드로 읽는다. sim 은 루프백 주소(시험용
     가짜 서버)만 — 진짜 재고관리에 묻지 않는다.
+  7 절전 막기(W-23 H3 — keep_awake.py): KEEP_AWAKE 에 따라 공정·수동 조작·히터 운전 중(또는 늘) 윈도우 시스템 절전을 막는다.
 버전은 .git 의 HEAD·ref 파일을 읽어서(git 명령을 실행하지 않음), 못 읽으면 unknown.
 
 종료(v1 main.py:4977 closeEvent 와 같은 조건)
@@ -147,6 +148,7 @@ class App:
         self.sims = None
         self.uplink = None
         self.targets = None                                # 재고관리 읽기(W-22 G)
+        self.keep_awake = None                             # 절전 막기(W-23 H3)
 
     # ───────── 1 설정 ─────────
     def load_config(self) -> bool:
@@ -275,6 +277,7 @@ class App:
             self._start_log_consumer()
             self.start_uplink(s)
             self.start_targets(s)
+            self.start_keep_awake(s)
             s.start(ready_timeout_s=float(self.cfg["CONNECT_INIT_TIMEOUT_SEC"]) + 3.0)
             down = [k for k, w in s.workers.items() if s.enabled[k] and not w.ready]
             msg = "장비 연결: " + ", ".join(f"{k} {'준비' if s.workers[k].ready else '연결 안 됨(재시도 중)'}"
@@ -361,6 +364,14 @@ class App:
             return
         self.uplink = s.uplink = up
         up.start()
+
+    def start_keep_awake(self, s: ChkSystem) -> None:
+        """절전 막기(W-23 H3 — keep_awake.py). 윈도우가 아니면 아무것도 하지 않는다."""
+        from v2.chk import keep_awake as KA
+        ka = KA.KeepAwake(s.cfg, busy=lambda: s.busy() or bool((getattr(s.heater, "st", None) or {}).get("run")),
+                          on_event=s._ev, api=KA.windows_api())
+        self.keep_awake = ka
+        ka.start()
 
     def start_targets(self, s: ChkSystem) -> None:
         """재고관리 장착 타겟 읽기(W-22 G — targets.py). 주소가 비면 안 함, sim 은 루프백(시험용 가짜 서버)만."""
@@ -593,6 +604,8 @@ class App:
             self.uplink.stop()                             # 남은 메시지는 보관함에(다음 시작 때 올림)
         if getattr(self, "targets", None) is not None:
             self.targets.stop()
+        if getattr(self, "keep_awake", None) is not None:
+            self.keep_awake.stop()
         if self.server is not None:
             self.server.stop()
         if self._log_thread is not None:
