@@ -43,6 +43,7 @@ from core.process_service import ProcessService
 from integrations.erp_commands import ErpCommandRunner, write_recipe_csv, HEATER_RECIPE_COLS
 from integrations.erp_commands import remove_quietly
 from integrations.erp_state import ErpStatePublisher
+from integrations.inventory_targets import InventoryTargetReader, fill_target_names
 from reporter import ErpReporter
 from controller.process_controller import SputterProcessController
 from controller.chat_notifier import ChatNotifier
@@ -185,6 +186,9 @@ class _MainProcessPorts:
 
     def build_csv_params(self, row):
         return self.w._build_params_from_csv_row(row)
+
+    def fill_targets(self, params):
+        return self.w._fill_inventory_targets(params)
 
     def check_csv_row(self, row):
         build_csv_params(row, self.w.ui.offset_edit.toPlainText(), self.w.ui.param_edit.toPlainText())
@@ -813,6 +817,9 @@ class MainDialog(QDialog):
         # MFC 압력·밸브 위치 1초 CSV(저우선 읽기) — 꺼져 있으면(기본) 아무것도 만들지 않는다
         self._setup_mfc_state_log()
 
+        # 재고관리 장착 타겟 읽기 — 꺼져 있거나 주소가 비었거나 개발 모드면 아무것도 만들지 않는다
+        self._setup_inventory_targets()
+
         self.ui.Sputter_Stop_Button.setEnabled(False)
 
         # === ERP 원격 명령 실행 (메인 스레드 전용) ===
@@ -1392,6 +1399,101 @@ class MainDialog(QDialog):
                 log_message_to_monitor("경고", msg)
         except Exception:
             pass
+
+    # ==================== 재고관리 장착 타겟 (integrations/inventory_targets) ====================
+    def _setup_inventory_targets(self, reader=None) -> None:
+        """INVENTORY_TARGETS_ENABLED 가 True 이고 주소가 있고 개발 모드가 아닐 때만 — 읽기 스레드를 시작하고, 사건 로그·입력칸
+        안내(placeholder·툴팁)를 맞출 메인 스레드 타이머(1초)를 켠다. 꺼져 있으면 아무것도 만들지 않는다.
+        reader 는 시험용(가짜 reader 를 끼운다 — 조건 검사 없이 그대로 쓴다)."""
+        self._inventory_reader = None
+        self._inventory_timer = None
+        self._inventory_hint = {}
+        if reader is None:
+            url = _CFG.INVENTORY_API_URL
+            if _CFG.INVENTORY_TARGETS_ENABLED is not True or not url or DEV_MODE:
+                return
+            reader = InventoryTargetReader(url, _CFG.INVENTORY_REFRESH_SEC, _CFG.INVENTORY_TIMEOUT_SEC,
+                                           _CFG.INVENTORY_MAX_AGE_SEC)
+        self._inventory_reader = reader
+        reader.start()
+        self._inventory_timer = QTimer(self)
+        self._inventory_timer.timeout.connect(self._poll_inventory_targets)
+        self._inventory_timer.start(1000)
+
+    def _stop_inventory_targets(self) -> None:
+        """종료 — 안내 타이머를 멈추고 읽기 스레드를 세운다(읽는 중이어도 오래 기다리지 않는다)."""
+        t = getattr(self, "_inventory_timer", None)
+        if t is not None:
+            t.stop()
+        r = getattr(self, "_inventory_reader", None)
+        if r is None:
+            return
+        try:
+            r.stop()
+        except Exception as e:
+            log_message_to_monitor("경고", f"[타겟] 재고관리 읽기 스레드를 멈추지 못했습니다({type(e).__name__}: {e})")
+
+    @Slot()
+    def _poll_inventory_targets(self) -> None:
+        """메인 스레드 1초 — 읽기 스레드가 쌓은 사건을 모니터에 1줄씩 남기고, G1/G2 입력칸 안내를 지금 값에 맞춘다."""
+        r = getattr(self, "_inventory_reader", None)
+        if r is None:
+            return
+        try:
+            for kind, data in r.pop_events():
+                if kind == "changed":
+                    g1 = (data or {}).get("g1") or "없음"
+                    g2 = (data or {}).get("g2") or "없음"
+                    log_message_to_monitor("정보", f"[타겟] 재고관리 장착 타겟 — G1: {g1}, G2: {g2}")
+                elif kind == "failed":
+                    log_message_to_monitor(
+                        "경고", f"[타겟] 재고관리에서 장착 타겟을 읽지 못했습니다({r.host}, {data}). 공정은 그대로 진행합니다")
+                elif kind == "recovered":
+                    log_message_to_monitor("정보", "[타겟] 재고관리에서 장착 타겟을 다시 읽었습니다")
+            self._update_inventory_hints()
+        except Exception as e:
+            log_message_to_monitor("경고", f"[타겟] 재고관리 장착 타겟 안내를 갱신하지 못했습니다({type(e).__name__}: {e})")
+
+    def _update_inventory_hints(self) -> None:
+        """G1/G2 입력칸의 placeholder(회색 안내 글)·툴팁을 지금 쓸 수 있는 장착 타겟에 맞춘다(입력값·위치·크기는 그대로)."""
+        r = self._inventory_reader
+        mounted, why = r.current()
+        wall = r.last_ok_wall()
+        at = datetime.datetime.fromtimestamp(wall).strftime("%H:%M") if wall else "-"
+        for n in (1, 2):
+            tgt = (mounted or {}).get(f"g{n}") if mounted else None
+            text = (tgt or {}).get("text") or ""
+            if text:
+                tip = f"재고관리 장착 타겟: {text} · 칸을 비워 두면 이 이름으로 기록됩니다 · 읽은 시각 {at}"
+            else:
+                reason = why or "재고관리에 장착 타겟 없음"
+                tip = f"재고관리 장착 타겟을 쓰지 않습니다({reason}) · 칸을 비워 두면 빈칸으로 기록됩니다"
+            if self._inventory_hint.get(n) == (text, tip):
+                continue
+            self._inventory_hint[n] = (text, tip)
+            edit = getattr(self.ui, f"G{n}_edit")
+            edit.setPlaceholderText(text)
+            edit.setToolTip(tip)
+
+    def _fill_inventory_targets(self, params: dict) -> list:
+        """공정 시작 — 쓰는 건의 빈 타겟 이름을 기억해 둔 장착 타겟으로 채우고(기다리지 않는다), 채운 건은 입력칸에도 같은 글을 쓴다.
+        공정 로그에 남길 문장 목록을 돌려준다. 읽기가 꺼져 있으면 []. 실패해도 공정은 막지 않는다."""
+        r = getattr(self, "_inventory_reader", None)
+        if r is None:
+            return []
+        msgs = []
+        try:
+            mounted, why = r.current()
+            filled = dict(fill_target_names(params, mounted))
+            for n in (1, 2):
+                if n in filled:
+                    getattr(self.ui, f"G{n}_edit").setPlainText(filled[n])
+                    msgs.append(f"[타겟] G{n} 타겟 이름을 재고관리 장착 타겟으로 기록합니다: {filled[n]}")
+                elif params.get(f"use_g{n}") and not str(params.get(f"g{n}_target_name") or "").strip():
+                    msgs.append(f"[타겟] G{n} 타겟 이름은 빈칸으로 기록합니다({why or '재고관리에 장착 타겟 없음'})")
+        except Exception as e:
+            msgs.append(f"[타겟] 장착 타겟 이름을 채우지 못해 입력값대로 기록합니다({type(e).__name__}: {e})")
+        return msgs
 
     def _stop_mfc_state_log(self, wait_sec: float = 3.0) -> None:
         """종료 — 기록 타이머(MFC 스레드)를 먼저 멈추고, 남은 행을 넘기고, 작업자는 wait_sec 안에서만 기다린다(NAS 가 멈춰도 종료는 멈추지 않는다)."""
@@ -4883,6 +4985,9 @@ class MainDialog(QDialog):
 
         # MFC 상태 기록 — 기록 타이머를 먼저 멈추고 남은 행을 넘긴다(꺼져 있으면 아무것도 안 한다)
         self._stop_mfc_state_log()
+
+        # 재고관리 장착 타겟 읽기 스레드(꺼져 있으면 아무것도 안 한다)
+        self._stop_inventory_targets()
 
         # worker 정리를 각 worker 자신의 스레드에서 먼저 수행
         self._invoke_worker_blocking(self.process_controller, "teardown")

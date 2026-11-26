@@ -964,6 +964,38 @@ def _validate_mfc_state_log_config() -> None:
 
 _validate_mfc_state_log_config()
 
+# ── 재고관리 장착 타겟(integrations/inventory_targets) — 타겟 이름을 비운 공정은 장착 타겟 이름으로 기록한다 ──
+#  기본 꺼짐(정확히 True 일 때만 켬). 주소가 비었거나 개발 모드면 읽지 않는다. 바꾸면 프로그램 재시작.
+INVENTORY_TARGETS_ENABLED = get('INVENTORY_TARGETS_ENABLED', False)
+INVENTORY_API_URL         = get('INVENTORY_API_URL', "https://vanam.synology.me/inventory/api/chamber-slots")
+INVENTORY_REFRESH_SEC     = get('INVENTORY_REFRESH_SEC', 60)     # 읽기 주기(초). 10~3600
+INVENTORY_TIMEOUT_SEC     = get('INVENTORY_TIMEOUT_SEC', 3)      # 요청 하나 응답 대기(초). 1~10
+INVENTORY_MAX_AGE_SEC     = get('INVENTORY_MAX_AGE_SEC', 300)    # 마지막 성공에서 이만큼 지나면 쓰지 않음(초). 30~86400
+
+
+def _validate_inventory_config() -> None:
+    """켜짐은 정확히 True 일 때만, 주소는 글(앞뒤 공백 제거), 숫자는 범위를 벗어나거나 숫자가 아니면 기본값. 예외는 던지지 않는다."""
+    global INVENTORY_TARGETS_ENABLED, INVENTORY_API_URL
+    INVENTORY_TARGETS_ENABLED = INVENTORY_TARGETS_ENABLED is True
+    if not isinstance(INVENTORY_API_URL, str):
+        print(f"[Config] INVENTORY_API_URL {INVENTORY_API_URL!r} → '' (글이 아님 — 읽지 않음)")
+        INVENTORY_API_URL = ""
+    INVENTORY_API_URL = INVENTORY_API_URL.strip()
+    for name, lo, hi, dflt in (
+            ("INVENTORY_REFRESH_SEC", 10, 3600, 60),
+            ("INVENTORY_TIMEOUT_SEC", 1, 10, 3),
+            ("INVENTORY_MAX_AGE_SEC", 30, 86400, 300)):
+        raw = globals()[name]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            print(f"[Config] {name} {raw!r} → {dflt} (숫자가 아님)")
+            globals()[name] = dflt
+        elif not (lo <= raw <= hi):
+            print(f"[Config] {name} {raw} → {dflt} (허용 {lo}~{hi})")
+            globals()[name] = dflt
+
+
+_validate_inventory_config()
+
 MFC_SCALE_FACTORS = {
     1: 1.0,  # Channel 1 (Ar)
     2: 1.0,  # Channel 2 (O2)

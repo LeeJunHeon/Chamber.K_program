@@ -50,6 +50,10 @@ class ProcessPorts(Protocol):
     def build_csv_params(self, row: dict) -> dict:
         """CSV 한 행 → 공정 params(화면 offset/param 칸 포함). 잘못되면 ValueError."""
 
+    def fill_targets(self, params: dict) -> list[str]:
+        """쓰는 건의 빈 타겟 이름을 재고관리 장착 타겟으로 채운다(params 를 그 자리에서). 공정 로그에 남길 문장 목록을 돌려준다.
+        재고관리 읽기가 꺼져 있으면 params 그대로·빈 목록."""
+
     def check_csv_row(self, row: dict) -> None:
         """CSV 한 행을 공정 params 를 만들 때와 같은 검사로 확인한다(경고 로그 없음). 잘못되면 ValueError(E3)."""
 
@@ -257,6 +261,9 @@ class ProcessService:
         if manual_inputs is not None:
             ports.show_manual_inputs(manual_inputs)
 
+        # 타겟 이름을 비운 쓰는 건은 재고관리 장착 타겟으로 채운다(문장은 공정 로그 파일을 연 뒤 남긴다)
+        target_msgs = ports.fill_targets(params)
+
         # ★ 단일 공정(수동 Start)일 때의 공정 이름
         st.current_name = "Single CHK"
 
@@ -269,6 +276,8 @@ class ProcessService:
         # ★★★ 여기서 이번 공정용 로그 파일을 NAS에 생성 (CHK_YYYYmmdd_HHMMSS.txt) ★★★
         ports.open_process_log("CHK")
         ports.log("정보", "=== CHK 공정 시작 ===")
+        for msg in target_msgs:
+            ports.log("정보", msg)
 
         # 이번 공정이 히터를 소유하는가 (히터 레시피와의 충돌 판정 기준)
         st.heater_claimed = bool(
@@ -511,6 +520,9 @@ class ProcessService:
             ports.notice("process", "critical", "CSV 레시피 오류", _row_msg)   # 정리 뒤에 알린다
             return
 
+        # 타겟 이름을 비운 쓰는 건은 재고관리 장착 타겟으로 채운다(문장은 공정 로그 파일을 연 뒤 남긴다)
+        target_msgs = ports.fill_targets(params)
+
         # ★ 이번 CSV STEP도 수동 공정과 동일한 로그 포맷을 위해
         #    파라미터 저장 + 평균값 누적 초기화
         st.last_params = dict(params)
@@ -539,6 +551,8 @@ class ProcessService:
         # total   = len(self.csv_rows)
 
         ports.log("정보", f"=== CHK CSV STEP {step_no}/{total} 시작 ===")
+        for msg in target_msgs:
+            ports.log("정보", msg)
 
         # 로그/스테이지 표시
         base_name = (

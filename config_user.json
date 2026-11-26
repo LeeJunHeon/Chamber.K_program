@@ -150,6 +150,18 @@
     "// 기록 읽기 응답 대기(ms). 허용 100~1000 (공정 명령 타임아웃 MFC_TIMEOUT 과 별개)": "",
     "MFC_STATE_LOG_TIMEOUT_MS": 500,
 
+    "// ------- 재고관리 장착 타겟 -------": "",
+    "// G1/G2 타겟 이름을 비워 둔 공정은 재고관리에 등록된 챔버K 장착 타겟 이름으로 기록한다(ChK_log.csv·공정 로그·구글챗·ERP). 끄려면 false. 바꾸면 프로그램 재시작": "",
+    "INVENTORY_TARGETS_ENABLED": true,
+    "// 재고관리 챔버 자리 목록 주소(사내망은 로그인 없이 읽음). 비우면 읽지 않는다. 바꾸면 프로그램 재시작": "",
+    "INVENTORY_API_URL": "https://vanam.synology.me/inventory/api/chamber-slots",
+    "// 읽기 주기(초). 허용 10~3600. 바꾸면 프로그램 재시작": "",
+    "INVENTORY_REFRESH_SEC": 60,
+    "// 요청 하나 응답 대기(초). 허용 1~10. 바꾸면 프로그램 재시작": "",
+    "INVENTORY_TIMEOUT_SEC": 3,
+    "// 마지막으로 읽은 지 이 시간(초)을 넘으면 쓰지 않고 빈칸으로 기록한다. 허용 30~86400. 바꾸면 프로그램 재시작": "",
+    "INVENTORY_MAX_AGE_SEC": 300,
+
     "// ------- 히터 설정 -------": "",
     "// 히터 기능 사용 여부": "",
     "HEATER_ENABLED": true,
