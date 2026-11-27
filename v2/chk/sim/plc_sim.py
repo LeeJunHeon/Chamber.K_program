@@ -69,6 +69,8 @@ class PlcSim(SimDevice):
         self.tc_fail = False
         self.tc2_fail = False
         self.ref_inject_w = 0.0
+        self.rf_off_lag_s = 0.0                         # 시험용(W-25 A1): 출력이 내려갈 때 Forward 가 이 시간 그대로 있다가 내려감
+        self._rf_hold_until: Optional[float] = None
         self.chamber = chamber or Chamber(start)
         self.forced_regs: Dict[int, int] = {}          # 래더가 강제하는 값 흉내(되읽기 불일치 시험)
         self.tc2_map = None                             # [(TC1, TC2), …] — 주면 TC2 가 이 매핑을 따른다(머리말)
@@ -171,6 +173,13 @@ class PlcSim(SimDevice):
         # RF
         target_w = (r[A["rf_dac"]] / D.RF_DAC_FULL_SCALE * RF_GEN_FULL_W) if c[A["rf_dac_enable"]] else 0.0
         target_w = max(target_w, self.rf_local_w)
+        if self.rf_off_lag_s > 0 and target_w < self.rf_fwd_w - 1.0:     # 내려가는 중 — 정해 둔 시간 동안 읽은 값이 늦게 내려옴
+            if self._rf_hold_until is None:
+                self._rf_hold_until = self.t + self.rf_off_lag_s
+            if self.t < self._rf_hold_until:
+                target_w = self.rf_fwd_w
+        else:
+            self._rf_hold_until = None
         self.rf_fwd_w += (target_w - self.rf_fwd_w) * min(1.0, dt / RF_TAU_S)
         # 압력 — 공용 챔버(밸브 코일 상태를 넣고 시각을 같이 진행)
         self.chamber.set_valves(**{k: c[A[k]] for k in ("mv", "turbo", "rotary", "rv", "fv", "vent")})

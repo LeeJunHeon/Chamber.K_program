@@ -151,7 +151,7 @@ class PlcDriver:
         regs = c.read_regs(*REGS)
         coils = {i + COILS_A[0]: v for i, v in enumerate(a)}
         coils.update({i + COILS_B[0]: v for i, v in enumerate(b)})
-        poll = PlcPoll(t0, coils, regs, self._decode(coils, regs))
+        poll = PlcPoll(t0, coils, regs, self._decode(coils, regs, self.clock.monotonic()))
         self._after_poll(poll)
         return poll
 
@@ -159,7 +159,7 @@ class PlcDriver:
         a = _ADDR[name]
         return coils[a.addr] if a.kind == "coil" else regs[a.addr]
 
-    def _decode(self, coils: Dict[int, bool], regs: List[int]) -> Dict[str, Any]:
+    def _decode(self, coils: Dict[int, bool], regs: List[int], now: Optional[float] = None) -> Dict[str, Any]:
         out: Dict[str, Any] = {}
         cfg = self.cfg
         for b in (SF.PLC_BLOCK, SF.HEATER_BLOCK, SF.RF_BLOCK):
@@ -186,7 +186,15 @@ class PlcDriver:
         en, dac, fwd = out.get("rf.dac_enable"), out.get("rf.dac"), out.get("rf.fwd_w")
         cmd_on = None if en is None or dac is None else (en is True and dac > 0)
         out["rf.cmd_on"] = cmd_on
-        out["rf.uncommanded"] = None if cmd_on is None or fwd is None else (not cmd_on and fwd >= float(cfg["RF_UNCOMMANDED_FWD_W"]))
+        # W-25 A1 — 명령으로 끈 직후 Forward 읽은 값이 1~2 s 늦게 내려와도 '명령 없는 출력'으로 보지 않는다: cmd_on 이 참이었던
+        # 마지막 읽기에서 RF_UNCOMMANDED_GRACE_SEC 안은 꺼지는 중(uncommanded 거짓 — 사건·표시 같은 판정). 0 이면 유예 없음.
+        if now is not None and cmd_on:
+            self._rf_cmd_on_t = now
+        last_on = getattr(self, "_rf_cmd_on_t", None)
+        grace = float(cfg.get("RF_UNCOMMANDED_GRACE_SEC", 0) or 0)
+        settling = now is not None and last_on is not None and now - last_on < grace
+        out["rf.uncommanded"] = None if cmd_on is None or fwd is None else (
+            not cmd_on and not settling and fwd >= float(cfg["RF_UNCOMMANDED_FWD_W"]))
         return out
 
     def rf_uncommanded_track(self, row: Dict[str, Any]) -> None:
@@ -288,7 +296,7 @@ class PlcDriver:
 
     # ───────── tick ─────────
     def on_tick(self, tick) -> None:
-        """TickLoop 의 tick 훅 — 하트비트, 링크 감시, 두절 블랙박스."""
+        """TickLoop 의 tick 훅 — 하트비트, 링크 감시, 끊김 블랙박스."""
         up = self.link_up
         now = self.clock.monotonic()
         if up != self._prev_link:

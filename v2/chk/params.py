@@ -349,8 +349,10 @@ PARAMS: tuple = (
           pattern=r".*", safety=L, src=_V2, desc="기록 파일의 사본을 둘 NAS 폴더입니다. 비워 두면 NAS 에 복사하지 않으며, 복사는 제어와 분리된 별도 스레드가 합니다."),
     _inst("KEEP_AWAKE", "절전 막기", E, "run", enum=("run", "always", "off"),
           enum_labels=(("run", "운전 중만"), ("always", "프로그램이 켜져 있는 동안"), ("off", "막지 않음")), src=_V2,
-          desc="장비 노트북이 대기 모드(절전)로 들어가지 않게 막는 때입니다. 기본은 공정·수동 조작·히터 운전 중에만 막으며, 화면 꺼짐은 "
-               "막지 않습니다."),
+          desc="장비 노트북이 대기 모드(절전)로 들어가지 않게 막는 때이며, 기본은 공정·수동 조작·히터 운전 중에만 막습니다. "
+               "덮개 닫기·전원 버튼처럼 사람이 직접 시킨 절전은 막지 못하므로 윈도우 전원 설정에서 덮개 닫기와 절전을 바꿔 두어야 합니다.",
+          note="화면 꺼짐(ES_DISPLAY_REQUIRED)은 막지 않는다. SetThreadExecutionState 는 사용자 절전(덮개·전원 버튼)을 막지 못한다"
+               "(Microsoft 문서) — 시작 때 전원 설정을 읽어 위험하면 POWER_SETTINGS 경고(W-25 A5, 설정은 바꾸지 않음)."),
     _inst("INVENTORY_API_URL", "재고관리 장착 타겟 주소", S, "https://vanam.synology.me/inventory/api/chamber-slots",
           pattern=r"(https?://\S+)?", safety=L, src=_V2,
           desc="재고관리 서버의 챔버 자리 목록 주소로, 연결할 때·5분마다·공정 시작 때 읽어 Gun1·Gun2 장착 타겟을 "
@@ -408,7 +410,7 @@ PARAMS: tuple = (
     _p("PLC_RETRY_DELAY_MS", "comm", "PLC 재시도 간격", "ms", I, 30, 0, 1000, safety=L,
         desc="PLC Modbus 트랜잭션이 실패했을 때 다시 보내기 전에 쉬는 시간입니다. 재시도는 'PLC 재시도 횟수'만큼 하며, 쉬는 "
              "시간도 'PLC 읽기 마감' 안에 들어갑니다."),
-    _p("PLC_COMM_LOSS_ABORT_SEC", "comm", "PLC 두절 공정 중단", "s", F, 10.0, 1.0, 10.0, safety=H,
+    _p("PLC_COMM_LOSS_ABORT_SEC", "comm", "PLC 끊김 공정 중단", "s", F, 10.0, 1.0, 10.0, safety=H,
        desc="PLC 읽기가 마지막으로 성공한 뒤 이 시간이 지나면 공정을 중단합니다. PLC 래더가 히터를 끄는 워치독 시간(10 s) "
             "이하로 둡니다.",
        note="래더 히터 워치독 TON(10 s) 이하."),
@@ -416,13 +418,13 @@ PARAMS: tuple = (
        src="device/PLC.py:192 (_DISCONNECT_GRACE_S)",
         desc="PLC 값이 이 시간 넘게 들어오지 않으면 끊김 알림(오류)을 끊길 때마다 한 번 보내고 PLC 블랙박스를 파일로 남깁니다. "
              "다시 연결되면 정보 알림을 한 번 보내며, 공정 중단과는 별개로 늘 봅니다."),
-    _p("DC_COMM_LOSS_ABORT_SEC", "comm", "DC 두절 공정 중단", "s", F, 10.0, 2.0, 30.0, safety=H,
+    _p("DC_COMM_LOSS_ABORT_SEC", "comm", "DC 끊김 공정 중단", "s", F, 10.0, 2.0, 30.0, safety=H,
         desc="DC 를 쓰는 공정에서 출력을 켠 뒤 DC 값이 이 시간 넘게 들어오지 않으면 DC 끄기를 보내고 공정을 중단합니다. 통신이 "
              "돌아왔을 때 공정이 없으면 DC 끄기를 다시 보냅니다."),
-    _p("MFC_COMM_LOSS_ABORT_SEC", "comm", "MFC 두절 공정 중단", "s", F, 30.0, 5.0, 120.0, safety=H, src=_V2,
+    _p("MFC_COMM_LOSS_ABORT_SEC", "comm", "MFC 끊김 공정 중단", "s", F, 30.0, 5.0, 120.0, safety=H, src=_V2,
        desc="공정이나 수동 조작 중에 MFC 값이 이 시간 넘게 들어오지 않으면 정지 순서로 공정을 멈춥니다. MFC 가 끊긴 채로도 파워 "
             "끄기·셔터 닫기·가스 밸브 닫기는 끝까지 합니다."),
-    _p("RFPULSE_COMM_LOSS_ABORT_SEC", "comm", "RF Pulse 두절 공정 중단", "s", F, 10.0, 2.0, 30.0,
+    _p("RFPULSE_COMM_LOSS_ABORT_SEC", "comm", "RF Pulse 끊김 공정 중단", "s", F, 10.0, 2.0, 30.0,
        safety=H,
         desc="RF Pulse 를 쓰는 공정에서 RF Pulse 를 시작한 뒤 값이 이 시간 넘게 들어오지 않으면 RF Pulse 끄기를 "
              "보내고 공정을 중단합니다. 통신이 돌아왔을 때 공정이 없으면 RF Pulse 끄기를 다시 보냅니다."),
@@ -431,22 +433,22 @@ PARAMS: tuple = (
         desc="지금은 쓰지 않는 설정입니다. 다시 연결은 'RF Pulse 연속 무응답 재연결 횟수'와 '재연결 첫 간격'·'재연결 최대 "
              "간격'이 정합니다.",
         note="v2 에서는 사용하지 않는다. v1 은 무응답이 이만큼 이어지면 포트를 다시 열었음."),
-    _p("IG_COMM_LOSS_ABORT_SEC", "comm", "Ion Gauge 두절 베이스 대기 중단", "s", F, 60.0, 10.0, 600.0,
+    _p("IG_COMM_LOSS_ABORT_SEC", "comm", "Ion Gauge 끊김 베이스 대기 중단", "s", F, 60.0, 10.0, 600.0,
        src="controller/process_controller.py:35",
         desc="베이스 압력 대기 단계 중 Ion Gauge 값이 이 시간 넘게 들어오지 않으면 공정을 중단합니다. Filament 켜기·끄기 "
-             "직후의 'Filament 전환 뒤 무응답 유예' 구간은 두절로 세지 않습니다."),
+             "직후의 'Filament 전환 뒤 무응답 유예' 구간은 끊김으로 세지 않습니다."),
     _p("COMM_RECONNECT_START_MS", "comm", "재연결 첫 간격", "ms", I, 1000, 100, 60000, safety=L,
         desc="장비 포트가 끊기거나 열기에 실패한 뒤 다시 연결을 시도하기까지의 첫 간격입니다. 실패할 때마다 두 배로 늘어 '재연결 최대 "
              "간격'까지 커지며, 다섯 장비에 함께 씁니다."),
     _p("COMM_RECONNECT_MAX_MS", "comm", "재연결 최대 간격", "ms", I, 60000, 1000, 600000, safety=L,
         desc="실패할 때마다 두 배로 늘어나는 재연결 간격의 상한입니다. '재연결 첫 간격'보다 작을 수 없으며, 다섯 장비에 함께 씁니다."),
-    _p("COMM_LONG_OUTAGE_SEC", "comm", "장기 두절 판정", "s", I, 600, 30, 86400, safety=L,
-        desc="연결 실패가 이 시간 넘게 이어지면 장기 두절로 보고 알림을 한 번 냅니다. 그 뒤로는 '장기 두절 중 시도 주기'마다 연결을 "
-             "시도하고, 실패 기록은 '두절 기록 간격'마다만 남깁니다."),
-    _p("COMM_PROBE_MS", "comm", "장기 두절 중 시도 주기", "ms", I, 60000, 1000, 600000, safety=L,
-        desc="장기 두절로 본 뒤 연결을 다시 시도하는 간격입니다. 이때부터는 두 배로 늘리는 재연결 간격 대신 이 주기로 시도합니다."),
-    _p("COMM_OUTAGE_LOG_SEC", "comm", "두절 기록 간격", "s", I, 600, 30, 86400, safety=L, apply=LIVE,
-        desc="장기 두절 중 연결 실패 기록을 남기는 간격입니다. DC 끄기를 확인하지 못해 다시 시도할 때 늘어나는 간격('DC OFF "
+    _p("COMM_LONG_OUTAGE_SEC", "comm", "장기 끊김 판정", "s", I, 600, 30, 86400, safety=L,
+        desc="연결 실패가 이 시간 넘게 이어지면 장기 끊김으로 보고 알림을 한 번 냅니다. 그 뒤로는 '장기 끊김 중 시도 주기'마다 연결을 "
+             "시도하고, 실패 기록은 '끊김 기록 간격'마다만 남깁니다."),
+    _p("COMM_PROBE_MS", "comm", "장기 끊김 중 시도 주기", "ms", I, 60000, 1000, 600000, safety=L,
+        desc="장기 끊김으로 본 뒤 연결을 다시 시도하는 간격입니다. 이때부터는 두 배로 늘리는 재연결 간격 대신 이 주기로 시도합니다."),
+    _p("COMM_OUTAGE_LOG_SEC", "comm", "끊김 기록 간격", "s", I, 600, 30, 86400, safety=L, apply=LIVE,
+        desc="장기 끊김 중 연결 실패 기록을 남기는 간격입니다. DC 끄기를 확인하지 못해 다시 시도할 때 늘어나는 간격('DC OFF "
              "미확인 재시도 첫 간격'에서 시작)의 상한으로도 씁니다."),
 
     # ───────────── PLC ─────────────
@@ -461,7 +463,7 @@ PARAMS: tuple = (
                            note="MV_INTERLOCK 이 이만큼 연속 OFF 면 중단(S3), 순간 끊김은 기록만."),
     _p("BLACKBOX_SECONDS", "plc", "PLC 블랙박스 길이", "s", I, 60, 10, 600, safety=L,
        apply=RESTART, src="device/PLC.py:178 (deque 300 × 200 ms)",
-        desc="PLC 내부 폴링 값을 최근 이 시간만큼 메모리에 담아 두는 블랙박스 길이입니다. PLC 통신 두절·끊김 알림·재기동 감지 때 "
+        desc="PLC 내부 폴링 값을 최근 이 시간만큼 메모리에 담아 두는 블랙박스 길이입니다. PLC 통신 끊김 알림·재기동 감지 때 "
              "이 기록을 파일로 남기며, 길수록 사고 전 기록이 길어집니다."),
 
     # ───────────── MFC(경고·알림만, 공정은 계속) ─────────────
@@ -591,7 +593,7 @@ PARAMS: tuple = (
        note="true 면 연결 때 쓰고 되읽는다(prod·sim). bench 에서 확인한 뒤 켠다. "
             "VOLT:OVP=DC_MAX_VOLTAGE, CURR:OCP=DC_MAX_CURRENT."),
     _p("DC_OFF_RETRY_START_SEC", "dc", "DC OFF 미확인 재시도 첫 간격", "s", F, 10.0, 2.0, 600.0,
-       src="device/DCpower.py:32", desc="DC 출력 끄기를 확인하지 못했을 때 끄기를 다시 시도하기까지의 첫 간격입니다. 실패할 때마다 두 배로 늘어나며 '두절 기록 "
+       src="device/DCpower.py:32", desc="DC 출력 끄기를 확인하지 못했을 때 끄기를 다시 시도하기까지의 첫 간격입니다. 실패할 때마다 두 배로 늘어나며 '끊김 기록 "
                                         "간격'까지 커집니다.",
                                    note="이후 2배씩, 최대 COMM_OUTAGE_LOG_SEC."),
 
@@ -607,6 +609,11 @@ PARAMS: tuple = (
             "값으로 검사합니다."),
     _p("RF_UNCOMMANDED_FWD_W", "rf", "RF 명령 없는 출력 기준", "W", F, 5.0, 0.5, 100.0, safety=M, apply=LIVE, src=_V2,
        desc="프로그램이 RF 를 켜지 않았는데 Forward 가 이 값 이상이면 '명령 없이 출력 중'으로 보고 기록을 남깁니다."),
+    _p("RF_UNCOMMANDED_GRACE_SEC", "rf", "RF 끈 뒤 명령 없는 출력 유예", "s", F, 5.0, 0.0, 30.0, safety=M, apply=LIVE, src=_V2,
+       desc="프로그램이 RF 를 끈 뒤 이 시간 동안은 Forward 가 남아 있어도 꺼지는 중으로 보고 '명령 없이 출력 중'으로 보지 않습니다. "
+            "0 이면 끈 바로 다음 읽기부터 판정합니다.",
+       note="W-25 A1(챔버12 에서 재현) — 끄는 순간 PLC Forward ADC 가 1~2 s 늦게 내려와 RF_UNCOMMANDED 경고가 잘못 뜸. "
+            "rf.cmd_on 이 참이었던 마지막 PLC 읽기 시각부터 잰다(drivers/plc.py _decode)."),
     _p("RF_FWD_FULL_SCALE_W", "rf", "RF Forward ADC 풀스케일", "W", F, 594.5, 1.0, 2000.0, safety=H,
        src="lib/config.py:558 (고정값)", desc="PLC ADC 4000 카운트에 해당하는 Forward 파워(W)로, Forward 측정값을 환산하는 교정 상수입니다.",
                                             note="v1 값이며 사용자 확인을 마쳤다(2026-10-15)."),
@@ -1269,6 +1276,13 @@ COMM_GROUPS: tuple = (
 _GROUP_OF = {k: g for g, keys in COMM_GROUPS for k in keys}
 PARAMS = tuple(_dc_replace(p, group=_GROUP_OF[p.key]) if p.key in _GROUP_OF else p for p in PARAMS)
 
+# 아무 동작도 하지 않는 설정(W-25 C2 — 코드에서 읽는 곳 없음을 다시 확인: process_states·safety_rules 의 params 목록은 설명용).
+# 키는 지우지 않는다(저장된 설정이 깨지지 않게). 웹 묶음 params[].unused — 평소 보기 설정 화면·서랍에서 숨기고 상세 보기에서만 '쓰지 않음'
+UNUSED_KEYS = frozenset({
+    "IG_GAUGE_A_NAME", "IG_GAUGE_B_NAME", "IG_VALUE_MAX_AGE_SEC", "IG_BASE_LOG_INTERVAL_SEC",
+    "HEATER_GAS_MFC_TIMEOUT_SEC", "RFPULSE_COMM_REOPEN_SEC", "DC_INITIAL_VOLTAGE",
+})
+
 
 # ───────────── 키 사이 규칙 ─────────────
 def _r(id_, keys, desc, fn) -> CrossRule:
@@ -1307,9 +1321,9 @@ CROSS_RULES: tuple = (
     _r("X06", ("HEATER_WD_PERIOD_MS",), "워치독 주기 ≤ 래더 TON/3",
        lambda v: _need(v["HEATER_WD_PERIOD_MS"] * 3 <= dev.HEATER_WD_TON_SEC * 1000,
                        f"WD {v['HEATER_WD_PERIOD_MS']} ms × 3 > TON {dev.HEATER_WD_TON_SEC} s")),
-    _r("X07", ("PLC_COMM_LOSS_ABORT_SEC",), "PLC 두절 중단 ≤ 래더 워치독 TON",
+    _r("X07", ("PLC_COMM_LOSS_ABORT_SEC",), "PLC 끊김 중단 ≤ 래더 워치독 TON",
        lambda v: _need(v["PLC_COMM_LOSS_ABORT_SEC"] <= dev.HEATER_WD_TON_SEC,
-                       "PLC 두절 중단이 래더 워치독보다 늦다")),
+                       "PLC 끊김 중단이 래더 워치독보다 늦다")),
     _r("X08", ("COMM_RECONNECT_START_MS", "COMM_RECONNECT_MAX_MS"), "재연결 MAX ≥ START",
        lambda v: _need(v["COMM_RECONNECT_MAX_MS"] >= v["COMM_RECONNECT_START_MS"], "MAX < START")),
     _r("X09", ("PLC_SESSION_MARK_REG",), "마커 D 주소가 사용 중인 주소와 겹치지 않음",

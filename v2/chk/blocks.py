@@ -9,7 +9,7 @@
   넣을 수 없다(값 검사). 무언가 남기려면 end_stop 블록을 넣고 그 단계(필라멘트·셔터·히터·가스)만 뺀다.
   STOP·이상 중단 정지 순서는 고정(safety_rules.STOP_SEQUENCE 전체).
 - 운전 중 장비 보호(SafetyEngine 규칙)는 순서와 무관 — 적용 구간은 공정 상태 이름이 아니라 블록·장비 상태:
-  무출력(S31A·S33A) = 그 장비가 램프 중, 두절·반사파(S30·S34C·S32) = 그 장비 출력 명령 뒤,
+  무출력(S31A·S33A) = 그 장비가 램프 중, 끊김·반사파(S30·S34C·S32) = 그 장비 출력 명령 뒤,
   이탈 감시(S31C·S33B·S34A·S38A·S38B) = 지금 블록의 watch(대기·메인·조건 대기 블록이 정한다, 그 밖의 블록은 WATCH_DEFAULT).
 
 기본 템플릿(template_blocks): v1 행(recipe.PROCESS_COLUMNS) → v1 _build_steps(controller/process_controller.py:486-682)와

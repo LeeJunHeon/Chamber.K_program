@@ -9,7 +9,7 @@
 OFF 확인(S29): Sequence — OUTP OFF → 0.5 s → OUTP? 최대 DC_OFF_VERIFY_TRIES 회("0" 이면 끝, "1"·무응답이면 OUTP OFF 다시).
   끝까지 확인 못 하면 DC_OFF_UNCONFIRMED — 단 이번 실행에서 출력을 켠 적이 없으면(maybe_on 거짓) 경고가 아니라 정보 한 줄
   (v1 _mark_off_unconfirmed, DCpower.py:356-359). OFF 는 늦추지 않는다(안전이 먼저). OFF 를 쓴 뒤 질의 금지 시간의 측정은
-  suppressed(실패·두절 판정에 넣지 않음).
+  suppressed(실패·끊김 판정에 넣지 않음).
   출력 켜기 시퀀스는 tick 을 주면 그 tick 의 측정 뒤에 시작한다.
   OFF 미확인(켠 적 있음)이면 DC_OFF_RETRY_START_SEC 뒤 다시, 실패마다 2배·최대 COMM_OUTAGE_LOG_SEC(v1 DCpower.py:269-270·
   366-379). 그 사이 DC 를 다시 켰으면(공정이 출력 주인) 하지 않는다.
@@ -243,7 +243,7 @@ class DcDriver:
                                    not_before=self.clock.monotonic() + self.off_retry_s, confirms_link=False))
 
     def _suppress_after_off(self) -> None:
-        """OFF 를 쓴 뒤 질의 금지 시간 동안의 측정은 실패가 아니라 suppressed — 연속 실패·두절 판정에 넣지 않는다."""
+        """OFF 를 쓴 뒤 질의 금지 시간 동안의 측정은 실패가 아니라 suppressed — 연속 실패·끊김 판정에 넣지 않는다."""
         self.worker.suppress(self._last_write + self.gap_s + 0.1, "DC OFF 확인 중")
 
     def output_off_confirmed(self, on_done: Optional[Callable[[str, Optional[str], list], None]] = None,

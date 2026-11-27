@@ -106,6 +106,9 @@
                 MFC_COMM_LOSS_ABORT_SEC·KEEP_AWAKE·DEVICE_PARAMS_REFRESH_MIN), 새 사유(MFC_COMM_LOSS·DEVICE_PARAMS_CHANGED)·
                 안전 규칙 S52, 사건(컨트롤러 값 바뀜·늦은 RF 쓰기 버림·절전 막기, 출처 app), 자동 제어 방식 쓰기는 PID(1)만,
                 runState.waitText(영점 대기 n s)
+                버전 25(W-25): 새 설정 RF_UNCOMMANDED_GRACE_SEC(RF 끈 뒤 명령 없는 출력 유예), 사유 MFC_COMM_LOSS 를 지우고 S52 는
+                MFC_COMM_LOST, 사유 POWER_SETTINGS·사건(장비 노트북 전원 설정·읽기 실패), '두절' → '끊김'(설정 이름·설명·규칙 이름),
+                params[].unused(아무 동작도 하지 않는 설정 — 평소 보기에서 숨김), S10 에 셔터 닫기
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키
   commands      명령(종류·경로·역할·허용 상태·조건·인자·benchOk) · preconditions · reasons(사유 코드) · plcButtons.
                 benchOk = bench(장비 쓰기 금지)에서도 받는 명령 — false 인 명령은 bench 에서 BENCH_READ_ONLY 로 거부된다
@@ -144,7 +147,7 @@ from v2.chk import recipe as RC
 from v2.chk import safety_rules as SR
 from v2.chk import snapshot_fields as SF
 
-EXPORT_VERSION = 24
+EXPORT_VERSION = 25
 
 # 웹이 받는 공정 기록 이벤트(ProcEvent kind → data 키) — 웹 단계에서 그대로 event·run_* 메시지로 올린다
 EVENTS: tuple = (
@@ -197,6 +200,7 @@ EVENT_LABEL: Dict[tuple, str] = {
     ("mfc", "params_read"): "컨트롤러 값 읽음", ("mfc", "param_write"): "컨트롤러 값 바꿈",
     ("mfc", "params_changed"): "컨트롤러 값이 바뀜", ("plc", "rf_write_dropped"): "RF 늦은 쓰기 버림",
     ("app", "keep_awake_on"): "절전 막기 시작", ("app", "keep_awake_off"): "절전 막기 끝",
+    ("app", "power_settings"): "장비 노트북 전원 설정", ("app", "power_settings_unread"): "전원 설정 읽기 실패",
     ("process", "targets"): "장착 타겟 채움", ("inventory", "targets_read_failed"): "장착 타겟 읽기 실패",
     ("inventory", "targets_read_ok"): "장착 타겟 읽기 복구", ("inventory", "targets_changed"): "장착 타겟 바뀜",
     ("dc", "identity"): "장비 확인", ("dc", "syst_err"): "장비 자체 오류 기록", ("dc", "last_state"): "전원 복귀 때 출력 설정",
@@ -281,6 +285,8 @@ EVENT_DESC: Dict[tuple, str] = {
     ("plc", "rf_write_dropped"): "RF 를 끈 뒤 늦게 실행된 RF 출력 쓰기를 버렸습니다. RF 가 다시 켜지지 않게 한 것입니다.",
     ("app", "keep_awake_on"): "운전 중이라 장비 노트북이 절전 모드로 들어가지 않게 막기 시작했습니다.",
     ("app", "keep_awake_off"): "절전 막기를 풀었습니다.",
+    ("app", "power_settings"): "덮개를 닫거나 오래 쓰지 않으면 절전되는 전원 설정이라 운전 중에 노트북이 멈출 수 있습니다.",
+    ("app", "power_settings_unread"): "윈도우 전원 설정을 읽지 못했습니다. 설정은 바꾸지 않았습니다.",
     ("inventory", "targets_read_failed"): "재고관리에서 장착 타겟을 읽지 못했습니다. 공정은 그대로 진행합니다.",
     ("inventory", "targets_read_ok"): "재고관리에서 장착 타겟을 다시 읽었습니다.",
     ("inventory", "targets_changed"): "재고관리의 Gun1·Gun2 장착 타겟이 바뀌었습니다.",
@@ -397,6 +403,7 @@ EVENT_KINDS: tuple = (
     ("mfc", "params_read", "컨트롤러 값 읽기", _D), ("mfc", "param_write", "컨트롤러 값 바꾸기", _M),
     ("mfc", "params_changed", "컨트롤러 값 바뀜", _M), ("plc", "rf_write_dropped", "RF 늦은 쓰기 버림", _D),
     ("app", "keep_awake_on", "절전 막기 시작", _D), ("app", "keep_awake_off", "절전 막기 끝", _D),
+    ("app", "power_settings", "장비 노트북 전원 설정", _M), ("app", "power_settings_unread", "전원 설정 읽기 실패", _D),
     ("process", "targets", "장착 타겟 채움", _M),
     ("inventory", "targets_read_failed", "장착 타겟 읽기 실패", _M), ("inventory", "targets_read_ok", "장착 타겟 읽기 복구", _D),
     ("inventory", "targets_changed", "장착 타겟 바뀜", _D),
@@ -444,6 +451,7 @@ def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any],
             "safety": p.safety.value, "apply": p.apply.value, "scope": p.scope.value, "role": p.role.value,
             "v1Key": p.v1_key, "v1Source": p.v1_source, "v1Default": p.v1_default, "pendingConfirm": p.pending_confirm,
             "webLocked": p.web_locked,
+            "unused": p.key in P.UNUSED_KEYS,                               # W-25 C2 — 아무 동작도 하지 않는 설정(평소 보기에서 숨김)
             "desc": p.desc, "note": p.note}
 
 

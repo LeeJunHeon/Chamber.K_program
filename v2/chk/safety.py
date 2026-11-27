@@ -13,7 +13,7 @@
 ALL STOP 은 v1 처럼 전부 끈다(사용자 결정 2026-10-20 — 펌프 유지 옵션 없음). on_hold(S46)는 실행하지 않는다.
 
 적용 구간(블록 공정, 사용자 결정 2026-10-20): 공정 상태 이름 대신 장비·블록 상태로 —
-무출력 S31A·S33A = 그 장비 램프 중(dc_ramping·rf_ramping), 두절·반사파 S30·S34C·S32 = 그 장비 출력 명령 뒤(dc_on·rfp_on·rf_on),
+무출력 S31A·S33A = 그 장비 램프 중(dc_ramping·rf_ramping), 끊김·반사파 S30·S34C·S32 = 그 장비 출력 명령 뒤(dc_on·rfp_on·rf_on),
 이탈 감시 S31C·S33B·S34A·S38A·S38B = 지금 블록의 감시(watching), S39B = 베이스 압력 대기 블록, S34D = RF Pulse 를 쓰는 행(시작 실패 이벤트는 START 에서만 온다).
 공정 중 수정(PROCESS_ADJUST) 뒤에는 새 목표에 다시 도달할 때까지 S31C(dc_settling)·S34A(rfp_settling)를 쉬고,
 RF 는 램프로 돌아가 유지 중에만 보는 S33B 가 저절로 쉰다. 기본 템플릿에서는 지금(5-3)과 같은 판정이다(SimpleProcess 는 상태 이름으로 같은 값을 낸다 — blocks.watch_for_state).
@@ -22,6 +22,8 @@ end_stop 블록의 skip 으로 단계를 뺄 수 있다(파워 끄기 단계 SR.
 정상 끝 정지 중에 STOP·이상 중단이 오면 남김을 취소한다 — 그 정지 순서가 끝나면 뺀 단계를 표 순서로 이어서(stop_rest).
 """
 from __future__ import annotations
+
+import dataclasses
 
 import collections
 from dataclasses import dataclass, field
@@ -66,7 +68,7 @@ IMPLEMENTED_IN: Dict[str, str] = {
     "S46": "on_hold", "S47": "recipe.check_process_row", "S48": "config_store.apply",
     "S49": "engine", "S50": "drivers/dc.py 연결 초기화(DC_SET_PROTECTION)",
     "S51": "ChkSafety.first_read(장비별 첫 정상 행 — 프로그램이 켜진 뒤 한 번)",
-    "S52": "engine(W-23 — MFC 통신 두절)",
+    "S52": "engine(W-23 — MFC 통신 끊김)",
 }
 
 # 표와 평가 위치가 다른 규칙(이유)
@@ -116,7 +118,7 @@ class SimpleProcess:
     uses_rf: bool = False
     uses_rfp: bool = False
     uses_heater: bool = False
-    dc_on: bool = False                 # 이번 행에서 출력 명령을 냈다(정지 순서·두절 판정 구간)
+    dc_on: bool = False                 # 이번 행에서 출력 명령을 냈다(정지 순서·끊김 판정 구간)
     rf_on: bool = False
     rfp_on: bool = False
     rf_ref_waiting: bool = False
@@ -199,7 +201,7 @@ def _p(key, scale=1.0):
 
 
 def _age_ge(cfg, block, key, skip_suppressed=False):
-    """두절 판정 — 나이 ≥ 한도. 값을 한 번도 못 받았으면(나이 없음) 모름."""
+    """끊김 판정 — 나이 ≥ 한도. 값을 한 번도 못 받았으면(나이 없음) 모름."""
     def cond(v, ctx):
         if skip_suppressed and v.q(block) == "suppressed":
             return None
@@ -254,9 +256,15 @@ def _heater_fault_acts(v: View, ctx) -> List[Act]:
     return acts
 
 
+# PLC 로 끄는 정지 단계(W-25 A3 — PLC 끊김 중단 때 보내기만 하는 것)
+PLC_STOP_ACTS = frozenset({"SHUTTERS_CLOSE", "HEATER_FORCE_OFF", "RF_SAFE_OFF", "GAS_VALVES_CLOSE"})
+
+
 def _s10_acts(v, ctx):
     ctx.comm_aborted = False
-    return [Act("RF_SAFE_OFF"), Act("HEATER_FORCE_OFF"), Act("GAS_VALVES_CLOSE"), _note("warn", "PLC_RECOVERED_SAFE")]
+    # 끊김 중에 보내지 못한 PLC 쪽 출력 — RF DAC·허용, 히터, 가스 밸브, 셔터(W-25 A3 — 셔터를 더함)
+    return [Act("RF_SAFE_OFF"), Act("HEATER_FORCE_OFF"), Act("GAS_VALVES_CLOSE"), Act("SHUTTERS_CLOSE", {"which": "ms,s1,s2"}),
+            _note("warn", "PLC_RECOVERED_SAFE")]
 
 
 def _s30_acts(v, ctx):
@@ -380,7 +388,7 @@ def build_rules(cfg: Dict[str, Any]) -> List[LiveRule]:
           states=ACT, applies=lambda c: c.watching("flow"), block="mfc"),
         L("S38B", "notify", "tick", lambda v, c: _pressure_dev(C, v, c), _fixed(_note("warn", "PRESSURE_DEVIATION")), _p("MFC_PRESSURE_WARN_SEC"),
           states=ACT, applies=lambda c: c.watching("pressure"), block="mfc"),
-        L("S52", "abort", "tick", _age_ge(C, "mfc", "MFC_COMM_LOSS_ABORT_SEC"), _fixed(_abort("MFC_COMM_LOSS")), states=ACT),
+        L("S52", "abort", "tick", _age_ge(C, "mfc", "MFC_COMM_LOSS_ABORT_SEC"), _fixed(_abort("MFC_COMM_LOST")), states=ACT),
         L("S39B", "abort", "tick", _age_ge(C, "ig", "IG_COMM_LOSS_ABORT_SEC", skip_suppressed=True),
           _fixed(_abort("IG_COMM_LOST")), states=ACT, applies=lambda c: c.block_type == "base_wait"),
         L("S49", "abort", "tick", g("rfp.itl_open"), _fixed(Act("RFP_SAFE_OFF"), _abort("RFP_FAULT")), states=ACT,
@@ -475,9 +483,9 @@ class ChkSafety:
                 self.engine.reset_rule(r.id)
         return fired
 
-    # ── S30·S34C 해제 동작 — 두절로 중단한 장비의 링크가 돌아오면 ──
+    # ── S30·S34C 해제 동작 — 끊김으로 중단한 장비의 링크가 돌아오면 ──
     def recover_after_comm_loss(self, v: View) -> None:
-        """DC·RF Pulse 통신 두절로 공정을 중단한 뒤 링크가 돌아오면: 공정이 없으면 OFF(확인형)를 한 번 더, 공정 중이면 생략
+        """DC·RF Pulse 통신 끊김으로 공정을 중단한 뒤 링크가 돌아오면: 공정이 없으면 OFF(확인형)를 한 번 더, 공정 중이면 생략
         (v1 main.py:1488-1517 _on_dc_recovered·_on_rfpulse_recovered)."""
         p = self.process
         for blk, flag, act, code in (("dc", "dc_comm_aborted", "DC_SAFE_OFF", "DC_RECOVERED_SAFE"),
@@ -630,10 +638,27 @@ class ChkSafety:
         drop = set(skip or ()) - set(SR.END_STOP_MUST_KEEP)
         order = [s for s in SR.STOP_SEQUENCE if s.no not in drop]
         left = getattr(p, "left_on", lambda item: False)       # 앞 행·지난 공정이 남긴 것(아직 그대로인 것)도 함께 정리
-        return self._steps(order, {"1": lambda: p.filament_by_process or left("filament"),
-                                   "3": lambda: p.uses_heater or left("heater"),
-                                   "4": lambda: bool(getattr(p, "dc_on", False)),
-                                   "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})
+        steps = self._steps(order, {"1": lambda: p.filament_by_process or left("filament"),
+                                    "3": lambda: p.uses_heater or left("heater"),
+                                    "4": lambda: bool(getattr(p, "dc_on", False)),
+                                    "5": lambda: bool(getattr(p, "rfp_on", False)), "6": rf_on}, {})
+        return self._plc_lost_steps(steps)
+
+    def _plc_lost_steps(self, steps: List[Step]) -> List[Step]:
+        """W-25 A3 — PLC 끊김(PLC_COMM_LOST)으로 중단했고 PLC 가 아직 끊겨 있으면 PLC 로 끄는 단계의 꺼짐 확인을 기다리지 않는다:
+        셔터·히터·RF 끄기·가스 밸브는 보내기만(nowait — 돌아오면 S10 이 셔터·RF·히터·가스 밸브를 다시 끈다), RF 천천히 내리기는
+        건너뜀(DAC 를 한 칸씩 쓰며 기다리는 단계라 끊긴 PLC 에는 의미 없음). 그래서 MFC 유량 끄기·DC·RF Pulse 끄기가 판정 뒤 곧바로.
+        PLC 가 살아 있거나 다른 사유의 정지 순서는 그대로."""
+        if self.engine.run_reason != "PLC_COMM_LOST" or getattr(self.plc, "link_up", True):
+            return steps
+        out = []
+        for s in steps:
+            if s.act.kind == "RF_RAMP_DOWN":
+                s = dataclasses.replace(s, when=lambda: False, desc="RF 천천히 내리기(PLC 끊김 — 건너뜀)")
+            elif s.act.kind in PLC_STOP_ACTS:
+                s = dataclasses.replace(s, nowait=True, desc=f"{s.desc}(PLC 끊김 — 보내기만)")
+            out.append(s)
+        return out
 
     def rest_steps(self, drop) -> List[Step]:
         """정상 끝 정지 중 STOP·이상 중단 — 그 정지 순서에서 뺀 단계만 표 순서로(조건은 STOP 과 같다)."""

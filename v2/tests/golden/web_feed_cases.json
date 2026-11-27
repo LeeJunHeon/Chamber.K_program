@@ -1,10 +1,10 @@
 {
- "exportVersion": 24,
- "bundleHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+ "exportVersion": 25,
+ "bundleHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
  "bundle": {
-  "version": 24,
-  "hash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
-  "paramSchemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+  "version": 25,
+  "hash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
+  "paramSchemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
   "configVersion": null,
   "overriddenKeys": [],
   "params": [
@@ -456,7 +456,7 @@
     "key": "KEEP_AWAKE",
     "group": "install",
     "label": "절전 막기",
-    "desc": "장비 노트북이 대기 모드(절전)로 들어가지 않게 막는 때입니다. 기본은 공정·수동 조작·히터 운전 중에만 막으며, 화면 꺼짐은 막지 않습니다."
+    "desc": "장비 노트북이 대기 모드(절전)로 들어가지 않게 막는 때이며, 기본은 공정·수동 조작·히터 운전 중에만 막습니다. 덮개 닫기·전원 버튼처럼 사람이 직접 시킨 절전은 막지 못하므로 윈도우 전원 설정에서 덮개 닫기와 절전을 바꿔 두어야 합니다."
    },
    {
     "key": "INVENTORY_API_URL",
@@ -539,7 +539,7 @@
    {
     "key": "PLC_COMM_LOSS_ABORT_SEC",
     "group": "comm",
-    "label": "PLC 두절 공정 중단",
+    "label": "PLC 끊김 공정 중단",
     "desc": "PLC 읽기가 마지막으로 성공한 뒤 이 시간이 지나면 공정을 중단합니다. PLC 래더가 히터를 끄는 워치독 시간(10 s) 이하로 둡니다."
    },
    {
@@ -551,19 +551,19 @@
    {
     "key": "DC_COMM_LOSS_ABORT_SEC",
     "group": "comm",
-    "label": "DC 두절 공정 중단",
+    "label": "DC 끊김 공정 중단",
     "desc": "DC 를 쓰는 공정에서 출력을 켠 뒤 DC 값이 이 시간 넘게 들어오지 않으면 DC 끄기를 보내고 공정을 중단합니다. 통신이 돌아왔을 때 공정이 없으면 DC 끄기를 다시 보냅니다."
    },
    {
     "key": "MFC_COMM_LOSS_ABORT_SEC",
     "group": "comm",
-    "label": "MFC 두절 공정 중단",
+    "label": "MFC 끊김 공정 중단",
     "desc": "공정이나 수동 조작 중에 MFC 값이 이 시간 넘게 들어오지 않으면 정지 순서로 공정을 멈춥니다. MFC 가 끊긴 채로도 파워 끄기·셔터 닫기·가스 밸브 닫기는 끝까지 합니다."
    },
    {
     "key": "RFPULSE_COMM_LOSS_ABORT_SEC",
     "group": "comm",
-    "label": "RF Pulse 두절 공정 중단",
+    "label": "RF Pulse 끊김 공정 중단",
     "desc": "RF Pulse 를 쓰는 공정에서 RF Pulse 를 시작한 뒤 값이 이 시간 넘게 들어오지 않으면 RF Pulse 끄기를 보내고 공정을 중단합니다. 통신이 돌아왔을 때 공정이 없으면 RF Pulse 끄기를 다시 보냅니다."
    },
    {
@@ -575,8 +575,8 @@
    {
     "key": "IG_COMM_LOSS_ABORT_SEC",
     "group": "comm",
-    "label": "Ion Gauge 두절 베이스 대기 중단",
-    "desc": "베이스 압력 대기 단계 중 Ion Gauge 값이 이 시간 넘게 들어오지 않으면 공정을 중단합니다. Filament 켜기·끄기 직후의 'Filament 전환 뒤 무응답 유예' 구간은 두절로 세지 않습니다."
+    "label": "Ion Gauge 끊김 베이스 대기 중단",
+    "desc": "베이스 압력 대기 단계 중 Ion Gauge 값이 이 시간 넘게 들어오지 않으면 공정을 중단합니다. Filament 켜기·끄기 직후의 'Filament 전환 뒤 무응답 유예' 구간은 끊김으로 세지 않습니다."
    },
    {
     "key": "COMM_RECONNECT_START_MS",
@@ -593,20 +593,20 @@
    {
     "key": "COMM_LONG_OUTAGE_SEC",
     "group": "comm",
-    "label": "장기 두절 판정",
-    "desc": "연결 실패가 이 시간 넘게 이어지면 장기 두절로 보고 알림을 한 번 냅니다. 그 뒤로는 '장기 두절 중 시도 주기'마다 연결을 시도하고, 실패 기록은 '두절 기록 간격'마다만 남깁니다."
+    "label": "장기 끊김 판정",
+    "desc": "연결 실패가 이 시간 넘게 이어지면 장기 끊김으로 보고 알림을 한 번 냅니다. 그 뒤로는 '장기 끊김 중 시도 주기'마다 연결을 시도하고, 실패 기록은 '끊김 기록 간격'마다만 남깁니다."
    },
    {
     "key": "COMM_PROBE_MS",
     "group": "comm",
-    "label": "장기 두절 중 시도 주기",
-    "desc": "장기 두절로 본 뒤 연결을 다시 시도하는 간격입니다. 이때부터는 두 배로 늘리는 재연결 간격 대신 이 주기로 시도합니다."
+    "label": "장기 끊김 중 시도 주기",
+    "desc": "장기 끊김으로 본 뒤 연결을 다시 시도하는 간격입니다. 이때부터는 두 배로 늘리는 재연결 간격 대신 이 주기로 시도합니다."
    },
    {
     "key": "COMM_OUTAGE_LOG_SEC",
     "group": "comm",
-    "label": "두절 기록 간격",
-    "desc": "장기 두절 중 연결 실패 기록을 남기는 간격입니다. DC 끄기를 확인하지 못해 다시 시도할 때 늘어나는 간격('DC OFF 미확인 재시도 첫 간격'에서 시작)의 상한으로도 씁니다."
+    "label": "끊김 기록 간격",
+    "desc": "장기 끊김 중 연결 실패 기록을 남기는 간격입니다. DC 끄기를 확인하지 못해 다시 시도할 때 늘어나는 간격('DC OFF 미확인 재시도 첫 간격'에서 시작)의 상한으로도 씁니다."
    },
    {
     "key": "PLC_SESSION_MARK_REG",
@@ -624,7 +624,7 @@
     "key": "BLACKBOX_SECONDS",
     "group": "plc",
     "label": "PLC 블랙박스 길이",
-    "desc": "PLC 내부 폴링 값을 최근 이 시간만큼 메모리에 담아 두는 블랙박스 길이입니다. PLC 통신 두절·끊김 알림·재기동 감지 때 이 기록을 파일로 남기며, 길수록 사고 전 기록이 길어집니다."
+    "desc": "PLC 내부 폴링 값을 최근 이 시간만큼 메모리에 담아 두는 블랙박스 길이입니다. PLC 통신 끊김 알림·재기동 감지 때 이 기록을 파일로 남기며, 길수록 사고 전 기록이 길어집니다."
    },
    {
     "key": "FLOW_ERROR_TOLERANCE",
@@ -828,7 +828,7 @@
     "key": "DC_OFF_RETRY_START_SEC",
     "group": "dc",
     "label": "DC OFF 미확인 재시도 첫 간격",
-    "desc": "DC 출력 끄기를 확인하지 못했을 때 끄기를 다시 시도하기까지의 첫 간격입니다. 실패할 때마다 두 배로 늘어나며 '두절 기록 간격'까지 커집니다."
+    "desc": "DC 출력 끄기를 확인하지 못했을 때 끄기를 다시 시도하기까지의 첫 간격입니다. 실패할 때마다 두 배로 늘어나며 '끊김 기록 간격'까지 커집니다."
    },
    {
     "key": "RF_MAX_POWER",
@@ -847,6 +847,12 @@
     "group": "rf",
     "label": "RF 명령 없는 출력 기준",
     "desc": "프로그램이 RF 를 켜지 않았는데 Forward 가 이 값 이상이면 '명령 없이 출력 중'으로 보고 기록을 남깁니다."
+   },
+   {
+    "key": "RF_UNCOMMANDED_GRACE_SEC",
+    "group": "rf",
+    "label": "RF 끈 뒤 명령 없는 출력 유예",
+    "desc": "프로그램이 RF 를 끈 뒤 이 시간 동안은 Forward 가 남아 있어도 꺼지는 중으로 보고 '명령 없이 출력 중'으로 보지 않습니다. 0 이면 끈 바로 다음 읽기부터 판정합니다."
    },
    {
     "key": "RF_FWD_FULL_SCALE_W",
@@ -4102,12 +4108,6 @@
     "help": "RF Pulse 와 통신이 끊겨 공정을 멈췄습니다. 케이블과 전원을 확인하세요."
    },
    {
-    "code": "MFC_COMM_LOSS",
-    "label": "MFC 통신 끊김",
-    "category": "abort",
-    "help": "MFC 와 통신이 끊긴 채 이어져 공정을 멈췄습니다. MFC 케이블과 전원을 확인하세요."
-   },
-   {
     "code": "RFP_START_FAILED",
     "label": "RF Pulse 시작 실패",
     "category": "abort",
@@ -4472,6 +4472,12 @@
     "label": "컨트롤러 값이 바뀜",
     "category": "info",
     "help": "프로그램이 바꾸지 않은 컨트롤러 값이 달라졌습니다. 장비 앞면에서 바꿨는지 확인하세요."
+   },
+   {
+    "code": "POWER_SETTINGS",
+    "label": "장비 노트북 전원 설정 확인",
+    "category": "info",
+    "help": "덮개를 닫거나 오래 두면 노트북이 절전될 수 있습니다. 윈도우 전원 설정에서 덮개 닫기와 절전을 바꾸세요."
    },
    {
     "code": "TARGETS_FILLED",
@@ -8177,6 +8183,20 @@
     "desc": "절전 막기를 풀었습니다."
    },
    {
+    "source": "app",
+    "kind": "power_settings",
+    "label": "장비 노트북 전원 설정",
+    "level": "main",
+    "desc": "덮개를 닫거나 오래 쓰지 않으면 절전되는 전원 설정이라 운전 중에 노트북이 멈출 수 있습니다."
+   },
+   {
+    "source": "app",
+    "kind": "power_settings_unread",
+    "label": "전원 설정 읽기 실패",
+    "level": "detail",
+    "desc": "윈도우 전원 설정을 읽지 못했습니다. 설정은 바꾸지 않았습니다."
+   },
+   {
     "source": "process",
     "kind": "targets",
     "label": "장착 타겟 채움",
@@ -11143,13 +11163,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "5e81746f2e7244f0833cf6d64ae844df",
+      "instance": "b4f2eff8daba486d93ea7911348510b5",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -11429,7 +11449,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0x7752",
+      "message": "D00060=0xFA5A",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -11559,13 +11579,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "683c6522a9a940d3972398fab3095112",
+      "instance": "4dc19556b45b40c9a705d98fb9f621a3",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -11845,7 +11865,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0xEEA6",
+      "message": "D00060=0xDAAD",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -11954,7 +11974,7 @@
     {
      "type": "run_start",
      "data": {
-      "runId": "ff1325dd317d",
+      "runId": "b66ff62e5b71",
       "recipeName": null,
       "by": "web",
       "name": "Ti 증착",
@@ -12467,7 +12487,7 @@
         "index": 1,
         "total": 12,
         "t": 1760000005.3425,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -12557,7 +12577,7 @@
         "total": 12,
         "elapsed_s": 3.0,
         "t": 1760000008.3425,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -12586,7 +12606,7 @@
         "index": 2,
         "total": 12,
         "t": 1760000008.3425,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -12692,7 +12712,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000015.3425,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -12724,7 +12744,7 @@
         "index": 3,
         "total": 12,
         "t": 1760000015.3425,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -12875,7 +12895,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000022.3425,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -12911,7 +12931,7 @@
         "index": 4,
         "total": 12,
         "t": 1760000022.3425,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -12996,7 +13016,7 @@
         "total": 12,
         "elapsed_s": 1.0,
         "t": 1760000023.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13025,7 +13045,7 @@
         "index": 5,
         "total": 12,
         "t": 1760000023.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13071,7 +13091,7 @@
         "total": 12,
         "elapsed_s": 6.0,
         "t": 1760000029.3404167,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13102,7 +13122,7 @@
         "index": 6,
         "total": 12,
         "t": 1760000029.3404167,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13168,7 +13188,7 @@
         "total": 12,
         "elapsed_s": 1.0,
         "t": 1760000030.3404167,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13202,7 +13222,7 @@
         "index": 7,
         "total": 12,
         "t": 1760000030.3404167,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13317,7 +13337,7 @@
         "total": 12,
         "elapsed_s": 18.0,
         "t": 1760000048.3404167,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13353,7 +13373,7 @@
         "index": 8,
         "total": 12,
         "t": 1760000048.3404167,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13494,7 +13514,7 @@
         "total": 12,
         "elapsed_s": 21.0,
         "t": 1760000069.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13530,7 +13550,7 @@
         "index": 9,
         "total": 12,
         "t": 1760000069.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13671,7 +13691,7 @@
         "total": 12,
         "elapsed_s": 24.0,
         "t": 1760000093.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13702,7 +13722,7 @@
         "index": 10,
         "total": 12,
         "t": 1760000093.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13768,7 +13788,7 @@
         "total": 12,
         "elapsed_s": 6.0,
         "t": 1760000099.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13798,7 +13818,7 @@
         "index": 11,
         "total": 12,
         "t": 1760000099.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13877,7 +13897,7 @@
         "total": 12,
         "elapsed_s": 13.0,
         "t": 1760000112.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -13905,7 +13925,7 @@
         "index": 12,
         "total": 12,
         "t": 1760000112.3414583,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -14206,7 +14226,7 @@
         "total": 12,
         "elapsed_s": 5.5,
         "t": 1760000117.8260555,
-        "run_id": "ff1325dd317d"
+        "run_id": "b66ff62e5b71"
        }
       }
      }
@@ -14214,7 +14234,7 @@
     {
      "type": "run_end",
      "data": {
-      "runId": "ff1325dd317d",
+      "runId": "b66ff62e5b71",
       "result": "done",
       "reasonCode": null,
       "summary": {
@@ -14408,13 +14428,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "18639e0a469a4d2286ea2465e5d38607",
+      "instance": "f1a779db990140ca88ab637ae19bd351",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -14694,7 +14714,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0xA88C",
+      "message": "D00060=0x5802",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -14803,7 +14823,7 @@
     {
      "type": "run_start",
      "data": {
-      "runId": "672e0cad8c43",
+      "runId": "c887cef968a8",
       "recipeName": null,
       "by": "web",
       "name": "Ti 증착",
@@ -15316,7 +15336,7 @@
         "index": 1,
         "total": 12,
         "t": 1760000005.3425,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15406,7 +15426,7 @@
         "total": 12,
         "elapsed_s": 3.0,
         "t": 1760000008.3425,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15435,7 +15455,7 @@
         "index": 2,
         "total": 12,
         "t": 1760000008.3425,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15541,7 +15561,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000015.3425,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15573,7 +15593,7 @@
         "index": 3,
         "total": 12,
         "t": 1760000015.3425,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15724,7 +15744,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000022.3425,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15760,7 +15780,7 @@
         "index": 4,
         "total": 12,
         "t": 1760000022.3425,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15845,7 +15865,7 @@
         "total": 12,
         "elapsed_s": 1.0,
         "t": 1760000023.3414583,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -15874,7 +15894,7 @@
         "index": 5,
         "total": 12,
         "t": 1760000023.3414583,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -16188,7 +16208,7 @@
         "total": 12,
         "elapsed_s": 9.3,
         "t": 1760000032.6760557,
-        "run_id": "672e0cad8c43"
+        "run_id": "c887cef968a8"
        }
       }
      }
@@ -16196,7 +16216,7 @@
     {
      "type": "run_end",
      "data": {
-      "runId": "672e0cad8c43",
+      "runId": "c887cef968a8",
       "result": "aborted",
       "reasonCode": "USER_STOP",
       "summary": {
@@ -16320,13 +16340,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "1facfa8f5de34cfb96401fd53c71bb66",
+      "instance": "9a406aef7e8b4670a9eb24ca9f7a6e25",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -16606,7 +16626,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0x1469",
+      "message": "D00060=0x3AA4",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -16715,7 +16735,7 @@
     {
      "type": "run_start",
      "data": {
-      "runId": "28180a098ee2",
+      "runId": "a85e04ec6c58",
       "recipeName": null,
       "by": "web",
       "name": "Ti 증착",
@@ -17228,7 +17248,7 @@
         "index": 1,
         "total": 12,
         "t": 1760000005.3425,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17318,7 +17338,7 @@
         "total": 12,
         "elapsed_s": 3.0,
         "t": 1760000008.3425,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17347,7 +17367,7 @@
         "index": 2,
         "total": 12,
         "t": 1760000008.3425,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17453,7 +17473,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000015.3425,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17485,7 +17505,7 @@
         "index": 3,
         "total": 12,
         "t": 1760000015.3425,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17636,7 +17656,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000022.3425,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17672,7 +17692,7 @@
         "index": 4,
         "total": 12,
         "t": 1760000022.3425,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17757,7 +17777,7 @@
         "total": 12,
         "elapsed_s": 1.0,
         "t": 1760000023.3414583,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -17786,7 +17806,7 @@
         "index": 5,
         "total": 12,
         "t": 1760000023.3414583,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -18116,7 +18136,7 @@
         "total": 12,
         "elapsed_s": 10.3,
         "t": 1760000033.6760557,
-        "run_id": "28180a098ee2"
+        "run_id": "a85e04ec6c58"
        }
       }
      }
@@ -18124,7 +18144,7 @@
     {
      "type": "run_end",
      "data": {
-      "runId": "28180a098ee2",
+      "runId": "a85e04ec6c58",
       "result": "error",
       "reasonCode": "MV_INTERLOCK_LOST",
       "summary": {
@@ -18248,13 +18268,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "64bdb9d23b16419fb6e87564667b3129",
+      "instance": "9618b9e6febb4a8f93c9ce413cca9fc2",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -18534,7 +18554,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0xF90A",
+      "message": "D00060=0x9F37",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -18662,13 +18682,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "dce7e6b0494c418b82b332b4a75c965f",
+      "instance": "a793fb65c4e045e79115d43892034284",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -18948,7 +18968,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0x8936",
+      "message": "D00060=0x9D18",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -19057,7 +19077,7 @@
     {
      "type": "run_start",
      "data": {
-      "runId": "e4244f938cb4",
+      "runId": "4e4ffa3c1798",
       "recipeName": null,
       "by": "web",
       "name": "수동 조작",
@@ -19230,7 +19250,7 @@
         "index": 1,
         "total": 1,
         "t": 1760000005.3425,
-        "run_id": "e4244f938cb4"
+        "run_id": "4e4ffa3c1798"
        }
       }
      }
@@ -19363,7 +19383,7 @@
         "total": 1,
         "elapsed_s": 14.0,
         "t": 1760000019.3425,
-        "run_id": "e4244f938cb4"
+        "run_id": "4e4ffa3c1798"
        }
       }
      }
@@ -19393,7 +19413,7 @@
         },
         "result": "done",
         "reason": null,
-        "run_id": "e4244f938cb4",
+        "run_id": "4e4ffa3c1798",
         "t": 1760000019.3425,
         "level": "info"
        }
@@ -19471,7 +19491,7 @@
         "index": 2,
         "total": 2,
         "t": 1760000020.0,
-        "run_id": "e4244f938cb4"
+        "run_id": "4e4ffa3c1798"
        }
       }
      }
@@ -19549,7 +19569,7 @@
         "total": 2,
         "elapsed_s": 1.3,
         "t": 1760000021.3425,
-        "run_id": "e4244f938cb4"
+        "run_id": "4e4ffa3c1798"
        }
       }
      }
@@ -19578,7 +19598,7 @@
         },
         "result": "done",
         "reason": null,
-        "run_id": "e4244f938cb4",
+        "run_id": "4e4ffa3c1798",
         "t": 1760000021.3425,
         "level": "info"
        }
@@ -19616,7 +19636,7 @@
        "data": {
         "by": "local",
         "source": "local",
-        "run_id": "e4244f938cb4",
+        "run_id": "4e4ffa3c1798",
         "t": 1760000022.0,
         "level": "info"
        }
@@ -19894,7 +19914,7 @@
     {
      "type": "run_end",
      "data": {
-      "runId": "e4244f938cb4",
+      "runId": "4e4ffa3c1798",
       "result": "done",
       "reasonCode": "MANUAL_END",
       "summary": {
@@ -20005,13 +20025,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "9daaba5020ac44aaa94077b8929ca191",
+      "instance": "47550ecfbe594d4b98c10b010a9e572d",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -20291,7 +20311,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0xD2AF",
+      "message": "D00060=0xF076",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -20501,13 +20521,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "0c3aacefd0c94fbf8ab6213b52b22507",
+      "instance": "28a9423d29a8492297fb627b95ba8222",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -20787,7 +20807,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0xA862",
+      "message": "D00060=0x7D74",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -20939,13 +20959,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "bc5a5f7754c24161a6033775482e2d22",
+      "instance": "c3b7dd4676cd4c7faae7149af1f0f4fa",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -21225,7 +21245,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0x71B5",
+      "message": "D00060=0xF38E",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -21477,13 +21497,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "48e113095e184023a4aa6da6d45ad6b2",
+      "instance": "f669402077084c6f9b50f225d7013fdf",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -21763,7 +21783,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0xEA91",
+      "message": "D00060=0xD304",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -22024,13 +22044,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "487bae4b2c5d4c378505e973954fe81e",
+      "instance": "46c0b30de5064419bc71236c51f61f59",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -22310,7 +22330,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0x5597",
+      "message": "D00060=0x78C9",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -22419,7 +22439,7 @@
     {
      "type": "run_start",
      "data": {
-      "runId": "576904c5a7f6",
+      "runId": "e0850b4c1d75",
       "recipeName": null,
       "by": "web",
       "name": "Ti 증착",
@@ -22932,7 +22952,7 @@
         "index": 1,
         "total": 12,
         "t": 1760000005.3425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23022,7 +23042,7 @@
         "total": 12,
         "elapsed_s": 3.0,
         "t": 1760000008.3425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23051,7 +23071,7 @@
         "index": 2,
         "total": 12,
         "t": 1760000008.3425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23157,7 +23177,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000015.3425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23189,7 +23209,7 @@
         "index": 3,
         "total": 12,
         "t": 1760000015.3425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23340,7 +23360,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000022.3425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23376,7 +23396,7 @@
         "index": 4,
         "total": 12,
         "t": 1760000022.3425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23461,7 +23481,7 @@
         "total": 12,
         "elapsed_s": 1.0,
         "t": 1760000023.3414583,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23490,7 +23510,7 @@
         "index": 5,
         "total": 12,
         "t": 1760000023.3414583,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23776,7 +23796,7 @@
         "total": 12,
         "elapsed_s": 9.3,
         "t": 1760000032.6425,
-        "run_id": "576904c5a7f6"
+        "run_id": "e0850b4c1d75"
        }
       }
      }
@@ -23784,7 +23804,7 @@
     {
      "type": "run_end",
      "data": {
-      "runId": "576904c5a7f6",
+      "runId": "e0850b4c1d75",
       "result": "error",
       "reasonCode": "ALL_STOP",
       "summary": {
@@ -23908,13 +23928,13 @@
      "type": "hello",
      "data": {
       "equipment": "CHK2",
-      "instance": "aa8ddcd213c74dd982c1ed78ccccb643",
+      "instance": "279e10241c33423f9b1a561a9ca3bfcf",
       "program": "chk-v2",
       "version": "unknown",
       "runMode": "prod",
-      "schemaHash": "af413f500c19a5adaac1a38bb598082e2a7f7c36b7bd250d9f3e8221aa50a5a0",
+      "schemaHash": "a31f444ad3ea4ee26270a944930ecdddfe6307e332dc38243688b00c1fd78924",
       "configVersion": 0,
-      "webSchemaHash": "ef84843afa9642b220a2fa91bc2743c32fd5a947fa7543b10b57aed4ee33e7ff",
+      "webSchemaHash": "dbc2ec441ef183e61abfb0f01bff42d55082ecd5b495ad8d042aa9c19a06d0db",
       "overriddenKeys": [],
       "snapshotColumns": [
        "ts",
@@ -24194,7 +24214,7 @@
       "level": "info",
       "code": "MARKER_WRITTEN",
       "ruleId": null,
-      "message": "D00060=0x2B55",
+      "message": "D00060=0x525E",
       "context": {
        "source": "plc",
        "kind": "marker_written",
@@ -24303,7 +24323,7 @@
     {
      "type": "run_start",
      "data": {
-      "runId": "5ce3a965e7af",
+      "runId": "d44d8de8432d",
       "recipeName": null,
       "by": "web",
       "name": "Ti 증착",
@@ -24816,7 +24836,7 @@
         "index": 1,
         "total": 12,
         "t": 1760000005.3425,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -24906,7 +24926,7 @@
         "total": 12,
         "elapsed_s": 3.0,
         "t": 1760000008.3425,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -24935,7 +24955,7 @@
         "index": 2,
         "total": 12,
         "t": 1760000008.3425,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25041,7 +25061,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000015.3425,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25073,7 +25093,7 @@
         "index": 3,
         "total": 12,
         "t": 1760000015.3425,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25224,7 +25244,7 @@
         "total": 12,
         "elapsed_s": 7.0,
         "t": 1760000022.3425,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25260,7 +25280,7 @@
         "index": 4,
         "total": 12,
         "t": 1760000022.3425,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25345,7 +25365,7 @@
         "total": 12,
         "elapsed_s": 1.0,
         "t": 1760000023.3414583,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25374,7 +25394,7 @@
         "index": 5,
         "total": 12,
         "t": 1760000023.3414583,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25420,7 +25440,7 @@
         "total": 12,
         "elapsed_s": 6.0,
         "t": 1760000029.3404167,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25451,7 +25471,7 @@
         "index": 6,
         "total": 12,
         "t": 1760000029.3404167,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25517,7 +25537,7 @@
         "total": 12,
         "elapsed_s": 1.0,
         "t": 1760000030.3404167,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25551,7 +25571,7 @@
         "index": 7,
         "total": 12,
         "t": 1760000030.3404167,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25636,7 +25656,7 @@
         "total": 12,
         "elapsed_s": 1.7,
         "t": 1760000032.0,
-        "run_id": "5ce3a965e7af"
+        "run_id": "d44d8de8432d"
        }
       }
      }
@@ -25644,7 +25664,7 @@
     {
      "type": "run_end",
      "data": {
-      "runId": "5ce3a965e7af",
+      "runId": "d44d8de8432d",
       "result": "error",
       "reasonCode": "PROGRAM_EXIT",
       "summary": {

@@ -2,8 +2,8 @@
 
 - 요청은 우선순위 큐로: safety(0) > write(1) > read(2), 같은 우선순위는 넣은 순서. 모든 요청에 deadline.
 - safety 요청(purge=True)은 큐의 읽기·쓰기를 버리고(CANCELLED) 진행 중인 읽기를 취소한 뒤 맨 앞에서 실행.
-- 연결 상태 기계: disconnected → (보호된 열기) → connected. 실패하면 지수 백오프(시작·최대·장기 두절은 파라미터).
-  연속 무응답 fail_streak 회 또는 포트 오류면 끊고 재연결. 장기 두절은 알림 1회, 기록은 log_every_s 마다.
+- 연결 상태 기계: disconnected → (보호된 열기) → connected. 실패하면 지수 백오프(시작·최대·장기 끊김은 파라미터).
+  연속 무응답 fail_streak 회 또는 포트 오류면 끊고 재연결. 장기 끊김은 알림 1회, 기록은 log_every_s 마다.
 - 긴 쓰기 시퀀스는 Sequence 로: 단계 하나 실행 → 다음 단계를 gap_s 뒤(not_before)에 다시 큐에 넣는다 —
   그 사이 tick 의 읽기가 끼어든다. 단계가 실패하거나 safety 가 오면 시퀀스 중단.
 - bench 모드(writes_allowed=False): write·safety 요청은 BENCH_READ_ONLY 로 즉시 거부.

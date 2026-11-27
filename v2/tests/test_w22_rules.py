@@ -336,14 +336,14 @@ def _mfc_drop(tmp_path, down_s):
 def test_mfc_comm_loss_aborts_and_stop_sequence_finishes(tmp_path):
     r, box = _mfc_drop(tmp_path, 1000)
     (end,) = r.ev("run_end")
-    assert end.data["status"] == "error" and end.data["reason"] == "MFC_COMM_LOSS"
+    assert end.data["status"] == "error" and end.data["reason"] == "MFC_COMM_LOST"
     fired = [e for e in r.rig.events if type(e).__name__ == "SafetyEvent" and e.rule == "S52" and e.kind in ("fired", "abort")]
     assert fired
     plc = r.rig.sims["plc"]
     assert r.rig.process.state == "IDLE"
     assert (plc.regs[A["rf_dac"]] or 0) == 0 and not plc.coils[A["rf_dac_enable"]]
     assert not any(plc.coils[A[k]] for k in ("ms", "s1", "s2", "ar_valve", "o2_valve"))
-    assert P.by_key()["MFC_COMM_LOSS_ABORT_SEC"].default == 30.0 and "MFC_COMM_LOSS" in C.reason_codes()
+    assert P.by_key()["MFC_COMM_LOSS_ABORT_SEC"].default == 30.0 and "MFC_COMM_LOST" in C.reason_codes()
 
 
 def test_mfc_comm_short_drop_no_abort(tmp_path):

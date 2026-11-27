@@ -23,6 +23,7 @@
   6 장착 타겟(재고관리 읽기, W-22 G — targets.py): INVENTORY_API_URL 이 있으면 자기 스레드로 읽는다. sim 은 루프백 주소(시험용
     가짜 서버)만 — 진짜 재고관리에 묻지 않는다.
   7 절전 막기(W-23 H3 — keep_awake.py): KEEP_AWAKE 에 따라 공정·수동 조작·히터 운전 중(또는 늘) 윈도우 시스템 절전을 막는다.
+    덮개 닫기·전원 버튼 절전은 막지 못해 시작 때 윈도우 전원 설정을 읽고 위험하면 한 줄 + 경고 사건(W-25 A5 — 읽기만).
 버전은 .git 의 HEAD·ref 파일을 읽어서(git 명령을 실행하지 않음), 못 읽으면 unknown.
 
 종료(v1 main.py:4977 closeEvent 와 같은 조건)
@@ -372,6 +373,8 @@ class App:
                           on_event=s._ev, api=KA.windows_api())
         self.keep_awake = ka
         ka.start()
+        # 전원 설정 읽기(W-25 A5 — 읽기만): 덮개 닫기·절전 시간·배터리면 시작 줄 한 줄 + 경고 사건. 윈도우가 아니면 아무것도
+        KA.check_power(KA.windows_power(), self.say, s._ev)
 
     def start_targets(self, s: ChkSystem) -> None:
         """재고관리 장착 타겟 읽기(W-22 G — targets.py). 주소가 비면 안 함, sim 은 루프백(시험용 가짜 서버)만."""
@@ -602,6 +605,7 @@ class App:
             self._tick_thread.join(3.0)
         if self.uplink is not None:
             self.uplink.stop()                             # 남은 메시지는 보관함에(다음 시작 때 올림)
+            self.uplink.bye()                              # 끝 표시(W-25 C1) — 웹이 주인 자리를 바로 비운다(다시 켜면 바로 받음)
         if getattr(self, "targets", None) is not None:
             self.targets.stop()
         if getattr(self, "keep_awake", None) is not None:
@@ -664,6 +668,10 @@ class App:
         self.log.warning("강제 종료(%s) — 보낸 명령 %s, 끝난 것 %s, %.2f s(보내기 %.3f s)%s", why, sent, res["done"],
                          res["elapsed_s"], t_sent, " — run_end error PROGRAM_EXIT" if was else "")
         s.recorder.flush(0.5)
+        if self.uplink is not None:                        # 창 닫기도 끝 표시(W-25 C1) — 남은 시간 안에서만(윈도우가 곧 끝낸다)
+            left = FORCE_DEADLINE_S + 1.0 - (clk.monotonic() - t0)
+            if left > 0.3:
+                res["bye"] = self.uplink.bye(timeout=min(1.0, left))
         for hd in self._log_handlers:
             hd.flush()
         return res

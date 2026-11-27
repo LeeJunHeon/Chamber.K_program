@@ -23,7 +23,7 @@ values 는 snapshot_fields.columns() 의 열 이름이다(시험이 존재를 �
 지속 시간(duration)은 실제 시각이다(4-3 결정): v1 은 장비마다 다른 주기로 횟수를 셌으므로 v2 는 v1 에서 실제로 걸리던
 시간(횟수 × v1 판정 주기)을 *_SEC 파라미터로 쓴다(params 의 v1_period_s). 판정은 v2.common.judge.Persist —
 값이 ok·late 인 표본만 판정에 쓰고, stale·fail·suppressed tick 은 판정을 바꾸지 않는다(시작 시각을 지우지도 확정하지도 않음).
-통신이 끊긴 경우는 따로 두절 규칙(S6·S30·S34C·S39B)이 잡는다.
+통신이 끊긴 경우는 따로 끊김 규칙(S6·S30·S34C·S39B)이 잡는다.
 """
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ RULES: tuple = (
     R("S5", "MFC 단일 사용", "reject", "command", "공정과 히터 가스는 서로 시작을 막는다(히터 가스 상태 IDLE 이 아니면 공정 시작 거부, 공정 중이면 히터 가스 시작 거부)",
       actions=(_rej("HEATER_GAS_ACTIVE"), _rej("PROCESS_RUNNING")), v1="main.py:2743, 3154, heater_atmosphere:405"),
     # ── PLC 통신 ──
-    R("S6", "PLC 통신 두절 중단", "trip", "tick", "plc.age_s ≥ PLC_COMM_LOSS_ABORT_SEC", ("plc.q", "plc.age_s"),
+    R("S6", "PLC 통신 끊김 중단", "trip", "tick", "plc.age_s ≥ PLC_COMM_LOSS_ABORT_SEC", ("plc.q", "plc.age_s"),
       ("PLC_COMM_LOSS_ABORT_SEC",), "PLC_COMM_LOSS_ABORT_SEC", ACT,
       (_abort("PLC_COMM_LOST"), Act("BLACKBOX_DUMP")), v1="device/PLC.py:410-440"),
     R("S7", "PLC 끊김 알림", "notify", "tick", "plc.age_s ≥ PLC_DISCONNECT_NOTIFY_SEC(단절당 1회)", ("plc.age_s",),
@@ -99,10 +99,11 @@ RULES: tuple = (
       ("PLC_SESSION_MARK_REG",), "2회 연속", ("*",),
       (Act("HEATER_PUSH_CONFIG"), Act("PLC_MARKER_WRITE"), _abort("PLC_RESTARTED"), _note("error", "PLC_RESTARTED")),
       release="공정 중이 아니면 중단 없이 재설정·알림만", v1="device/PLC.py:575-620, main.py:1537"),
-    R("S10", "PLC 복구 뒤 안전 재적용", "recover", "event:plc_link_up", "두절로 공정을 중단했고 지금 공정이 없음",
+    R("S10", "PLC 복구 뒤 안전 재적용", "recover", "event:plc_link_up", "끊김으로 공정을 중단했고 지금 공정이 없음",
       ("plc.q",), states=("IDLE", "LOADED", "ABORTED"),
-      actions=(Act("RF_SAFE_OFF"), Act("HEATER_FORCE_OFF"), Act("GAS_VALVES_CLOSE"), _note("warn", "PLC_RECOVERED_SAFE")),
-      v1="main.py:1551-1590"),
+      actions=(Act("RF_SAFE_OFF"), Act("HEATER_FORCE_OFF"), Act("GAS_VALVES_CLOSE"), Act("SHUTTERS_CLOSE", {"which": "ms,s1,s2"}),
+               _note("warn", "PLC_RECOVERED_SAFE")),
+      v1="main.py:1551-1590 (W-25 A3 — 끊김 중단 때 보내기만 한 셔터 닫기도 다시)"),
     R("S11", "링크 끊김·값 오래됨 화면 잠금", "maintain", "tick", "장비 품질이 ok 가 아니고 나이 ≥ HEATER_STALE_SEC 면 그 장비 조작 잠금·회색",
       ("plc.q", "plc.age_s"), ("HEATER_STALE_SEC",), actions=(Act("LOCK_CONTROLS"),), v1="main.py:3884"),
     R("S12", "링크 없을 때 히터 OFF 보류", "maintain", "worker", "RUN=0 요청이 실패하거나 링크가 없으면 보류 → 링크 복구 즉시 적용",
@@ -182,7 +183,7 @@ RULES: tuple = (
     R("S29", "DC OFF 확인형", "maintain", "event:dc_off", "OUTP OFF 뒤 OUTP? 를 DC_OFF_VERIFY_TRIES 회 확인. 미확인이면 백오프 재시도",
       ("dc.out",), ("DC_OFF_VERIFY_TRIES", "DC_OFF_RETRY_START_SEC", "COMM_OUTAGE_LOG_SEC"),
       actions=(Act("DC_SAFE_OFF"), _note("error", "DC_OFF_UNCONFIRMED")), release="확인되면 info", v1="device/DCpower.py:273-379"),
-    R("S30", "DC 통신 두절", "trip", "tick", "DC 사용 공정에서 dc.age_s ≥ DC_COMM_LOSS_ABORT_SEC", ("dc.q", "dc.age_s"),
+    R("S30", "DC 통신 끊김", "trip", "tick", "DC 사용 공정에서 dc.age_s ≥ DC_COMM_LOSS_ABORT_SEC", ("dc.q", "dc.age_s"),
       ("DC_COMM_LOSS_ABORT_SEC",), "DC_COMM_LOSS_ABORT_SEC", ACT, (_abort("DC_COMM_LOST"), Act("DC_SAFE_OFF")),
       release="복구 때 공정이 없으면 DC_SAFE_OFF 다시(DC_RECOVERED_SAFE). 판정은 DC 를 켠 뒤(POWER_WAIT 출력 명령 이후)만",
       v1="device/DCpower.py:240-253·242-243·454-458, main.py:1488-1497"),
@@ -218,7 +219,7 @@ RULES: tuple = (
     R("S34B", "RF Pulse 반사파", "trip", "tick", "rfp.ref_w ≥ RFPULSE_REFP_LIMIT_WATTS", ("rfp.ref_w",),
       ("RFPULSE_REFP_LIMIT_WATTS", "RFPULSE_REFP_SEC"), "RFPULSE_REFP_SEC", ACT,
       (_abort("RFP_REFLECTED_HIGH"), Act("RFP_SAFE_OFF")), v1="device/RFpulse.py:1267"),
-    R("S34C", "RF Pulse 통신 두절", "trip", "tick", "RF Pulse 사용 공정에서 rfp.age_s ≥ RFPULSE_COMM_LOSS_ABORT_SEC",
+    R("S34C", "RF Pulse 통신 끊김", "trip", "tick", "RF Pulse 사용 공정에서 rfp.age_s ≥ RFPULSE_COMM_LOSS_ABORT_SEC",
       ("rfp.q", "rfp.age_s"), ("RFPULSE_COMM_LOSS_ABORT_SEC", "RFPULSE_COMM_REOPEN_SEC"), "RFPULSE_COMM_LOSS_ABORT_SEC", ACT,
       (_abort("RFP_COMM_LOST"), Act("RFP_SAFE_OFF")),
       release="복구 때 공정이 없으면 RFP_SAFE_OFF 다시(RFP_RECOVERED_SAFE). 판정은 RF Pulse START 이후만",
@@ -245,16 +246,16 @@ RULES: tuple = (
       ("MFC_PRESSURE_WARN_RATIO", "MFC_PRESSURE_WARN_SEC"), "MFC_PRESSURE_WARN_SEC", ACT,
       (_note("warn", "PRESSURE_DEVIATION"),), release="경고만 — 공정 계속. 블록 감시 pressure(기본 템플릿: MAIN)",
       v1="device/MFC.py:1333-1342"),
-    R("S52", "MFC 통신 두절", "trip", "tick", "공정·수동 조작 중 mfc.age_s ≥ MFC_COMM_LOSS_ABORT_SEC", ("mfc.q", "mfc.age_s"),
-      ("MFC_COMM_LOSS_ABORT_SEC",), "MFC_COMM_LOSS_ABORT_SEC", ACT, (_abort("MFC_COMM_LOSS"),),
+    R("S52", "MFC 통신 끊김", "trip", "tick", "공정·수동 조작 중 mfc.age_s ≥ MFC_COMM_LOSS_ABORT_SEC", ("mfc.q", "mfc.age_s"),
+      ("MFC_COMM_LOSS_ABORT_SEC",), "MFC_COMM_LOSS_ABORT_SEC", ACT, (_abort("MFC_COMM_LOST"),),
       release="정지 순서는 MFC 가 끊긴 채로도 끝까지(MFC 명령 단계는 기다리다 넘어감 — RF 램프다운·셔터 닫기·PLC 가스 밸브 닫기는 그대로)",
-      v1="v2 (W-23) — v1 은 MFC 두절로 공정을 멈추지 않음"),
+      v1="v2 (W-23) — v1 은 MFC 끊김으로 공정을 멈추지 않음"),
     R("S39A", "베이스 압력 대기 한도", "trip", "state:BASE_WAIT", "IG_BASE_WAIT_TIMEOUT_SEC 안에 도달 못 함",
       ("ig.ion_torr", "ig.filament", "ig.emission"), ("IG_BASE_WAIT_TIMEOUT_SEC", "IG_BASE_STABLE_SEC", "IG_SETTLE_SEC",
                                                     "IG_VALUE_MAX_AGE_SEC"),
       "IG_BASE_WAIT_TIMEOUT_SEC", ("BASE_WAIT",), (_abort("BASE_WAIT_TIMEOUT"), Act("IG_FILAMENT_OFF")),
       v1="controller/process_controller.py:1175"),
-    R("S39B", "베이스 대기 중 IG 두절", "trip", "tick", "ig.age_s ≥ IG_COMM_LOSS_ABORT_SEC (suppressed 구간 제외)", ("ig.q", "ig.age_s"),
+    R("S39B", "베이스 대기 중 IG 끊김", "trip", "tick", "ig.age_s ≥ IG_COMM_LOSS_ABORT_SEC (suppressed 구간 제외)", ("ig.q", "ig.age_s"),
       ("IG_COMM_LOSS_ABORT_SEC",), "IG_COMM_LOSS_ABORT_SEC", ACT, (_abort("IG_COMM_LOST"),),
       release="베이스 압력 대기 블록에서만", v1="controller/process_controller.py:1179"),
     R("S39C", "필라멘트 켜기 실패", "trip", "state:BASE_WAIT", "IG_FILAMENT_ON_TIMEOUT_SEC 안에 filament·emission 이 안 보임, 재점등 IG_MAX_RELIGHTS 초과",
